@@ -1,0 +1,345 @@
+import AppKit
+import SwiftUI
+
+enum FilePanePath {
+    static func expandedPath(for draft: String) -> String? {
+        guard !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return NSString(string: draft).expandingTildeInPath
+    }
+}
+
+struct FilePaneView: View {
+    let paneID: PaneID
+    let state: FilePaneState
+    let workspace: WorkspaceState
+    let operationController: FileOperationController
+    let favorites: FavoritesStore
+    let materializer: any CloudMaterializing
+    let accessCoordinator: CloudLocationScopedAccessCoordinator
+    let isActive: Bool
+    let onActivate: () -> Void
+    let onRequestTrashConfirmation: ([URL]) -> Void
+
+    @State private var pathDraft = ""
+    @State private var pathError: String?
+    @State private var pathEditingSession: WorkspaceTextEditingSession?
+    @State private var inlineEditingSession: WorkspaceTextEditingSession?
+    @State private var favoriteError: String?
+    @FocusState private var pathFieldIsFocused: Bool
+
+    var body: some View {
+        @Bindable var state = state
+
+        VStack(spacing: 0) {
+            HStack(spacing: 6) {
+                Button {
+                    onActivate()
+                    Task { await state.goBack() }
+                } label: {
+                    Image(systemName: "chevron.left")
+                        .accessibilityHidden(true)
+                }
+                .buttonStyle(.borderless)
+                .disabled(!state.canGoBack)
+                .help("Back")
+                .accessibilityLabel("Back")
+
+                Button {
+                    onActivate()
+                    Task { await state.goForward() }
+                } label: {
+                    Image(systemName: "chevron.right")
+                        .accessibilityHidden(true)
+                }
+                .buttonStyle(.borderless)
+                .disabled(!state.canGoForward)
+                .help("Forward")
+                .accessibilityLabel("Forward")
+
+                if state.isEditingPath {
+                    TextField("Path", text: $pathDraft)
+                        .textFieldStyle(.roundedBorder)
+                        .focused($pathFieldIsFocused)
+                        .onSubmit { submitPath() }
+                        .onExitCommand { cancelPathEditing() }
+                } else {
+                    Button {
+                        beginPathEditing()
+                    } label: {
+                        Text(state.currentDirectory.path)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Edit location (Command-L)")
+                    .contextMenu {
+                        Button("Add to Favorites") {
+                            onActivate()
+                            addFavorite(state.currentDirectory)
+                        }
+                        .disabled(favorites.containsExactURL(state.currentDirectory))
+                    }
+                }
+
+                if state.isLoading {
+                    ProgressView()
+                        .controlSize(.small)
+                        .help("Loading")
+                } else if let message = pathError ?? state.errorMessage {
+                    HStack(spacing: 6) {
+                        Label(message, systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption)
+                            .lineLimit(1)
+                            .foregroundStyle(.red)
+                            .help(message)
+                        Button("Go to \(workspace.fallbackDisplayName(for: paneID))") {
+                            let fallback = workspace.fallbackURL(for: paneID)
+                            Task { await state.navigate(to: fallback, recordHistory: false) }
+                        }
+                        .controlSize(.small)
+                        .accessibilityHint("Opens the safe fallback folder for this pane")
+                    }
+                }
+            }
+            .padding(.horizontal, 8)
+            .frame(height: 38)
+            .background(.bar)
+            .overlay(alignment: .bottom) { Divider() }
+
+            FileTableView(
+                items: state.visibleItems,
+                selection: $state.selection,
+                sort: state.sort,
+                directory: state.currentDirectory,
+                focusRequestID: state.focusRequestID,
+                renameRequestID: state.renameRequestID,
+                isOperationRunning: operationController.isRunning,
+                onActivatePane: onActivate,
+                onOpen: open,
+                onSortChange: { state.sort = $0 },
+                onConsumeRenameRequest: state.consumeInlineRenameRequest,
+                onInlineEditingEvent: handleInlineEditingEvent,
+                onDiscardRename: state.cancelPendingRename,
+                onCommitRename: commitRename,
+                onDrop: performDrop,
+                canAddToFavorites: { item in
+                    FavoriteAddPolicy.canAdd(
+                        item,
+                        containsExactURL: favorites.containsExactURL
+                    )
+                },
+                onAddToFavorites: addFavorite,
+                onCreateFolder: createFolder,
+                onRequestRename: {
+                    Task { _ = await operationController.requestRename(in: workspace) }
+                },
+                onCopy: copySelection,
+                onPaste: paste,
+                onRequestTrashConfirmation: requestTrashConfirmation
+            )
+        }
+        .overlay {
+            Rectangle()
+                .stroke(isActive ? Color.accentColor : .clear, lineWidth: 2)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
+        .onChange(of: state.isEditingPath) { _, isEditing in
+            if isEditing {
+                pathDraft = state.currentDirectory.path
+                pathError = nil
+                Task { @MainActor in
+                    pathFieldIsFocused = true
+                }
+            } else {
+                pathDraft = state.currentDirectory.path
+                pathError = nil
+                pathFieldIsFocused = false
+            }
+        }
+        .onChange(of: pathFieldIsFocused) { _, isFocused in
+            if isFocused {
+                beginPathEditingSession()
+            } else {
+                endPathEditingSession()
+            }
+        }
+        .onAppear {
+            if pathFieldIsFocused {
+                beginPathEditingSession()
+            }
+        }
+        .onDisappear {
+            if let pathEditingSession {
+                workspace.endTextEditing(pathEditingSession)
+                self.pathEditingSession = nil
+            }
+            if let inlineEditingSession {
+                workspace.endTextEditing(inlineEditingSession)
+                self.inlineEditingSession = nil
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier(
+            paneID == .left
+                ? AccessibilityIdentifiers.leftPane
+                : AccessibilityIdentifiers.rightPane
+        )
+        .accessibilityLabel(PaneAccessibilityPresentation.label(for: paneID))
+        .accessibilityValue(PaneAccessibilityPresentation.value(isActive: isActive))
+        .alert("Could Not Add Favorite", isPresented: Binding(
+            get: { favoriteError != nil },
+            set: { if !$0 { favoriteError = nil } }
+        )) {
+            Button("OK") { favoriteError = nil }
+        } message: {
+            Text(favoriteError ?? "The folder could not be added to Favorites.")
+        }
+    }
+
+    private func beginPathEditing() {
+        onActivate()
+        state.isEditingPath = true
+    }
+
+    private func cancelPathEditing() {
+        pathDraft = state.currentDirectory.path
+        pathError = nil
+        state.isEditingPath = false
+        pathFieldIsFocused = false
+    }
+
+    private func submitPath() {
+        guard let expandedPath = FilePanePath.expandedPath(for: pathDraft) else {
+            pathError = "The location is not an existing directory."
+            return
+        }
+        let destination = URL(filePath: expandedPath, directoryHint: .isDirectory).standardizedFileURL
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: destination.path, isDirectory: &isDirectory),
+              isDirectory.boolValue
+        else {
+            pathError = "The location is not an existing directory."
+            return
+        }
+
+        pathDraft = destination.path
+        pathError = nil
+        state.isEditingPath = false
+        pathFieldIsFocused = false
+        Task { await state.navigate(to: destination) }
+    }
+
+    private func open(_ item: FileItem) {
+        onActivate()
+        Task {
+            await WorkspaceOpenActions.open(
+                [item],
+                in: state,
+                materializer: materializer,
+                accessCoordinator: accessCoordinator
+            )
+        }
+    }
+
+    private func createFolder() {
+        onActivate()
+        _ = WorkspaceCommandActions.createFolder(
+            in: state,
+            workspace: workspace,
+            operationController: operationController
+        )
+    }
+
+    private func commitRename(_ source: URL, _ name: String) {
+        onActivate()
+        _ = operationController.commitPendingRename(
+            in: state,
+            to: name,
+            workspace: workspace
+        )
+    }
+
+    private func copySelection() {
+        onActivate()
+        FileURLPasteboard.write(
+            state.selection.sorted { $0.path < $1.path },
+            to: .general
+        )
+    }
+
+    private func paste() {
+        onActivate()
+        let urls = FileURLPasteboard.read(from: .general)
+        guard !urls.isEmpty else { return }
+        _ = operationController.runTransfer(
+            urls,
+            to: state.currentDirectory,
+            mode: .copy,
+            workspace: workspace
+        )
+    }
+
+    private func performDrop(_ urls: [URL], _ destination: URL, _ intent: DropIntent) {
+        onActivate()
+        _ = operationController.runTransfer(
+            urls,
+            to: destination,
+            mode: intent.transferMode,
+            workspace: workspace
+        )
+    }
+
+    private func addFavorite(_ url: URL) {
+        do {
+            try favorites.add(url)
+        } catch {
+            favoriteError = error.localizedDescription
+        }
+    }
+
+    private func requestTrashConfirmation() {
+        onActivate()
+        let urls = state.selection.sorted { $0.path < $1.path }
+        Task {
+            await operationController.requestTrashConfirmation(for: urls, workspace: workspace)
+        }
+    }
+
+    private func handleInlineEditingEvent(_ event: InlineTextEditingEvent) {
+        switch event {
+        case let .began(token):
+            let session = WorkspaceTextEditingSession(
+                id: token,
+                paneID: paneID,
+                kind: .inlineName
+            )
+            inlineEditingSession = session
+            workspace.beginTextEditing(session)
+        case let .ended(token):
+            let session = WorkspaceTextEditingSession(
+                id: token,
+                paneID: paneID,
+                kind: .inlineName
+            )
+            workspace.endTextEditing(session)
+            if inlineEditingSession == session {
+                inlineEditingSession = nil
+            }
+        }
+    }
+
+    private func beginPathEditingSession() {
+        guard pathEditingSession == nil else { return }
+        let session = WorkspaceTextEditingSession(paneID: paneID, kind: .path)
+        pathEditingSession = session
+        workspace.beginTextEditing(session)
+    }
+
+    private func endPathEditingSession() {
+        guard let session = pathEditingSession else { return }
+        pathEditingSession = nil
+        workspace.endTextEditing(session)
+    }
+}

@@ -1,0 +1,8 @@
+.DS_Store
+.superpowers/
+.worktrees/
+.build/
+DerivedData/
+node_modules/
+dist/
+docs/HANDOFF-SECRETS.local.md
