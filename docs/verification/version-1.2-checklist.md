@@ -72,16 +72,19 @@ keyboard-focus, or appearance evidence.
 
 ## Accessibility and appearance
 
-- [ ] **NOT RUN:** With VoiceOver enabled, the filter exposed its pane label and
-  result count through the macOS accessibility tree, but spoken announcement
-  output and restored-selection speech were not captured. VoiceOver was
-  returned to its original off state.
+- [ ] **PARTIAL — 2026-07-30:** With VoiceOver physically enabled, the filter
+  exposed its left-pane label and changed from 4 matching items to 1 matching
+  item after entering `Alpha`. Escape restored the previously selected row and
+  the VoiceOver focus ring returned to the table. Spoken output itself was not
+  recorded, so announcement-audio evidence remains open. VoiceOver and the
+  table's horizontal scroll position were returned to their original states.
 - [x] **PASS — 2026-07-30:** After filtering the left pane with `.DS`, Escape
   restored the prior selection and Arrow Down moved the selected table row,
   confirming that keyboard focus returned to the table.
 - [x] **PASS — 2026-07-30:** The physical app remained readable and operable in
   both macOS light and dark appearances; the original dark appearance was
   restored after verification.
-- [ ] **NOT RUN:** Increased contrast and reduced motion remain usable. The
-  macOS accessibility-settings extension repeatedly closed the UI automation
-  connection before either setting could be safely toggled and restored.
+- [x] **PASS — 2026-07-30:** With Increased Contrast and Reduce Motion both
+  physically enabled, pane activation, row selection, filtering, Escape focus
+  restoration, and Quick Look open/close remained readable and operable. Both
+  accessibility settings and the original active pane were restored afterward.
