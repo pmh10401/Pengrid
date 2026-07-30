@@ -35,7 +35,9 @@ keyboard-focus, or appearance evidence.
 
 ## Navigation and restoration
 
-- [ ] **NOT RUN:** Back and Forward remain independent in both panes.
+- [x] **PASS — 2026-07-30:** Back and Forward restored OneDrive and Documents
+  in the right pane and Applications and Home in the left pane; each inactive
+  pane kept its location during the other pane's navigation.
 - [ ] **NOT RUN:** Returning near the top, middle, and end of a large folder
   restores position.
 - [ ] **NOT RUN:** Deleted selections, anchors, and history destinations recover
