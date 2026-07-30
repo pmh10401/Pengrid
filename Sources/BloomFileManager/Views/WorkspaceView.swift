@@ -167,11 +167,13 @@ struct WorkspaceView: View {
             )
             return
         }
-        guard let requests = await WorkspaceOpenActions.identifiedRequests(
+        let requests = await WorkspaceOpenActions.identifiedRequests(
             for: urls,
             fileSystem: fileSystem,
             accessCoordinator: cloudAccessCoordinator
-        ) else {
+        )
+        guard !Task.isCancelled else { return }
+        guard let requests else {
             await quickLookController.updateIfPresented(
                 requests: [],
                 materializer: materializer

@@ -226,6 +226,60 @@ import Testing
     }
 
     @MainActor
+    @Test func cancelledEmptyUpdateCannotCloseOrSupersedeNewerPreview() async {
+        let initial = IdentifiedFileRequest(
+            url: URL(filePath: "/Cloud/initial.txt"),
+            identity: identity("initial")
+        )
+        let new = IdentifiedFileRequest(
+            url: URL(filePath: "/Cloud/new.txt"),
+            identity: identity("new")
+        )
+        let recorder = QuickLookPresentationRecorder()
+        let controller = QuickLookController { recorder.present($0) }
+        await controller.prepareAndPresent(
+            requests: [initial],
+            materializer: RecordingGateMaterializer(result: .init(
+                preparedRequests: [initial],
+                failures: [],
+                wasCancelled: false
+            ))
+        )
+
+        let oldSelectionBarrier = SuspendingBarrier()
+        let oldTask = Task { @MainActor in
+            await oldSelectionBarrier.wait()
+            await controller.updateIfPresented(
+                requests: [],
+                materializer: InMemoryCloudMaterializer()
+            )
+        }
+        while await !oldSelectionBarrier.hasWaiter {
+            await Task.yield()
+        }
+        oldTask.cancel()
+
+        let newerMaterializer = SuspendingGateMaterializer()
+        let newTask = Task { @MainActor in
+            await controller.updateIfPresented(
+                requests: [new],
+                materializer: newerMaterializer
+            )
+        }
+        while await !newerMaterializer.hasProgressed {
+            await Task.yield()
+        }
+
+        await oldSelectionBarrier.release()
+        await oldTask.value
+        await newerMaterializer.release()
+        await newTask.value
+
+        #expect(recorder.history == [[initial.url], [new.url]])
+        #expect(controller.isPresenting)
+    }
+
+    @MainActor
     @Test func closingTheSystemPanelStopsFutureSelectionUpdates() async {
         let request = IdentifiedFileRequest(
             url: URL(filePath: "/Cloud/item.txt"),
@@ -610,6 +664,23 @@ private actor SuspendingGateMaterializer: CloudMaterializing {
             failures: [],
             wasCancelled: false
         )
+    }
+
+    func release() {
+        continuation?.resume()
+        continuation = nil
+    }
+}
+
+private actor SuspendingBarrier {
+    private var continuation: CheckedContinuation<Void, Never>?
+    private(set) var hasWaiter = false
+
+    func wait() async {
+        hasWaiter = true
+        await withCheckedContinuation { continuation in
+            self.continuation = continuation
+        }
     }
 
     func release() {

@@ -42,7 +42,7 @@ final class QuickLookController: NSObject, @preconcurrency QLPreviewPanelDataSou
         requests: [IdentifiedFileRequest],
         materializer: any CloudMaterializing
     ) async {
-        guard isPresenting else { return }
+        guard !Task.isCancelled, isPresenting else { return }
         requestGeneration &+= 1
         let generation = requestGeneration
         guard !requests.isEmpty else {
