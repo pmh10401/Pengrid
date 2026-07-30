@@ -90,6 +90,20 @@ enum PaneAccessibilityPresentation {
 }
 
 enum PaneFilterAccessibilityPresentation {
+    static func fieldLabel(for paneID: PaneID) -> String {
+        switch paneID {
+        case .left: "Filter files in left pane"
+        case .right: "Filter files in right pane"
+        }
+    }
+
+    static func closeLabel(for paneID: PaneID) -> String {
+        switch paneID {
+        case .left: "Close left pane file filter"
+        case .right: "Close right pane file filter"
+        }
+    }
+
     static func resultCount(_ count: Int) -> String {
         switch count {
         case 0: "No matching items"

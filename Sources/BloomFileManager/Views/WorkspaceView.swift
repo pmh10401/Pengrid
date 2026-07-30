@@ -5,6 +5,15 @@ private struct QuickLookSelectionKey: Hashable {
     let urls: [URL]
 }
 
+@MainActor
+enum WorkspaceQuickLookSelectionRouting {
+    static func begin(controller: QuickLookController) -> Bool {
+        guard !Task.isCancelled else { return false }
+        controller.invalidatePendingPreparationForSelectionChange()
+        return controller.isPresenting
+    }
+}
+
 struct WorkspaceView: View {
     let workspace: WorkspaceState
     let operationController: FileOperationController
@@ -158,7 +167,9 @@ struct WorkspaceView: View {
     }
 
     private func updateQuickLookForSelection() async {
-        guard quickLookController.isPresenting else { return }
+        guard WorkspaceQuickLookSelectionRouting.begin(
+            controller: quickLookController
+        ) else { return }
         let urls = workspace.selectedURLsForCommands
         guard !urls.isEmpty else {
             await quickLookController.updateIfPresented(

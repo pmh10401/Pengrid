@@ -31,4 +31,18 @@ struct PaneViewStateCacheTests {
         #expect(cache.value(for: b) == nil)
         #expect(cache.value(for: c) != nil)
     }
+
+    @Test func cacheTreatsTrailingDirectorySeparatorsAsTheSameLocation() {
+        var cache = PaneViewStateCache(capacity: 2)
+        let folder = URL(string: "file:///folder")!
+        let folderWithSeparator = URL(string: "file:///folder/")!
+        let state = PaneDirectoryViewState(
+            selection: [URL(filePath: "/folder/report.txt")],
+            scrollAnchor: URL(filePath: "/folder/summary.txt")
+        )
+
+        cache.store(state, for: folderWithSeparator)
+
+        #expect(cache.value(for: folder) == state)
+    }
 }

@@ -15,6 +15,7 @@ final class FilePaneState {
     private var nextRefreshID: UInt64 = 0
     private var pendingMonitorRefreshDirectory: URL?
     private var committedState: PaneSnapshot
+    private var currentNavigationIntent: PaneNavigationIntent?
     private var persistenceChangeHandler: (@MainActor () -> Void)?
     private var selectionBeforeFiltering: Set<URL> = []
     private var navigationHistory = PaneNavigationHistory(capacity: 100)
@@ -207,7 +208,10 @@ final class FilePaneState {
     ) -> Task<Void, Never> {
         prepareForNavigation()
         committedState = snapshot()
-        return startNavigation(to: directory, recordHistory: recordHistory)
+        return startNavigation(
+            to: directory,
+            intent: .user(from: currentDirectory, recordsHistory: recordHistory)
+        )
     }
 
     private func prepareForNavigation() {
@@ -232,6 +236,7 @@ final class FilePaneState {
         taskLifecycle.setLoad(nil)
         restore(committedState)
         currentRequestID = nil
+        currentNavigationIntent = nil
         loadTask = nil
         isLoading = false
         if recoverDirtyMonitor {
@@ -241,12 +246,9 @@ final class FilePaneState {
 
     private func startNavigation(
         to directory: URL,
-        recordHistory: Bool
+        intent: PaneNavigationIntent
     ) -> Task<Void, Never> {
         storeCurrentDirectoryViewState()
-        if recordHistory {
-            navigationHistory.recordUserNavigation(from: currentDirectory, to: directory)
-        }
 
         currentDirectory = directory
         selection.removeAll()
@@ -260,6 +262,7 @@ final class FilePaneState {
         nextRequestID += 1
         let requestID = nextRequestID
         currentRequestID = requestID
+        currentNavigationIntent = intent
         let listingService = listingService
         let task = Task { @MainActor [weak self, listingService] in
             do {
@@ -293,19 +296,23 @@ final class FilePaneState {
 
     func goBack() async {
         prepareForNavigation()
-        let previousState = snapshot()
-        guard let target = navigationHistory.popBackward(from: currentDirectory) else { return }
-        committedState = previousState
-        let task = startNavigation(to: target, recordHistory: false)
+        committedState = snapshot()
+        guard let target = navigationHistory.backward.last else { return }
+        let task = startNavigation(
+            to: target,
+            intent: .backward(from: currentDirectory, destination: target)
+        )
         await Self.awaitTask(task)
     }
 
     func goForward() async {
         prepareForNavigation()
-        let previousState = snapshot()
-        guard let target = navigationHistory.popForward(from: currentDirectory) else { return }
-        committedState = previousState
-        let task = startNavigation(to: target, recordHistory: false)
+        committedState = snapshot()
+        guard let target = navigationHistory.forward.last else { return }
+        let task = startNavigation(
+            to: target,
+            intent: .forward(from: currentDirectory, destination: target)
+        )
         await Self.awaitTask(task)
     }
 
@@ -491,7 +498,10 @@ final class FilePaneState {
 
     private func failNavigation(_ error: Error, requestID: UInt64) {
         guard isCurrentRequest(requestID) else { return }
+        let intent = currentNavigationIntent
         restore(committedState)
+        discardFailedHistoryDestination(for: intent)
+        committedState = snapshot()
         let navigationErrorMessage = error.localizedDescription
         errorMessage = navigationErrorMessage
         finishRequest(requestID)
@@ -500,6 +510,7 @@ final class FilePaneState {
 
     private func completeNavigation(to directory: URL, requestID: UInt64) {
         guard isCurrentRequest(requestID) else { return }
+        commitNavigationHistory(for: currentNavigationIntent, destination: directory)
         restoreDirectoryViewState(for: directory)
         committedState = snapshot()
         finishRequest(requestID)
@@ -558,6 +569,7 @@ final class FilePaneState {
     private func finishRequest(_ requestID: UInt64) {
         guard isCurrentRequest(requestID) else { return }
         currentRequestID = nil
+        currentNavigationIntent = nil
         loadTask = nil
         taskLifecycle.setLoad(nil)
         isLoading = false
@@ -594,6 +606,41 @@ final class FilePaneState {
             PaneScrollRequest(id: UUID(), anchor: $0)
         }
         navigationHistory = snapshot.navigationHistory
+    }
+
+    private func commitNavigationHistory(
+        for intent: PaneNavigationIntent?,
+        destination: URL
+    ) {
+        switch intent {
+        case let .user(origin, recordsHistory):
+            if recordsHistory {
+                navigationHistory.recordUserNavigation(from: origin, to: destination)
+            }
+        case let .backward(origin, expectedDestination):
+            navigationHistory.commitBackwardNavigation(
+                from: origin,
+                to: expectedDestination
+            )
+        case let .forward(origin, expectedDestination):
+            navigationHistory.commitForwardNavigation(
+                from: origin,
+                to: expectedDestination
+            )
+        case nil:
+            break
+        }
+    }
+
+    private func discardFailedHistoryDestination(for intent: PaneNavigationIntent?) {
+        switch intent {
+        case let .backward(_, destination):
+            navigationHistory.discardBackwardDestination(destination)
+        case let .forward(_, destination):
+            navigationHistory.discardForwardDestination(destination)
+        case .user, nil:
+            break
+        }
     }
 
     private static func entryPath(_ url: URL) -> String {
@@ -641,4 +688,10 @@ private struct PaneSnapshot {
     let selection: Set<URL>
     let firstVisibleItem: URL?
     let navigationHistory: PaneNavigationHistory
+}
+
+private enum PaneNavigationIntent {
+    case user(from: URL, recordsHistory: Bool)
+    case backward(from: URL, destination: URL)
+    case forward(from: URL, destination: URL)
 }

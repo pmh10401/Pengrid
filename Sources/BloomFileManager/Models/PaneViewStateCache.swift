@@ -41,6 +41,10 @@ struct PaneViewStateCache: Sendable {
     }
 
     private static func key(_ url: URL) -> String {
-        url.standardizedFileURL.path(percentEncoded: false)
+        var path = url.standardizedFileURL.path(percentEncoded: false)
+        while path.count > 1, path.hasSuffix("/") {
+            path.removeLast()
+        }
+        return path
     }
 }

@@ -31,3 +31,55 @@ import Testing
 @Test func emptyPathDraftIsRejectedBeforeURLResolution() {
     #expect(FilePanePath.expandedPath(for: " \t\n") == nil)
 }
+
+@MainActor
+@Test func focusingPresentedFilterActivatesInactivePaneBeforeEditingSession() {
+    let workspace = WorkspaceState(
+        leftURL: URL(filePath: "/left"),
+        rightURL: URL(filePath: "/right"),
+        listingService: StubDirectoryListingService(values: [:])
+    )
+    workspace.activate(.right)
+    workspace.left.beginFiltering()
+    var activePaneWhenEditingBegan: PaneID?
+
+    PaneFilterFocusRouting.handle(
+        isFocused: true,
+        onActivate: { workspace.activate(.left) },
+        onBeginEditing: { activePaneWhenEditingBegan = workspace.activePaneID },
+        onEndEditing: {}
+    )
+
+    #expect(workspace.activePaneID == .left)
+    #expect(activePaneWhenEditingBegan == .left)
+    #expect(workspace.left.isFilterPresented)
+}
+
+@MainActor
+@Test func escapeFromPathEditorDismissesFilterBeforeCancellingPathEditing() {
+    let pane = FilePaneState(
+        directory: URL(filePath: "/left"),
+        listingService: StubDirectoryListingService(values: [:])
+    )
+    pane.beginFiltering()
+    var pathCancellationCount = 0
+
+    let dismissedFilter = PaneEscapeRouting.handle(
+        isFilterPresented: pane.isFilterPresented,
+        dismissFilter: pane.dismissFiltering,
+        otherwise: { pathCancellationCount += 1 }
+    )
+
+    #expect(dismissedFilter)
+    #expect(!pane.isFilterPresented)
+    #expect(pathCancellationCount == 0)
+
+    let dismissedFilterAgain = PaneEscapeRouting.handle(
+        isFilterPresented: pane.isFilterPresented,
+        dismissFilter: pane.dismissFiltering,
+        otherwise: { pathCancellationCount += 1 }
+    )
+
+    #expect(!dismissedFilterAgain)
+    #expect(pathCancellationCount == 1)
+}

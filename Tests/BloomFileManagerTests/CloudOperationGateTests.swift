@@ -133,6 +133,91 @@ import Testing
     }
 
     @MainActor
+    @Test func selectionChangeInvalidatesPendingInitialQuickLookPreparation() async {
+        let first = IdentifiedFileRequest(
+            url: URL(filePath: "/Cloud/first.txt"),
+            identity: identity("first")
+        )
+        let recorder = QuickLookPresentationRecorder()
+        let controller = QuickLookController { recorder.present($0) }
+        let suspended = SuspendingGateMaterializer()
+        let initialTask = Task { @MainActor in
+            await controller.prepareAndPresent(
+                requests: [first],
+                materializer: suspended
+            )
+        }
+        while await !suspended.hasProgressed {
+            await Task.yield()
+        }
+
+        let shouldPrepareReplacement = WorkspaceQuickLookSelectionRouting.begin(
+            controller: controller
+        )
+        await suspended.release()
+        await initialTask.value
+
+        #expect(!shouldPrepareReplacement)
+        #expect(recorder.history.isEmpty)
+        #expect(!controller.isPresenting)
+    }
+
+    @MainActor
+    @Test func quickLookCommandRejectsSelectionChangedDuringIdentityPreflight() async {
+        let firstURL = URL(filePath: "/Cloud/first.txt")
+        let secondURL = URL(filePath: "/Cloud/second.txt")
+        let firstRequest = IdentifiedFileRequest(
+            url: firstURL,
+            identity: identity("first")
+        )
+        let fileSystem = RecordingFileSystem(
+            existingURLs: [firstURL],
+            identities: [firstURL: firstRequest.identity],
+            suspendIdentityOf: firstURL
+        )
+        let materializer = RecordingGateMaterializer(result: .init(
+            preparedRequests: [firstRequest],
+            failures: [],
+            wasCancelled: false
+        ))
+        let recorder = QuickLookPresentationRecorder()
+        let controller = QuickLookController { recorder.present($0) }
+        let workspace = workspace(left: URL(filePath: "/Cloud"))
+        workspace.left.selection = [firstURL]
+        let capturedSelection = WorkspaceQuickLookCommandSelection(
+            paneID: workspace.activePaneID,
+            urls: workspace.selectedURLsForCommands
+        )
+
+        let quickLookTask = Task { @MainActor in
+            await WorkspaceQuickLookCommandRouting.prepareAndPresent(
+                capturedSelection: capturedSelection,
+                currentSelection: {
+                    WorkspaceQuickLookCommandSelection(
+                        paneID: workspace.activePaneID,
+                        urls: workspace.selectedURLsForCommands
+                    )
+                },
+                controller: controller,
+                materializer: materializer,
+                fileSystem: fileSystem
+            )
+        }
+        while await !fileSystem.hasSuspendedIdentity {
+            await Task.yield()
+        }
+
+        workspace.right.selection = [secondURL]
+        workspace.activate(.right)
+        await fileSystem.releaseSuspendedIdentity()
+        await quickLookTask.value
+
+        #expect(recorder.history.isEmpty)
+        #expect(await materializer.recordedRequests.isEmpty)
+        #expect(!controller.isPresenting)
+    }
+
+    @MainActor
     @Test func liveQuickLookClosesForEmptyOrFailedReplacement() async {
         let first = IdentifiedFileRequest(
             url: URL(filePath: "/Cloud/first.txt"),

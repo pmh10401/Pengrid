@@ -11,6 +11,11 @@ final class QuickLookController: NSObject, @preconcurrency QLPreviewPanelDataSou
         self.onPresent = onPresent
     }
 
+    func invalidatePendingPreparationForSelectionChange() {
+        guard !Task.isCancelled else { return }
+        requestGeneration &+= 1
+    }
+
     func prepareAndPresent(
         requests: [IdentifiedFileRequest],
         materializer: any CloudMaterializing
@@ -42,9 +47,10 @@ final class QuickLookController: NSObject, @preconcurrency QLPreviewPanelDataSou
         requests: [IdentifiedFileRequest],
         materializer: any CloudMaterializing
     ) async {
-        guard !Task.isCancelled, isPresenting else { return }
+        guard !Task.isCancelled else { return }
         requestGeneration &+= 1
         let generation = requestGeneration
+        guard isPresenting else { return }
         guard !requests.isEmpty else {
             presentPrepared(urls: [])
             return

@@ -35,6 +35,7 @@ enum InlineTextEditingEvent: Equatable {
 
 final class PaneActivatingTableView: NSTableView {
     var onBecomeFirstResponder: (() -> Void)?
+    var onCancel: (() -> Bool)?
 
     override func becomeFirstResponder() -> Bool {
         let accepted = super.becomeFirstResponder()
@@ -44,6 +45,11 @@ final class PaneActivatingTableView: NSTableView {
 
     override func keyDown(with event: NSEvent) {
         let commandModifiers: NSEvent.ModifierFlags = [.command, .control, .option, .shift]
+        if event.keyCode == 53,
+           event.modifierFlags.intersection(commandModifiers).isEmpty,
+           onCancel?() == true {
+            return
+        }
         if event.charactersIgnoringModifiers == " ",
            event.modifierFlags.intersection(commandModifiers).isEmpty,
            NSApp.mainMenu?.performKeyEquivalent(with: event) == true {
@@ -67,6 +73,7 @@ struct FileTableView: NSViewRepresentable {
     let onActivatePane: () -> Void
     let onOpen: (FileItem) -> Void
     let onSortChange: (FileSort) -> Void
+    let onCancel: () -> Bool
     let onFirstVisibleItemChange: (URL?) -> Void
     let onConsumeScrollRequest: (UUID) -> Void
     let onConsumeRenameRequest: (UUID) -> Void
@@ -97,6 +104,7 @@ struct FileTableView: NSViewRepresentable {
         onActivatePane: @escaping () -> Void,
         onOpen: @escaping (FileItem) -> Void,
         onSortChange: @escaping (FileSort) -> Void,
+        onCancel: @escaping () -> Bool = { false },
         onFirstVisibleItemChange: @escaping (URL?) -> Void = { _ in },
         onConsumeScrollRequest: @escaping (UUID) -> Void = { _ in },
         onConsumeRenameRequest: @escaping (UUID) -> Void = { _ in },
@@ -124,6 +132,7 @@ struct FileTableView: NSViewRepresentable {
         self.onActivatePane = onActivatePane
         self.onOpen = onOpen
         self.onSortChange = onSortChange
+        self.onCancel = onCancel
         self.onFirstVisibleItemChange = onFirstVisibleItemChange
         self.onConsumeScrollRequest = onConsumeScrollRequest
         self.onConsumeRenameRequest = onConsumeRenameRequest
@@ -152,6 +161,9 @@ struct FileTableView: NSViewRepresentable {
         let tableView = PaneActivatingTableView()
         tableView.onBecomeFirstResponder = { [weak coordinator] in
             coordinator?.activatePaneFromFocus()
+        }
+        tableView.onCancel = { [weak coordinator] in
+            coordinator?.cancelFromTable() ?? false
         }
         tableView.dataSource = coordinator
         tableView.delegate = coordinator
@@ -223,6 +235,7 @@ struct FileTableView: NSViewRepresentable {
         scrollView.contentView.postsBoundsChangedNotifications = false
         guard let tableView = scrollView.documentView as? PaneActivatingTableView else { return }
         tableView.onBecomeFirstResponder = nil
+        tableView.onCancel = nil
         tableView.dataSource = nil
         tableView.delegate = nil
         tableView.target = nil
@@ -371,7 +384,20 @@ extension FileTableView {
             else { return }
 
             isApplyingScrollRequest = true
-            tableView.scrollRowToVisible(row)
+            if let scrollView = tableView.enclosingScrollView {
+                let clipView = scrollView.contentView
+                let requestedBounds = NSRect(
+                    x: clipView.bounds.minX,
+                    y: tableView.rect(ofRow: row).minY,
+                    width: clipView.bounds.width,
+                    height: clipView.bounds.height
+                )
+                let targetBounds = clipView.constrainBoundsRect(requestedBounds)
+                clipView.scroll(to: targetBounds.origin)
+                scrollView.reflectScrolledClipView(clipView)
+            } else {
+                tableView.scrollRowToVisible(row)
+            }
             lastHandledScrollRequestID = request.id
             parent.onConsumeScrollRequest(request.id)
             isApplyingScrollRequest = false
@@ -440,6 +466,10 @@ extension FileTableView {
 
         func activatePaneFromFocus() {
             parent.onActivatePane()
+        }
+
+        func cancelFromTable() -> Bool {
+            parent.onCancel()
         }
 
         @objc func openClickedRow(_ sender: NSTableView) {

@@ -16,15 +16,37 @@ struct PaneNavigationHistory: Equatable, Sendable {
     }
 
     mutating func popBackward(from current: URL) -> URL? {
-        guard let target = backward.popLast() else { return nil }
-        forward = Self.appending(current, to: forward, capacity: capacity)
+        guard let target = backward.last else { return nil }
+        commitBackwardNavigation(from: current, to: target)
         return target
     }
 
     mutating func popForward(from current: URL) -> URL? {
-        guard let target = forward.popLast() else { return nil }
-        backward = Self.appending(current, to: backward, capacity: capacity)
+        guard let target = forward.last else { return nil }
+        commitForwardNavigation(from: current, to: target)
         return target
+    }
+
+    mutating func commitBackwardNavigation(from current: URL, to destination: URL) {
+        guard backward.last.map(Self.path) == Self.path(destination) else { return }
+        backward.removeLast()
+        forward = Self.appending(current, to: forward, capacity: capacity)
+    }
+
+    mutating func commitForwardNavigation(from current: URL, to destination: URL) {
+        guard forward.last.map(Self.path) == Self.path(destination) else { return }
+        forward.removeLast()
+        backward = Self.appending(current, to: backward, capacity: capacity)
+    }
+
+    mutating func discardBackwardDestination(_ destination: URL) {
+        guard backward.last.map(Self.path) == Self.path(destination) else { return }
+        backward.removeLast()
+    }
+
+    mutating func discardForwardDestination(_ destination: URL) {
+        guard forward.last.map(Self.path) == Self.path(destination) else { return }
+        forward.removeLast()
     }
 
     private static func appending(

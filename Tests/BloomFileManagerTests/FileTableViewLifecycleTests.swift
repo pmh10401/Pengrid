@@ -481,6 +481,80 @@ struct FileTableViewLifecycleTests {
         #expect(recorder.performCount == 1)
     }
 
+    @Test func escapeFromFocusedFilterResultTableDismissesFilterFirst() async throws {
+        let directory = URL(filePath: "/filter", directoryHint: .isDirectory)
+        let captured = makeTableItem(named: "captured.txt", in: directory)
+        let result = makeTableItem(named: "result.txt", in: directory)
+        let pane = FilePaneState(
+            directory: directory,
+            listingService: StubDirectoryListingService(values: [
+                directory: [captured, result]
+            ])
+        )
+        await pane.navigate(to: directory, recordHistory: false)
+        pane.selection = [captured.url]
+        pane.beginFiltering()
+        pane.updateFilterQuery("result")
+        var broaderCancellations = 0
+        let selection = Binding<Set<URL>>(
+            get: { pane.selection },
+            set: { pane.selection = $0 }
+        )
+        let view = FileTableView(
+            items: pane.visibleItems,
+            selection: selection,
+            onActivatePane: {},
+            onOpen: { _ in },
+            onSortChange: { _ in },
+            onCancel: {
+                guard pane.isFilterPresented else {
+                    broaderCancellations += 1
+                    return false
+                }
+                pane.dismissFiltering()
+                return true
+            }
+        )
+        let coordinator = view.makeCoordinator()
+        let scroll = view.makeScrollView(coordinator: coordinator)
+        let table = try #require(scroll.documentView as? PaneActivatingTableView)
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 500, height: 200),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = scroll
+        coordinator.apply(items: pane.visibleItems, selection: [], to: table)
+        table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+        coordinator.tableViewSelectionDidChange(Notification(
+            name: NSTableView.selectionDidChangeNotification,
+            object: table
+        ))
+        #expect(window.makeFirstResponder(table))
+        #expect(pane.selection == [result.url])
+        let escape = try #require(NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: window.windowNumber,
+            context: nil,
+            characters: "\u{1B}",
+            charactersIgnoringModifiers: "\u{1B}",
+            isARepeat: false,
+            keyCode: 53
+        ))
+
+        table.keyDown(with: escape)
+
+        #expect(!pane.isFilterPresented)
+        #expect(pane.filterQuery.isEmpty)
+        #expect(pane.selection == [captured.url])
+        #expect(pane.focusRequestID != nil)
+        #expect(broaderCancellations == 0)
+    }
+
     @Test func tableReportsTheFirstVisibleItemAfterScrolling() throws {
         let directory = URL(filePath: "/scroll", directoryHint: .isDirectory)
         let items = (0..<30).map {
@@ -507,6 +581,31 @@ struct FileTableViewLifecycleTests {
 
         let index = try #require(items.firstIndex { $0.url == reported })
         #expect((19...21).contains(index))
+    }
+
+    @Test func scrollRestorationPinsTopAnchorToFirstVisibleRow() throws {
+        let fixture = try scrollRestorationFixture(anchorIndex: 0, initialY: 300)
+
+        fixture.coordinator.applyScrollRequest(to: fixture.table)
+
+        #expect(fixture.table.rows(in: fixture.table.visibleRect).location == 0)
+    }
+
+    @Test func scrollRestorationPinsMiddleAnchorToFirstVisibleRow() throws {
+        let fixture = try scrollRestorationFixture(anchorIndex: 15, initialY: 0)
+
+        fixture.coordinator.applyScrollRequest(to: fixture.table)
+
+        #expect(fixture.table.rows(in: fixture.table.visibleRect).location == 15)
+    }
+
+    @Test func scrollRestorationClampsEndAnchorToDocumentBottom() throws {
+        let fixture = try scrollRestorationFixture(anchorIndex: 29, initialY: 0)
+
+        fixture.coordinator.applyScrollRequest(to: fixture.table)
+
+        let visibleRows = fixture.table.rows(in: fixture.table.visibleRect)
+        #expect(NSMaxRange(visibleRows) == 30)
     }
 
     @Test func tableConsumesEachAvailableScrollRequestExactlyOnce() throws {
@@ -592,6 +691,39 @@ struct FileTableViewLifecycleTests {
             onOpen: { _ in },
             onSortChange: { _ in }
         )
+    }
+
+    private func scrollRestorationFixture(
+        anchorIndex: Int,
+        initialY: CGFloat
+    ) throws -> (
+        coordinator: FileTableView.Coordinator,
+        scroll: NSScrollView,
+        table: PaneActivatingTableView
+    ) {
+        let directory = URL(filePath: "/scroll", directoryHint: .isDirectory)
+        let items = (0..<30).map {
+            makeTableItem(named: String(format: "item-%02d", $0), in: directory)
+        }
+        let view = FileTableView(
+            items: items,
+            selection: .constant([]),
+            scrollRequest: PaneScrollRequest(id: UUID(), anchor: items[anchorIndex].url),
+            onActivatePane: {},
+            onOpen: { _ in },
+            onSortChange: { _ in }
+        )
+        let coordinator = view.makeCoordinator()
+        let scroll = view.makeScrollView(coordinator: coordinator)
+        scroll.hasVerticalScroller = false
+        scroll.hasHorizontalScroller = false
+        scroll.frame = NSRect(x: 0, y: 0, width: 500, height: 140)
+        let table = try #require(scroll.documentView as? PaneActivatingTableView)
+        table.frame = NSRect(x: 0, y: 0, width: 500, height: 900)
+        coordinator.apply(items: items, selection: [], to: table)
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: initialY))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        return (coordinator, scroll, table)
     }
 }
 

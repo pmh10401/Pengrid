@@ -8,6 +8,40 @@ enum FilePanePath {
     }
 }
 
+@MainActor
+enum PaneFilterFocusRouting {
+    static func handle(
+        isFocused: Bool,
+        onActivate: () -> Void,
+        onBeginEditing: () -> Void,
+        onEndEditing: () -> Void
+    ) {
+        if isFocused {
+            onActivate()
+            onBeginEditing()
+        } else {
+            onEndEditing()
+        }
+    }
+}
+
+@MainActor
+enum PaneEscapeRouting {
+    @discardableResult
+    static func handle(
+        isFilterPresented: Bool,
+        dismissFilter: () -> Void,
+        otherwise: () -> Void = {}
+    ) -> Bool {
+        guard isFilterPresented else {
+            otherwise()
+            return false
+        }
+        dismissFilter()
+        return true
+    }
+}
+
 struct FilePaneView: View {
     let paneID: PaneID
     let state: FilePaneState
@@ -63,7 +97,9 @@ struct FilePaneView: View {
                         .textFieldStyle(.roundedBorder)
                         .focused($pathFieldIsFocused)
                         .onSubmit { submitPath() }
-                        .onExitCommand { cancelPathEditing() }
+                        .onExitCommand {
+                            handleEscape(otherwise: cancelPathEditing)
+                        }
                 } else {
                     Button {
                         beginPathEditing()
@@ -122,13 +158,13 @@ struct FilePaneView: View {
                     )
                     .textFieldStyle(.roundedBorder)
                     .focused($filterFieldIsFocused)
-                    .onExitCommand { dismissFilter() }
+                    .onExitCommand { handleEscape() }
                     .accessibilityIdentifier(
                         paneID == .left
                             ? AccessibilityIdentifiers.leftPaneFilter
                             : AccessibilityIdentifiers.rightPaneFilter
                     )
-                    .accessibilityLabel("Filter files in this folder")
+                    .accessibilityLabel(PaneFilterAccessibilityPresentation.fieldLabel(for: paneID))
                     .accessibilityValue(
                         PaneFilterAccessibilityPresentation.resultCount(state.filterResultCount)
                     )
@@ -139,7 +175,7 @@ struct FilePaneView: View {
                         .accessibilityHidden(true)
 
                     Button("Close") { dismissFilter() }
-                        .accessibilityLabel("Close file filter")
+                        .accessibilityLabel(PaneFilterAccessibilityPresentation.closeLabel(for: paneID))
                 }
                 .padding(.horizontal, 8)
                 .frame(height: 38)
@@ -159,6 +195,7 @@ struct FilePaneView: View {
                 onActivatePane: onActivate,
                 onOpen: open,
                 onSortChange: { state.sort = $0 },
+                onCancel: { handleEscape() },
                 onFirstVisibleItemChange: state.recordFirstVisibleItem,
                 onConsumeScrollRequest: state.consumeScrollRestoreRequest,
                 onConsumeRenameRequest: state.consumeInlineRenameRequest,
@@ -188,6 +225,7 @@ struct FilePaneView: View {
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)
         }
+        .onExitCommand { handleEscape() }
         .onChange(of: state.isEditingPath) { _, isEditing in
             if isEditing {
                 pathDraft = state.currentDirectory.path
@@ -217,11 +255,12 @@ struct FilePaneView: View {
             }
         }
         .onChange(of: filterFieldIsFocused) { _, isFocused in
-            if isFocused {
-                beginFilterEditingSession()
-            } else {
-                endFilterEditingSession()
-            }
+            PaneFilterFocusRouting.handle(
+                isFocused: isFocused,
+                onActivate: onActivate,
+                onBeginEditing: beginFilterEditingSession,
+                onEndEditing: endFilterEditingSession
+            )
         }
         .onChange(of: state.isFilterPresented) { _, isPresented in
             guard !isPresented else { return }
@@ -430,5 +469,14 @@ struct FilePaneView: View {
         filterFieldIsFocused = false
         endFilterEditingSession()
         state.dismissFiltering()
+    }
+
+    @discardableResult
+    private func handleEscape(otherwise: () -> Void = {}) -> Bool {
+        PaneEscapeRouting.handle(
+            isFilterPresented: state.isFilterPresented,
+            dismissFilter: dismissFilter,
+            otherwise: otherwise
+        )
     }
 }

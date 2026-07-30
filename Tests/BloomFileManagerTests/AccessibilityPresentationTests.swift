@@ -49,6 +49,10 @@ import Testing
 @Test func paneFilterAccessibilityIsStableAndReportsResults() {
     #expect(AccessibilityIdentifiers.leftPaneFilter == "leftPane.filter")
     #expect(AccessibilityIdentifiers.rightPaneFilter == "rightPane.filter")
+    #expect(PaneFilterAccessibilityPresentation.fieldLabel(for: .left) == "Filter files in left pane")
+    #expect(PaneFilterAccessibilityPresentation.fieldLabel(for: .right) == "Filter files in right pane")
+    #expect(PaneFilterAccessibilityPresentation.closeLabel(for: .left) == "Close left pane file filter")
+    #expect(PaneFilterAccessibilityPresentation.closeLabel(for: .right) == "Close right pane file filter")
     #expect(PaneFilterAccessibilityPresentation.resultCount(0) == "No matching items")
     #expect(PaneFilterAccessibilityPresentation.resultCount(1) == "1 matching item")
     #expect(PaneFilterAccessibilityPresentation.resultCount(12) == "12 matching items")
