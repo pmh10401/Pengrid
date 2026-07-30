@@ -53,12 +53,18 @@ keyboard-focus, or appearance evidence.
 
 ## Quick Look
 
-- [ ] **NOT RUN:** An open panel follows local-file selection.
+- [x] **PASS — 2026-07-30:** A physical Quick Look panel initially showed
+  `café-notes.txt`; changing the live table selection to `여행계획.txt` updated
+  the same panel to the new filename without reopening it.
 - [x] **PASS — 2026-07-30:** Quick Look on a physical OneDrive online-only item
   materialized the selected file: its `dataless` flag cleared and the parent
   folder's online-only count changed from 8 to 7 before presentation.
-- [ ] **NOT RUN:** Empty, deleted, offline, and superseded selections do not
-  show stale content.
+- [x] **PASS — 2026-07-30:** Navigating the pane to an empty physical folder
+  closed its live Quick Look session. Deleting a separately previewed fixture
+  file also closed the panel immediately and cleared the table selection.
+- [ ] **NOT RUN:** Physical offline-provider and superseded-materialization race
+  cases do not show stale content. Their automated operation-gate regressions
+  pass, but no separate physical provider race was induced.
 
 ## Accessibility and appearance
 
