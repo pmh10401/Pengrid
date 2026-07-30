@@ -8,8 +8,8 @@ keyboard-focus, or appearance evidence.
 
 ## Automated evidence
 
-- [x] **PASS — 2026-07-30:** The exact serial full Swift test suite passed 576
-  tests in 45 suites with zero failures in 36.348 seconds.
+- [x] **PASS — 2026-07-30:** The exact serial full Swift test suite passed 588
+  tests in 45 suites with zero failures in 35.825 seconds.
 - [x] **PASS — 2026-07-30:** `./script/build_and_run.sh --verify` exited zero
   from the same worktree state and confirmed the launched `BloomFileManager`
   process. The staged development executable is a Mach-O arm64 binary and its
