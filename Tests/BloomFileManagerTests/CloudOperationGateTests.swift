@@ -99,6 +99,299 @@ import Testing
     }
 
     @MainActor
+    @Test func quickLookUpdatesOnlyAfterItHasBeenPresented() async {
+        let first = IdentifiedFileRequest(
+            url: URL(filePath: "/Cloud/first.txt"),
+            identity: identity("first")
+        )
+        let second = IdentifiedFileRequest(
+            url: URL(filePath: "/Cloud/second.txt"),
+            identity: identity("second")
+        )
+        let recorder = QuickLookPresentationRecorder()
+        let controller = QuickLookController { recorder.present($0) }
+        let materializer = RecordingGateMaterializer(result: .init(
+            preparedRequests: [second],
+            failures: [],
+            wasCancelled: false
+        ))
+
+        await controller.updateIfPresented(requests: [second], materializer: materializer)
+        #expect(recorder.history.isEmpty)
+
+        await controller.prepareAndPresent(
+            requests: [first],
+            materializer: RecordingGateMaterializer(result: .init(
+                preparedRequests: [first],
+                failures: [],
+                wasCancelled: false
+            ))
+        )
+        await controller.updateIfPresented(requests: [second], materializer: materializer)
+
+        #expect(recorder.history == [[first.url], [second.url]])
+    }
+
+    @MainActor
+    @Test func selectionChangeInvalidatesPendingInitialQuickLookPreparation() async {
+        let first = IdentifiedFileRequest(
+            url: URL(filePath: "/Cloud/first.txt"),
+            identity: identity("first")
+        )
+        let recorder = QuickLookPresentationRecorder()
+        let controller = QuickLookController { recorder.present($0) }
+        let suspended = SuspendingGateMaterializer()
+        let initialTask = Task { @MainActor in
+            await controller.prepareAndPresent(
+                requests: [first],
+                materializer: suspended
+            )
+        }
+        while await !suspended.hasProgressed {
+            await Task.yield()
+        }
+
+        let shouldPrepareReplacement = WorkspaceQuickLookSelectionRouting.begin(
+            controller: controller
+        )
+        await suspended.release()
+        await initialTask.value
+
+        #expect(!shouldPrepareReplacement)
+        #expect(recorder.history.isEmpty)
+        #expect(!controller.isPresenting)
+    }
+
+    @MainActor
+    @Test func quickLookCommandRejectsSelectionChangedDuringIdentityPreflight() async {
+        let firstURL = URL(filePath: "/Cloud/first.txt")
+        let secondURL = URL(filePath: "/Cloud/second.txt")
+        let firstRequest = IdentifiedFileRequest(
+            url: firstURL,
+            identity: identity("first")
+        )
+        let fileSystem = RecordingFileSystem(
+            existingURLs: [firstURL],
+            identities: [firstURL: firstRequest.identity],
+            suspendIdentityOf: firstURL
+        )
+        let materializer = RecordingGateMaterializer(result: .init(
+            preparedRequests: [firstRequest],
+            failures: [],
+            wasCancelled: false
+        ))
+        let recorder = QuickLookPresentationRecorder()
+        let controller = QuickLookController { recorder.present($0) }
+        let workspace = workspace(left: URL(filePath: "/Cloud"))
+        workspace.left.selection = [firstURL]
+        let capturedSelection = WorkspaceQuickLookCommandSelection(
+            paneID: workspace.activePaneID,
+            urls: workspace.selectedURLsForCommands
+        )
+
+        let quickLookTask = Task { @MainActor in
+            await WorkspaceQuickLookCommandRouting.prepareAndPresent(
+                capturedSelection: capturedSelection,
+                currentSelection: {
+                    WorkspaceQuickLookCommandSelection(
+                        paneID: workspace.activePaneID,
+                        urls: workspace.selectedURLsForCommands
+                    )
+                },
+                controller: controller,
+                materializer: materializer,
+                fileSystem: fileSystem
+            )
+        }
+        while await !fileSystem.hasSuspendedIdentity {
+            await Task.yield()
+        }
+
+        workspace.right.selection = [secondURL]
+        workspace.activate(.right)
+        await fileSystem.releaseSuspendedIdentity()
+        await quickLookTask.value
+
+        #expect(recorder.history.isEmpty)
+        #expect(await materializer.recordedRequests.isEmpty)
+        #expect(!controller.isPresenting)
+    }
+
+    @MainActor
+    @Test func liveQuickLookClosesForEmptyOrFailedReplacement() async {
+        let first = IdentifiedFileRequest(
+            url: URL(filePath: "/Cloud/first.txt"),
+            identity: identity("first")
+        )
+        let recorder = QuickLookPresentationRecorder()
+        let controller = QuickLookController { recorder.present($0) }
+        await controller.prepareAndPresent(
+            requests: [first],
+            materializer: RecordingGateMaterializer(result: .init(
+                preparedRequests: [first],
+                failures: [],
+                wasCancelled: false
+            ))
+        )
+
+        await controller.updateIfPresented(
+            requests: [],
+            materializer: InMemoryCloudMaterializer()
+        )
+
+        #expect(recorder.history == [[first.url], []])
+        #expect(!controller.isPresenting)
+
+        await controller.prepareAndPresent(
+            requests: [first],
+            materializer: RecordingGateMaterializer(result: .init(
+                preparedRequests: [first],
+                failures: [],
+                wasCancelled: false
+            ))
+        )
+        await controller.updateIfPresented(
+            requests: [first],
+            materializer: RecordingGateMaterializer(result: .init(
+                preparedRequests: [],
+                failures: [.init(name: "first.txt", reason: .offline)],
+                wasCancelled: false
+            ))
+        )
+        #expect(recorder.history.suffix(2) == [[first.url], []])
+        #expect(!controller.isPresenting)
+    }
+
+    @MainActor
+    @Test func supersededLiveUpdateCannotReplaceTheLatestPreview() async {
+        let initial = IdentifiedFileRequest(
+            url: URL(filePath: "/Cloud/initial.txt"),
+            identity: identity("initial")
+        )
+        let old = IdentifiedFileRequest(
+            url: URL(filePath: "/Cloud/old.txt"),
+            identity: identity("old")
+        )
+        let new = IdentifiedFileRequest(
+            url: URL(filePath: "/Cloud/new.txt"),
+            identity: identity("new")
+        )
+        let recorder = QuickLookPresentationRecorder()
+        let controller = QuickLookController { recorder.present($0) }
+        await controller.prepareAndPresent(
+            requests: [initial],
+            materializer: RecordingGateMaterializer(result: .init(
+                preparedRequests: [initial],
+                failures: [],
+                wasCancelled: false
+            ))
+        )
+        let suspended = SuspendingGateMaterializer()
+        let oldTask = Task { @MainActor in
+            await controller.updateIfPresented(
+                requests: [old],
+                materializer: suspended
+            )
+        }
+        while await !suspended.hasProgressed {
+            await Task.yield()
+        }
+        await controller.updateIfPresented(
+            requests: [new],
+            materializer: RecordingGateMaterializer(result: .init(
+                preparedRequests: [new],
+                failures: [],
+                wasCancelled: false
+            ))
+        )
+        await suspended.release()
+        await oldTask.value
+
+        #expect(recorder.history == [[initial.url], [new.url]])
+    }
+
+    @MainActor
+    @Test func cancelledEmptyUpdateCannotCloseOrSupersedeNewerPreview() async {
+        let initial = IdentifiedFileRequest(
+            url: URL(filePath: "/Cloud/initial.txt"),
+            identity: identity("initial")
+        )
+        let new = IdentifiedFileRequest(
+            url: URL(filePath: "/Cloud/new.txt"),
+            identity: identity("new")
+        )
+        let recorder = QuickLookPresentationRecorder()
+        let controller = QuickLookController { recorder.present($0) }
+        await controller.prepareAndPresent(
+            requests: [initial],
+            materializer: RecordingGateMaterializer(result: .init(
+                preparedRequests: [initial],
+                failures: [],
+                wasCancelled: false
+            ))
+        )
+
+        let oldSelectionBarrier = SuspendingBarrier()
+        let oldTask = Task { @MainActor in
+            await oldSelectionBarrier.wait()
+            await controller.updateIfPresented(
+                requests: [],
+                materializer: InMemoryCloudMaterializer()
+            )
+        }
+        while await !oldSelectionBarrier.hasWaiter {
+            await Task.yield()
+        }
+        oldTask.cancel()
+
+        let newerMaterializer = SuspendingGateMaterializer()
+        let newTask = Task { @MainActor in
+            await controller.updateIfPresented(
+                requests: [new],
+                materializer: newerMaterializer
+            )
+        }
+        while await !newerMaterializer.hasProgressed {
+            await Task.yield()
+        }
+
+        await oldSelectionBarrier.release()
+        await oldTask.value
+        await newerMaterializer.release()
+        await newTask.value
+
+        #expect(recorder.history == [[initial.url], [new.url]])
+        #expect(controller.isPresenting)
+    }
+
+    @MainActor
+    @Test func closingTheSystemPanelStopsFutureSelectionUpdates() async {
+        let request = IdentifiedFileRequest(
+            url: URL(filePath: "/Cloud/item.txt"),
+            identity: identity("item")
+        )
+        let recorder = QuickLookPresentationRecorder()
+        let controller = QuickLookController { recorder.present($0) }
+        await controller.prepareAndPresent(
+            requests: [request],
+            materializer: RecordingGateMaterializer(result: .init(
+                preparedRequests: [request],
+                failures: [],
+                wasCancelled: false
+            ))
+        )
+
+        controller.previewPanelWillClose(nil)
+
+        #expect(!controller.isPresenting)
+        await controller.updateIfPresented(
+            requests: [request],
+            materializer: InMemoryCloudMaterializer()
+        )
+        #expect(recorder.history == [[request.url]])
+    }
+
+    @MainActor
     @Test func openDoesNotReachNSWorkspaceAfterMaterializationFailure() async {
         let url = URL(filePath: "/Cloud/private/account/brief.pages")
         let directory = url.deletingLastPathComponent()
@@ -456,6 +749,23 @@ private actor SuspendingGateMaterializer: CloudMaterializing {
             failures: [],
             wasCancelled: false
         )
+    }
+
+    func release() {
+        continuation?.resume()
+        continuation = nil
+    }
+}
+
+private actor SuspendingBarrier {
+    private var continuation: CheckedContinuation<Void, Never>?
+    private(set) var hasWaiter = false
+
+    func wait() async {
+        hasWaiter = true
+        await withCheckedContinuation { continuation in
+            self.continuation = continuation
+        }
     }
 
     func release() {

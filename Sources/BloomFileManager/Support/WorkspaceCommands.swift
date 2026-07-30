@@ -70,6 +70,13 @@ enum WorkspaceCommandActions {
 }
 
 @MainActor
+enum WorkspaceFilterCommandActions {
+    static func showFilter(in workspace: WorkspaceState) {
+        workspace.activePane.requestFilterFocus()
+    }
+}
+
+@MainActor
 protocol WorkspaceOpening {
     func open(_ url: URL)
 }
@@ -148,6 +155,36 @@ enum WorkspaceOpenActions {
             requests.append(IdentifiedFileRequest(url: url, identity: identity))
         }
         return requests
+    }
+}
+
+struct WorkspaceQuickLookCommandSelection: Equatable, Sendable {
+    let paneID: PaneID
+    let urls: [URL]
+}
+
+@MainActor
+enum WorkspaceQuickLookCommandRouting {
+    static func prepareAndPresent(
+        capturedSelection: WorkspaceQuickLookCommandSelection,
+        currentSelection: @MainActor () -> WorkspaceQuickLookCommandSelection,
+        controller: QuickLookController,
+        materializer: any CloudMaterializing,
+        fileSystem: any FileSystemAccess,
+        accessCoordinator: CloudLocationScopedAccessCoordinator = .init()
+    ) async {
+        guard let requests = await WorkspaceOpenActions.identifiedRequests(
+            for: capturedSelection.urls,
+            fileSystem: fileSystem,
+            accessCoordinator: accessCoordinator
+        ),
+        !Task.isCancelled,
+        currentSelection() == capturedSelection
+        else { return }
+        await controller.prepareAndPresent(
+            requests: requests,
+            materializer: materializer
+        )
     }
 }
 
@@ -371,17 +408,24 @@ struct WorkspaceCommands: Commands {
             .disabled(!policy.canOpen)
 
             Button("Quick Look") {
-                guard policy.canQuickLook else { return }
-                let urls = workspace?.selectedURLsForCommands ?? []
+                guard policy.canQuickLook, let workspace else { return }
+                let capturedSelection = WorkspaceQuickLookCommandSelection(
+                    paneID: workspace.activePaneID,
+                    urls: workspace.selectedURLsForCommands
+                )
                 Task {
-                    guard let requests = await WorkspaceOpenActions.identifiedRequests(
-                        for: urls,
+                    await WorkspaceQuickLookCommandRouting.prepareAndPresent(
+                        capturedSelection: capturedSelection,
+                        currentSelection: {
+                            WorkspaceQuickLookCommandSelection(
+                                paneID: workspace.activePaneID,
+                                urls: workspace.selectedURLsForCommands
+                            )
+                        },
+                        controller: quickLookController,
+                        materializer: materializer,
                         fileSystem: fileSystem,
                         accessCoordinator: accessCoordinator
-                    ) else { return }
-                    await quickLookController.prepareAndPresent(
-                        requests: requests,
-                        materializer: materializer
                     )
                 }
             }
@@ -415,6 +459,15 @@ struct WorkspaceCommands: Commands {
             }
             .keyboardShortcut("v", modifiers: .command)
             .disabled(workspace == nil || policy.pasteRoute == .unavailable)
+        }
+
+        CommandGroup(after: .pasteboard) {
+            Button("Filter Files") {
+                guard let workspace else { return }
+                WorkspaceFilterCommandActions.showFilter(in: workspace)
+            }
+            .keyboardShortcut("f", modifiers: .command)
+            .disabled(workspace == nil)
         }
 
         CommandMenu("File Operations") {

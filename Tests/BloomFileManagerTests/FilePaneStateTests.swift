@@ -42,24 +42,146 @@ struct FilePaneStateTests {
         #expect(pane.forwardHistory.isEmpty)
     }
 
-    @Test func failedBackNavigationRestoresThePreviousHistory() async {
+    @Test func successfulNavigationsKeepOnlyTheNewestHundredBackEntries() async {
+        let root = URL(filePath: "/history-root")
+        let pane = FilePaneState(directory: root, listingService: StubDirectoryListingService(values: [:]))
+
+        for index in 1...105 {
+            await pane.navigate(to: root.appending(path: "\(index)"))
+        }
+
+        #expect(pane.backHistory.count == 100)
+    }
+
+    @Test func failedBackNavigationDropsOnlyTheAttemptedDestination() async {
         let home = URL(filePath: "/private/test-home")
+        let stale = home.appending(path: "Stale")
         let documents = home.appending(path: "Documents")
         let downloads = home.appending(path: "Downloads")
+        let listing = MutableFailingDirectoryListingService()
         let pane = FilePaneState(
             directory: home,
-            listingService: FailingDirectoryListingService(failingDirectories: [home])
+            listingService: listing
         )
 
+        await pane.navigate(to: stale)
         await pane.navigate(to: documents)
         await pane.navigate(to: downloads)
         await pane.goBack()
+        listing.fail(stale)
         await pane.goBack()
 
         #expect(pane.currentDirectory == documents)
         #expect(pane.backHistory == [home])
         #expect(pane.forwardHistory == [downloads])
         #expect(pane.errorMessage != nil)
+
+        await pane.goBack()
+
+        #expect(pane.currentDirectory == home)
+        #expect(pane.backHistory.isEmpty)
+        #expect(pane.forwardHistory == [downloads, documents])
+    }
+
+    @Test func failedForwardNavigationDropsOnlyTheAttemptedDestination() async {
+        let home = URL(filePath: "/private/test-home")
+        let documents = home.appending(path: "Documents")
+        let stale = home.appending(path: "Stale")
+        let downloads = home.appending(path: "Downloads")
+        let listing = MutableFailingDirectoryListingService()
+        let pane = FilePaneState(
+            directory: home,
+            listingService: listing
+        )
+
+        await pane.navigate(to: documents)
+        await pane.navigate(to: stale)
+        await pane.navigate(to: downloads)
+        await pane.goBack()
+        await pane.goBack()
+        listing.fail(stale)
+        await pane.goForward()
+
+        #expect(pane.currentDirectory == documents)
+        #expect(pane.backHistory == [home])
+        #expect(pane.forwardHistory == [downloads])
+        #expect(pane.errorMessage != nil)
+
+        await pane.goForward()
+
+        #expect(pane.currentDirectory == downloads)
+        #expect(pane.backHistory == [home, documents])
+        #expect(pane.forwardHistory.isEmpty)
+    }
+
+    @Test func cancelledBackNavigationRestoresCompletePriorHistory() async {
+        let home = URL(filePath: "/private/test-home")
+        let documents = home.appending(path: "Documents")
+        let downloads = home.appending(path: "Downloads")
+        let control = ControlledListingControl()
+        let pane = FilePaneState(
+            directory: home,
+            listingService: ControlledDirectoryListingService(control: control)
+        )
+
+        let documentsLoad = Task { await pane.navigate(to: documents) }
+        await control.waitForStart(in: documents, count: 1)
+        await control.finish(in: documents, request: 0)
+        await documentsLoad.value
+        let downloadsLoad = Task { await pane.navigate(to: downloads) }
+        await control.waitForStart(in: downloads, count: 1)
+        await control.finish(in: downloads, request: 0)
+        await downloadsLoad.value
+
+        let backLoad = Task { await pane.goBack() }
+        await control.waitForStart(in: documents, count: 2)
+        backLoad.cancel()
+        await control.finish(in: documents, request: 1)
+        await backLoad.value
+
+        #expect(pane.currentDirectory == downloads)
+        #expect(pane.backHistory == [home, documents])
+        #expect(pane.forwardHistory.isEmpty)
+    }
+
+    @Test func supersededForwardNavigationRestoresCompletePriorHistory() async {
+        let home = URL(filePath: "/private/test-home")
+        let documents = home.appending(path: "Documents")
+        let downloads = home.appending(path: "Downloads")
+        let replacement = home.appending(path: "Replacement")
+        let control = ControlledListingControl()
+        let pane = FilePaneState(
+            directory: home,
+            listingService: ControlledDirectoryListingService(control: control)
+        )
+
+        let documentsLoad = Task { await pane.navigate(to: documents) }
+        await control.waitForStart(in: documents, count: 1)
+        await control.finish(in: documents, request: 0)
+        await documentsLoad.value
+        let downloadsLoad = Task { await pane.navigate(to: downloads) }
+        await control.waitForStart(in: downloads, count: 1)
+        await control.finish(in: downloads, request: 0)
+        await downloadsLoad.value
+        let backLoad = Task { await pane.goBack() }
+        await control.waitForStart(in: documents, count: 2)
+        await control.finish(in: documents, request: 1)
+        await backLoad.value
+
+        let forwardLoad = Task { await pane.goForward() }
+        await control.waitForStart(in: downloads, count: 2)
+        let replacementLoad = Task {
+            await pane.navigate(to: replacement, recordHistory: false)
+        }
+        await control.waitForStart(in: replacement, count: 1)
+        await control.finish(in: downloads, request: 1)
+        await control.finish(in: replacement, request: 0)
+        await forwardLoad.value
+        await replacementLoad.value
+
+        #expect(pane.currentDirectory == replacement)
+        #expect(pane.backHistory == [home])
+        #expect(pane.forwardHistory == [downloads])
     }
 
     @Test func staleBatchesFromCancelledLoadsAreRejected() async {
@@ -120,6 +242,34 @@ struct FilePaneStateTests {
         #expect(pane.selection == [selected])
         #expect(pane.backHistory == [root])
         #expect(pane.forwardHistory.isEmpty)
+    }
+
+    @Test func failedNavigationRollbackPreservesScrollAnchorForLaterReturn() async {
+        // Catches rollback snapshots that omit the committed scroll anchor and
+        // allow the next navigation to overwrite its cache entry with nil.
+        let home = URL(filePath: "/rollback-home", directoryHint: .isDirectory)
+        let blocked = URL(filePath: "/blocked", directoryHint: .isDirectory)
+        let other = URL(filePath: "/other", directoryHint: .isDirectory)
+        let anchor = makeItem(named: "anchor.txt", in: home)
+        let pane = FilePaneState(
+            directory: home,
+            listingService: PartiallyFailingDirectoryListingService(
+                values: [
+                    home: [anchor],
+                    other: [makeItem(named: "other.txt", in: other)]
+                ],
+                failingDirectories: [blocked]
+            )
+        )
+        await pane.navigate(to: home, recordHistory: false)
+        pane.recordFirstVisibleItem(anchor.url)
+
+        await pane.navigate(to: blocked)
+        await pane.navigate(to: other)
+        await pane.goBack()
+
+        #expect(pane.currentDirectory == home)
+        #expect(pane.scrollRestoreRequest?.anchor == anchor.url)
     }
 
     @Test func cancelledSameDirectoryLoadCannotClearTheNewerLoadState() async {
@@ -204,9 +354,133 @@ struct FilePaneStateTests {
         #expect(pane.items == [replacementItem])
         #expect(!pane.isLoading)
     }
+
+    @Test func filterSessionUsesLoadedItemsAndRestoresCapturedSelection() async {
+        let root = URL(filePath: "/filter-root", directoryHint: .isDirectory)
+        let alpha = makeItem(named: "alpha.txt", in: root)
+        let resume = makeItem(named: "Résumé.pdf", in: root)
+        let korean = makeItem(named: "한글보고서.pdf", in: root)
+        let listing = CountingDirectoryListingService(values: [root: [alpha, resume, korean]])
+        let pane = FilePaneState(directory: root, listingService: listing)
+        await pane.navigate(to: root, recordHistory: false)
+        pane.selection = [resume.url]
+
+        pane.beginFiltering()
+        pane.updateFilterQuery("한글")
+
+        #expect(pane.visibleItems.map(\.name) == ["한글보고서.pdf"])
+        #expect(pane.selection.isEmpty)
+        #expect(pane.filterResultCount == 1)
+        #expect(listing.callCount(for: root) == 1)
+
+        pane.dismissFiltering()
+
+        #expect(pane.visibleItems.count == 3)
+        #expect(pane.selection == [resume.url])
+        #expect(pane.filterQuery.isEmpty)
+        #expect(!pane.isFilterPresented)
+    }
+
+    @Test func navigationClearsPaneFilterWithoutRestoringOldDirectorySelection() async {
+        let root = URL(filePath: "/filter-root", directoryHint: .isDirectory)
+        let next = root.appending(path: "Next", directoryHint: .isDirectory)
+        let selected = makeItem(named: "selected.txt", in: root)
+        let pane = FilePaneState(
+            directory: root,
+            listingService: StubDirectoryListingService(values: [
+                root: [selected],
+                next: [makeItem(named: "next.txt", in: next)]
+            ])
+        )
+        await pane.navigate(to: root, recordHistory: false)
+        pane.selection = [selected.url]
+        pane.beginFiltering()
+        pane.updateFilterQuery("selected")
+
+        await pane.navigate(to: next)
+
+        #expect(!pane.isFilterPresented)
+        #expect(pane.filterQuery.isEmpty)
+        #expect(pane.selection.isEmpty)
+    }
+
+    @Test func returningToDirectoryRestoresExistingSelectionAndScrollAnchor() async {
+        let a = URL(filePath: "/a", directoryHint: .isDirectory)
+        let b = URL(filePath: "/b", directoryHint: .isDirectory)
+        let first = makeItem(named: "first.txt", in: a)
+        let middle = makeItem(named: "middle.txt", in: a)
+        let pane = FilePaneState(
+            directory: a,
+            listingService: StubDirectoryListingService(values: [
+                a: [first, middle],
+                b: [makeItem(named: "other.txt", in: b)]
+            ])
+        )
+        await pane.navigate(to: a, recordHistory: false)
+        pane.selection = [middle.url]
+        pane.recordFirstVisibleItem(first.url)
+
+        await pane.navigate(to: b)
+        await pane.goBack()
+
+        #expect(pane.selection == [middle.url])
+        #expect(pane.scrollRestoreRequest?.anchor == first.url)
+    }
+
+    @Test func missingRestorationTargetsAreSilentlyDiscarded() async {
+        let a = URL(filePath: "/a", directoryHint: .isDirectory)
+        let b = URL(filePath: "/b", directoryHint: .isDirectory)
+        let disappearing = makeItem(named: "gone.txt", in: a)
+        let listing = MutableDirectoryListingService(values: [
+            a: [disappearing],
+            b: []
+        ])
+        let pane = FilePaneState(directory: a, listingService: listing)
+        await pane.navigate(to: a, recordHistory: false)
+        pane.selection = [disappearing.url]
+        pane.recordFirstVisibleItem(disappearing.url)
+
+        await pane.navigate(to: b)
+        listing.set([], for: a)
+        await pane.goBack()
+
+        #expect(pane.selection.isEmpty)
+        #expect(pane.scrollRestoreRequest == nil)
+        #expect(pane.errorMessage == nil)
+    }
 }
 
-private struct FailingDirectoryListingService: DirectoryListingService {
+private final class MutableFailingDirectoryListingService:
+    DirectoryListingService,
+    @unchecked Sendable
+{
+    private let lock = NSLock()
+    private var failingDirectories: Set<URL> = []
+
+    func fail(_ directory: URL) {
+        _ = lock.withLock {
+            failingDirectories.insert(directory)
+        }
+    }
+
+    func batches(in directory: URL) -> AsyncThrowingStream<[FileItem], Error> {
+        let shouldFail = lock.withLock { failingDirectories.contains(directory) }
+        return AsyncThrowingStream { continuation in
+            if shouldFail {
+                continuation.finish(throwing: ListingError.unavailable)
+            } else {
+                continuation.finish()
+            }
+        }
+    }
+
+    private enum ListingError: Error {
+        case unavailable
+    }
+}
+
+private struct PartiallyFailingDirectoryListingService: DirectoryListingService {
+    let values: [URL: [FileItem]]
     let failingDirectories: Set<URL>
 
     func batches(in directory: URL) -> AsyncThrowingStream<[FileItem], Error> {
@@ -214,6 +488,7 @@ private struct FailingDirectoryListingService: DirectoryListingService {
             if failingDirectories.contains(directory) {
                 continuation.finish(throwing: ListingError.unavailable)
             } else {
+                continuation.yield(values[directory] ?? [])
                 continuation.finish()
             }
         }
@@ -244,6 +519,56 @@ private struct DelayedDirectoryListingService: DirectoryListingService {
             } else {
                 continuation.finish()
             }
+        }
+    }
+}
+
+private final class CountingDirectoryListingService:
+    DirectoryListingService,
+    @unchecked Sendable
+{
+    private let lock = NSLock()
+    private let values: [URL: [FileItem]]
+    private var counts: [URL: Int] = [:]
+
+    init(values: [URL: [FileItem]]) {
+        self.values = values
+    }
+
+    func batches(in directory: URL) -> AsyncThrowingStream<[FileItem], Error> {
+        lock.withLock { counts[directory, default: 0] += 1 }
+        let items = values[directory] ?? []
+        return AsyncThrowingStream { continuation in
+            continuation.yield(items)
+            continuation.finish()
+        }
+    }
+
+    func callCount(for directory: URL) -> Int {
+        lock.withLock { counts[directory, default: 0] }
+    }
+}
+
+private final class MutableDirectoryListingService:
+    DirectoryListingService,
+    @unchecked Sendable
+{
+    private let lock = NSLock()
+    private var values: [URL: [FileItem]]
+
+    init(values: [URL: [FileItem]]) {
+        self.values = values
+    }
+
+    func set(_ items: [FileItem], for directory: URL) {
+        lock.withLock { values[directory] = items }
+    }
+
+    func batches(in directory: URL) -> AsyncThrowingStream<[FileItem], Error> {
+        let items = lock.withLock { values[directory] ?? [] }
+        return AsyncThrowingStream { continuation in
+            continuation.yield(items)
+            continuation.finish()
         }
     }
 }

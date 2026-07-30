@@ -119,8 +119,11 @@ actor RecordingFileSystem: FileSystemAccess {
     private let stagingReservationIdentityError: CocoaError?
     private let cancelAfterCommit: Bool
     private let cancelAfterIdentityOf: URL?
+    private let suspendIdentityOf: URL?
     private let cancelAfterTrashOf: URL?
     private let caseInsensitivePaths: Bool
+    private var suspendedIdentityContinuation: CheckedContinuation<Void, Never>?
+    private(set) var hasSuspendedIdentity = false
     private var didCancelStagingReservation = false
     private var nextIdentity = 0
     private var committedDestinations: Set<URL> = []
@@ -152,6 +155,7 @@ actor RecordingFileSystem: FileSystemAccess {
         stagingReservationIdentityError: CocoaError? = nil,
         cancelAfterCommit: Bool = false,
         cancelAfterIdentityOf: URL? = nil,
+        suspendIdentityOf: URL? = nil,
         cancelAfterTrashOf: URL? = nil,
         caseInsensitivePaths: Bool = false
     ) {
@@ -188,6 +192,7 @@ actor RecordingFileSystem: FileSystemAccess {
         self.stagingReservationIdentityError = stagingReservationIdentityError
         self.cancelAfterCommit = cancelAfterCommit
         self.cancelAfterIdentityOf = cancelAfterIdentityOf
+        self.suspendIdentityOf = suspendIdentityOf
         self.cancelAfterTrashOf = cancelAfterTrashOf
         self.caseInsensitivePaths = caseInsensitivePaths
     }
@@ -395,6 +400,12 @@ actor RecordingFileSystem: FileSystemAccess {
 
     func identity(of url: URL) async throws -> FileIdentity? {
         try record(.identity(url))
+        if suspendIdentityOf == url {
+            hasSuspendedIdentity = true
+            await withCheckedContinuation { continuation in
+                suspendedIdentityContinuation = continuation
+            }
+        }
         if url.lastPathComponent.hasPrefix(".bloom-staging-"),
            let stagingReservationIdentityError {
             throw stagingReservationIdentityError
@@ -414,6 +425,11 @@ actor RecordingFileSystem: FileSystemAccess {
             withUnsafeCurrentTask { $0?.cancel() }
         }
         return identity
+    }
+
+    func releaseSuspendedIdentity() {
+        suspendedIdentityContinuation?.resume()
+        suspendedIdentityContinuation = nil
     }
 
     func move(_ source: URL, identifiedBy identity: FileIdentity, to destination: URL) async throws {

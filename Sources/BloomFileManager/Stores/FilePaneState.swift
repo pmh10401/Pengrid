@@ -15,12 +15,17 @@ final class FilePaneState {
     private var nextRefreshID: UInt64 = 0
     private var pendingMonitorRefreshDirectory: URL?
     private var committedState: PaneSnapshot
+    private var currentNavigationIntent: PaneNavigationIntent?
     private var persistenceChangeHandler: (@MainActor () -> Void)?
+    private var selectionBeforeFiltering: Set<URL> = []
+    private var navigationHistory = PaneNavigationHistory(capacity: 100)
+    private var viewStateCache = PaneViewStateCache(capacity: 100)
+    private var firstVisibleItem: URL?
 
     private(set) var currentDirectory: URL
     private(set) var items: [FileItem] = []
-    private(set) var backHistory: [URL] = []
-    private(set) var forwardHistory: [URL] = []
+    var backHistory: [URL] { navigationHistory.backward }
+    var forwardHistory: [URL] { navigationHistory.forward }
     var selection: Set<URL> = [] {
         didSet {
             guard let pendingRenameTarget else { return }
@@ -42,17 +47,51 @@ final class FilePaneState {
     var isEditingPath = false
     var isLoading = false
     var errorMessage: String?
+    private(set) var isFilterPresented = false
+    private(set) var filterQuery = ""
+    private(set) var filterFocusRequestID: UUID?
     private(set) var focusRequestID: UUID?
     private(set) var renameRequestID: UUID?
     private(set) var pendingRenameTarget: IdentifiedFileRequest?
+    private(set) var scrollRestoreRequest: PaneScrollRequest?
 
     var canGoBack: Bool { !backHistory.isEmpty }
     var canGoForward: Bool { !forwardHistory.isEmpty }
-    var visibleItems: [FileItem] { sort.apply(to: items) }
+    var filterResultCount: Int { visibleItems.count }
+    var visibleItems: [FileItem] {
+        sort.apply(to: PaneFilenameFilter(query: filterQuery).apply(to: items))
+    }
     var committedDirectoryForPersistence: URL { committedState.directory }
 
     func requestTableFocus() {
         focusRequestID = UUID()
+    }
+
+    func beginFiltering() {
+        if !isFilterPresented {
+            selectionBeforeFiltering = selection
+            isFilterPresented = true
+        }
+    }
+
+    func requestFilterFocus() {
+        beginFiltering()
+        filterFocusRequestID = UUID()
+    }
+
+    func updateFilterQuery(_ query: String) {
+        filterQuery = query
+        let visibleURLs = Set(visibleItems.map(\.url))
+        selection.formIntersection(visibleURLs)
+    }
+
+    func dismissFiltering() {
+        let captured = selectionBeforeFiltering
+        isFilterPresented = false
+        filterQuery = ""
+        selectionBeforeFiltering.removeAll()
+        let loadedURLs = Set(items.map(\.url))
+        selection = captured.intersection(loadedURLs)
     }
 
     @discardableResult
@@ -115,6 +154,15 @@ final class FilePaneState {
         renameRequestID = nil
     }
 
+    func recordFirstVisibleItem(_ url: URL?) {
+        firstVisibleItem = url
+    }
+
+    func consumeScrollRestoreRequest(_ id: UUID) {
+        guard scrollRestoreRequest?.id == id else { return }
+        scrollRestoreRequest = nil
+    }
+
     private func clearPendingRename() {
         renameRequestID = nil
         pendingRenameTarget = nil
@@ -134,8 +182,8 @@ final class FilePaneState {
             directory: directory,
             items: [],
             selection: [],
-            backHistory: [],
-            forwardHistory: []
+            firstVisibleItem: nil,
+            navigationHistory: PaneNavigationHistory(capacity: 100)
         )
     }
 
@@ -159,12 +207,22 @@ final class FilePaneState {
     ) -> Task<Void, Never> {
         prepareForNavigation()
         committedState = snapshot()
-        return startNavigation(to: directory, recordHistory: recordHistory)
+        return startNavigation(
+            to: directory,
+            intent: .user(from: currentDirectory, recordsHistory: recordHistory)
+        )
     }
 
     private func prepareForNavigation() {
         cancelRefresh()
         cancelLoading(recoverDirtyMonitor: false)
+        resetFilterForNavigation()
+    }
+
+    private func resetFilterForNavigation() {
+        isFilterPresented = false
+        filterQuery = ""
+        selectionBeforeFiltering.removeAll()
     }
 
     func cancelLoading() {
@@ -177,6 +235,7 @@ final class FilePaneState {
         taskLifecycle.setLoad(nil)
         restore(committedState)
         currentRequestID = nil
+        currentNavigationIntent = nil
         loadTask = nil
         isLoading = false
         if recoverDirtyMonitor {
@@ -186,15 +245,14 @@ final class FilePaneState {
 
     private func startNavigation(
         to directory: URL,
-        recordHistory: Bool
+        intent: PaneNavigationIntent
     ) -> Task<Void, Never> {
-        if recordHistory, directory != currentDirectory {
-            backHistory.append(currentDirectory)
-            forwardHistory.removeAll()
-        }
+        storeCurrentDirectoryViewState()
 
         currentDirectory = directory
         selection.removeAll()
+        firstVisibleItem = nil
+        scrollRestoreRequest = nil
         clearPendingRename()
         items.removeAll(keepingCapacity: true)
         errorMessage = nil
@@ -203,6 +261,7 @@ final class FilePaneState {
         nextRequestID += 1
         let requestID = nextRequestID
         currentRequestID = requestID
+        currentNavigationIntent = intent
         let listingService = listingService
         let task = Task { @MainActor [weak self, listingService] in
             do {
@@ -236,21 +295,23 @@ final class FilePaneState {
 
     func goBack() async {
         prepareForNavigation()
-        let previousState = snapshot()
-        guard let target = backHistory.popLast() else { return }
-        forwardHistory.append(currentDirectory)
-        committedState = previousState
-        let task = startNavigation(to: target, recordHistory: false)
+        committedState = snapshot()
+        guard let target = navigationHistory.backward.last else { return }
+        let task = startNavigation(
+            to: target,
+            intent: .backward(from: currentDirectory, destination: target)
+        )
         await Self.awaitTask(task)
     }
 
     func goForward() async {
         prepareForNavigation()
-        let previousState = snapshot()
-        guard let target = forwardHistory.popLast() else { return }
-        backHistory.append(currentDirectory)
-        committedState = previousState
-        let task = startNavigation(to: target, recordHistory: false)
+        committedState = snapshot()
+        guard let target = navigationHistory.forward.last else { return }
+        let task = startNavigation(
+            to: target,
+            intent: .forward(from: currentDirectory, destination: target)
+        )
         await Self.awaitTask(task)
     }
 
@@ -436,7 +497,10 @@ final class FilePaneState {
 
     private func failNavigation(_ error: Error, requestID: UInt64) {
         guard isCurrentRequest(requestID) else { return }
+        let intent = currentNavigationIntent
         restore(committedState)
+        discardFailedHistoryDestination(for: intent)
+        committedState = snapshot()
         let navigationErrorMessage = error.localizedDescription
         errorMessage = navigationErrorMessage
         finishRequest(requestID)
@@ -445,6 +509,8 @@ final class FilePaneState {
 
     private func completeNavigation(to directory: URL, requestID: UInt64) {
         guard isCurrentRequest(requestID) else { return }
+        commitNavigationHistory(for: currentNavigationIntent, destination: directory)
+        restoreDirectoryViewState(for: directory)
         committedState = snapshot()
         finishRequest(requestID)
         let shouldReconcileVisibleDirectory = pendingMonitorRefreshDirectory.map {
@@ -456,6 +522,36 @@ final class FilePaneState {
             beginRefresh()
         }
         persistenceChangeHandler?()
+    }
+
+    private func storeCurrentDirectoryViewState() {
+        viewStateCache.store(
+            PaneDirectoryViewState(
+                selection: selection,
+                scrollAnchor: firstVisibleItem
+            ),
+            for: currentDirectory
+        )
+    }
+
+    private func restoreDirectoryViewState(for directory: URL) {
+        guard let saved = viewStateCache.value(for: directory) else {
+            firstVisibleItem = nil
+            scrollRestoreRequest = nil
+            return
+        }
+        let loadedByPath = Dictionary(uniqueKeysWithValues: items.map {
+            (Self.entryPath($0.url), $0.url)
+        })
+        selection = Set(saved.selection.compactMap {
+            loadedByPath[Self.entryPath($0)]
+        })
+        firstVisibleItem = saved.scrollAnchor.flatMap {
+            loadedByPath[Self.entryPath($0)]
+        }
+        scrollRestoreRequest = firstVisibleItem.map {
+            PaneScrollRequest(id: UUID(), anchor: $0)
+        }
     }
 
     private func reconcilePendingMonitorRefreshIfNeeded(
@@ -472,6 +568,7 @@ final class FilePaneState {
     private func finishRequest(_ requestID: UInt64) {
         guard isCurrentRequest(requestID) else { return }
         currentRequestID = nil
+        currentNavigationIntent = nil
         loadTask = nil
         taskLifecycle.setLoad(nil)
         isLoading = false
@@ -490,8 +587,8 @@ final class FilePaneState {
             directory: currentDirectory,
             items: items,
             selection: selection,
-            backHistory: backHistory,
-            forwardHistory: forwardHistory
+            firstVisibleItem: firstVisibleItem,
+            navigationHistory: navigationHistory
         )
     }
 
@@ -499,8 +596,50 @@ final class FilePaneState {
         currentDirectory = snapshot.directory
         items = snapshot.items
         selection = snapshot.selection
-        backHistory = snapshot.backHistory
-        forwardHistory = snapshot.forwardHistory
+        firstVisibleItem = snapshot.firstVisibleItem.flatMap { anchor in
+            snapshot.items.first {
+                Self.entryPath($0.url) == Self.entryPath(anchor)
+            }?.url
+        }
+        scrollRestoreRequest = firstVisibleItem.map {
+            PaneScrollRequest(id: UUID(), anchor: $0)
+        }
+        navigationHistory = snapshot.navigationHistory
+    }
+
+    private func commitNavigationHistory(
+        for intent: PaneNavigationIntent?,
+        destination: URL
+    ) {
+        switch intent {
+        case let .user(origin, recordsHistory):
+            if recordsHistory {
+                navigationHistory.recordUserNavigation(from: origin, to: destination)
+            }
+        case let .backward(origin, expectedDestination):
+            navigationHistory.commitBackwardNavigation(
+                from: origin,
+                to: expectedDestination
+            )
+        case let .forward(origin, expectedDestination):
+            navigationHistory.commitForwardNavigation(
+                from: origin,
+                to: expectedDestination
+            )
+        case nil:
+            break
+        }
+    }
+
+    private func discardFailedHistoryDestination(for intent: PaneNavigationIntent?) {
+        switch intent {
+        case let .backward(_, destination):
+            navigationHistory.discardBackwardDestination(destination)
+        case let .forward(_, destination):
+            navigationHistory.discardForwardDestination(destination)
+        case .user, nil:
+            break
+        }
     }
 
     private static func entryPath(_ url: URL) -> String {
@@ -546,6 +685,12 @@ private struct PaneSnapshot {
     let directory: URL
     let items: [FileItem]
     let selection: Set<URL>
-    let backHistory: [URL]
-    let forwardHistory: [URL]
+    let firstVisibleItem: URL?
+    let navigationHistory: PaneNavigationHistory
+}
+
+private enum PaneNavigationIntent {
+    case user(from: URL, recordsHistory: Bool)
+    case backward(from: URL, destination: URL)
+    case forward(from: URL, destination: URL)
 }

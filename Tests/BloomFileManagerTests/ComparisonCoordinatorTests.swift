@@ -271,13 +271,20 @@ import Testing
 
         await fixture.listing.releaseNext(root: fixture.leftRoot)
         await fixture.listing.releaseNext(root: fixture.rightRoot)
-        await fixture.checksums.succeed(request: 0, digest: Data("same".utf8))
-        await fixture.checksums.succeed(request: 1, digest: Data("same".utf8))
-
         #expect(await waitUntil {
             fixture.coordinator.rows.first?.left?.fingerprint.identity.entryIdentifier == "left-new"
         })
-        #expect(fixture.coordinator.rows.first?.status == .checking(nil))
+
+        await fixture.checksums.succeed(request: 0, digest: Data("same".utf8))
+        await fixture.checksums.succeed(request: 1, digest: Data("same".utf8))
+        #expect(await waitUntil { await fixture.checksums.completedCount >= 2 })
+
+        let status = try #require(fixture.coordinator.rows.first?.status)
+        guard case .checking = status else {
+            Issue.record("A stale checksum result replaced the new fingerprint's verification state")
+            fixture.coordinator.stop()
+            return
+        }
         fixture.coordinator.stop()
     }
 

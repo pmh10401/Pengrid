@@ -8,6 +8,58 @@ enum FilePanePath {
     }
 }
 
+@MainActor
+enum PaneFilterFocusRouting {
+    static func handle(
+        isFocused: Bool,
+        onActivate: () -> Void,
+        onBeginEditing: () -> Void,
+        onEndEditing: () -> Void
+    ) {
+        if isFocused {
+            onActivate()
+            onBeginEditing()
+        } else {
+            onEndEditing()
+        }
+    }
+}
+
+@MainActor
+enum PaneEscapeRouting {
+    @discardableResult
+    static func handle(
+        isFilterPresented: Bool,
+        dismissFilter: () -> Void,
+        otherwise: () -> Void = {}
+    ) -> Bool {
+        guard isFilterPresented else {
+            otherwise()
+            return false
+        }
+        dismissFilter()
+        return true
+    }
+}
+
+@MainActor
+enum PaneFilterDismissalRouting {
+    static func handle(
+        clearFieldFocus: () -> Void,
+        endEditing: () -> Void,
+        dismissFilter: () -> Void,
+        requestTableFocus: @escaping @MainActor () -> Void
+    ) -> Task<Void, Never> {
+        clearFieldFocus()
+        endEditing()
+        dismissFilter()
+        return Task { @MainActor in
+            await Task.yield()
+            requestTableFocus()
+        }
+    }
+}
+
 struct FilePaneView: View {
     let paneID: PaneID
     let state: FilePaneState
@@ -23,9 +75,11 @@ struct FilePaneView: View {
     @State private var pathDraft = ""
     @State private var pathError: String?
     @State private var pathEditingSession: WorkspaceTextEditingSession?
+    @State private var filterEditingSession: WorkspaceTextEditingSession?
     @State private var inlineEditingSession: WorkspaceTextEditingSession?
     @State private var favoriteError: String?
     @FocusState private var pathFieldIsFocused: Bool
+    @FocusState private var filterFieldIsFocused: Bool
 
     var body: some View {
         @Bindable var state = state
@@ -61,7 +115,9 @@ struct FilePaneView: View {
                         .textFieldStyle(.roundedBorder)
                         .focused($pathFieldIsFocused)
                         .onSubmit { submitPath() }
-                        .onExitCommand { cancelPathEditing() }
+                        .onExitCommand {
+                            handleEscape(otherwise: cancelPathEditing)
+                        }
                 } else {
                     Button {
                         beginPathEditing()
@@ -107,6 +163,44 @@ struct FilePaneView: View {
             .background(.bar)
             .overlay(alignment: .bottom) { Divider() }
 
+            if state.isFilterPresented {
+                HStack(spacing: 6) {
+                    Image(systemName: "magnifyingglass")
+                        .accessibilityHidden(true)
+                    TextField(
+                        "Filter files",
+                        text: Binding(
+                            get: { state.filterQuery },
+                            set: { state.updateFilterQuery($0) }
+                        )
+                    )
+                    .textFieldStyle(.roundedBorder)
+                    .focused($filterFieldIsFocused)
+                    .onExitCommand { handleEscape() }
+                    .accessibilityIdentifier(
+                        paneID == .left
+                            ? AccessibilityIdentifiers.leftPaneFilter
+                            : AccessibilityIdentifiers.rightPaneFilter
+                    )
+                    .accessibilityLabel(PaneFilterAccessibilityPresentation.fieldLabel(for: paneID))
+                    .accessibilityValue(
+                        PaneFilterAccessibilityPresentation.resultCount(state.filterResultCount)
+                    )
+
+                    Text("\(state.filterResultCount)")
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
+
+                    Button("Close") { dismissFilter() }
+                        .accessibilityLabel(PaneFilterAccessibilityPresentation.closeLabel(for: paneID))
+                }
+                .padding(.horizontal, 8)
+                .frame(height: 38)
+                .background(.bar)
+                .overlay(alignment: .bottom) { Divider() }
+            }
+
             FileTableView(
                 items: state.visibleItems,
                 selection: $state.selection,
@@ -114,10 +208,14 @@ struct FilePaneView: View {
                 directory: state.currentDirectory,
                 focusRequestID: state.focusRequestID,
                 renameRequestID: state.renameRequestID,
+                scrollRequest: state.scrollRestoreRequest,
                 isOperationRunning: operationController.isRunning,
                 onActivatePane: onActivate,
                 onOpen: open,
                 onSortChange: { state.sort = $0 },
+                onCancel: { handleEscape() },
+                onFirstVisibleItemChange: state.recordFirstVisibleItem,
+                onConsumeScrollRequest: state.consumeScrollRestoreRequest,
                 onConsumeRenameRequest: state.consumeInlineRenameRequest,
                 onInlineEditingEvent: handleInlineEditingEvent,
                 onDiscardRename: state.cancelPendingRename,
@@ -145,6 +243,7 @@ struct FilePaneView: View {
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)
         }
+        .onExitCommand { handleEscape() }
         .onChange(of: state.isEditingPath) { _, isEditing in
             if isEditing {
                 pathDraft = state.currentDirectory.path
@@ -165,15 +264,43 @@ struct FilePaneView: View {
                 endPathEditingSession()
             }
         }
+        .onChange(of: state.filterFocusRequestID) { _, requestID in
+            guard requestID != nil else { return }
+            onActivate()
+            Task { @MainActor in
+                guard state.isFilterPresented else { return }
+                filterFieldIsFocused = true
+            }
+        }
+        .onChange(of: filterFieldIsFocused) { _, isFocused in
+            PaneFilterFocusRouting.handle(
+                isFocused: isFocused,
+                onActivate: onActivate,
+                onBeginEditing: beginFilterEditingSession,
+                onEndEditing: endFilterEditingSession
+            )
+        }
+        .onChange(of: state.isFilterPresented) { _, isPresented in
+            guard !isPresented else { return }
+            filterFieldIsFocused = false
+            endFilterEditingSession()
+        }
         .onAppear {
             if pathFieldIsFocused {
                 beginPathEditingSession()
+            }
+            if filterFieldIsFocused {
+                beginFilterEditingSession()
             }
         }
         .onDisappear {
             if let pathEditingSession {
                 workspace.endTextEditing(pathEditingSession)
                 self.pathEditingSession = nil
+            }
+            if let filterEditingSession {
+                workspace.endTextEditing(filterEditingSession)
+                self.filterEditingSession = nil
             }
             if let inlineEditingSession {
                 workspace.endTextEditing(inlineEditingSession)
@@ -341,5 +468,36 @@ struct FilePaneView: View {
         guard let session = pathEditingSession else { return }
         pathEditingSession = nil
         workspace.endTextEditing(session)
+    }
+
+    private func beginFilterEditingSession() {
+        guard filterEditingSession == nil else { return }
+        let session = WorkspaceTextEditingSession(paneID: paneID, kind: .filter)
+        filterEditingSession = session
+        workspace.beginTextEditing(session)
+    }
+
+    private func endFilterEditingSession() {
+        guard let session = filterEditingSession else { return }
+        filterEditingSession = nil
+        workspace.endTextEditing(session)
+    }
+
+    private func dismissFilter() {
+        _ = PaneFilterDismissalRouting.handle(
+            clearFieldFocus: { filterFieldIsFocused = false },
+            endEditing: endFilterEditingSession,
+            dismissFilter: state.dismissFiltering,
+            requestTableFocus: state.requestTableFocus
+        )
+    }
+
+    @discardableResult
+    private func handleEscape(otherwise: () -> Void = {}) -> Bool {
+        PaneEscapeRouting.handle(
+            isFilterPresented: state.isFilterPresented,
+            dismissFilter: dismissFilter,
+            otherwise: otherwise
+        )
     }
 }

@@ -1,5 +1,19 @@
 import SwiftUI
 
+private struct QuickLookSelectionKey: Hashable {
+    let paneID: String
+    let urls: [URL]
+}
+
+@MainActor
+enum WorkspaceQuickLookSelectionRouting {
+    static func begin(controller: QuickLookController) -> Bool {
+        guard !Task.isCancelled else { return false }
+        controller.invalidatePendingPreparationForSelectionChange()
+        return controller.isPresenting
+    }
+}
+
 struct WorkspaceView: View {
     let workspace: WorkspaceState
     let operationController: FileOperationController
@@ -140,6 +154,47 @@ struct WorkspaceView: View {
                 }
             }
         }
+        .task(id: quickLookSelectionKey) {
+            await updateQuickLookForSelection()
+        }
+    }
+
+    private var quickLookSelectionKey: QuickLookSelectionKey {
+        QuickLookSelectionKey(
+            paneID: workspace.activePaneID.rawValue,
+            urls: workspace.selectedURLsForCommands
+        )
+    }
+
+    private func updateQuickLookForSelection() async {
+        guard WorkspaceQuickLookSelectionRouting.begin(
+            controller: quickLookController
+        ) else { return }
+        let urls = workspace.selectedURLsForCommands
+        guard !urls.isEmpty else {
+            await quickLookController.updateIfPresented(
+                requests: [],
+                materializer: materializer
+            )
+            return
+        }
+        let requests = await WorkspaceOpenActions.identifiedRequests(
+            for: urls,
+            fileSystem: fileSystem,
+            accessCoordinator: cloudAccessCoordinator
+        )
+        guard !Task.isCancelled else { return }
+        guard let requests else {
+            await quickLookController.updateIfPresented(
+                requests: [],
+                materializer: materializer
+            )
+            return
+        }
+        await quickLookController.updateIfPresented(
+            requests: requests,
+            materializer: materializer
+        )
     }
 
     private var pendingConflict: Binding<IdentifiedFileConflict?> {

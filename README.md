@@ -62,9 +62,21 @@ automated. Physical storage, real 100,000-file, disconnect/reconnect, Trash,
 accessibility, and appearance checks remain unrun release gates in
 `docs/verification/storage-inspector-checklist.md`.
 
+## Navigation productivity
+
+Each pane has an independent current-folder filename filter, Back and Forward
+history, and session-only selection and scroll restoration. An open Quick Look
+panel follows selection changes through the same identity and cloud
+materialization safety gates used when it first opens.
+
+The filename filter works only on the directory listing already loaded in
+memory. It is not recursive or file-content search, and it does not download
+cloud-only files.
+
 ## Release status
 
-See `docs/release.md`, `docs/verification/version-1.1-checklist.md`, and
+See `docs/release.md`, `docs/verification/version-1.1-checklist.md`,
+`docs/verification/version-1.2-checklist.md`, and
 `docs/verification/storage-inspector-checklist.md`. An unsigned package is for
 local inspection only; distribution requires the documented Developer ID,
 notarization, stapling, Gatekeeper, and physical-manual gates.
