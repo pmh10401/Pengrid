@@ -62,9 +62,13 @@ keyboard-focus, or appearance evidence.
 - [x] **PASS — 2026-07-30:** Navigating the pane to an empty physical folder
   closed its live Quick Look session. Deleting a separately previewed fixture
   file also closed the panel immediately and cleared the table selection.
-- [ ] **NOT RUN:** Physical offline-provider and superseded-materialization race
-  cases do not show stale content. Their automated operation-gate regressions
-  pass, but no separate physical provider race was induced.
+- [x] **PASS — 2026-07-30:** A physical OneDrive Quick Look request for a
+  34.8 MB online-only movie was immediately superseded by selecting a second
+  online-only movie. The older download completed, but its panel never appeared
+  and the second selection remained active.
+- [ ] **NOT RUN:** A physical provider-offline failure does not show stale
+  content. Its automated operation-gate regressions pass, but taking the
+  machine or provider offline was not induced.
 
 ## Accessibility and appearance
 
