@@ -1,5 +1,10 @@
 import SwiftUI
 
+private struct QuickLookSelectionKey: Hashable {
+    let paneID: String
+    let urls: [URL]
+}
+
 struct WorkspaceView: View {
     let workspace: WorkspaceState
     let operationController: FileOperationController
@@ -140,6 +145,43 @@ struct WorkspaceView: View {
                 }
             }
         }
+        .task(id: quickLookSelectionKey) {
+            await updateQuickLookForSelection()
+        }
+    }
+
+    private var quickLookSelectionKey: QuickLookSelectionKey {
+        QuickLookSelectionKey(
+            paneID: workspace.activePaneID.rawValue,
+            urls: workspace.selectedURLsForCommands
+        )
+    }
+
+    private func updateQuickLookForSelection() async {
+        guard quickLookController.isPresenting else { return }
+        let urls = workspace.selectedURLsForCommands
+        guard !urls.isEmpty else {
+            await quickLookController.updateIfPresented(
+                requests: [],
+                materializer: materializer
+            )
+            return
+        }
+        guard let requests = await WorkspaceOpenActions.identifiedRequests(
+            for: urls,
+            fileSystem: fileSystem,
+            accessCoordinator: cloudAccessCoordinator
+        ) else {
+            await quickLookController.updateIfPresented(
+                requests: [],
+                materializer: materializer
+            )
+            return
+        }
+        await quickLookController.updateIfPresented(
+            requests: requests,
+            materializer: materializer
+        )
     }
 
     private var pendingConflict: Binding<IdentifiedFileConflict?> {

@@ -5,6 +5,7 @@ final class QuickLookController: NSObject, @preconcurrency QLPreviewPanelDataSou
     private var urls: [URL] = []
     private let onPresent: (@MainActor ([URL]) -> Void)?
     private var requestGeneration: UInt = 0
+    private(set) var isPresenting = false
 
     init(onPresent: (@MainActor ([URL]) -> Void)? = nil) {
         self.onPresent = onPresent
@@ -37,7 +38,38 @@ final class QuickLookController: NSObject, @preconcurrency QLPreviewPanelDataSou
         presentPrepared(urls: prepared.map(\.url))
     }
 
+    func updateIfPresented(
+        requests: [IdentifiedFileRequest],
+        materializer: any CloudMaterializing
+    ) async {
+        guard isPresenting else { return }
+        requestGeneration &+= 1
+        let generation = requestGeneration
+        guard !requests.isEmpty else {
+            presentPrepared(urls: [])
+            return
+        }
+        let result = await materializer.materialize(
+            requests,
+            purpose: .quickLook,
+            progress: { _ in }
+        )
+        guard generation == requestGeneration, !Task.isCancelled else { return }
+        guard !result.wasCancelled,
+              result.failures.isEmpty,
+              let prepared = CloudOperationRequestGate.identityPreservingPreparedRequests(
+                  original: requests,
+                  prepared: result.preparedRequests
+              )
+        else {
+            presentPrepared(urls: [])
+            return
+        }
+        presentPrepared(urls: prepared.map(\.url))
+    }
+
     private func presentPrepared(urls: [URL]) {
+        isPresenting = !urls.isEmpty
         self.urls = urls
         if let onPresent {
             onPresent(urls)
@@ -56,6 +88,12 @@ final class QuickLookController: NSObject, @preconcurrency QLPreviewPanelDataSou
         panel?.reloadData()
         panel?.currentPreviewItemIndex = 0
         panel?.makeKeyAndOrderFront(nil)
+    }
+
+    func previewPanelWillClose(_ panel: QLPreviewPanel!) {
+        requestGeneration &+= 1
+        urls.removeAll()
+        isPresenting = false
     }
 
     func numberOfPreviewItems(in panel: QLPreviewPanel!) -> Int {
