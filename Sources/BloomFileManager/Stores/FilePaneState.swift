@@ -16,6 +16,7 @@ final class FilePaneState {
     private var pendingMonitorRefreshDirectory: URL?
     private var committedState: PaneSnapshot
     private var persistenceChangeHandler: (@MainActor () -> Void)?
+    private var selectionBeforeFiltering: Set<URL> = []
 
     private(set) var currentDirectory: URL
     private(set) var items: [FileItem] = []
@@ -42,17 +43,45 @@ final class FilePaneState {
     var isEditingPath = false
     var isLoading = false
     var errorMessage: String?
+    private(set) var isFilterPresented = false
+    private(set) var filterQuery = ""
     private(set) var focusRequestID: UUID?
     private(set) var renameRequestID: UUID?
     private(set) var pendingRenameTarget: IdentifiedFileRequest?
 
     var canGoBack: Bool { !backHistory.isEmpty }
     var canGoForward: Bool { !forwardHistory.isEmpty }
-    var visibleItems: [FileItem] { sort.apply(to: items) }
+    var filterResultCount: Int { visibleItems.count }
+    var visibleItems: [FileItem] {
+        sort.apply(to: PaneFilenameFilter(query: filterQuery).apply(to: items))
+    }
     var committedDirectoryForPersistence: URL { committedState.directory }
 
     func requestTableFocus() {
         focusRequestID = UUID()
+    }
+
+    func beginFiltering() {
+        if !isFilterPresented {
+            selectionBeforeFiltering = selection
+            isFilterPresented = true
+        }
+    }
+
+    func updateFilterQuery(_ query: String) {
+        filterQuery = query
+        let visibleURLs = Set(visibleItems.map(\.url))
+        selection.formIntersection(visibleURLs)
+    }
+
+    func dismissFiltering() {
+        let captured = selectionBeforeFiltering
+        isFilterPresented = false
+        filterQuery = ""
+        selectionBeforeFiltering.removeAll()
+        let loadedURLs = Set(items.map(\.url))
+        selection = captured.intersection(loadedURLs)
+        requestTableFocus()
     }
 
     @discardableResult
@@ -165,6 +194,13 @@ final class FilePaneState {
     private func prepareForNavigation() {
         cancelRefresh()
         cancelLoading(recoverDirtyMonitor: false)
+        resetFilterForNavigation()
+    }
+
+    private func resetFilterForNavigation() {
+        isFilterPresented = false
+        filterQuery = ""
+        selectionBeforeFiltering.removeAll()
     }
 
     func cancelLoading() {

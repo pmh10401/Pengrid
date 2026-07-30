@@ -204,6 +204,55 @@ struct FilePaneStateTests {
         #expect(pane.items == [replacementItem])
         #expect(!pane.isLoading)
     }
+
+    @Test func filterSessionUsesLoadedItemsAndRestoresCapturedSelection() async {
+        let root = URL(filePath: "/filter-root", directoryHint: .isDirectory)
+        let alpha = makeItem(named: "alpha.txt", in: root)
+        let resume = makeItem(named: "Résumé.pdf", in: root)
+        let korean = makeItem(named: "한글보고서.pdf", in: root)
+        let listing = CountingDirectoryListingService(values: [root: [alpha, resume, korean]])
+        let pane = FilePaneState(directory: root, listingService: listing)
+        await pane.navigate(to: root, recordHistory: false)
+        pane.selection = [resume.url]
+
+        pane.beginFiltering()
+        pane.updateFilterQuery("한글")
+
+        #expect(pane.visibleItems.map(\.name) == ["한글보고서.pdf"])
+        #expect(pane.selection.isEmpty)
+        #expect(pane.filterResultCount == 1)
+        #expect(listing.callCount(for: root) == 1)
+
+        pane.dismissFiltering()
+
+        #expect(pane.visibleItems.count == 3)
+        #expect(pane.selection == [resume.url])
+        #expect(pane.filterQuery.isEmpty)
+        #expect(!pane.isFilterPresented)
+    }
+
+    @Test func navigationClearsPaneFilterWithoutRestoringOldDirectorySelection() async {
+        let root = URL(filePath: "/filter-root", directoryHint: .isDirectory)
+        let next = root.appending(path: "Next", directoryHint: .isDirectory)
+        let selected = makeItem(named: "selected.txt", in: root)
+        let pane = FilePaneState(
+            directory: root,
+            listingService: StubDirectoryListingService(values: [
+                root: [selected],
+                next: [makeItem(named: "next.txt", in: next)]
+            ])
+        )
+        await pane.navigate(to: root, recordHistory: false)
+        pane.selection = [selected.url]
+        pane.beginFiltering()
+        pane.updateFilterQuery("selected")
+
+        await pane.navigate(to: next)
+
+        #expect(!pane.isFilterPresented)
+        #expect(pane.filterQuery.isEmpty)
+        #expect(pane.selection.isEmpty)
+    }
 }
 
 private struct FailingDirectoryListingService: DirectoryListingService {
@@ -245,6 +294,32 @@ private struct DelayedDirectoryListingService: DirectoryListingService {
                 continuation.finish()
             }
         }
+    }
+}
+
+private final class CountingDirectoryListingService:
+    DirectoryListingService,
+    @unchecked Sendable
+{
+    private let lock = NSLock()
+    private let values: [URL: [FileItem]]
+    private var counts: [URL: Int] = [:]
+
+    init(values: [URL: [FileItem]]) {
+        self.values = values
+    }
+
+    func batches(in directory: URL) -> AsyncThrowingStream<[FileItem], Error> {
+        lock.withLock { counts[directory, default: 0] += 1 }
+        let items = values[directory] ?? []
+        return AsyncThrowingStream { continuation in
+            continuation.yield(items)
+            continuation.finish()
+        }
+    }
+
+    func callCount(for directory: URL) -> Int {
+        lock.withLock { counts[directory, default: 0] }
     }
 }
 
