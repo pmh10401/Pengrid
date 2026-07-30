@@ -46,6 +46,14 @@ import Testing
     #expect(PaneAccessibilityPresentation.value(isActive: false) == "Inactive pane")
 }
 
+@Test func paneFilterAccessibilityIsStableAndReportsResults() {
+    #expect(AccessibilityIdentifiers.leftPaneFilter == "leftPane.filter")
+    #expect(AccessibilityIdentifiers.rightPaneFilter == "rightPane.filter")
+    #expect(PaneFilterAccessibilityPresentation.resultCount(0) == "No matching items")
+    #expect(PaneFilterAccessibilityPresentation.resultCount(1) == "1 matching item")
+    #expect(PaneFilterAccessibilityPresentation.resultCount(12) == "12 matching items")
+}
+
 @Test func reduceMotionDisablesOnlyNonessentialAnimation() {
     #expect(AccessibilityMotionPresentation.allowsNonessentialAnimation(reduceMotion: false))
     #expect(!AccessibilityMotionPresentation.allowsNonessentialAnimation(reduceMotion: true))

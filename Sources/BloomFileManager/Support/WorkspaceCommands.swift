@@ -70,6 +70,13 @@ enum WorkspaceCommandActions {
 }
 
 @MainActor
+enum WorkspaceFilterCommandActions {
+    static func showFilter(in workspace: WorkspaceState) {
+        workspace.activePane.requestFilterFocus()
+    }
+}
+
+@MainActor
 protocol WorkspaceOpening {
     func open(_ url: URL)
 }
@@ -415,6 +422,15 @@ struct WorkspaceCommands: Commands {
             }
             .keyboardShortcut("v", modifiers: .command)
             .disabled(workspace == nil || policy.pasteRoute == .unavailable)
+        }
+
+        CommandGroup(after: .pasteboard) {
+            Button("Filter Files") {
+                guard let workspace else { return }
+                WorkspaceFilterCommandActions.showFilter(in: workspace)
+            }
+            .keyboardShortcut("f", modifiers: .command)
+            .disabled(workspace == nil)
         }
 
         CommandMenu("File Operations") {

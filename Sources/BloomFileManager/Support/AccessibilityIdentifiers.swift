@@ -10,6 +10,8 @@ enum AccessibilityIdentifiers {
     static let favoritesSection = "favoritesSection"
     static let leftPane = "leftPane"
     static let rightPane = "rightPane"
+    static let leftPaneFilter = "leftPane.filter"
+    static let rightPaneFilter = "rightPane.filter"
     static let operationStatus = "operationStatus"
     static let conflictSheet = "conflictSheet"
     static let comparisonWorkspace = "comparisonWorkspace"
@@ -84,6 +86,16 @@ enum PaneAccessibilityPresentation {
 
     static func value(isActive: Bool) -> String {
         isActive ? "Active pane" : "Inactive pane"
+    }
+}
+
+enum PaneFilterAccessibilityPresentation {
+    static func resultCount(_ count: Int) -> String {
+        switch count {
+        case 0: "No matching items"
+        case 1: "1 matching item"
+        default: "\(count) matching items"
+        }
     }
 }
 

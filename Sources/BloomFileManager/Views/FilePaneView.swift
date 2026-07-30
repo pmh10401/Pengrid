@@ -23,9 +23,11 @@ struct FilePaneView: View {
     @State private var pathDraft = ""
     @State private var pathError: String?
     @State private var pathEditingSession: WorkspaceTextEditingSession?
+    @State private var filterEditingSession: WorkspaceTextEditingSession?
     @State private var inlineEditingSession: WorkspaceTextEditingSession?
     @State private var favoriteError: String?
     @FocusState private var pathFieldIsFocused: Bool
+    @FocusState private var filterFieldIsFocused: Bool
 
     var body: some View {
         @Bindable var state = state
@@ -107,6 +109,44 @@ struct FilePaneView: View {
             .background(.bar)
             .overlay(alignment: .bottom) { Divider() }
 
+            if state.isFilterPresented {
+                HStack(spacing: 6) {
+                    Image(systemName: "magnifyingglass")
+                        .accessibilityHidden(true)
+                    TextField(
+                        "Filter files",
+                        text: Binding(
+                            get: { state.filterQuery },
+                            set: { state.updateFilterQuery($0) }
+                        )
+                    )
+                    .textFieldStyle(.roundedBorder)
+                    .focused($filterFieldIsFocused)
+                    .onExitCommand { dismissFilter() }
+                    .accessibilityIdentifier(
+                        paneID == .left
+                            ? AccessibilityIdentifiers.leftPaneFilter
+                            : AccessibilityIdentifiers.rightPaneFilter
+                    )
+                    .accessibilityLabel("Filter files in this folder")
+                    .accessibilityValue(
+                        PaneFilterAccessibilityPresentation.resultCount(state.filterResultCount)
+                    )
+
+                    Text("\(state.filterResultCount)")
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
+
+                    Button("Close") { dismissFilter() }
+                        .accessibilityLabel("Close file filter")
+                }
+                .padding(.horizontal, 8)
+                .frame(height: 38)
+                .background(.bar)
+                .overlay(alignment: .bottom) { Divider() }
+            }
+
             FileTableView(
                 items: state.visibleItems,
                 selection: $state.selection,
@@ -165,15 +205,42 @@ struct FilePaneView: View {
                 endPathEditingSession()
             }
         }
+        .onChange(of: state.filterFocusRequestID) { _, requestID in
+            guard requestID != nil else { return }
+            onActivate()
+            Task { @MainActor in
+                guard state.isFilterPresented else { return }
+                filterFieldIsFocused = true
+            }
+        }
+        .onChange(of: filterFieldIsFocused) { _, isFocused in
+            if isFocused {
+                beginFilterEditingSession()
+            } else {
+                endFilterEditingSession()
+            }
+        }
+        .onChange(of: state.isFilterPresented) { _, isPresented in
+            guard !isPresented else { return }
+            filterFieldIsFocused = false
+            endFilterEditingSession()
+        }
         .onAppear {
             if pathFieldIsFocused {
                 beginPathEditingSession()
+            }
+            if filterFieldIsFocused {
+                beginFilterEditingSession()
             }
         }
         .onDisappear {
             if let pathEditingSession {
                 workspace.endTextEditing(pathEditingSession)
                 self.pathEditingSession = nil
+            }
+            if let filterEditingSession {
+                workspace.endTextEditing(filterEditingSession)
+                self.filterEditingSession = nil
             }
             if let inlineEditingSession {
                 workspace.endTextEditing(inlineEditingSession)
@@ -341,5 +408,24 @@ struct FilePaneView: View {
         guard let session = pathEditingSession else { return }
         pathEditingSession = nil
         workspace.endTextEditing(session)
+    }
+
+    private func beginFilterEditingSession() {
+        guard filterEditingSession == nil else { return }
+        let session = WorkspaceTextEditingSession(paneID: paneID, kind: .filter)
+        filterEditingSession = session
+        workspace.beginTextEditing(session)
+    }
+
+    private func endFilterEditingSession() {
+        guard let session = filterEditingSession else { return }
+        filterEditingSession = nil
+        workspace.endTextEditing(session)
+    }
+
+    private func dismissFilter() {
+        filterFieldIsFocused = false
+        endFilterEditingSession()
+        state.dismissFiltering()
     }
 }

@@ -157,14 +157,14 @@ struct WorkspaceCommandTests {
         #expect(workspace.activeTextEditingSession == nil)
     }
 
-    @Test func pathAndInlineEditorsBothSuppressReturnDeleteAndImmediateTrashFileActions() {
+    @Test func pathInlineAndFilterEditorsSuppressReturnDeleteAndImmediateTrashFileActions() {
         let workspace = WorkspaceState(
             leftURL: URL(filePath: "/left"),
             rightURL: URL(filePath: "/right"),
             listingService: StubDirectoryListingService(values: [:])
         )
 
-        for kind in [WorkspaceTextEditingSession.Kind.path, .inlineName] {
+        for kind in [WorkspaceTextEditingSession.Kind.path, .inlineName, .filter] {
             let session = WorkspaceTextEditingSession(paneID: .left, kind: kind)
             workspace.beginTextEditing(session)
             let policy = WorkspaceCommandPolicy(
@@ -183,6 +183,24 @@ struct WorkspaceCommandTests {
             #expect(policy.canOpen == false)
             workspace.endTextEditing(session)
         }
+    }
+
+    @Test func filterEditingIsATextSessionAndCommandFTargetsOnlyTheActivePane() {
+        let workspace = WorkspaceState(
+            leftURL: URL(filePath: "/left"),
+            rightURL: URL(filePath: "/right"),
+            listingService: StubDirectoryListingService(values: [:])
+        )
+        let session = WorkspaceTextEditingSession(paneID: .right, kind: .filter)
+        workspace.beginTextEditing(session)
+        #expect(workspace.activeTextEditingSession == session)
+        workspace.endTextEditing(session)
+
+        workspace.activate(.right)
+        WorkspaceFilterCommandActions.showFilter(in: workspace)
+        #expect(!workspace.left.isFilterPresented)
+        #expect(workspace.right.isFilterPresented)
+        #expect(workspace.right.filterFocusRequestID != nil)
     }
 
     @Test func oldSamePaneAndKindSessionCannotEndANewerGeneration() {

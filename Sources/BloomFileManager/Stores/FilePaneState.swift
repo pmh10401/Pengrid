@@ -45,6 +45,7 @@ final class FilePaneState {
     var errorMessage: String?
     private(set) var isFilterPresented = false
     private(set) var filterQuery = ""
+    private(set) var filterFocusRequestID: UUID?
     private(set) var focusRequestID: UUID?
     private(set) var renameRequestID: UUID?
     private(set) var pendingRenameTarget: IdentifiedFileRequest?
@@ -66,6 +67,11 @@ final class FilePaneState {
             selectionBeforeFiltering = selection
             isFilterPresented = true
         }
+    }
+
+    func requestFilterFocus() {
+        beginFiltering()
+        filterFocusRequestID = UUID()
     }
 
     func updateFilterQuery(_ query: String) {
