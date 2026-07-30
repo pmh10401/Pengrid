@@ -42,6 +42,24 @@ enum PaneEscapeRouting {
     }
 }
 
+@MainActor
+enum PaneFilterDismissalRouting {
+    static func handle(
+        clearFieldFocus: () -> Void,
+        endEditing: () -> Void,
+        dismissFilter: () -> Void,
+        requestTableFocus: @escaping @MainActor () -> Void
+    ) -> Task<Void, Never> {
+        clearFieldFocus()
+        endEditing()
+        dismissFilter()
+        return Task { @MainActor in
+            await Task.yield()
+            requestTableFocus()
+        }
+    }
+}
+
 struct FilePaneView: View {
     let paneID: PaneID
     let state: FilePaneState
@@ -466,9 +484,12 @@ struct FilePaneView: View {
     }
 
     private func dismissFilter() {
-        filterFieldIsFocused = false
-        endFilterEditingSession()
-        state.dismissFiltering()
+        _ = PaneFilterDismissalRouting.handle(
+            clearFieldFocus: { filterFieldIsFocused = false },
+            endEditing: endFilterEditingSession,
+            dismissFilter: state.dismissFiltering,
+            requestTableFocus: state.requestTableFocus
+        )
     }
 
     @discardableResult

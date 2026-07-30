@@ -92,7 +92,6 @@ final class FilePaneState {
         selectionBeforeFiltering.removeAll()
         let loadedURLs = Set(items.map(\.url))
         selection = captured.intersection(loadedURLs)
-        requestTableFocus()
     }
 
     @discardableResult

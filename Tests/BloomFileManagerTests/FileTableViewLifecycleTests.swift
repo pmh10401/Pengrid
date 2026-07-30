@@ -496,6 +496,7 @@ struct FileTableViewLifecycleTests {
         pane.beginFiltering()
         pane.updateFilterQuery("result")
         var broaderCancellations = 0
+        var focusTask: Task<Void, Never>?
         let selection = Binding<Set<URL>>(
             get: { pane.selection },
             set: { pane.selection = $0 }
@@ -511,7 +512,12 @@ struct FileTableViewLifecycleTests {
                     broaderCancellations += 1
                     return false
                 }
-                pane.dismissFiltering()
+                focusTask = PaneFilterDismissalRouting.handle(
+                    clearFieldFocus: {},
+                    endEditing: {},
+                    dismissFilter: pane.dismissFiltering,
+                    requestTableFocus: pane.requestTableFocus
+                )
                 return true
             }
         )
@@ -547,6 +553,7 @@ struct FileTableViewLifecycleTests {
         ))
 
         table.keyDown(with: escape)
+        await focusTask?.value
 
         #expect(!pane.isFilterPresented)
         #expect(pane.filterQuery.isEmpty)

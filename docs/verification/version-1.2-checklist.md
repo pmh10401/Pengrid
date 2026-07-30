@@ -8,8 +8,8 @@ keyboard-focus, or appearance evidence.
 
 ## Automated evidence
 
-- [x] **PASS — 2026-07-30:** The exact serial full Swift test suite passed 588
-  tests in 45 suites with zero failures in 35.825 seconds.
+- [x] **PASS — 2026-07-30:** The exact serial full Swift test suite passed 589
+  tests in 45 suites with zero failures in 36.663 seconds.
 - [x] **PASS — 2026-07-30:** `./script/build_and_run.sh --verify` exited zero
   from the same worktree state and confirmed the launched `BloomFileManager`
   process. The staged development executable is a Mach-O arm64 binary and its
@@ -54,6 +54,8 @@ keyboard-focus, or appearance evidence.
 
 - [ ] **NOT RUN:** VoiceOver announces filter labels, result count, and restored
   selection.
-- [ ] **NOT RUN:** Keyboard focus returns to the table after Escape.
+- [x] **PASS — 2026-07-30:** After filtering the left pane with `.DS`, Escape
+  restored the prior selection and Arrow Down moved the selected table row,
+  confirming that keyboard focus returned to the table.
 - [ ] **NOT RUN:** Light, dark, increased contrast, and reduced motion remain
   usable.

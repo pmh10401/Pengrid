@@ -83,3 +83,34 @@ import Testing
     #expect(!dismissedFilterAgain)
     #expect(pathCancellationCount == 1)
 }
+
+@MainActor
+@Test func dismissingFilterDefersTableFocusUntilAfterFieldTeardown() async {
+    let pane = FilePaneState(
+        directory: URL(filePath: "/left"),
+        listingService: StubDirectoryListingService(values: [:])
+    )
+    pane.beginFiltering()
+    var events: [String] = []
+
+    let focusTask = PaneFilterDismissalRouting.handle(
+        clearFieldFocus: { events.append("clear") },
+        endEditing: { events.append("end") },
+        dismissFilter: {
+            pane.dismissFiltering()
+            events.append("dismiss")
+        },
+        requestTableFocus: {
+            pane.requestTableFocus()
+            events.append("focus")
+        }
+    )
+
+    #expect(events == ["clear", "end", "dismiss"])
+    #expect(pane.focusRequestID == nil)
+
+    await focusTask.value
+
+    #expect(events == ["clear", "end", "dismiss", "focus"])
+    #expect(pane.focusRequestID != nil)
+}
