@@ -17,10 +17,10 @@ keyboard-focus, or appearance evidence.
 - [x] **PASS — 2026-07-30:** The 10,000-item filter regression test passed in
   0.088 seconds across five queries. The five-second value is a CI regression
   ceiling, not a user-operation latency promise.
-- [x] **PASS — 2026-07-30 (durable timing-flake note):** One transient
-  comparison-coordinator assertion failed, passed in focused isolation, and
-  the following complete serial rerun passed. The release gate remains PASS;
-  no flake fix is claimed.
+- [x] **PASS — 2026-07-30 (timing regression stabilized):** The comparison
+  test now waits for the new fingerprint before completing stale checksum
+  requests and accepts legitimate progress on the replacement verification.
+  Twenty focused repetitions and the following complete serial run passed.
 
 ## Filter and keyboard
 
