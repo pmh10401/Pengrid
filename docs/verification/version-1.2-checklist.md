@@ -24,10 +24,11 @@ keyboard-focus, or appearance evidence.
 
 ## Filter and keyboard
 
-- [ ] **NOT RUN:** Command-F opens the active pane's filter and does not affect
-  the other pane.
-- [ ] **NOT RUN:** Escape restores the prior selection when that item still
-  exists.
+- [x] **PASS — 2026-07-30:** Command-F opened only the active pane's filter in
+  both left- and right-pane manual UI checks. Activating the right pane first
+  produced the pane-specific `rightPane.filter` control.
+- [x] **PASS — 2026-07-30:** Escape closed the populated left-pane filter and
+  restored the previously selected `Chrome Apps.localized` row.
 - [ ] **NOT RUN:** Korean, English, case, and accent matching behave as
   documented.
 - [ ] **NOT RUN:** Filtering a File Provider listing causes no download request.
