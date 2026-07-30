@@ -42,6 +42,17 @@ struct FilePaneStateTests {
         #expect(pane.forwardHistory.isEmpty)
     }
 
+    @Test func successfulNavigationsKeepOnlyTheNewestHundredBackEntries() async {
+        let root = URL(filePath: "/history-root")
+        let pane = FilePaneState(directory: root, listingService: StubDirectoryListingService(values: [:]))
+
+        for index in 1...105 {
+            await pane.navigate(to: root.appending(path: "\(index)"))
+        }
+
+        #expect(pane.backHistory.count == 100)
+    }
+
     @Test func failedBackNavigationRestoresThePreviousHistory() async {
         let home = URL(filePath: "/private/test-home")
         let documents = home.appending(path: "Documents")

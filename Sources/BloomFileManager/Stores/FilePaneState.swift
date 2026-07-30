@@ -17,11 +17,12 @@ final class FilePaneState {
     private var committedState: PaneSnapshot
     private var persistenceChangeHandler: (@MainActor () -> Void)?
     private var selectionBeforeFiltering: Set<URL> = []
+    private var navigationHistory = PaneNavigationHistory(capacity: 100)
 
     private(set) var currentDirectory: URL
     private(set) var items: [FileItem] = []
-    private(set) var backHistory: [URL] = []
-    private(set) var forwardHistory: [URL] = []
+    var backHistory: [URL] { navigationHistory.backward }
+    var forwardHistory: [URL] { navigationHistory.forward }
     var selection: Set<URL> = [] {
         didSet {
             guard let pendingRenameTarget else { return }
@@ -169,8 +170,7 @@ final class FilePaneState {
             directory: directory,
             items: [],
             selection: [],
-            backHistory: [],
-            forwardHistory: []
+            navigationHistory: PaneNavigationHistory(capacity: 100)
         )
     }
 
@@ -230,9 +230,8 @@ final class FilePaneState {
         to directory: URL,
         recordHistory: Bool
     ) -> Task<Void, Never> {
-        if recordHistory, directory != currentDirectory {
-            backHistory.append(currentDirectory)
-            forwardHistory.removeAll()
+        if recordHistory {
+            navigationHistory.recordUserNavigation(from: currentDirectory, to: directory)
         }
 
         currentDirectory = directory
@@ -279,8 +278,7 @@ final class FilePaneState {
     func goBack() async {
         prepareForNavigation()
         let previousState = snapshot()
-        guard let target = backHistory.popLast() else { return }
-        forwardHistory.append(currentDirectory)
+        guard let target = navigationHistory.popBackward(from: currentDirectory) else { return }
         committedState = previousState
         let task = startNavigation(to: target, recordHistory: false)
         await Self.awaitTask(task)
@@ -289,8 +287,7 @@ final class FilePaneState {
     func goForward() async {
         prepareForNavigation()
         let previousState = snapshot()
-        guard let target = forwardHistory.popLast() else { return }
-        backHistory.append(currentDirectory)
+        guard let target = navigationHistory.popForward(from: currentDirectory) else { return }
         committedState = previousState
         let task = startNavigation(to: target, recordHistory: false)
         await Self.awaitTask(task)
@@ -532,8 +529,7 @@ final class FilePaneState {
             directory: currentDirectory,
             items: items,
             selection: selection,
-            backHistory: backHistory,
-            forwardHistory: forwardHistory
+            navigationHistory: navigationHistory
         )
     }
 
@@ -541,8 +537,7 @@ final class FilePaneState {
         currentDirectory = snapshot.directory
         items = snapshot.items
         selection = snapshot.selection
-        backHistory = snapshot.backHistory
-        forwardHistory = snapshot.forwardHistory
+        navigationHistory = snapshot.navigationHistory
     }
 
     private static func entryPath(_ url: URL) -> String {
@@ -588,6 +583,5 @@ private struct PaneSnapshot {
     let directory: URL
     let items: [FileItem]
     let selection: Set<URL>
-    let backHistory: [URL]
-    let forwardHistory: [URL]
+    let navigationHistory: PaneNavigationHistory
 }
