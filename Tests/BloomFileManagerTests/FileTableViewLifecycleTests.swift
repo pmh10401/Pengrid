@@ -481,6 +481,109 @@ struct FileTableViewLifecycleTests {
         #expect(recorder.performCount == 1)
     }
 
+    @Test func tableReportsTheFirstVisibleItemAfterScrolling() throws {
+        let directory = URL(filePath: "/scroll", directoryHint: .isDirectory)
+        let items = (0..<30).map {
+            makeTableItem(named: String(format: "item-%02d", $0), in: directory)
+        }
+        var reported: URL?
+        let view = FileTableView(
+            items: items,
+            selection: .constant([]),
+            onActivatePane: {},
+            onOpen: { _ in },
+            onSortChange: { _ in },
+            onFirstVisibleItemChange: { reported = $0 }
+        )
+        let coordinator = view.makeCoordinator()
+        let scroll = view.makeScrollView(coordinator: coordinator)
+        scroll.frame = NSRect(x: 0, y: 0, width: 500, height: 140)
+        let table = try #require(scroll.documentView as? NSTableView)
+        table.frame = NSRect(x: 0, y: 0, width: 500, height: 30 * 28)
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: 20 * 28))
+        scroll.reflectScrolledClipView(scroll.contentView)
+
+        coordinator.reportFirstVisibleItem(in: table)
+
+        let index = try #require(items.firstIndex { $0.url == reported })
+        #expect((19...21).contains(index))
+    }
+
+    @Test func tableConsumesEachAvailableScrollRequestExactlyOnce() throws {
+        let directory = URL(filePath: "/scroll", directoryHint: .isDirectory)
+        let items = (0..<30).map {
+            makeTableItem(named: "item-\($0)", in: directory)
+        }
+        let request = PaneScrollRequest(id: UUID(), anchor: items[20].url)
+        var consumed: [UUID] = []
+        var view = FileTableView(
+            items: items,
+            selection: .constant([]),
+            scrollRequest: request,
+            onActivatePane: {},
+            onOpen: { _ in },
+            onSortChange: { _ in },
+            onConsumeScrollRequest: { consumed.append($0) }
+        )
+        let coordinator = view.makeCoordinator()
+        let scroll = view.makeScrollView(coordinator: coordinator)
+        let table = try #require(scroll.documentView as? NSTableView)
+        coordinator.apply(items: items, selection: [], to: table)
+
+        coordinator.applyScrollRequest(to: table)
+        coordinator.applyScrollRequest(to: table)
+
+        #expect(consumed == [request.id])
+
+        view = FileTableView(
+            items: Array(items.dropLast(10)),
+            selection: .constant([]),
+            scrollRequest: PaneScrollRequest(id: UUID(), anchor: items[29].url),
+            onActivatePane: {},
+            onOpen: { _ in },
+            onSortChange: { _ in },
+            onConsumeScrollRequest: { consumed.append($0) }
+        )
+        coordinator.parent = view
+        coordinator.apply(items: view.items, selection: [], to: table)
+        coordinator.applyScrollRequest(to: table)
+
+        #expect(consumed == [request.id])
+    }
+
+    @Test func dismantledTableStopsReportingBoundsChanges() throws {
+        let directory = URL(filePath: "/scroll", directoryHint: .isDirectory)
+        let items = (0..<30).map {
+            makeTableItem(named: "item-\($0)", in: directory)
+        }
+        var reportCount = 0
+        let view = FileTableView(
+            items: items,
+            selection: .constant([]),
+            onActivatePane: {},
+            onOpen: { _ in },
+            onSortChange: { _ in },
+            onFirstVisibleItemChange: { _ in reportCount += 1 }
+        )
+        let coordinator = view.makeCoordinator()
+        let scroll = view.makeScrollView(coordinator: coordinator)
+        _ = try #require(scroll.documentView as? NSTableView)
+
+        NotificationCenter.default.post(
+            name: NSView.boundsDidChangeNotification,
+            object: scroll.contentView
+        )
+        #expect(reportCount == 1)
+
+        FileTableView.dismantleNSView(scroll, coordinator: coordinator)
+        NotificationCenter.default.post(
+            name: NSView.boundsDidChangeNotification,
+            object: scroll.contentView
+        )
+
+        #expect(reportCount == 1)
+    }
+
     private func makeTableView(items: [FileItem], selection: SelectionRecorder) -> FileTableView {
         FileTableView(
             items: items,

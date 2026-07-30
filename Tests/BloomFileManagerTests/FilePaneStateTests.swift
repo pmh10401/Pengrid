@@ -264,6 +264,51 @@ struct FilePaneStateTests {
         #expect(pane.filterQuery.isEmpty)
         #expect(pane.selection.isEmpty)
     }
+
+    @Test func returningToDirectoryRestoresExistingSelectionAndScrollAnchor() async {
+        let a = URL(filePath: "/a", directoryHint: .isDirectory)
+        let b = URL(filePath: "/b", directoryHint: .isDirectory)
+        let first = makeItem(named: "first.txt", in: a)
+        let middle = makeItem(named: "middle.txt", in: a)
+        let pane = FilePaneState(
+            directory: a,
+            listingService: StubDirectoryListingService(values: [
+                a: [first, middle],
+                b: [makeItem(named: "other.txt", in: b)]
+            ])
+        )
+        await pane.navigate(to: a, recordHistory: false)
+        pane.selection = [middle.url]
+        pane.recordFirstVisibleItem(first.url)
+
+        await pane.navigate(to: b)
+        await pane.goBack()
+
+        #expect(pane.selection == [middle.url])
+        #expect(pane.scrollRestoreRequest?.anchor == first.url)
+    }
+
+    @Test func missingRestorationTargetsAreSilentlyDiscarded() async {
+        let a = URL(filePath: "/a", directoryHint: .isDirectory)
+        let b = URL(filePath: "/b", directoryHint: .isDirectory)
+        let disappearing = makeItem(named: "gone.txt", in: a)
+        let listing = MutableDirectoryListingService(values: [
+            a: [disappearing],
+            b: []
+        ])
+        let pane = FilePaneState(directory: a, listingService: listing)
+        await pane.navigate(to: a, recordHistory: false)
+        pane.selection = [disappearing.url]
+        pane.recordFirstVisibleItem(disappearing.url)
+
+        await pane.navigate(to: b)
+        listing.set([], for: a)
+        await pane.goBack()
+
+        #expect(pane.selection.isEmpty)
+        #expect(pane.scrollRestoreRequest == nil)
+        #expect(pane.errorMessage == nil)
+    }
 }
 
 private struct FailingDirectoryListingService: DirectoryListingService {
@@ -331,6 +376,30 @@ private final class CountingDirectoryListingService:
 
     func callCount(for directory: URL) -> Int {
         lock.withLock { counts[directory, default: 0] }
+    }
+}
+
+private final class MutableDirectoryListingService:
+    DirectoryListingService,
+    @unchecked Sendable
+{
+    private let lock = NSLock()
+    private var values: [URL: [FileItem]]
+
+    init(values: [URL: [FileItem]]) {
+        self.values = values
+    }
+
+    func set(_ items: [FileItem], for directory: URL) {
+        lock.withLock { values[directory] = items }
+    }
+
+    func batches(in directory: URL) -> AsyncThrowingStream<[FileItem], Error> {
+        let items = lock.withLock { values[directory] ?? [] }
+        return AsyncThrowingStream { continuation in
+            continuation.yield(items)
+            continuation.finish()
+        }
     }
 }
 

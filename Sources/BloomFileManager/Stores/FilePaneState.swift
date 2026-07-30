@@ -18,6 +18,8 @@ final class FilePaneState {
     private var persistenceChangeHandler: (@MainActor () -> Void)?
     private var selectionBeforeFiltering: Set<URL> = []
     private var navigationHistory = PaneNavigationHistory(capacity: 100)
+    private var viewStateCache = PaneViewStateCache(capacity: 100)
+    private var firstVisibleItem: URL?
 
     private(set) var currentDirectory: URL
     private(set) var items: [FileItem] = []
@@ -50,6 +52,7 @@ final class FilePaneState {
     private(set) var focusRequestID: UUID?
     private(set) var renameRequestID: UUID?
     private(set) var pendingRenameTarget: IdentifiedFileRequest?
+    private(set) var scrollRestoreRequest: PaneScrollRequest?
 
     var canGoBack: Bool { !backHistory.isEmpty }
     var canGoForward: Bool { !forwardHistory.isEmpty }
@@ -151,6 +154,15 @@ final class FilePaneState {
         renameRequestID = nil
     }
 
+    func recordFirstVisibleItem(_ url: URL?) {
+        firstVisibleItem = url
+    }
+
+    func consumeScrollRestoreRequest(_ id: UUID) {
+        guard scrollRestoreRequest?.id == id else { return }
+        scrollRestoreRequest = nil
+    }
+
     private func clearPendingRename() {
         renameRequestID = nil
         pendingRenameTarget = nil
@@ -230,12 +242,15 @@ final class FilePaneState {
         to directory: URL,
         recordHistory: Bool
     ) -> Task<Void, Never> {
+        storeCurrentDirectoryViewState()
         if recordHistory {
             navigationHistory.recordUserNavigation(from: currentDirectory, to: directory)
         }
 
         currentDirectory = directory
         selection.removeAll()
+        firstVisibleItem = nil
+        scrollRestoreRequest = nil
         clearPendingRename()
         items.removeAll(keepingCapacity: true)
         errorMessage = nil
@@ -484,6 +499,7 @@ final class FilePaneState {
 
     private func completeNavigation(to directory: URL, requestID: UInt64) {
         guard isCurrentRequest(requestID) else { return }
+        restoreDirectoryViewState(for: directory)
         committedState = snapshot()
         finishRequest(requestID)
         let shouldReconcileVisibleDirectory = pendingMonitorRefreshDirectory.map {
@@ -495,6 +511,32 @@ final class FilePaneState {
             beginRefresh()
         }
         persistenceChangeHandler?()
+    }
+
+    private func storeCurrentDirectoryViewState() {
+        viewStateCache.store(
+            PaneDirectoryViewState(
+                selection: selection,
+                scrollAnchor: firstVisibleItem
+            ),
+            for: currentDirectory
+        )
+    }
+
+    private func restoreDirectoryViewState(for directory: URL) {
+        guard let saved = viewStateCache.value(for: directory) else {
+            scrollRestoreRequest = nil
+            return
+        }
+        let loadedByPath = Dictionary(uniqueKeysWithValues: items.map {
+            (Self.entryPath($0.url), $0.url)
+        })
+        selection = Set(saved.selection.compactMap {
+            loadedByPath[Self.entryPath($0)]
+        })
+        scrollRestoreRequest = saved.scrollAnchor.flatMap {
+            loadedByPath[Self.entryPath($0)]
+        }.map { PaneScrollRequest(id: UUID(), anchor: $0) }
     }
 
     private func reconcilePendingMonitorRefreshIfNeeded(

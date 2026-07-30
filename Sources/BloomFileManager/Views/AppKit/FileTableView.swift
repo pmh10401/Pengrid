@@ -61,11 +61,14 @@ struct FileTableView: NSViewRepresentable {
     let directory: URL
     let focusRequestID: UUID?
     let renameRequestID: UUID?
+    let scrollRequest: PaneScrollRequest?
     let isOperationRunning: Bool
     let dropModifierFlags: () -> NSEvent.ModifierFlags
     let onActivatePane: () -> Void
     let onOpen: (FileItem) -> Void
     let onSortChange: (FileSort) -> Void
+    let onFirstVisibleItemChange: (URL?) -> Void
+    let onConsumeScrollRequest: (UUID) -> Void
     let onConsumeRenameRequest: (UUID) -> Void
     let onInlineEditingEvent: (InlineTextEditingEvent) -> Void
     let onDiscardRename: () -> Void
@@ -86,6 +89,7 @@ struct FileTableView: NSViewRepresentable {
         directory: URL = URL(filePath: "/", directoryHint: .isDirectory),
         focusRequestID: UUID? = nil,
         renameRequestID: UUID? = nil,
+        scrollRequest: PaneScrollRequest? = nil,
         isOperationRunning: Bool = false,
         dropModifierFlags: @escaping () -> NSEvent.ModifierFlags = {
             NSEvent.modifierFlags.intersection(.deviceIndependentFlagsMask)
@@ -93,6 +97,8 @@ struct FileTableView: NSViewRepresentable {
         onActivatePane: @escaping () -> Void,
         onOpen: @escaping (FileItem) -> Void,
         onSortChange: @escaping (FileSort) -> Void,
+        onFirstVisibleItemChange: @escaping (URL?) -> Void = { _ in },
+        onConsumeScrollRequest: @escaping (UUID) -> Void = { _ in },
         onConsumeRenameRequest: @escaping (UUID) -> Void = { _ in },
         onInlineEditingEvent: @escaping (InlineTextEditingEvent) -> Void = { _ in },
         onDiscardRename: @escaping () -> Void = {},
@@ -112,11 +118,14 @@ struct FileTableView: NSViewRepresentable {
         self.directory = directory
         self.focusRequestID = focusRequestID
         self.renameRequestID = renameRequestID
+        self.scrollRequest = scrollRequest
         self.isOperationRunning = isOperationRunning
         self.dropModifierFlags = dropModifierFlags
         self.onActivatePane = onActivatePane
         self.onOpen = onOpen
         self.onSortChange = onSortChange
+        self.onFirstVisibleItemChange = onFirstVisibleItemChange
+        self.onConsumeScrollRequest = onConsumeScrollRequest
         self.onConsumeRenameRequest = onConsumeRenameRequest
         self.onInlineEditingEvent = onInlineEditingEvent
         self.onDiscardRename = onDiscardRename
@@ -184,6 +193,13 @@ struct FileTableView: NSViewRepresentable {
         scrollView.hasHorizontalScroller = true
         scrollView.autohidesScrollers = true
         scrollView.documentView = tableView
+        scrollView.contentView.postsBoundsChangedNotifications = true
+        NotificationCenter.default.addObserver(
+            coordinator,
+            selector: #selector(Coordinator.scrollViewBoundsDidChange(_:)),
+            name: NSView.boundsDidChangeNotification,
+            object: scrollView.contentView
+        )
         return scrollView
     }
 
@@ -193,7 +209,25 @@ struct FileTableView: NSViewRepresentable {
         coordinator.parent = self
         coordinator.apply(sort: sort, to: tableView)
         coordinator.apply(items: items, selection: selection, to: tableView)
+        coordinator.applyScrollRequest(to: tableView)
+        coordinator.reportFirstVisibleItem(in: tableView)
         coordinator.applyFocusRequest(to: tableView)
+    }
+
+    static func dismantleNSView(_ scrollView: NSScrollView, coordinator: Coordinator) {
+        NotificationCenter.default.removeObserver(
+            coordinator,
+            name: NSView.boundsDidChangeNotification,
+            object: scrollView.contentView
+        )
+        scrollView.contentView.postsBoundsChangedNotifications = false
+        guard let tableView = scrollView.documentView as? PaneActivatingTableView else { return }
+        tableView.onBecomeFirstResponder = nil
+        tableView.dataSource = nil
+        tableView.delegate = nil
+        tableView.target = nil
+        tableView.menu?.delegate = nil
+        coordinator.tableView = nil
     }
 }
 
@@ -251,10 +285,12 @@ extension FileTableView {
         var items: [FileItem]
         var isApplyingSelection = false
         private var isApplyingSort = false
+        private var isApplyingScrollRequest = false
         weak var tableView: NSTableView?
 
         private var lastHandledRenameRequestID: UUID?
         private var lastHandledFocusRequestID: UUID?
+        private var lastHandledScrollRequestID: UUID?
         private var editingURL: URL?
         private var isInlineEditingActive = false
         private var inlineEditingToken: UUID?
@@ -319,6 +355,33 @@ extension FileTableView {
                   window.makeFirstResponder(tableView)
             else { return }
             lastHandledFocusRequestID = requestID
+        }
+
+        func reportFirstVisibleItem(in tableView: NSTableView) {
+            guard !isApplyingScrollRequest else { return }
+            let row = tableView.rows(in: tableView.visibleRect).location
+            let url = items.indices.contains(row) ? items[row].url : nil
+            parent.onFirstVisibleItemChange(url)
+        }
+
+        func applyScrollRequest(to tableView: NSTableView) {
+            guard let request = parent.scrollRequest,
+                  request.id != lastHandledScrollRequestID,
+                  let row = items.firstIndex(where: { $0.url == request.anchor })
+            else { return }
+
+            isApplyingScrollRequest = true
+            tableView.scrollRowToVisible(row)
+            lastHandledScrollRequestID = request.id
+            parent.onConsumeScrollRequest(request.id)
+            isApplyingScrollRequest = false
+        }
+
+        @objc func scrollViewBoundsDidChange(_ notification: Notification) {
+            guard let tableView,
+                  notification.object as AnyObject? === tableView.enclosingScrollView?.contentView
+            else { return }
+            reportFirstVisibleItem(in: tableView)
         }
 
         func tableView(
