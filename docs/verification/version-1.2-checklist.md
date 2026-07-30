@@ -29,33 +29,49 @@ keyboard-focus, or appearance evidence.
   produced the pane-specific `rightPane.filter` control.
 - [x] **PASS — 2026-07-30:** Escape closed the populated left-pane filter and
   restored the previously selected `Chrome Apps.localized` row.
-- [ ] **NOT RUN:** Korean, English, case, and accent matching behave as
-  documented.
-- [ ] **NOT RUN:** Filtering a File Provider listing causes no download request.
+- [x] **PASS — 2026-07-30:** A physical four-file fixture matched
+  `AlphaFile.txt` from `ALPHAFILE` and `café-notes.txt` from `cafe`, confirming
+  English, case-insensitive, and accent-insensitive matching in the app UI.
+- [x] **PASS — 2026-07-30:** Copying composed Korean `여행` through a native
+  macOS text field into the physical app filter returned only `여행계획.txt`.
+- [x] **PASS — 2026-07-30:** Filtering a physical OneDrive File Provider folder
+  for `docx` returned three rows while its online-only `dataless` file count
+  remained 8 before and after filtering.
 
 ## Navigation and restoration
 
 - [x] **PASS — 2026-07-30:** Back and Forward restored OneDrive and Documents
   in the right pane and Applications and Home in the left pane; each inactive
   pane kept its location during the other pane's navigation.
-- [ ] **NOT RUN:** Returning near the top, middle, and end of a large folder
-  restores position.
-- [ ] **NOT RUN:** Deleted selections, anchors, and history destinations recover
-  without a crash.
+- [x] **PASS — 2026-07-30:** Returning to a physical 100-file folder restored
+  its vertical scroll position near the end (`0.996` to `0.996`), middle
+  (`0.500` to `0.501`), and top (`0` to `0`).
+- [x] **PASS — 2026-07-30:** Removing the selected first-visible fixture file
+  cleared the stale selection and anchor without a crash. Removing a recorded
+  history destination kept the pane in its current folder and showed a
+  recoverable “no such file” error.
 
 ## Quick Look
 
 - [ ] **NOT RUN:** An open panel follows local-file selection.
-- [ ] **NOT RUN:** An online-only item uses the existing materialization gate.
+- [x] **PASS — 2026-07-30:** Quick Look on a physical OneDrive online-only item
+  materialized the selected file: its `dataless` flag cleared and the parent
+  folder's online-only count changed from 8 to 7 before presentation.
 - [ ] **NOT RUN:** Empty, deleted, offline, and superseded selections do not
   show stale content.
 
 ## Accessibility and appearance
 
-- [ ] **NOT RUN:** VoiceOver announces filter labels, result count, and restored
-  selection.
+- [ ] **NOT RUN:** With VoiceOver enabled, the filter exposed its pane label and
+  result count through the macOS accessibility tree, but spoken announcement
+  output and restored-selection speech were not captured. VoiceOver was
+  returned to its original off state.
 - [x] **PASS — 2026-07-30:** After filtering the left pane with `.DS`, Escape
   restored the prior selection and Arrow Down moved the selected table row,
   confirming that keyboard focus returned to the table.
-- [ ] **NOT RUN:** Light, dark, increased contrast, and reduced motion remain
-  usable.
+- [x] **PASS — 2026-07-30:** The physical app remained readable and operable in
+  both macOS light and dark appearances; the original dark appearance was
+  restored after verification.
+- [ ] **NOT RUN:** Increased contrast and reduced motion remain usable. The
+  macOS accessibility-settings extension repeatedly closed the UI automation
+  connection before either setting could be safely toggled and restored.
