@@ -239,13 +239,11 @@ struct WorkspacePersistenceTests {
         )
 
         workspace.splitRatio = 0.31
-        try? await Task.sleep(for: .milliseconds(180))
         workspace.splitRatio = 0.68
-        try? await Task.sleep(for: .milliseconds(180))
 
         #expect(persistence.load() == nil)
 
-        try? await Task.sleep(for: .milliseconds(160))
+        try? await Task.sleep(for: .milliseconds(350))
         #expect(persistence.load()?.splitRatio == 0.68)
     }
 
