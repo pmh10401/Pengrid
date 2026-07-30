@@ -182,6 +182,7 @@ final class FilePaneState {
             directory: directory,
             items: [],
             selection: [],
+            firstVisibleItem: nil,
             navigationHistory: PaneNavigationHistory(capacity: 100)
         )
     }
@@ -525,6 +526,7 @@ final class FilePaneState {
 
     private func restoreDirectoryViewState(for directory: URL) {
         guard let saved = viewStateCache.value(for: directory) else {
+            firstVisibleItem = nil
             scrollRestoreRequest = nil
             return
         }
@@ -534,9 +536,12 @@ final class FilePaneState {
         selection = Set(saved.selection.compactMap {
             loadedByPath[Self.entryPath($0)]
         })
-        scrollRestoreRequest = saved.scrollAnchor.flatMap {
+        firstVisibleItem = saved.scrollAnchor.flatMap {
             loadedByPath[Self.entryPath($0)]
-        }.map { PaneScrollRequest(id: UUID(), anchor: $0) }
+        }
+        scrollRestoreRequest = firstVisibleItem.map {
+            PaneScrollRequest(id: UUID(), anchor: $0)
+        }
     }
 
     private func reconcilePendingMonitorRefreshIfNeeded(
@@ -571,6 +576,7 @@ final class FilePaneState {
             directory: currentDirectory,
             items: items,
             selection: selection,
+            firstVisibleItem: firstVisibleItem,
             navigationHistory: navigationHistory
         )
     }
@@ -579,6 +585,14 @@ final class FilePaneState {
         currentDirectory = snapshot.directory
         items = snapshot.items
         selection = snapshot.selection
+        firstVisibleItem = snapshot.firstVisibleItem.flatMap { anchor in
+            snapshot.items.first {
+                Self.entryPath($0.url) == Self.entryPath(anchor)
+            }?.url
+        }
+        scrollRestoreRequest = firstVisibleItem.map {
+            PaneScrollRequest(id: UUID(), anchor: $0)
+        }
         navigationHistory = snapshot.navigationHistory
     }
 
@@ -625,5 +639,6 @@ private struct PaneSnapshot {
     let directory: URL
     let items: [FileItem]
     let selection: Set<URL>
+    let firstVisibleItem: URL?
     let navigationHistory: PaneNavigationHistory
 }

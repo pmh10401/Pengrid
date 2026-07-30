@@ -133,6 +133,34 @@ struct FilePaneStateTests {
         #expect(pane.forwardHistory.isEmpty)
     }
 
+    @Test func failedNavigationRollbackPreservesScrollAnchorForLaterReturn() async {
+        // Catches rollback snapshots that omit the committed scroll anchor and
+        // allow the next navigation to overwrite its cache entry with nil.
+        let home = URL(filePath: "/rollback-home", directoryHint: .isDirectory)
+        let blocked = URL(filePath: "/blocked", directoryHint: .isDirectory)
+        let other = URL(filePath: "/other", directoryHint: .isDirectory)
+        let anchor = makeItem(named: "anchor.txt", in: home)
+        let pane = FilePaneState(
+            directory: home,
+            listingService: PartiallyFailingDirectoryListingService(
+                values: [
+                    home: [anchor],
+                    other: [makeItem(named: "other.txt", in: other)]
+                ],
+                failingDirectories: [blocked]
+            )
+        )
+        await pane.navigate(to: home, recordHistory: false)
+        pane.recordFirstVisibleItem(anchor.url)
+
+        await pane.navigate(to: blocked)
+        await pane.navigate(to: other)
+        await pane.goBack()
+
+        #expect(pane.currentDirectory == home)
+        #expect(pane.scrollRestoreRequest?.anchor == anchor.url)
+    }
+
     @Test func cancelledSameDirectoryLoadCannotClearTheNewerLoadState() async {
         let root = URL(filePath: "/")
         let directory = URL(filePath: "/private/test-home")
@@ -319,6 +347,26 @@ private struct FailingDirectoryListingService: DirectoryListingService {
             if failingDirectories.contains(directory) {
                 continuation.finish(throwing: ListingError.unavailable)
             } else {
+                continuation.finish()
+            }
+        }
+    }
+
+    private enum ListingError: Error {
+        case unavailable
+    }
+}
+
+private struct PartiallyFailingDirectoryListingService: DirectoryListingService {
+    let values: [URL: [FileItem]]
+    let failingDirectories: Set<URL>
+
+    func batches(in directory: URL) -> AsyncThrowingStream<[FileItem], Error> {
+        AsyncThrowingStream { continuation in
+            if failingDirectories.contains(directory) {
+                continuation.finish(throwing: ListingError.unavailable)
+            } else {
+                continuation.yield(values[directory] ?? [])
                 continuation.finish()
             }
         }
