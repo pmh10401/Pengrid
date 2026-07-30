@@ -66,18 +66,20 @@ keyboard-focus, or appearance evidence.
   34.8 MB online-only movie was immediately superseded by selecting a second
   online-only movie. The older download completed, but its panel never appeared
   and the second selection remained active.
-- [ ] **NOT RUN:** A physical provider-offline failure does not show stale
-  content. Its automated operation-gate regressions pass, but taking the
-  machine or provider offline was not induced.
+- [x] **PASS — 2026-07-30:** With OneDrive and its File Provider extension
+  stopped, Quick Look for a still-online-only file did not present a panel or
+  stale content after 7.8 seconds, preserved the current selection, and did not
+  materialize the file. Pengrid's prior location, OneDrive, and its File
+  Provider extension were restored afterward.
 
 ## Accessibility and appearance
 
-- [ ] **PARTIAL — 2026-07-30:** With VoiceOver physically enabled, the filter
+- [x] **PASS — 2026-07-30:** With VoiceOver physically enabled, the filter
   exposed its left-pane label and changed from 4 matching items to 1 matching
   item after entering `Alpha`. Escape restored the previously selected row and
-  the VoiceOver focus ring returned to the table. Spoken output itself was not
-  recorded, so announcement-audio evidence remains open. VoiceOver and the
-  table's horizontal scroll position were returned to their original states.
+  the VoiceOver focus ring returned to the table. The user confirmed that
+  VoiceOver speech worked. VoiceOver and the table's horizontal scroll position
+  were returned to their original states.
 - [x] **PASS — 2026-07-30:** After filtering the left pane with `.DS`, Escape
   restored the prior selection and Arrow Down moved the selected table row,
   confirming that keyboard focus returned to the table.
