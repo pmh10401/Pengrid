@@ -59,8 +59,9 @@ EXECUTABLE_NAME="BloomFileManager"
 ICON_NAME="Pengrid.icns"
 BUNDLE_ID="com.minho.BloomFileManager"
 MIN_SYSTEM_VERSION="15.0"
-APP_VERSION="1.1.0"
-BUILD_VERSION="2"
+APP_VERSION="1.2.0"
+BUILD_VERSION="3"
+DMG_FORMAT="UDBZ"
 SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 ROOT_DIR="$(cd -P "$SCRIPT_DIR/.." && pwd -P)"
 ICON_SOURCE="$ROOT_DIR/Assets/Pengrid/$ICON_NAME"
@@ -68,6 +69,7 @@ DIST_DIR="$ROOT_DIR/dist"
 RELEASE_DIR="$DIST_DIR/release"
 APP_BUNDLE="$RELEASE_DIR/$APP_DISPLAY_NAME.app"
 ZIP_PATH="$RELEASE_DIR/$APP_DISPLAY_NAME.zip"
+DMG_PATH="$RELEASE_DIR/$APP_DISPLAY_NAME.dmg"
 
 if [[ "$TESTING" == 1 ]]; then
   RAW_TEST_TEMP_DIR="$(/usr/bin/getconf DARWIN_USER_TEMP_DIR)"
@@ -80,6 +82,7 @@ if [[ "$TESTING" == 1 ]]; then
 fi
 
 GETCONF="$(tool_path /usr/bin/getconf)"
+HDIUTIL="$(tool_path /usr/bin/hdiutil)"
 XATTR="$(tool_path /usr/bin/xattr)"
 UNAME="$(tool_path /usr/bin/uname)"
 XCODEBUILD="$(tool_path /usr/bin/xcodebuild)"
@@ -335,7 +338,7 @@ if [[ "$MODE" == "--signed" ]]; then
 fi
 
 echo 'Running tests...'
-"$SWIFT_BIN" test --no-parallel --package-path "$ROOT_DIR"
+"$SWIFT_BIN" test --enable-swift-testing --no-parallel --filter BloomFileManagerTests --package-path "$ROOT_DIR"
 
 echo 'Building arm64 release product...'
 "$SWIFT_BIN" build --package-path "$ROOT_DIR" -c release --arch arm64
@@ -373,20 +376,25 @@ STAGING_ICON="$STAGING_RESOURCES/$ICON_NAME"
 STAGING_INFO_PLIST="$STAGING_CONTENTS/Info.plist"
 SUBMISSION_ZIP="$STAGING_ROOT/$APP_DISPLAY_NAME-submission.zip"
 FINAL_STAGED_ZIP="$STAGING_ROOT/$APP_DISPLAY_NAME.zip"
+FINAL_STAGED_DMG="$STAGING_ROOT/$APP_DISPLAY_NAME.dmg"
 NOTARY_RESULT_JSON="$STAGING_ROOT/notary-result.json"
 NOTARY_RESULT_PLIST="$STAGING_ROOT/notary-result.plist"
 PUBLIC_NEW_APP=''
 PUBLIC_BACKUP_APP=''
 PUBLIC_NEW_ZIP=''
 PUBLIC_BACKUP_ZIP=''
+PUBLIC_NEW_DMG=''
+PUBLIC_BACKUP_DMG=''
 NEW_VERSION_DIR=''
 NEW_VERSION_ID=''
 OLD_OWNED_VERSION_DIR=''
 OLD_OWNED_VERSION_ID=''
 OLD_APP_ID=''
 OLD_ZIP_ID=''
+OLD_DMG_ID=''
 NEW_APP_ID=''
 NEW_ZIP_ID=''
+NEW_DMG_ID=''
 PUBLICATION_STARTED=false
 PUBLICATION_COMMITTED=false
 cleanup() {
@@ -401,6 +409,9 @@ cleanup() {
     fi
     if [[ -n "$PUBLIC_NEW_ZIP" ]]; then
       nonfatal_delete_owned_leaf "$PUBLIC_NEW_ZIP" "$RELEASE_DIR" "$NEW_ZIP_ID" || cleanup_status=1
+    fi
+    if [[ -n "$PUBLIC_NEW_DMG" ]]; then
+      nonfatal_delete_owned_leaf "$PUBLIC_NEW_DMG" "$RELEASE_DIR" "$NEW_DMG_ID" || cleanup_status=1
     fi
     if [[ -n "$NEW_VERSION_DIR" ]]; then
       if [[ ! -L "$APP_BUNDLE" || "$("$READLINK" "$APP_BUNDLE" 2>/dev/null || true)" != "$NEW_VERSION_DIR/$APP_DISPLAY_NAME.app" ]]; then
@@ -755,6 +766,16 @@ if [[ "$MODE" == "--signed" ]]; then
   verify_archive "$FINAL_STAGED_ZIP" "$STAGING_ROOT/verified-archive"
 fi
 
+create_dmg() {
+  local source_app="$1"
+  local destination="$2"
+  "$HDIUTIL" create -volname "$APP_DISPLAY_NAME" -srcfolder "$source_app" \
+    -ov -format "$DMG_FORMAT" "$destination"
+  "$HDIUTIL" verify "$destination" >/dev/null
+}
+
+create_dmg "$STAGING_APP" "$FINAL_STAGED_DMG"
+
 owned_file_provider_version_dir() {
   local public_target target_parent canonical_target version_dir
   [[ "$CACHE_BACKED_RELEASE" == true && -L "$APP_BUNDLE" ]] || return 1
@@ -777,6 +798,9 @@ fi
 if [[ -e "$ZIP_PATH" || -L "$ZIP_PATH" ]]; then
   OLD_ZIP_ID="$(entry_identity "$ZIP_PATH")"
 fi
+if [[ -e "$DMG_PATH" || -L "$DMG_PATH" ]]; then
+  OLD_DMG_ID="$(entry_identity "$DMG_PATH")"
+fi
 OLD_OWNED_VERSION_DIR="$(owned_file_provider_version_dir || true)"
 if [[ -n "$OLD_OWNED_VERSION_DIR" ]]; then
   OLD_OWNED_VERSION_ID="$(entry_identity "$OLD_OWNED_VERSION_DIR")"
@@ -786,7 +810,9 @@ PUBLIC_NEW_APP="$RELEASE_DIR/.$APP_DISPLAY_NAME.app.new-$TRANSACTION_ID"
 PUBLIC_BACKUP_APP="$RELEASE_DIR/.$APP_DISPLAY_NAME.app.backup-$TRANSACTION_ID"
 PUBLIC_NEW_ZIP="$RELEASE_DIR/.$APP_DISPLAY_NAME.zip.new-$TRANSACTION_ID"
 PUBLIC_BACKUP_ZIP="$RELEASE_DIR/.$APP_DISPLAY_NAME.zip.backup-$TRANSACTION_ID"
-for publication_path in "$PUBLIC_NEW_APP" "$PUBLIC_BACKUP_APP" "$PUBLIC_NEW_ZIP" "$PUBLIC_BACKUP_ZIP"; do
+PUBLIC_NEW_DMG="$RELEASE_DIR/.$APP_DISPLAY_NAME.dmg.new-$TRANSACTION_ID"
+PUBLIC_BACKUP_DMG="$RELEASE_DIR/.$APP_DISPLAY_NAME.dmg.backup-$TRANSACTION_ID"
+for publication_path in "$PUBLIC_NEW_APP" "$PUBLIC_BACKUP_APP" "$PUBLIC_NEW_ZIP" "$PUBLIC_BACKUP_ZIP" "$PUBLIC_NEW_DMG" "$PUBLIC_BACKUP_DMG"; do
   assert_strict_child "$publication_path" "$RELEASE_DIR"
   assert_no_symlink_parents "$publication_path"
   [[ ! -e "$publication_path" && ! -L "$publication_path" ]] \
@@ -813,6 +839,9 @@ if [[ "$MODE" == "--signed" ]]; then
     || die 'public ZIP candidate differs from the verified private ZIP.'
   NEW_ZIP_ID="$(entry_identity "$PUBLIC_NEW_ZIP")"
 fi
+"$CP" "$FINAL_STAGED_DMG" "$PUBLIC_NEW_DMG"
+"$HDIUTIL" verify "$PUBLIC_NEW_DMG" >/dev/null
+NEW_DMG_ID="$(entry_identity "$PUBLIC_NEW_DMG")"
 
 publication_checkpoint() {
   local checkpoint="$1"
@@ -891,6 +920,10 @@ rollback_artifact() {
 
 rollback_publication() {
   local rollback_status=0
+  rollback_artifact \
+    "$DMG_PATH" "$PUBLIC_BACKUP_DMG" "$PUBLIC_NEW_DMG" \
+    "$OLD_DMG_ID" "$NEW_DMG_ID" 'DMG' \
+    || rollback_status=1
   if [[ "$MODE" == "--signed" ]]; then
     rollback_artifact \
       "$ZIP_PATH" "$PUBLIC_BACKUP_ZIP" "$PUBLIC_NEW_ZIP" \
@@ -912,6 +945,14 @@ publish_release() {
   safe_move "$PUBLIC_NEW_APP" "$APP_BUNDLE" "$RELEASE_DIR" "$RELEASE_DIR" || return 1
   publication_checkpoint after_app_install || return 1
 
+  if [[ -e "$DMG_PATH" || -L "$DMG_PATH" ]]; then
+    safe_move "$DMG_PATH" "$PUBLIC_BACKUP_DMG" "$RELEASE_DIR" "$RELEASE_DIR" || return 1
+  fi
+  publication_checkpoint after_dmg_backup || return 1
+  publication_checkpoint before_dmg_install || return 1
+  safe_move "$PUBLIC_NEW_DMG" "$DMG_PATH" "$RELEASE_DIR" "$RELEASE_DIR" || return 1
+  publication_checkpoint after_dmg_install || return 1
+
   if [[ "$MODE" == "--signed" ]]; then
     if [[ -e "$ZIP_PATH" || -L "$ZIP_PATH" ]]; then
       safe_move "$ZIP_PATH" "$PUBLIC_BACKUP_ZIP" "$RELEASE_DIR" "$RELEASE_DIR" || return 1
@@ -923,6 +964,7 @@ publish_release() {
   fi
 
   "$CODESIGN" --verify --deep --strict --verbose=2 "$APP_BUNDLE" || return 1
+  "$HDIUTIL" verify "$DMG_PATH" >/dev/null || return 1
   if [[ "$MODE" == "--signed" ]]; then
     "$CMP" -s "$FINAL_STAGED_ZIP" "$ZIP_PATH" || return 1
   fi
@@ -942,6 +984,10 @@ trap - INT TERM
 if [[ -n "$OLD_APP_ID" ]]; then
   nonfatal_delete_owned_leaf "$PUBLIC_BACKUP_APP" "$RELEASE_DIR" "$OLD_APP_ID" || \
     echo "warning: previous app backup retained at $PUBLIC_BACKUP_APP" >&2
+fi
+if [[ -n "$OLD_DMG_ID" ]]; then
+  nonfatal_delete_owned_leaf "$PUBLIC_BACKUP_DMG" "$RELEASE_DIR" "$OLD_DMG_ID" || \
+    echo "warning: previous DMG backup retained at $PUBLIC_BACKUP_DMG" >&2
 fi
 if [[ "$MODE" == "--signed" && -n "$OLD_ZIP_ID" ]]; then
   nonfatal_delete_owned_leaf "$PUBLIC_BACKUP_ZIP" "$RELEASE_DIR" "$OLD_ZIP_ID" || \
@@ -965,6 +1011,8 @@ if [[ "$CACHE_BACKED_RELEASE" == true ]]; then
 fi
 if [[ "$MODE" == "--unsigned" ]]; then
   echo "Unsigned local package ready: $APP_BUNDLE"
+  echo "Unsigned DMG package ready: $DMG_PATH"
 else
   echo "Signed and notarized package ready: $ZIP_PATH"
+  echo "Signed DMG package ready: $DMG_PATH"
 fi

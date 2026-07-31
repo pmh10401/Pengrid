@@ -49,8 +49,12 @@ import Testing
 @Test func paneFilterAccessibilityIsStableAndReportsResults() {
     #expect(AccessibilityIdentifiers.leftPaneFilter == "leftPane.filter")
     #expect(AccessibilityIdentifiers.rightPaneFilter == "rightPane.filter")
+    #expect(AccessibilityIdentifiers.leftPaneFilterResults == "leftPane.filterResults")
+    #expect(AccessibilityIdentifiers.rightPaneFilterResults == "rightPane.filterResults")
     #expect(PaneFilterAccessibilityPresentation.fieldLabel(for: .left) == "Filter files in left pane")
     #expect(PaneFilterAccessibilityPresentation.fieldLabel(for: .right) == "Filter files in right pane")
+    #expect(PaneFilterAccessibilityPresentation.resultCountLabel(for: .left) == "Matching files in left pane")
+    #expect(PaneFilterAccessibilityPresentation.resultCountLabel(for: .right) == "Matching files in right pane")
     #expect(PaneFilterAccessibilityPresentation.closeLabel(for: .left) == "Close left pane file filter")
     #expect(PaneFilterAccessibilityPresentation.closeLabel(for: .right) == "Close right pane file filter")
     #expect(PaneFilterAccessibilityPresentation.resultCount(0) == "No matching items")
@@ -69,6 +73,12 @@ import Testing
     #expect(filePane.contains("AccessibilityIdentifiers.rightPane"))
     #expect(filePane.contains(".accessibilityLabel(PaneAccessibilityPresentation.label(for: paneID))"))
     #expect(filePane.contains(".accessibilityValue(PaneAccessibilityPresentation.value(isActive: isActive))"))
+    #expect(filePane.contains("PaneFilterAccessibilityPresentation.resultCountLabel(for: paneID)"))
+    #expect(filePane.contains("AccessibilityIdentifiers.leftPaneFilterResults"))
+    #expect(filePane.contains("AccessibilityIdentifiers.rightPaneFilterResults"))
+    #expect(!filePane.contains(
+        ".accessibilityValue(\n                        PaneFilterAccessibilityPresentation.resultCount"
+    ))
     #expect(filePane.occurrences(of: ".accessibilityHidden(true)") >= 3)
 
     let placesRail = try source(named: "Views/PlacesRailView.swift")

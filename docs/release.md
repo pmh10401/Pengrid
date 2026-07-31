@@ -2,13 +2,13 @@
 
 Pengrid is distributed directly for Apple Silicon Macs running macOS 15 or newer. The release does not use App Sandbox entitlements. Its executable filename and compatibility-sensitive internal identity remain `BloomFileManager`.
 
-## Version 1.1 release gates
+## Version 1.2 release gates
 
-Version 1.1 adds live folder comparison, recursive comparison, staged checksum
-verification, directional copy, and confirmed one-sided directional move. The feature
-gate is not passed until every required automated and static check is current and every
-physical-manual scenario in
-[`docs/verification/version-1.1-checklist.md`](verification/version-1.1-checklist.md)
+Version 1.2 adds pane-local filename filtering, bounded Back and Forward
+history, in-session selection and scroll restoration, and live Quick Look
+updates. The feature gate is not passed until every required automated and
+static check is current and every physical-manual scenario in
+[`docs/verification/version-1.2-checklist.md`](verification/version-1.2-checklist.md)
 has recorded evidence.
 
 In particular, a release candidate still requires physical checks with local, external,
@@ -19,9 +19,10 @@ and Dark Mode. Automated fixtures and source inspection do not replace those che
 The distribution gate also remains open until the exact candidate has been signed with a
 valid Developer ID Application identity, accepted by Apple notarization, stapled and
 validated, and accepted by Gatekeeper. An unsigned package is suitable only for local
-inspection and must not be described as a distributable version 1.1 release.
+inspection or an explicitly labelled Developer Preview; it must not be described as a
+signed public release.
 
-## Local unsigned package
+## Local unsigned package and Developer Preview
 
 Command Line Tools are sufficient for local packaging on an Apple Silicon Mac:
 
@@ -31,13 +32,22 @@ codesign --verify --deep --strict --verbose=2 dist/release/Pengrid.app
 file dist/release/Pengrid.app/Contents/MacOS/BloomFileManager
 plutil -p dist/release/Pengrid.app/Contents/Info.plist
 codesign -dvvv --entitlements :- dist/release/Pengrid.app
+hdiutil verify dist/release/Pengrid.dmg
 ```
 
-The app is ad-hoc signed for local inspection. It is not a distributable Developer ID release and Gatekeeper is not expected to accept it as one.
+The app and DMG are ad-hoc signed for local inspection. They are not a
+distributable Developer ID release and Gatekeeper is not expected to accept
+them as one. An unsigned GitHub **Developer Preview** may be published only
+when its prerelease title and notes clearly state this trust warning; it must
+not be presented as a signed public release.
 
-In an ordinary local workspace, `dist/release/Pengrid.app` is the real app directory. If the repository is under a File Provider-managed Documents folder, the script instead makes that path a symlink to a versioned real bundle in the current user's cache. This prevents repeatedly attached Finder metadata from invalidating the signature. After a successful replacement, the script removes the previous version only when its canonical path and filesystem identity prove that it is a directly owned cache version; external symlink targets are never removed. Deleting the cache can therefore break the local app link; rerunning the package script recreates it. The signed ZIP is always self-contained, contains no cache symlink, and is the artifact to distribute.
+In an ordinary local workspace, `dist/release/Pengrid.app` is the real app directory. If the repository is under a File Provider-managed Documents folder, the script instead makes that path a symlink to a versioned real bundle in the current user's cache. This prevents repeatedly attached Finder metadata from invalidating the signature. After a successful replacement, the script removes the previous version only when its canonical path and filesystem identity prove that it is a directly owned cache version; external symlink targets are never removed. Deleting the cache can therefore break the local app link; rerunning the package script recreates it. The signed ZIP is always self-contained, contains no cache symlink, and is one of the signed distribution artifacts.
 
-Unsigned mode ad-hoc signs and replaces only `Pengrid.app`. It does not produce or replace `Pengrid.zip` and intentionally preserves any existing ZIP, which may represent an older signed and notarized release. Signed mode produces and publishes both artifacts. Never distribute a preserved ZIP as if it were produced by the latest unsigned run.
+Unsigned mode ad-hoc signs and replaces `Pengrid.app` and `Pengrid.dmg`. It
+does not produce or replace `Pengrid.zip` and intentionally preserves any
+existing ZIP, which may represent an older signed and notarized release.
+Signed mode produces the app, ZIP, and DMG artifacts. Never distribute a
+preserved ZIP as if it were produced by the latest unsigned run.
 
 ## Signed and notarized package
 
@@ -80,7 +90,7 @@ export NOTARY_PROFILE='BloomNotary'
 ./script/package_release.sh --signed
 ```
 
-Before tests or builds, signed mode verifies the exact Developer ID Application identity and runs `notarytool history` against the selected keychain profile. The script then tests and builds the release product, verifies an exact arm64-only executable, signs it with hardened runtime and a secure timestamp, submits a private `ditto --keepParent` archive, and requires a structured `Accepted` result. It staples and validates the private app, recreates and independently extracts/verifies the final ZIP, and only then transactionally replaces the public app and ZIP. A failure, explicit exit, interrupt, or termination signal during publication runs identity-checked rollback before cleanup, leaving the previous release paths unchanged.
+Before tests or builds, signed mode verifies the exact Developer ID Application identity and runs `notarytool history` against the selected keychain profile. The script then tests and builds the release product, verifies an exact arm64-only executable, signs it with hardened runtime and a secure timestamp, submits a private `ditto --keepParent` archive, and requires a structured `Accepted` result. It staples and validates the private app, recreates and independently extracts/verifies the final ZIP, creates and verifies the DMG, and only then transactionally replaces the public app, ZIP, and DMG. A failure, explicit exit, interrupt, or termination signal during publication runs identity-checked rollback before cleanup, leaving the previous release paths unchanged.
 
 Verify the final artifacts:
 
@@ -90,6 +100,7 @@ codesign -dvvv --entitlements :- dist/release/Pengrid.app
 xcrun stapler validate dist/release/Pengrid.app
 spctl --assess --type execute --verbose=4 dist/release/Pengrid.app
 ditto -x -k dist/release/Pengrid.zip /tmp/pengrid-release-inspection
+hdiutil verify dist/release/Pengrid.dmg
 ```
 
 `spctl` must report an accepted Developer ID source. The entitlements output must not contain `com.apple.security.app-sandbox`.

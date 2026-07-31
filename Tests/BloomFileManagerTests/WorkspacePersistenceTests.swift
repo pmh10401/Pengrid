@@ -243,7 +243,9 @@ struct WorkspacePersistenceTests {
 
         #expect(persistence.load() == nil)
 
-        try? await Task.sleep(for: .milliseconds(350))
+        await waitUntil {
+            persistence.load()?.splitRatio == 0.68
+        }
         #expect(persistence.load()?.splitRatio == 0.68)
     }
 

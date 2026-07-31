@@ -33,6 +33,7 @@ final class StorageAnalysisStore {
     @ObservationIgnored private let locationPolicy: any StorageScanLocationValidating
     @ObservationIgnored private var entryIndexByID: [StorageRelativePath: Int] = [:]
     @ObservationIgnored private var scanTask: Task<Void, Never>?
+    @ObservationIgnored private var duplicateCancellation: StorageDuplicateCancellation?
     @ObservationIgnored private var pendingProtectedOptions: StorageScanOptions?
     @ObservationIgnored private var pendingProtectedAdmission: StorageScanAdmissionToken?
     @ObservationIgnored private var lastScanRoot: URL?
@@ -327,6 +328,8 @@ final class StorageAnalysisStore {
 
     private func invalidateCurrentWork() {
         currentGeneration &+= 1
+        duplicateCancellation?.cancel()
+        duplicateCancellation = nil
         scanTask?.cancel()
         scanTask = nil
     }
@@ -336,6 +339,8 @@ final class StorageAnalysisStore {
         options: StorageScanOptions
     ) async {
         let generation = currentGeneration
+        let cancellation = StorageDuplicateCancellation()
+        duplicateCancellation = cancellation
         clearPublishedAnalysis()
         let root = admission.root
         rootURL = root
@@ -350,20 +355,23 @@ final class StorageAnalysisStore {
             await self.runScan(
                 admission: admission,
                 options: options,
-                generation: generation
+                generation: generation,
+                cancellation: cancellation
             )
         }
         scanTask = task
         await task.value
         if generation == currentGeneration {
             scanTask = nil
+            duplicateCancellation = nil
         }
     }
 
     private func runScan(
         admission: StorageScanAdmissionToken,
         options: StorageScanOptions,
-        generation: UInt64
+        generation: UInt64,
+        cancellation: StorageDuplicateCancellation
     ) async {
         var enteredVerification = false
         do {
@@ -404,7 +412,7 @@ final class StorageAnalysisStore {
 
             phase = .verifying
             enteredVerification = true
-            for try await event in duplicates.events(for: entries) {
+            for try await event in duplicates.events(for: entries, cancellation: cancellation) {
                 guard canPublish(generation) else { return }
                 guard await validateAdmission(
                     admission,

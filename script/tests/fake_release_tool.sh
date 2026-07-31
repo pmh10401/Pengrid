@@ -123,6 +123,12 @@ case "$tool_name" in
     record "LIPO"
     echo "${FAKE_LIPO_ARCHS:-arm64}"
     ;;
+  hdiutil)
+    record "HDIUTIL"
+    destination="${*: -1}"
+    /bin/mkdir -p "$(dirname "$destination")" 2>/dev/null || true
+    echo 'fake dmg' >"$destination"
+    ;;
   getconf)
     if [[ "${1:-}" == DARWIN_USER_CACHE_DIR ]]; then
       echo "$FAKE_USER_CACHE_DIR"

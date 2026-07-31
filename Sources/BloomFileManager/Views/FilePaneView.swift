@@ -183,14 +183,18 @@ struct FilePaneView: View {
                             : AccessibilityIdentifiers.rightPaneFilter
                     )
                     .accessibilityLabel(PaneFilterAccessibilityPresentation.fieldLabel(for: paneID))
-                    .accessibilityValue(
-                        PaneFilterAccessibilityPresentation.resultCount(state.filterResultCount)
-                    )
 
-                    Text("\(state.filterResultCount)")
+                    Text(PaneFilterAccessibilityPresentation.resultCount(state.filterResultCount))
                         .monospacedDigit()
                         .foregroundStyle(.secondary)
-                        .accessibilityHidden(true)
+                        .accessibilityLabel(
+                            PaneFilterAccessibilityPresentation.resultCountLabel(for: paneID)
+                        )
+                        .accessibilityIdentifier(
+                            paneID == .left
+                                ? AccessibilityIdentifiers.leftPaneFilterResults
+                                : AccessibilityIdentifiers.rightPaneFilterResults
+                        )
 
                     Button("Close") { dismissFilter() }
                         .accessibilityLabel(PaneFilterAccessibilityPresentation.closeLabel(for: paneID))

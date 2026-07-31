@@ -8,8 +8,9 @@ keyboard-focus, or appearance evidence.
 
 ## Automated evidence
 
-- [x] **PASS — 2026-07-30:** The exact serial full Swift test suite passed 589
-  tests in 45 suites with zero failures in 36.663 seconds.
+- [x] **PASS — 2026-07-31:** `swift test --enable-swift-testing --no-parallel
+  --filter BloomFileManagerTests` selected and passed all 590 listed Swift
+  Testing cases with zero failures for the 1.2 candidate.
 - [x] **PASS — 2026-07-30:** `./script/build_and_run.sh --verify` exited zero
   from the same worktree state and confirmed the launched `BloomFileManager`
   process. The staged development executable is a Mach-O arm64 binary and its
@@ -90,3 +91,12 @@ keyboard-focus, or appearance evidence.
   physically enabled, pane activation, row selection, filtering, Escape focus
   restoration, and Quick Look open/close remained readable and operable. Both
   accessibility settings and the original active pane were restored afterward.
+
+## Release gate
+
+- [ ] **NOT RUN:** Developer ID Application signing, Apple notarization,
+  stapling validation, and Gatekeeper assessment of the exact 1.2 candidate.
+- [ ] **NOT RUN:** Physical direct-distribution verification of the exact
+  signed DMG on a clean supported Apple Silicon Mac.
+- [ ] **NOT RUN:** The exact unsigned Developer Preview DMG package and its
+  GitHub prerelease notes have not yet been generated for the 1.2 candidate.

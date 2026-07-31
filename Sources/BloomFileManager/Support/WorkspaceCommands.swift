@@ -58,7 +58,7 @@ enum WorkspaceCommandActions {
         operationController: FileOperationController
     ) -> Bool {
         guard !operationController.isRunning else { return false }
-        let existing = Set(pane.visibleItems.map(\.name))
+        let existing = Set(pane.items.map(\.name))
         let name = KeepBothNamer.availableName(for: "New Folder", existing: existing)
         return operationController.createFolder(
             in: pane.currentDirectory,
@@ -71,7 +71,8 @@ enum WorkspaceCommandActions {
 
 @MainActor
 enum WorkspaceFilterCommandActions {
-    static func showFilter(in workspace: WorkspaceState) {
+    static func showFilter(in workspace: WorkspaceState, canNavigate: Bool) {
+        guard canNavigate else { return }
         workspace.activePane.requestFilterFocus()
     }
 }
@@ -463,11 +464,11 @@ struct WorkspaceCommands: Commands {
 
         CommandGroup(after: .pasteboard) {
             Button("Filter Files") {
-                guard let workspace else { return }
-                WorkspaceFilterCommandActions.showFilter(in: workspace)
+                guard let workspace, policy.canNavigate else { return }
+                WorkspaceFilterCommandActions.showFilter(in: workspace, canNavigate: policy.canNavigate)
             }
             .keyboardShortcut("f", modifiers: .command)
-            .disabled(workspace == nil)
+            .disabled(workspace == nil || !policy.canNavigate)
         }
 
         CommandMenu("File Operations") {

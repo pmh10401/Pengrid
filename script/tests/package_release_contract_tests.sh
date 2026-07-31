@@ -6,8 +6,10 @@ SOURCE_SCRIPT="$SOURCE_ROOT/script/package_release.sh"
 SOURCE_BUILD_SCRIPT="$SOURCE_ROOT/script/build_and_run.sh"
 SOURCE_FAKE_TOOL="$SOURCE_ROOT/script/tests/fake_release_tool.sh"
 SOURCE_ICON="$SOURCE_ROOT/Assets/Pengrid/Pengrid.icns"
+CI_WORKFLOW="$SOURCE_ROOT/.github/workflows/ci.yml"
 VERSION_1_CHECKLIST="$SOURCE_ROOT/docs/verification/version-1-checklist.md"
 VERSION_11_CHECKLIST="$SOURCE_ROOT/docs/verification/version-1.1-checklist.md"
+VERSION_12_CHECKLIST="$SOURCE_ROOT/docs/verification/version-1.2-checklist.md"
 RELEASE_GUIDE="$SOURCE_ROOT/docs/release.md"
 RAW_TEST_TEMP_DIR="$(/usr/bin/getconf DARWIN_USER_TEMP_DIR)"
 TEST_TEMP_DIR="$(cd -P "$RAW_TEST_TEMP_DIR" && pwd -P)"
@@ -57,19 +59,25 @@ test_version_11_release_contract_is_documented() {
   assert_file_contains "$VERSION_11_CHECKLIST" '## Physical manual evidence'
   assert_file_contains "$VERSION_11_CHECKLIST" 'MANUAL NOT RUN'
   assert_file_contains "$VERSION_1_CHECKLIST" 'version-1.1-checklist.md'
-  assert_file_contains "$RELEASE_GUIDE" 'Version 1.1 release gates'
-  assert_file_contains "$RELEASE_GUIDE" 'not passed until'
+}
+
+test_version_12_release_contract_is_documented() {
+  [[ -f "$VERSION_12_CHECKLIST" ]] || fail 'version 1.2 verification checklist is absent'
+  assert_file_contains "$VERSION_12_CHECKLIST" '## Release gate'
+  assert_file_contains "$RELEASE_GUIDE" 'Version 1.2 release gates'
+  assert_file_contains "$RELEASE_GUIDE" 'Developer Preview'
 }
 
 test_release_tests_run_nonparallel() {
-  assert_file_contains "$SOURCE_SCRIPT" 'test --no-parallel --package-path'
+  assert_file_contains "$SOURCE_SCRIPT" 'test --enable-swift-testing --no-parallel --filter BloomFileManagerTests --package-path'
+  assert_file_contains "$CI_WORKFLOW" 'swift test --enable-swift-testing --no-parallel --filter BloomFileManagerTests'
 }
 
-test_version_11_bundle_version_is_declared() {
-  assert_file_contains "$SOURCE_SCRIPT" 'APP_VERSION="1.1.0"'
-  assert_file_contains "$SOURCE_SCRIPT" 'BUILD_VERSION="2"'
-  assert_file_contains "$SOURCE_BUILD_SCRIPT" 'APP_VERSION="1.1.0"'
-  assert_file_contains "$SOURCE_BUILD_SCRIPT" 'BUILD_VERSION="2"'
+test_version_12_bundle_version_is_declared() {
+  assert_file_contains "$SOURCE_SCRIPT" 'APP_VERSION="1.2.0"'
+  assert_file_contains "$SOURCE_SCRIPT" 'BUILD_VERSION="3"'
+  assert_file_contains "$SOURCE_BUILD_SCRIPT" 'APP_VERSION="1.2.0"'
+  assert_file_contains "$SOURCE_BUILD_SCRIPT" 'BUILD_VERSION="3"'
 }
 
 new_fixture() {
@@ -87,7 +95,7 @@ new_fixture() {
   /bin/cp "$SOURCE_FAKE_TOOL" "$fixture/tools/fake_release_tool.sh"
   /bin/chmod +x "$fixture/tools/fake_release_tool.sh"
   local tool
-  for tool in swift xcodebuild security xcrun codesign file lipo getconf; do
+  for tool in swift xcodebuild security xcrun codesign file lipo hdiutil getconf; do
     /bin/ln -s "$fixture/tools/fake_release_tool.sh" "$fixture/tools/$tool"
   done
   echo "$fixture"
@@ -118,6 +126,7 @@ test_pengrid_release_identity_preserves_legacy_executable_and_icon() {
     "$fixture/repo/Assets/Pengrid/Pengrid.icns" \
     "$release_dir/Pengrid.app/Contents/Resources/Pengrid.icns"
   assert_file_exists "$release_dir/Pengrid.zip"
+  assert_file_exists "$release_dir/Pengrid.dmg"
   [[ "$(/usr/bin/zipinfo -1 "$release_dir/Pengrid.zip" | /usr/bin/head -1)" == 'Pengrid.app/' ]] \
     || fail 'signed archive top-level leaf is not Pengrid.app'
 
@@ -395,6 +404,14 @@ test_unsigned_preserves_existing_signed_zip() {
   assert_file_contains "$fixture/repo/dist/release/Pengrid.zip" 'existing signed zip'
 }
 
+test_unsigned_creates_a_verified_dmg() {
+  local fixture
+  fixture="$(new_fixture unsigned-dmg)"
+  run_fixture "$fixture" -- --unsigned >"$fixture/output" 2>&1
+  assert_file_exists "$fixture/repo/dist/release/Pengrid.dmg"
+  /usr/bin/grep -q '^HDIUTIL$' "$fixture/commands.log" || fail 'hdiutil was not invoked'
+}
+
 test_rejected_notary_preserves_release_and_diagnostics() {
   local fixture diagnostic_path
   fixture="$(new_fixture rejected-notary)"
@@ -549,8 +566,9 @@ test_malformed_notary_ids_are_never_used_for_log_requests() {
 
 run_all_contract_tests() {
   test_version_11_release_contract_is_documented
+  test_version_12_release_contract_is_documented
   test_release_tests_run_nonparallel
-  test_version_11_bundle_version_is_declared
+  test_version_12_bundle_version_is_declared
   test_pengrid_release_identity_preserves_legacy_executable_and_icon
   test_icon_source_symlink_is_rejected
   test_icon_source_replacement_cannot_change_staged_bytes
@@ -566,6 +584,7 @@ run_all_contract_tests() {
   test_signed_authority_is_required
   test_hardened_runtime_is_required
   test_unsigned_preserves_existing_signed_zip
+  test_unsigned_creates_a_verified_dmg
   test_rejected_notary_preserves_release_and_diagnostics
   test_publish_failure_rolls_back_both_artifacts
   test_abrupt_publication_exit_rolls_back
