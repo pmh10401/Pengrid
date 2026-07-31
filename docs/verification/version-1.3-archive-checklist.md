@@ -8,8 +8,15 @@ VoiceOver checks below.
 
 ## Automated evidence
 
-- [ ] **NOT RUN:** Run the focused live-`ditto` integration suite from the
-  candidate worktree:
+- [x] **PASS — 2026-07-31:** The exact 1.3.0 (build 4) Developer Preview
+  candidate passed the full serial Swift Testing suite (**625 tests in 50
+  suites**) and the live `ditto` integration coverage. The unsigned package
+  script produced an arm64, ad-hoc-signed Pengrid.app and a verified DMG;
+  `codesign --verify --deep --strict` and `hdiutil verify` passed. The DMG
+  SHA-256 is
+  `690ea180e7d313d424c965d08fd959b00ebd3ba2b7370dd175c9f61bed9d3548`.
+
+  The focused live-`ditto` command is:
 
   ```bash
   DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
