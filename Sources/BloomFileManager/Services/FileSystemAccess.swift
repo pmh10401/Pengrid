@@ -69,6 +69,7 @@ protocol FileSystemAccess: Sendable {
     func createDirectory(_ url: URL) async throws
     func copyAndCaptureIdentity(_ source: URL, to destination: URL) async throws -> FileIdentity
     func move(_ source: URL, to destination: URL) async throws
+    func moveExclusively(_ source: URL, to destination: URL) async throws
     func remove(_ url: URL) async throws
     func replace(_ destination: URL, with stagedItem: URL) async throws
     func identity(of url: URL) async throws -> FileIdentity?
@@ -339,6 +340,21 @@ actor LiveFileSystemAccess: FileSystemAccess {
 
     func move(_ source: URL, to destination: URL) throws {
         try renameItem(source, to: destination)
+    }
+
+    func moveExclusively(_ source: URL, to destination: URL) throws {
+        let (sourceParentDescriptor, sourceName) = try openParentDirectory(of: source)
+        defer { Darwin.close(sourceParentDescriptor) }
+        let (destinationParentDescriptor, destinationName) = try openParentDirectory(
+            of: destination
+        )
+        defer { Darwin.close(destinationParentDescriptor) }
+        try renameExclusive(
+            from: sourceParentDescriptor,
+            name: sourceName,
+            to: destinationParentDescriptor,
+            name: destinationName
+        )
     }
 
     func remove(_ url: URL) throws {

@@ -774,6 +774,9 @@ private actor CleanupRecordingFileSystem: FileSystemAccess {
     func move(_ source: URL, to destination: URL) async throws {
         throw CleanupFixtureError.unsupported
     }
+    func moveExclusively(_ source: URL, to destination: URL) async throws {
+        throw CleanupFixtureError.unsupported
+    }
     func remove(_ url: URL) async throws {
         removeCalls += 1
         identities.removeValue(forKey: url)

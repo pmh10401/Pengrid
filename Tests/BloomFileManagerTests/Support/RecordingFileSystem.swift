@@ -27,6 +27,7 @@ actor RecordingFileSystem: FileSystemAccess {
         case createDirectory(URL)
         case copy(URL, URL)
         case move(URL, URL)
+        case exclusiveMove(URL, URL)
         case remove(URL)
         case replace(URL, URL)
         case trash(URL)
@@ -52,6 +53,8 @@ actor RecordingFileSystem: FileSystemAccess {
                 "copy:\(source.path)->\(destination.path)"
             case let .move(source, destination):
                 "move:\(source.path)->\(destination.path)"
+            case let .exclusiveMove(source, destination):
+                "moveExclusively:\(source.path)->\(destination.path)"
             case let .remove(url):
                 "remove:\(url.path)"
             case let .replace(destination, stagedItem):
@@ -258,6 +261,28 @@ actor RecordingFileSystem: FileSystemAccess {
     func move(_ source: URL, to destination: URL) async throws {
         let operation = Operation.move(source, destination)
         try record(operation)
+        let identity = identities.removeValue(forKey: source)
+        existingURLs.remove(source)
+        existingURLs.insert(destination)
+        identities[destination] = identity ?? makeIdentity()
+    }
+
+    func moveExclusively(_ source: URL, to destination: URL) async throws {
+        let operation = Operation.exclusiveMove(source, destination)
+        try record(operation)
+        let destinationExists: Bool
+        if caseInsensitivePaths {
+            destinationExists = existingURLs.contains {
+                $0.path.compare(
+                    destination.path,
+                    options: [.caseInsensitive, .diacriticInsensitive]
+                ) == .orderedSame
+            }
+        } else {
+            destinationExists = existingURLs.contains(destination)
+        }
+        guard !destinationExists else { throw POSIXError(.EEXIST) }
+
         let identity = identities.removeValue(forKey: source)
         existingURLs.remove(source)
         existingURLs.insert(destination)
