@@ -98,5 +98,9 @@ keyboard-focus, or appearance evidence.
   stapling validation, and Gatekeeper assessment of the exact 1.2 candidate.
 - [ ] **NOT RUN:** Physical direct-distribution verification of the exact
   signed DMG on a clean supported Apple Silicon Mac.
-- [ ] **NOT RUN:** The exact unsigned Developer Preview DMG package and its
-  GitHub prerelease notes have not yet been generated for the 1.2 candidate.
+- [x] **PASS — 2026-07-31:** The unsigned 1.2 Developer Preview DMG was
+  published as GitHub prerelease
+  [`v1.2.0-developer-preview.1`](https://github.com/pmh10401/Pengrid/releases/tag/v1.2.0-developer-preview.1).
+  Its notes identify the missing Developer ID signing and notarization; the
+  published DMG SHA-256 is
+  `d28ba55ef138c754475b7d82d8743cce8c1ca418599b588f6ad93a726a9013b2`.

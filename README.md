@@ -27,6 +27,11 @@ git clone https://github.com/pmh10401/Pengrid.git
 cd Pengrid
 ```
 
+An unsigned compiled DMG is also available from the
+[Pengrid 1.2 Developer Preview](https://github.com/pmh10401/Pengrid/releases/tag/v1.2.0-developer-preview.1).
+It is not Developer ID signed or notarized, so only open it when you downloaded
+it directly from this repository's GitHub release page.
+
 The current verified development target is Apple Silicon on macOS 15 or newer
 with full Xcode installed.
 
