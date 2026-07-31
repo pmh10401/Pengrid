@@ -189,7 +189,7 @@ import Testing
         encoding: .utf8
     )
 
-    for declaration in ["APP_VERSION=\"1.2.0\"", "BUILD_VERSION=\"3\""] {
+    for declaration in ["APP_VERSION=\"1.3.0\"", "BUILD_VERSION=\"4\""] {
         #expect(development.contains(declaration))
         #expect(release.contains(declaration))
     }
