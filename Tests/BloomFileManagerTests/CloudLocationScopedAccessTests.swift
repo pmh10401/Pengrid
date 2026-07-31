@@ -280,6 +280,65 @@ struct CloudLocationScopedAccessTests {
     }
 
     @MainActor
+    @Test func runtimeDependenciesShareRegisteredAccessWithArchiveOperations() async throws {
+        let directory = try TemporaryDirectory()
+        defer { directory.remove() }
+        let source = directory.url.appending(path: "Selected.txt")
+        let otherDirectory = directory.url.appending(
+            path: "Other",
+            directoryHint: .isDirectory
+        )
+        try Data("selected".utf8).write(to: source)
+        try FileManager.default.createDirectory(
+            at: otherDirectory,
+            withIntermediateDirectories: false
+        )
+        let driver = RecordingSecurityScopeDriver()
+        let accessCoordinator = CloudLocationScopedAccessCoordinator(driver: driver)
+        accessCoordinator.replaceManualRoots([directory.url])
+        let dependencies = CloudRuntimeDependencies(
+            accessCoordinator: accessCoordinator
+        )
+        let workspace = WorkspaceState(
+            leftURL: directory.url,
+            rightURL: otherDirectory,
+            listingService: StubDirectoryListingService(values: [
+                directory.url: [
+                    FileItem(
+                        url: source,
+                        name: source.lastPathComponent,
+                        isDirectory: false,
+                        isPackage: false,
+                        modifiedAt: nil,
+                        byteSize: 8,
+                        typeDescription: "Text"
+                    )
+                ],
+                otherDirectory: []
+            ])
+        )
+        await workspace.loadInitialDirectories()
+        workspace.left.selection = [source]
+        let operations = FileOperationController(
+            service: dependencies.makeFileOperationService(),
+            materializer: dependencies.materializer
+        )
+
+        #expect(await operations.compressSelection(workspace))
+        while operations.isRunning {
+            await Task.yield()
+        }
+
+        let destination = directory.url.appending(path: "Selected.txt.zip")
+        #expect(FileManager.default.fileExists(atPath: destination.path))
+        #expect(operations.lastResult == FileOperationResult(outcomes: [
+            .succeeded(source: source, destination: destination)
+        ]))
+        #expect(driver.startedURLs == Array(repeating: directory.url, count: 4))
+        #expect(driver.stoppedURLs == driver.startedURLs)
+    }
+
+    @MainActor
     @Test func workspaceOpenAndRequestCaptureHoldAccessBeforeMaterialization() async throws {
         let directory = try TemporaryDirectory()
         defer { directory.remove() }

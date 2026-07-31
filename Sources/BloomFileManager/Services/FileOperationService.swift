@@ -24,6 +24,16 @@ actor FileOperationService {
         self.storageFingerprints = storageFingerprints
     }
 
+    nonisolated func makeArchiveOperationService(
+        commandRunner: any ArchiveCommandRunning = LiveArchiveCommandRunner()
+    ) -> ArchiveOperationService {
+        ArchiveOperationService(
+            fileSystem: fileSystem,
+            accessCoordinator: accessCoordinator,
+            commandRunner: commandRunner
+        )
+    }
+
     func trashStorageCleanup(
         _ groups: [StorageCleanupMutationGroup],
         progress: OperationProgressHandler = { _ in }

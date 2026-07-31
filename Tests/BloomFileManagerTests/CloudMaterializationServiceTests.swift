@@ -3,6 +3,37 @@ import Testing
 @testable import BloomFileManager
 
 @Suite struct CloudMaterializationServiceTests {
+    @Test func archivePurposePreservesSelectedSymbolicLinkWithoutReadingItsTarget() async throws {
+        let temporaryDirectory = try TemporaryDirectory()
+        defer { temporaryDirectory.remove() }
+        let target = temporaryDirectory.url.appending(path: "Target.txt")
+        let selectedLink = temporaryDirectory.url.appending(path: "Selected Link.txt")
+        try Data("target".utf8).write(to: target)
+        try FileManager.default.createSymbolicLink(
+            atPath: selectedLink.path,
+            withDestinationPath: target.lastPathComponent
+        )
+        let identity = try #require(
+            try await LiveFileSystemAccess().identity(of: selectedLink)
+        )
+        let request = IdentifiedFileRequest(url: selectedLink, identity: identity)
+        let coordinator = ArchivePurposeReadCoordinator()
+        let service = LiveCloudMaterializationService(
+            fileSystem: LiveFileSystemAccess(),
+            availabilityReader: ArchivePurposeAvailabilityReader(values: [:]),
+            coordinator: coordinator,
+            maximumPollAttempts: 1,
+            pollInterval: .zero
+        )
+
+        let result = await service.materialize([request], purpose: .archive) { _ in }
+
+        #expect(result.isReady)
+        #expect(result.preparedRequests == [request])
+        #expect(result.failures.isEmpty)
+        #expect(await coordinator.coordinatedURLs().isEmpty)
+    }
+
     @Test func archivePurposeMaterializesDirectoryDescendants() async throws {
         let temporaryDirectory = try TemporaryDirectory()
         defer { temporaryDirectory.remove() }

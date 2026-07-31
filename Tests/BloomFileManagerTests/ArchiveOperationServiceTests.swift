@@ -298,6 +298,46 @@ struct ArchiveOperationServiceTests {
         try expectNoStagingDirectories(in: root.url)
     }
 
+    @Test func cancellationDuringOutputVerificationPreventsFinalPublication() async {
+        let root = URL(filePath: "/workspace", directoryHint: .isDirectory)
+        let source = root.appending(path: "Source.txt")
+        let destination = root.appending(path: "Archive.zip")
+        let fileSystem = RecordingFileSystem(
+            existingURLs: [root, source],
+            suspendExistsOfLastPathComponent: "payload"
+        )
+        let runner = RecordingArchiveCommandRunner { _, _, stagedDestination in
+            try await fileSystem.createDirectory(stagedDestination)
+        }
+        let service = ArchiveOperationService(
+            fileSystem: fileSystem,
+            commandRunner: runner
+        )
+        let request = ArchiveRequest(
+            kind: .compress,
+            verifiedSources: [source],
+            finalDestination: destination
+        )
+
+        let operation = Task {
+            await service.perform([request]) { _ in }
+        }
+        while await !fileSystem.hasSuspendedExists {
+            await Task.yield()
+        }
+        operation.cancel()
+        await fileSystem.releaseSuspendedExists()
+        let result = await operation.value
+
+        #expect(result == FileOperationResult(outcomes: [
+            .cancelled(source: source)
+        ]))
+        #expect(await fileSystem.exists(destination) == false)
+        #expect(await fileSystem.events.contains {
+            $0.hasPrefix("moveExclusively:")
+        } == false)
+    }
+
     @Test func scopedAccessCoversEverySourceAndReleasesAfterEachRequest() async throws {
         let firstRoot = try TemporaryDirectory()
         defer { firstRoot.remove() }

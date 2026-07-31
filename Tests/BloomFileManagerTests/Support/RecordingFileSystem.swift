@@ -123,10 +123,14 @@ actor RecordingFileSystem: FileSystemAccess {
     private let cancelAfterCommit: Bool
     private let cancelAfterIdentityOf: URL?
     private let suspendIdentityOf: URL?
+    private let suspendExistsOfLastPathComponent: String?
     private let cancelAfterTrashOf: URL?
     private let caseInsensitivePaths: Bool
     private var suspendedIdentityContinuation: CheckedContinuation<Void, Never>?
+    private var suspendedExistsContinuation: CheckedContinuation<Void, Never>?
     private(set) var hasSuspendedIdentity = false
+    private(set) var hasSuspendedExists = false
+    private var didSuspendExists = false
     private var didCancelStagingReservation = false
     private var nextIdentity = 0
     private var committedDestinations: Set<URL> = []
@@ -159,6 +163,7 @@ actor RecordingFileSystem: FileSystemAccess {
         cancelAfterCommit: Bool = false,
         cancelAfterIdentityOf: URL? = nil,
         suspendIdentityOf: URL? = nil,
+        suspendExistsOfLastPathComponent: String? = nil,
         cancelAfterTrashOf: URL? = nil,
         caseInsensitivePaths: Bool = false
     ) {
@@ -196,11 +201,20 @@ actor RecordingFileSystem: FileSystemAccess {
         self.cancelAfterCommit = cancelAfterCommit
         self.cancelAfterIdentityOf = cancelAfterIdentityOf
         self.suspendIdentityOf = suspendIdentityOf
+        self.suspendExistsOfLastPathComponent = suspendExistsOfLastPathComponent
         self.cancelAfterTrashOf = cancelAfterTrashOf
         self.caseInsensitivePaths = caseInsensitivePaths
     }
 
     func exists(_ url: URL) async -> Bool {
+        if !didSuspendExists,
+           url.lastPathComponent == suspendExistsOfLastPathComponent {
+            didSuspendExists = true
+            hasSuspendedExists = true
+            await withCheckedContinuation { continuation in
+                suspendedExistsContinuation = continuation
+            }
+        }
         if recordsExistenceChecks {
             events.append("exists:\(url.path)")
         }
@@ -268,6 +282,7 @@ actor RecordingFileSystem: FileSystemAccess {
     }
 
     func moveExclusively(_ source: URL, to destination: URL) async throws {
+        try Task.checkCancellation()
         let operation = Operation.exclusiveMove(source, destination)
         try record(operation)
         let destinationExists: Bool
@@ -455,6 +470,11 @@ actor RecordingFileSystem: FileSystemAccess {
     func releaseSuspendedIdentity() {
         suspendedIdentityContinuation?.resume()
         suspendedIdentityContinuation = nil
+    }
+
+    func releaseSuspendedExists() {
+        suspendedExistsContinuation?.resume()
+        suspendedExistsContinuation = nil
     }
 
     func move(_ source: URL, identifiedBy identity: FileIdentity, to destination: URL) async throws {

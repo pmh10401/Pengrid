@@ -353,12 +353,14 @@ actor LiveFileSystemAccess: FileSystemAccess {
     }
 
     func moveExclusively(_ source: URL, to destination: URL) throws {
+        try Task.checkCancellation()
         let (sourceParentDescriptor, sourceName) = try openParentDirectory(of: source)
         defer { Darwin.close(sourceParentDescriptor) }
         let (destinationParentDescriptor, destinationName) = try openParentDirectory(
             of: destination
         )
         defer { Darwin.close(destinationParentDescriptor) }
+        try Task.checkCancellation()
         try renameExclusive(
             from: sourceParentDescriptor,
             name: sourceName,

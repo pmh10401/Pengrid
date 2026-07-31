@@ -16,18 +16,19 @@ struct LiveArchiveCommandRunner: ArchiveCommandRunning {
         sources: [URL],
         destination: URL
     ) async throws {
-        let arguments = try Self.arguments(
+        let preparedCommand = try Self.prepareCommand(
             kind: kind,
             sources: sources,
             destination: destination
         )
+        defer { preparedCommand.cleanup() }
         guard !Task.isCancelled else {
             throw ArchiveOperationError.cancelled
         }
 
         let process = Process()
         process.executableURL = URL(filePath: "/usr/bin/ditto")
-        process.arguments = arguments
+        process.arguments = preparedCommand.arguments
 
         let standardErrorPipe = Pipe()
         process.standardError = standardErrorPipe
@@ -79,18 +80,107 @@ struct LiveArchiveCommandRunner: ArchiveCommandRunning {
 
         switch kind {
         case .compress:
-            return [
-                "-c",
-                "-k",
-                "--keepParent",
-                "--sequesterRsrc"
-            ] + sources.map(\.path) + [destination.path]
+            guard sources.count == 1 else {
+                throw ArchiveOperationError.invalidRequest
+            }
+            return compressionArguments(
+                sourcePaths: sources.map(\.path),
+                destination: destination,
+                keepParent: true
+            )
         case .extract:
             guard sources.count == 1 else {
                 throw ArchiveOperationError.invalidRequest
             }
             return ["-x", "-k", sources[0].path, destination.path]
         }
+    }
+
+    private static func prepareCommand(
+        kind: ArchiveOperationKind,
+        sources: [URL],
+        destination: URL
+    ) throws -> PreparedArchiveCommand {
+        guard kind == .compress else {
+            return PreparedArchiveCommand(
+                arguments: try arguments(
+                    kind: kind,
+                    sources: sources,
+                    destination: destination
+                )
+            )
+        }
+        guard !sources.isEmpty else {
+            throw ArchiveOperationError.invalidRequest
+        }
+
+        let aggregateRoot = destination
+            .deletingLastPathComponent()
+            .appending(
+                path: ".archive-source-\(UUID().uuidString)",
+                directoryHint: .isDirectory
+            )
+        do {
+            try FileManager.default.createDirectory(
+                at: aggregateRoot,
+                withIntermediateDirectories: false
+            )
+            var selectedNames: Set<String> = []
+            for source in sources {
+                try Task.checkCancellation()
+                let name = source.lastPathComponent
+                guard !name.isEmpty, selectedNames.insert(name).inserted else {
+                    throw ArchiveOperationError.invalidRequest
+                }
+                try FileManager.default.copyItem(
+                    at: source,
+                    to: aggregateRoot.appending(path: name)
+                )
+            }
+            try Task.checkCancellation()
+        } catch {
+            try? FileManager.default.removeItem(at: aggregateRoot)
+            throw error
+        }
+
+        return PreparedArchiveCommand(
+            arguments: compressionArguments(
+                sourcePaths: [aggregateRoot.path],
+                destination: destination,
+                keepParent: false
+            ),
+            aggregateRoot: aggregateRoot
+        )
+    }
+
+    private static func compressionArguments(
+        sourcePaths: [String],
+        destination: URL,
+        keepParent: Bool
+    ) -> [String] {
+        var arguments = ["-c", "-k"]
+        if keepParent {
+            arguments.append("--keepParent")
+        }
+        arguments.append("--sequesterRsrc")
+        arguments.append(contentsOf: sourcePaths)
+        arguments.append(destination.path)
+        return arguments
+    }
+}
+
+private struct PreparedArchiveCommand {
+    let arguments: [String]
+    let aggregateRoot: URL?
+
+    init(arguments: [String], aggregateRoot: URL? = nil) {
+        self.arguments = arguments
+        self.aggregateRoot = aggregateRoot
+    }
+
+    func cleanup() {
+        guard let aggregateRoot else { return }
+        try? FileManager.default.removeItem(at: aggregateRoot)
     }
 }
 

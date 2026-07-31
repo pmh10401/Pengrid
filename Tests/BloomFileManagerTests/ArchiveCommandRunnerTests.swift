@@ -3,16 +3,13 @@ import Testing
 @testable import BloomFileManager
 
 @Suite struct ArchiveCommandRunnerTests {
-    @Test func compressionArgumentsKeepSourcePathsSeparate() throws {
-        let sources = [
-            URL(filePath: "/tmp/Project Notes"),
-            URL(filePath: "/tmp/photo.jpg")
-        ]
+    @Test func directCompressionArgumentsKeepASpacedSourcePathSeparate() throws {
+        let source = URL(filePath: "/tmp/Project Notes")
         let destination = URL(filePath: "/tmp/Archive.zip")
 
         let arguments = try LiveArchiveCommandRunner.arguments(
             kind: .compress,
-            sources: sources,
+            sources: [source],
             destination: destination
         )
 
@@ -22,9 +19,21 @@ import Testing
             "--keepParent",
             "--sequesterRsrc",
             "/tmp/Project Notes",
-            "/tmp/photo.jpg",
             "/tmp/Archive.zip"
         ])
+    }
+
+    @Test func directCompressionArgumentsRejectMultipleDittoArchiveSources() {
+        #expect(throws: ArchiveOperationError.invalidRequest) {
+            try LiveArchiveCommandRunner.arguments(
+                kind: .compress,
+                sources: [
+                    URL(filePath: "/tmp/First.txt"),
+                    URL(filePath: "/tmp/Second.txt")
+                ],
+                destination: URL(filePath: "/tmp/Archive.zip")
+            )
+        }
     }
 
     @Test func extractionArgumentsKeepArchivePathSeparate() throws {

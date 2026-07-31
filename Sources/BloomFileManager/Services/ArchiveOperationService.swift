@@ -99,6 +99,7 @@ actor ArchiveOperationService: ArchiveOperating {
             guard await fileSystem.exists(reservation.item) else {
                 throw ArchiveServiceError.missingStagedOutput
             }
+            try Task.checkCancellation()
             try await fileSystem.moveExclusively(
                 reservation.item,
                 to: request.finalDestination

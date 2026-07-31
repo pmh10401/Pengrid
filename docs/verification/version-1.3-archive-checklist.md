@@ -17,8 +17,9 @@ VoiceOver checks below.
     --filter ArchiveOperationIntegrationTests
   ```
 
-  The suite creates temporary local files, round-trips a spaced filename with
-  macOS `ditto`, and verifies malformed-ZIP failure cleanup.
+  The suite creates temporary local files, round-trips spaced and multi-item
+  selections with macOS `ditto`, verifies a selected symbolic link remains a
+  link, and verifies malformed-ZIP failure cleanup.
 
 ## Manual verification
 
@@ -63,6 +64,28 @@ VoiceOver checks below.
   Select the resulting ZIP and use **File Operations > Extract ZIP**. Open the
   new extraction directory and verify `Kept Parent/Report with spaces.txt`
   exists with the original content.
+
+- [ ] **NOT RUN — selected package:** Create or copy a disposable macOS package
+  such as `Archive Fixture.app`, with a known file under its `Contents`
+  directory. Select only the package and choose **File Operations > Compress to
+  ZIP**, then extract the resulting ZIP. Confirm the extracted
+  `Archive Fixture.app` remains a package and its known nested file has the
+  original content.
+
+- [ ] **NOT RUN — selected symbolic-link policy:** In Terminal, create a target
+  file and a relative symbolic link to it, then select only the symbolic link in
+  Pengrid and choose **File Operations > Compress to ZIP**. Extract the ZIP into
+  its dedicated destination. Run `test -L "Selected Link"` and
+  `readlink "Selected Link"` inside the extraction directory; confirm the
+  selected item is still a link with the original link text. Confirm the target
+  file's bytes were not silently substituted into the archive. Pengrid's 1.3
+  policy is to preserve a selected link itself, never follow its target.
+
+- [ ] **NOT RUN — case-sensitive volume:** On a disposable case-sensitive APFS
+  volume, create `Case.txt` and `case.txt` with different known contents.
+  Multi-select both files, compress them, and extract the ZIP. Confirm both
+  distinct names and contents survive. Repeat a keep-both collision on that
+  volume and confirm Pengrid never replaces either pre-existing path.
 
 - [ ] **NOT RUN — cloud-provider materialization:** In a Google Drive or
   OneDrive File Provider folder shown by Pengrid, choose an online-only local

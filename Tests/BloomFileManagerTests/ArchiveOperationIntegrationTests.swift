@@ -4,6 +4,64 @@ import Testing
 
 @Suite("ArchiveOperationIntegrationTests")
 struct ArchiveOperationIntegrationTests {
+    @Test func dittoCompressionArchivesMultipleSelectedItemsAtTheZIPRoot() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let firstSource = root.url.appending(path: "First.txt")
+        let secondSource = root.url.appending(path: "Second File.txt")
+        let archive = root.url.appending(path: "Archive.zip")
+        let extraction = root.url.appending(path: "Extracted", directoryHint: .isDirectory)
+        try Data("first selection".utf8).write(to: firstSource)
+        try Data("second selection".utf8).write(to: secondSource)
+
+        let runner = LiveArchiveCommandRunner()
+        try await runner.run(
+            kind: .compress,
+            sources: [firstSource, secondSource],
+            destination: archive
+        )
+        try expectNoAggregateSourceDirectories(in: root.url)
+        try await runner.run(kind: .extract, sources: [archive], destination: extraction)
+
+        #expect(try Data(contentsOf: extraction.appending(path: "First.txt"))
+            == Data("first selection".utf8))
+        #expect(try Data(contentsOf: extraction.appending(path: "Second File.txt"))
+            == Data("second selection".utf8))
+        #expect(FileManager.default.fileExists(
+            atPath: extraction.appending(path: root.url.lastPathComponent).path
+        ) == false)
+    }
+
+    @Test func dittoCompressionPreservesATopLevelSelectedSymbolicLink() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let target = root.url.appending(path: "Target.txt")
+        let selectedLink = root.url.appending(path: "Selected Link.txt")
+        let archive = root.url.appending(path: "Link.zip")
+        let extraction = root.url.appending(path: "Extracted", directoryHint: .isDirectory)
+        try Data("target bytes must not be followed".utf8).write(to: target)
+        try FileManager.default.createSymbolicLink(
+            atPath: selectedLink.path,
+            withDestinationPath: target.lastPathComponent
+        )
+
+        let runner = LiveArchiveCommandRunner()
+        try await runner.run(
+            kind: .compress,
+            sources: [selectedLink],
+            destination: archive
+        )
+        try await runner.run(kind: .extract, sources: [archive], destination: extraction)
+
+        let extractedLink = extraction.appending(path: selectedLink.lastPathComponent)
+        #expect(try FileManager.default.destinationOfSymbolicLink(
+            atPath: extractedLink.path
+        ) == target.lastPathComponent)
+        #expect(FileManager.default.fileExists(
+            atPath: extraction.appending(path: target.lastPathComponent).path
+        ) == false)
+    }
+
     @Test func dittoRoundTripPreservesSpacedFileNameAndContentUnderKeptParent() async throws {
         let root = try TemporaryDirectory()
         defer { root.remove() }
@@ -63,4 +121,14 @@ private func expectNoStagingDirectories(in directory: URL) throws {
         includingPropertiesForKeys: nil
     )
     #expect(children.contains { $0.lastPathComponent.hasPrefix(".bloom-staging-") } == false)
+}
+
+private func expectNoAggregateSourceDirectories(in directory: URL) throws {
+    let children = try FileManager.default.contentsOfDirectory(
+        at: directory,
+        includingPropertiesForKeys: nil
+    )
+    #expect(children.contains {
+        $0.lastPathComponent.hasPrefix(".archive-source-")
+    } == false)
 }

@@ -253,6 +253,17 @@ struct LiveCloudMaterializationService: CloudMaterializing {
             .isSymbolicLinkKey
         ])
 
+        if purpose == .archive, values.isSymbolicLink == true {
+            let finalIdentity = try await requireIdentity(
+                request.identity,
+                at: request.url
+            )
+            return IdentifiedFileRequest(
+                url: request.url,
+                identity: finalIdentity
+            )
+        }
+
         switch purpose {
         case .transfer, .archive:
             if values.isDirectory == true,

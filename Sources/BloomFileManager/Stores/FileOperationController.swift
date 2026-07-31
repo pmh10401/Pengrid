@@ -53,13 +53,12 @@ final class FileOperationController {
     init(
         service: FileOperationService,
         materializer: any CloudMaterializing,
-        archiveService: any ArchiveOperating = ArchiveOperationService(
-            fileSystem: LiveFileSystemAccess()
-        )
+        archiveService: (any ArchiveOperating)? = nil
     ) {
         self.service = service
         self.materializer = materializer
         self.archiveService = archiveService
+            ?? service.makeArchiveOperationService()
     }
 
     func requestDecision(for conflict: FileConflict) async -> ConflictDecision {
