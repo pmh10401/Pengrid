@@ -25,5 +25,6 @@ enum CloudPreparationPurpose: Sendable {
     case open
     case quickLook
     case transfer
+    case archive
     case checksum
 }

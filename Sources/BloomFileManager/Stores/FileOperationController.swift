@@ -31,6 +31,7 @@ enum CloudOperationRequestGate {
 final class FileOperationController {
     private let service: FileOperationService
     private let materializer: any CloudMaterializing
+    private let archiveService: any ArchiveOperating
 
     private(set) var stage: FileOperationStage?
     private(set) var pendingConflict: FileConflict?
@@ -50,10 +51,14 @@ final class FileOperationController {
 
     init(
         service: FileOperationService,
-        materializer: any CloudMaterializing
+        materializer: any CloudMaterializing,
+        archiveService: any ArchiveOperating = ArchiveOperationService(
+            fileSystem: LiveFileSystemAccess()
+        )
     ) {
         self.service = service
         self.materializer = materializer
+        self.archiveService = archiveService
     }
 
     func requestDecision(for conflict: FileConflict) async -> ConflictDecision {
@@ -102,6 +107,190 @@ final class FileOperationController {
     private func cancelPendingDecision(requestID: UUID) {
         guard conflictRequestID == requestID else { return }
         resolvePendingConflict(.cancel, applyToAll: false)
+    }
+
+    @discardableResult
+    func compressSelection(_ workspace: WorkspaceState) -> Bool {
+        guard let capture = archiveSelectionCapture(in: workspace),
+              let plan = ArchiveDestinationPlanner.compression(
+                selectedItems: capture.selectedItems,
+                in: capture.directory,
+                occupiedNames: capture.occupiedNames
+              )
+        else { return false }
+        return runArchive(plan, in: workspace)
+    }
+
+    @discardableResult
+    func extractSelection(_ workspace: WorkspaceState) -> Bool {
+        guard let capture = archiveSelectionCapture(in: workspace),
+              let plan = ArchiveDestinationPlanner.extraction(
+                selectedItems: capture.selectedItems,
+                in: capture.directory,
+                occupiedNames: capture.occupiedNames
+              )
+        else { return false }
+        return runArchive(plan, in: workspace)
+    }
+
+    private func archiveSelectionCapture(
+        in workspace: WorkspaceState
+    ) -> ArchiveSelectionCapture? {
+        let pane = workspace.activePane
+        let selectedURLs = pane.selection.sorted { $0.path < $1.path }
+        guard !selectedURLs.isEmpty else { return nil }
+        let itemsByURL = Dictionary(uniqueKeysWithValues: pane.items.map { ($0.url, $0) })
+        let selectedItems = selectedURLs.compactMap { itemsByURL[$0] }
+        guard selectedItems.count == selectedURLs.count else { return nil }
+        return ArchiveSelectionCapture(
+            selectedItems: selectedItems,
+            directory: pane.currentDirectory,
+            occupiedNames: Set(pane.items.map(\.name))
+        )
+    }
+
+    private func runArchive(
+        _ plan: ArchiveDestinationPlan,
+        in workspace: WorkspaceState
+    ) -> Bool {
+        let sources = plan.selectedSources
+        let firstDestinationName = plan.destinations.first?.lastPathComponent ?? ""
+        return beginOperation(
+            totalCount: plan.destinations.count,
+            initialName: firstDestinationName,
+            initialStage: .preparing(CloudMaterializationProgress(
+                completedCount: 0,
+                totalCount: sources.count,
+                currentName: Self.sanitizedBasename(sources.first)
+            )),
+            touchedDirectories: Set(plan.destinations.map { $0.deletingLastPathComponent() }),
+            workspace: workspace
+        ) { [weak self, service, materializer, archiveService] in
+            guard let self else {
+                return FileOperationResult(outcomes: sources.map {
+                    .cancelled(source: $0)
+                })
+            }
+
+            let captured: [IdentifiedFileRequest]
+            do {
+                var requests: [IdentifiedFileRequest] = []
+                for source in sources {
+                    try Task.checkCancellation()
+                    requests.append(IdentifiedFileRequest(
+                        url: source,
+                        identity: try await service.identity(of: source)
+                    ))
+                }
+                captured = requests
+            } catch is CancellationError {
+                return FileOperationResult(outcomes: sources.map {
+                    .cancelled(source: $0)
+                })
+            } catch {
+                return FileOperationResult(outcomes: sources.map {
+                    .failed(source: $0, message: error.localizedDescription)
+                })
+            }
+
+            let materialization = await materializer.materialize(
+                captured,
+                purpose: .archive
+            ) { [weak self] progress in
+                await MainActor.run {
+                    self?.stage = .preparing(Self.sanitizedPreparationProgress(
+                        progress,
+                        requests: captured
+                    ))
+                }
+            }
+            self.lastPreparationFailures = materialization.failures
+
+            guard !Task.isCancelled, !materialization.wasCancelled else {
+                return FileOperationResult(outcomes: sources.map {
+                    .cancelled(source: $0)
+                })
+            }
+            guard materialization.failures.isEmpty,
+                  let prepared = CloudOperationRequestGate
+                    .identityPreservingPreparedRequests(
+                        original: captured,
+                        prepared: materialization.preparedRequests
+                    )
+            else {
+                if materialization.failures.isEmpty {
+                    self.lastPreparationFailures = sources.map {
+                        CloudMaterializationFailure(
+                            name: Self.sanitizedBasename($0),
+                            reason: .itemChanged
+                        )
+                    }
+                }
+                return FileOperationResult(outcomes: sources.map { source in
+                    let name = Self.sanitizedBasename(source)
+                    let reason = materialization.failures.first {
+                        $0.name == name
+                    }?.reason ?? materialization.failures.first?.reason ?? .itemChanged
+                    return .failed(
+                        source: source,
+                        message: Self.preparationFailureMessage(reason)
+                    )
+                })
+            }
+
+            do {
+                for request in prepared {
+                    try Task.checkCancellation()
+                    let currentIdentity = try await service.identity(of: request.url)
+                    guard currentIdentity.refersToSameItem(as: request.identity) else {
+                        return self.archiveIdentityChangedResult(for: sources)
+                    }
+                }
+            } catch is CancellationError {
+                return FileOperationResult(outcomes: sources.map {
+                    .cancelled(source: $0)
+                })
+            } catch {
+                return self.archiveIdentityChangedResult(for: sources)
+            }
+
+            guard let archiveRequests = plan.requests(
+                for: prepared.map(\.url)
+            ) else {
+                return self.archiveIdentityChangedResult(for: sources)
+            }
+            self.stage = .operating(FileOperationProgress(
+                completedCount: 0,
+                totalCount: archiveRequests.count,
+                currentName: firstDestinationName
+            ))
+            return await archiveService.perform(archiveRequests) { [weak self] progress in
+                await MainActor.run {
+                    self?.stage = .operating(FileOperationProgress(
+                        completedCount: 0,
+                        totalCount: archiveRequests.count,
+                        currentName: progress.currentDisplayName
+                    ))
+                }
+            }
+        }
+    }
+
+    private func archiveIdentityChangedResult(
+        for sources: [URL]
+    ) -> FileOperationResult {
+        lastPreparationFailures = sources.map {
+            CloudMaterializationFailure(
+                name: Self.sanitizedBasename($0),
+                reason: .itemChanged
+            )
+        }
+        return FileOperationResult(outcomes: sources.map {
+            .failed(
+                source: $0,
+                message: Self.preparationFailureMessage(.itemChanged)
+            )
+        })
     }
 
     @discardableResult
@@ -665,6 +854,12 @@ final class FileOperationController {
         }
         return path
     }
+}
+
+private struct ArchiveSelectionCapture {
+    let selectedItems: [FileItem]
+    let directory: URL
+    let occupiedNames: Set<String>
 }
 
 private final class IdentifiedRequestCapture: @unchecked Sendable {

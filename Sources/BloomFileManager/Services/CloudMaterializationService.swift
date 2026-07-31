@@ -253,12 +253,15 @@ struct LiveCloudMaterializationService: CloudMaterializing {
             .isSymbolicLinkKey
         ])
 
-        if case .transfer = purpose {
+        switch purpose {
+        case .transfer, .archive:
             if values.isDirectory == true,
                values.isPackage != true,
                values.isSymbolicLink != true {
                 return try await prepareDirectory(request)
             }
+        case .open, .quickLook, .checksum:
+            break
         }
 
         let kind: CloudCoordinatedReadKind = values.isDirectory == true ? .directory : .regularFile

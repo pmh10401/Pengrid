@@ -36,6 +36,100 @@ struct IdentifiedTransferRequest: Sendable, Equatable {
     let relativeParentComponents: [String]
 }
 
+enum ArchiveSelectionEligibility {
+    static func canCompress(_ items: [FileItem]) -> Bool {
+        !items.isEmpty
+    }
+
+    static func canExtract(_ items: [FileItem]) -> Bool {
+        !items.isEmpty && items.allSatisfy {
+            !$0.isDirectory
+                && URL(filePath: $0.name).pathExtension.lowercased() == "zip"
+        }
+    }
+}
+
+struct ArchiveDestinationPlan: Sendable, Equatable {
+    let kind: ArchiveOperationKind
+    let selectedSources: [URL]
+    let destinations: [URL]
+
+    func requests(for verifiedSources: [URL]) -> [ArchiveRequest]? {
+        guard verifiedSources.count == selectedSources.count else { return nil }
+        switch kind {
+        case .compress:
+            guard destinations.count == 1 else { return nil }
+            return [
+                ArchiveRequest(
+                    kind: .compress,
+                    verifiedSources: verifiedSources,
+                    finalDestination: destinations[0]
+                )
+            ]
+        case .extract:
+            guard destinations.count == verifiedSources.count else { return nil }
+            return zip(verifiedSources, destinations).map { source, destination in
+                ArchiveRequest(
+                    kind: .extract,
+                    verifiedSources: [source],
+                    finalDestination: destination
+                )
+            }
+        }
+    }
+}
+
+enum ArchiveDestinationPlanner {
+    static func compression(
+        selectedItems: [FileItem],
+        in directory: URL,
+        occupiedNames: Set<String>
+    ) -> ArchiveDestinationPlan? {
+        guard ArchiveSelectionEligibility.canCompress(selectedItems) else { return nil }
+        let proposedName = selectedItems.count == 1
+            ? "\(selectedItems[0].name).zip"
+            : "Archive.zip"
+        let destinationName = KeepBothNamer.availableName(
+            for: proposedName,
+            existing: occupiedNames
+        )
+        return ArchiveDestinationPlan(
+            kind: .compress,
+            selectedSources: selectedItems.map(\.url),
+            destinations: [directory.appending(path: destinationName)]
+        )
+    }
+
+    static func extraction(
+        selectedItems: [FileItem],
+        in directory: URL,
+        occupiedNames: Set<String>
+    ) -> ArchiveDestinationPlan? {
+        guard ArchiveSelectionEligibility.canExtract(selectedItems) else { return nil }
+        var occupied = occupiedNames
+        var destinations: [URL] = []
+        for item in selectedItems {
+            let stem = URL(filePath: item.name)
+                .deletingPathExtension()
+                .lastPathComponent
+            let destinationName = KeepBothNamer.availableName(
+                for: stem,
+                existing: occupied
+            )
+            occupied.insert(destinationName)
+            destinations.append(directory.appending(
+                path: destinationName,
+                directoryHint: .isDirectory
+            ))
+        }
+        return ArchiveDestinationPlan(
+            kind: .extract,
+            selectedSources: selectedItems.map(\.url),
+            destinations: destinations
+        )
+    }
+}
+
 enum FileOperationItemOutcome: Sendable, Equatable {
     case succeeded(source: URL, destination: URL?)
     case recoveryNeeded(source: URL)

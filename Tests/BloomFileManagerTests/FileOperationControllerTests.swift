@@ -4,6 +4,345 @@ import Testing
 
 @MainActor
 struct FileOperationControllerTests {
+    @Test func compressionUsesDisplayNameAndKeepBothDestination() async {
+        let directory = URL(filePath: "/workspace")
+        let otherDirectory = URL(filePath: "/other")
+        let source = directory.appending(path: "provider-token")
+        let existingArchive = directory.appending(path: "Project Notes.zip")
+        let selectedItem = FileItem(
+            url: source,
+            name: "Project Notes",
+            isDirectory: false,
+            isPackage: false,
+            modifiedAt: nil,
+            byteSize: nil,
+            typeDescription: "Document"
+        )
+        let listingService = StubDirectoryListingService(values: [
+            directory: [
+                selectedItem,
+                fileItem(at: existingArchive)
+            ],
+            otherDirectory: []
+        ])
+        let workspace = WorkspaceState(
+            leftURL: directory,
+            rightURL: otherDirectory,
+            listingService: listingService
+        )
+        await workspace.loadInitialDirectories()
+        workspace.left.selection = [source]
+        let archiveService = RecordingArchiveOperator()
+        let controller = FileOperationController(
+            service: FileOperationService(
+                fileSystem: RecordingFileSystem(existingURLs: [directory, source])
+            ),
+            materializer: InMemoryCloudMaterializer(),
+            archiveService: archiveService
+        )
+
+        #expect(controller.compressSelection(workspace))
+        await waitUntilIdle(controller)
+
+        #expect(await archiveService.recordedRequests() == [
+            ArchiveRequest(
+                kind: .compress,
+                verifiedSources: [source],
+                finalDestination: directory.appending(path: "Project Notes 2.zip")
+            )
+        ])
+    }
+
+    @Test func multipleItemsCompressToTheFirstAvailableArchiveName() async {
+        let directory = URL(filePath: "/workspace")
+        let otherDirectory = URL(filePath: "/other")
+        let first = directory.appending(path: "First.txt")
+        let second = directory.appending(path: "Second.txt")
+        let items = [
+            fileItem(at: first),
+            fileItem(at: second),
+            fileItem(at: directory.appending(path: "Archive.zip")),
+            fileItem(at: directory.appending(path: "Archive 2.zip"))
+        ]
+        let workspace = WorkspaceState(
+            leftURL: directory,
+            rightURL: otherDirectory,
+            listingService: StubDirectoryListingService(values: [
+                directory: items,
+                otherDirectory: []
+            ])
+        )
+        await workspace.loadInitialDirectories()
+        workspace.left.selection = [second, first]
+        let archiveService = RecordingArchiveOperator()
+        let controller = FileOperationController(
+            service: FileOperationService(
+                fileSystem: RecordingFileSystem(existingURLs: [directory, first, second])
+            ),
+            materializer: InMemoryCloudMaterializer(),
+            archiveService: archiveService
+        )
+
+        #expect(controller.compressSelection(workspace))
+        await waitUntilIdle(controller)
+
+        #expect(await archiveService.recordedRequests() == [
+            ArchiveRequest(
+                kind: .compress,
+                verifiedSources: [first, second],
+                finalDestination: directory.appending(path: "Archive 3.zip")
+            )
+        ])
+    }
+
+    @Test func eachSelectedZIPExtractsIntoItsOwnAvailableStemFolder() async {
+        let directory = URL(filePath: "/workspace")
+        let otherDirectory = URL(filePath: "/other")
+        let first = directory.appending(path: "First.zip")
+        let second = directory.appending(path: "Second.ZIP")
+        let items = [
+            fileItem(at: first),
+            fileItem(at: second),
+            fileItem(at: directory.appending(path: "First")),
+            fileItem(at: directory.appending(path: "First 2")),
+            fileItem(at: directory.appending(path: "Second"))
+        ]
+        let workspace = WorkspaceState(
+            leftURL: directory,
+            rightURL: otherDirectory,
+            listingService: StubDirectoryListingService(values: [
+                directory: items,
+                otherDirectory: []
+            ])
+        )
+        await workspace.loadInitialDirectories()
+        workspace.left.selection = [second, first]
+        let archiveService = RecordingArchiveOperator()
+        let controller = FileOperationController(
+            service: FileOperationService(
+                fileSystem: RecordingFileSystem(existingURLs: [directory, first, second])
+            ),
+            materializer: InMemoryCloudMaterializer(),
+            archiveService: archiveService
+        )
+
+        #expect(controller.extractSelection(workspace))
+        await waitUntilIdle(controller)
+
+        #expect(await archiveService.recordedRequests() == [
+            ArchiveRequest(
+                kind: .extract,
+                verifiedSources: [first],
+                finalDestination: directory.appending(
+                    path: "First 3",
+                    directoryHint: .isDirectory
+                )
+            ),
+            ArchiveRequest(
+                kind: .extract,
+                verifiedSources: [second],
+                finalDestination: directory.appending(
+                    path: "Second 2",
+                    directoryHint: .isDirectory
+                )
+            )
+        ])
+    }
+
+    @Test func archiveServiceWaitsForArchivePurposeMaterialization() async {
+        let directory = URL(filePath: "/workspace")
+        let otherDirectory = URL(filePath: "/other")
+        let source = directory.appending(path: "cloud.txt")
+        let item = fileItem(at: source, availability: .onlineOnly)
+        let workspace = WorkspaceState(
+            leftURL: directory,
+            rightURL: otherDirectory,
+            listingService: StubDirectoryListingService(values: [
+                directory: [item],
+                otherDirectory: []
+            ])
+        )
+        await workspace.loadInitialDirectories()
+        workspace.left.selection = [source]
+        let materializer = SuspendingArchiveMaterializer()
+        let archiveService = RecordingArchiveOperator()
+        let controller = FileOperationController(
+            service: FileOperationService(
+                fileSystem: RecordingFileSystem(existingURLs: [directory, source])
+            ),
+            materializer: materializer,
+            archiveService: archiveService
+        )
+
+        #expect(controller.compressSelection(workspace))
+        await materializer.waitUntilStarted()
+
+        #expect(await archiveService.recordedRequests().isEmpty)
+        let purpose = await materializer.recordedPurpose()
+        guard case .archive = purpose else {
+            Issue.record("Archive preparation used the wrong cloud purpose")
+            await materializer.resume()
+            return
+        }
+
+        await materializer.resume()
+        await waitUntilIdle(controller)
+        #expect(await archiveService.recordedRequests().first?.verifiedSources == [source])
+    }
+
+    @Test func cancellationDuringArchivePreparationPreventsArchiveWork() async {
+        let directory = URL(filePath: "/workspace")
+        let otherDirectory = URL(filePath: "/other")
+        let source = directory.appending(path: "cloud.txt")
+        let workspace = WorkspaceState(
+            leftURL: directory,
+            rightURL: otherDirectory,
+            listingService: StubDirectoryListingService(values: [
+                directory: [fileItem(at: source, availability: .onlineOnly)],
+                otherDirectory: []
+            ])
+        )
+        await workspace.loadInitialDirectories()
+        workspace.left.selection = [source]
+        let materializer = SuspendingArchiveMaterializer()
+        let archiveService = RecordingArchiveOperator()
+        let controller = FileOperationController(
+            service: FileOperationService(
+                fileSystem: RecordingFileSystem(existingURLs: [directory, source])
+            ),
+            materializer: materializer,
+            archiveService: archiveService
+        )
+
+        #expect(controller.compressSelection(workspace))
+        await materializer.waitUntilStarted()
+        controller.cancel()
+        await materializer.resume()
+        await waitUntilIdle(controller)
+
+        #expect(await archiveService.recordedRequests().isEmpty)
+        #expect(controller.lastResult == FileOperationResult(outcomes: [
+            .cancelled(source: source)
+        ]))
+    }
+
+    @Test func changedIdentityAfterArchivePreparationPreventsArchiveWork() async {
+        let directory = URL(filePath: "/workspace")
+        let otherDirectory = URL(filePath: "/other")
+        let source = directory.appending(path: "cloud.txt")
+        let capturedIdentity = FileIdentity(
+            entryIdentifier: "captured",
+            resolvedIdentifier: "captured"
+        )
+        let replacementIdentity = FileIdentity(
+            entryIdentifier: "replacement",
+            resolvedIdentifier: "replacement"
+        )
+        let workspace = WorkspaceState(
+            leftURL: directory,
+            rightURL: otherDirectory,
+            listingService: StubDirectoryListingService(values: [
+                directory: [fileItem(at: source, availability: .onlineOnly)],
+                otherDirectory: []
+            ])
+        )
+        await workspace.loadInitialDirectories()
+        workspace.left.selection = [source]
+        let fileSystem = RecordingFileSystem(
+            existingURLs: [directory, source],
+            identities: [source: capturedIdentity]
+        )
+        let materializer = IdentityReplacingArchiveMaterializer(
+            fileSystem: fileSystem,
+            source: source,
+            replacementIdentity: replacementIdentity
+        )
+        let archiveService = RecordingArchiveOperator()
+        let controller = FileOperationController(
+            service: FileOperationService(fileSystem: fileSystem),
+            materializer: materializer,
+            archiveService: archiveService
+        )
+
+        #expect(controller.compressSelection(workspace))
+        await waitUntilIdle(controller)
+
+        #expect(await archiveService.recordedRequests().isEmpty)
+        #expect(controller.lastPreparationFailures == [
+            CloudMaterializationFailure(name: "cloud.txt", reason: .itemChanged)
+        ])
+    }
+
+    @Test func invalidExtractionSelectionsAreRejectedBeforeOperationStart() async {
+        let directory = URL(filePath: "/workspace")
+        let otherDirectory = URL(filePath: "/other")
+        let zipDirectory = directory.appending(path: "Folder.zip", directoryHint: .isDirectory)
+        let archive = directory.appending(path: "Archive.zip")
+        let text = directory.appending(path: "notes.txt")
+        let workspace = WorkspaceState(
+            leftURL: directory,
+            rightURL: otherDirectory,
+            listingService: StubDirectoryListingService(values: [
+                directory: [
+                    fileItem(at: zipDirectory, isDirectory: true),
+                    fileItem(at: archive),
+                    fileItem(at: text)
+                ],
+                otherDirectory: []
+            ])
+        )
+        await workspace.loadInitialDirectories()
+        let archiveService = RecordingArchiveOperator()
+        let controller = FileOperationController(
+            service: FileOperationService(
+                fileSystem: RecordingFileSystem(
+                    existingURLs: [directory, zipDirectory, archive, text]
+                )
+            ),
+            materializer: InMemoryCloudMaterializer(),
+            archiveService: archiveService
+        )
+
+        #expect(controller.extractSelection(workspace) == false)
+        workspace.left.selection = [zipDirectory]
+        #expect(controller.extractSelection(workspace) == false)
+        workspace.left.selection = [archive, text]
+        #expect(controller.extractSelection(workspace) == false)
+
+        #expect(controller.isRunning == false)
+        #expect(await archiveService.recordedRequests().isEmpty)
+    }
+
+    @Test func archiveSuccessRefreshesOnlyPanesShowingTheDestinationFolder() async {
+        let directory = URL(filePath: "/workspace")
+        let otherDirectory = URL(filePath: "/other")
+        let source = directory.appending(path: "Item.txt")
+        let listingService = ArchiveRequestRecordingListingService(values: [
+            directory: [fileItem(at: source)],
+            otherDirectory: []
+        ])
+        let workspace = WorkspaceState(
+            leftURL: directory,
+            rightURL: otherDirectory,
+            listingService: listingService
+        )
+        await workspace.loadInitialDirectories()
+        workspace.left.selection = [source]
+        let controller = FileOperationController(
+            service: FileOperationService(
+                fileSystem: RecordingFileSystem(existingURLs: [directory, source])
+            ),
+            materializer: InMemoryCloudMaterializer(),
+            archiveService: RecordingArchiveOperator()
+        )
+
+        #expect(controller.compressSelection(workspace))
+        await waitUntilIdle(controller)
+
+        #expect(await listingService.requestCount(for: directory) == 2)
+        #expect(await listingService.requestCount(for: otherDirectory) == 1)
+    }
+
     @Test func conflictWaitsForExplicitUserDecision() async {
         let controller = FileOperationController(
             service: FileOperationService(fileSystem: RecordingFileSystem())
@@ -600,16 +939,146 @@ struct FileOperationControllerTests {
         return controller.pendingConflict != nil
     }
 
-    private func fileItem(at url: URL) -> FileItem {
+    private func fileItem(
+        at url: URL,
+        isDirectory: Bool = false,
+        availability: CloudItemAvailability = .availableLocally
+    ) -> FileItem {
         FileItem(
             url: url,
             name: url.lastPathComponent,
-            isDirectory: false,
+            isDirectory: isDirectory,
             isPackage: false,
             modifiedAt: nil,
             byteSize: nil,
-            typeDescription: "File"
+            typeDescription: isDirectory ? "Folder" : "File",
+            availability: availability
         )
+    }
+}
+
+private actor RecordingArchiveOperator: ArchiveOperating {
+    private var requests: [ArchiveRequest] = []
+
+    func perform(
+        _ requests: [ArchiveRequest],
+        progress: ArchiveProgressHandler
+    ) async -> FileOperationResult {
+        self.requests.append(contentsOf: requests)
+        return FileOperationResult(outcomes: requests.map { request in
+            .succeeded(
+                source: request.verifiedSources.first ?? request.finalDestination,
+                destination: request.finalDestination
+            )
+        })
+    }
+
+    func recordedRequests() -> [ArchiveRequest] {
+        requests
+    }
+}
+
+private actor IdentityReplacingArchiveMaterializer: CloudMaterializing {
+    private let fileSystem: RecordingFileSystem
+    private let source: URL
+    private let replacementIdentity: FileIdentity
+
+    init(
+        fileSystem: RecordingFileSystem,
+        source: URL,
+        replacementIdentity: FileIdentity
+    ) {
+        self.fileSystem = fileSystem
+        self.source = source
+        self.replacementIdentity = replacementIdentity
+    }
+
+    func materialize(
+        _ requests: [IdentifiedFileRequest],
+        purpose: CloudPreparationPurpose,
+        progress: @Sendable (CloudMaterializationProgress) async -> Void
+    ) async -> CloudMaterializationResult {
+        await fileSystem.replaceIdentity(at: source, with: replacementIdentity)
+        return CloudMaterializationResult(
+            preparedRequests: requests,
+            failures: [],
+            wasCancelled: false
+        )
+    }
+}
+
+private actor SuspendingArchiveMaterializer: CloudMaterializing {
+    private var requests: [IdentifiedFileRequest] = []
+    private var purpose: CloudPreparationPurpose?
+    private var hasStarted = false
+    private var startWaiters: [CheckedContinuation<Void, Never>] = []
+    private var release: CheckedContinuation<Void, Never>?
+
+    func materialize(
+        _ requests: [IdentifiedFileRequest],
+        purpose: CloudPreparationPurpose,
+        progress: @Sendable (CloudMaterializationProgress) async -> Void
+    ) async -> CloudMaterializationResult {
+        self.requests = requests
+        self.purpose = purpose
+        hasStarted = true
+        let waiters = startWaiters
+        startWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+        await withCheckedContinuation { release = $0 }
+        if Task.isCancelled {
+            return CloudMaterializationResult(
+                preparedRequests: [],
+                failures: [],
+                wasCancelled: true
+            )
+        }
+        return CloudMaterializationResult(
+            preparedRequests: requests,
+            failures: [],
+            wasCancelled: false
+        )
+    }
+
+    func waitUntilStarted() async {
+        if hasStarted { return }
+        await withCheckedContinuation { startWaiters.append($0) }
+    }
+
+    func recordedPurpose() -> CloudPreparationPurpose? {
+        purpose
+    }
+
+    func resume() {
+        release?.resume()
+        release = nil
+    }
+}
+
+private actor ArchiveRequestRecordingListingService: DirectoryListingService {
+    private let values: [URL: [FileItem]]
+    private var requestCounts: [URL: Int] = [:]
+
+    init(values: [URL: [FileItem]]) {
+        self.values = values
+    }
+
+    nonisolated func batches(in directory: URL) -> AsyncThrowingStream<[FileItem], Error> {
+        AsyncThrowingStream { continuation in
+            Task {
+                continuation.yield(await response(for: directory))
+                continuation.finish()
+            }
+        }
+    }
+
+    func requestCount(for directory: URL) -> Int {
+        requestCounts[directory, default: 0]
+    }
+
+    private func response(for directory: URL) -> [FileItem] {
+        requestCounts[directory, default: 0] += 1
+        return values[directory] ?? []
     }
 }
 
