@@ -12,6 +12,8 @@ enum AccessibilityIdentifiers {
     static let rightPane = "rightPane"
     static let leftPaneFilter = "leftPane.filter"
     static let rightPaneFilter = "rightPane.filter"
+    static let leftPaneFilterResults = "leftPane.filterResults"
+    static let rightPaneFilterResults = "rightPane.filterResults"
     static let operationStatus = "operationStatus"
     static let conflictSheet = "conflictSheet"
     static let comparisonWorkspace = "comparisonWorkspace"
@@ -94,6 +96,13 @@ enum PaneFilterAccessibilityPresentation {
         switch paneID {
         case .left: "Filter files in left pane"
         case .right: "Filter files in right pane"
+        }
+    }
+
+    static func resultCountLabel(for paneID: PaneID) -> String {
+        switch paneID {
+        case .left: "Matching files in left pane"
+        case .right: "Matching files in right pane"
         }
     }
 

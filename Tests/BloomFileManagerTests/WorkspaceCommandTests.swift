@@ -50,6 +50,42 @@ struct WorkspaceCommandTests {
         ))
     }
 
+    @Test func newFolderAvoidsNamesHiddenByTheActiveFilter() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let directory = root.url.appending(path: "folder", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        try FileManager.default.createDirectory(
+            at: directory.appending(path: "New Folder", directoryHint: .isDirectory),
+            withIntermediateDirectories: false
+        )
+        let listing = LiveDirectoryListingService(batchSize: 64)
+        let workspace = WorkspaceState(
+            leftURL: directory,
+            rightURL: directory,
+            listingService: listing
+        )
+        let controller = FileOperationController(
+            service: FileOperationService(fileSystem: LiveFileSystemAccess())
+        )
+        await workspace.loadInitialDirectories()
+        workspace.left.beginFiltering()
+        workspace.left.updateFilterQuery("does-not-match")
+        #expect(workspace.left.visibleItems.isEmpty)
+
+        #expect(WorkspaceCommandActions.createFolder(
+            in: workspace.left,
+            workspace: workspace,
+            operationController: controller
+        ))
+        while controller.isRunning { await Task.yield() }
+
+        #expect(controller.lastResult?.hasFailures == false)
+        #expect(FileManager.default.fileExists(
+            atPath: directory.appending(path: "New Folder 2", directoryHint: .isDirectory).path
+        ))
+    }
+
     @Test func commandSelectionUsesOnlyTheActivePane() {
         let workspace = WorkspaceState(
             leftURL: URL(filePath: "/left"),
@@ -197,7 +233,11 @@ struct WorkspaceCommandTests {
         workspace.endTextEditing(session)
 
         workspace.activate(.right)
-        WorkspaceFilterCommandActions.showFilter(in: workspace)
+        WorkspaceFilterCommandActions.showFilter(in: workspace, canNavigate: false)
+        #expect(!workspace.left.isFilterPresented)
+        #expect(!workspace.right.isFilterPresented)
+
+        WorkspaceFilterCommandActions.showFilter(in: workspace, canNavigate: true)
         #expect(!workspace.left.isFilterPresented)
         #expect(workspace.right.isFilterPresented)
         #expect(workspace.right.filterFocusRequestID != nil)

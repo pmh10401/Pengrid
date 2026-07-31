@@ -59,6 +59,40 @@ enum StorageDuplicateDetectionEvent: Sendable {
 protocol StorageDuplicateDetecting: Sendable {
     func events(for entries: [StorageEntry])
         -> AsyncThrowingStream<StorageDuplicateDetectionEvent, Error>
+
+    func events(
+        for entries: [StorageEntry],
+        cancellation: StorageDuplicateCancellation
+    ) -> AsyncThrowingStream<StorageDuplicateDetectionEvent, Error>
+}
+
+extension StorageDuplicateDetecting {
+    func events(
+        for entries: [StorageEntry],
+        cancellation _: StorageDuplicateCancellation
+    ) -> AsyncThrowingStream<StorageDuplicateDetectionEvent, Error> {
+        events(for: entries)
+    }
+}
+
+final class StorageDuplicateCancellation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelled = false
+
+    func cancel() {
+        lock.lock()
+        cancelled = true
+        lock.unlock()
+    }
+
+    func check() throws {
+        lock.lock()
+        let isCancelled = cancelled
+        lock.unlock()
+        if isCancelled || Task.isCancelled {
+            throw CancellationError()
+        }
+    }
 }
 
 enum StorageDuplicateWorkerStage: Hashable, Sendable {
@@ -117,6 +151,13 @@ actor LiveStorageDuplicateDetectionService: StorageDuplicateDetecting {
 
     nonisolated func events(for entries: [StorageEntry])
         -> AsyncThrowingStream<StorageDuplicateDetectionEvent, Error> {
+        events(for: entries, cancellation: StorageDuplicateCancellation())
+    }
+
+    nonisolated func events(
+        for entries: [StorageEntry],
+        cancellation: StorageDuplicateCancellation
+    ) -> AsyncThrowingStream<StorageDuplicateDetectionEvent, Error> {
         let partials = partials
         let checksums = checksums
         let fingerprints = fingerprints
@@ -135,6 +176,7 @@ actor LiveStorageDuplicateDetectionService: StorageDuplicateDetecting {
                         fingerprints: fingerprints,
                         workerObserver: workerObserver,
                         eventBufferObserver: eventBufferObserver,
+                        cancellation: cancellation,
                         continuation: continuation
                     )
                     continuation.finish()
@@ -253,6 +295,7 @@ private func detectStorageDuplicates(
     fingerprints: any StorageEntryFingerprintReading,
     workerObserver: any StorageDuplicateWorkerObserving,
     eventBufferObserver: any StorageDuplicateEventBufferObserving,
+    cancellation: StorageDuplicateCancellation,
     continuation: AsyncThrowingStream<StorageDuplicateDetectionEvent, Error>.Continuation
 ) async throws {
     let sizeCandidates = Dictionary(grouping: entries.filter {
@@ -266,6 +309,7 @@ private func detectStorageDuplicates(
         .sorted { $0.relativePath < $1.relativePath }
 
     for entry in partialCandidates {
+        try cancellation.check()
         try await yieldStorageDuplicateEvent(
             .state(entry.id, .partial(nil)),
             delivery: .transient,
@@ -280,6 +324,7 @@ private func detectStorageDuplicates(
         observer: workerObserver
     ) { entry -> StoragePartialOutcome in
         do {
+            try cancellation.check()
             let fingerprint = try await partials.fingerprint(for: entry) { value in
                 guard !Task.isCancelled else { return }
                 try? await yieldStorageDuplicateEvent(
@@ -289,6 +334,7 @@ private func detectStorageDuplicates(
                     continuation: continuation
                 )
             }
+            try cancellation.check()
             try Task.checkCancellation()
             return .success(entry, fingerprint)
         } catch {
@@ -298,6 +344,7 @@ private func detectStorageDuplicates(
             return .excluded(entry, storageVerificationState(for: error))
         }
     }
+    try cancellation.check()
     try Task.checkCancellation()
 
     var partialMatches: [(StorageEntry, StoragePartialFingerprint)] = []
@@ -334,6 +381,7 @@ private func detectStorageDuplicates(
         observer: workerObserver
     ) { entry -> StorageChecksumOutcome in
         do {
+            try cancellation.check()
             let checksum = try await checksums.checksum(
                 for: ChecksumRequest(
                     url: entry.url,
@@ -348,6 +396,7 @@ private func detectStorageDuplicates(
                     continuation: continuation
                 )
             }
+            try cancellation.check()
             try Task.checkCancellation()
             return .success(entry, checksum)
         } catch {
@@ -357,6 +406,7 @@ private func detectStorageDuplicates(
             return .excluded(entry, storageVerificationState(for: error))
         }
     }
+    try cancellation.check()
     try Task.checkCancellation()
 
     var completeMatches: [(StorageEntry, ChecksumResult)] = []
@@ -388,6 +438,7 @@ private func detectStorageDuplicates(
 
     var verifiedGroups: [(StorageDuplicateGroupID, [StorageEntry])] = []
     for (id, candidates) in duplicateCandidates {
+        try cancellation.check()
         try Task.checkCancellation()
         let outcomes = await runStorageDuplicateWorkers(
             candidates: candidates,
@@ -395,7 +446,9 @@ private func detectStorageDuplicates(
             observer: workerObserver
         ) { entry -> StorageLiveFingerprintOutcome in
             do {
+                try cancellation.check()
                 let current = try await fingerprints.fingerprint(of: entry.url)
+                try cancellation.check()
                 try Task.checkCancellation()
                 guard storageFingerprintIsCurrent(
                     captured: entry.fingerprint,
@@ -411,6 +464,7 @@ private func detectStorageDuplicates(
                 return .excluded(entry, storageVerificationState(for: error))
             }
         }
+        try cancellation.check()
         try Task.checkCancellation()
 
         var currentEntries: [StorageEntry] = []
@@ -444,6 +498,7 @@ private func detectStorageDuplicates(
         lhs.1.map(\.relativePath).min()! < rhs.1.map(\.relativePath).min()!
     }
     for (id, entries) in verifiedGroups {
+        try cancellation.check()
         try Task.checkCancellation()
         let members = entries.sorted { $0.relativePath < $1.relativePath }
         guard let keepID = StorageKeepRecommender.recommendedKeep(

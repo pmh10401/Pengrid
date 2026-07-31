@@ -7,7 +7,7 @@ name `BloomFileManager` for compatibility.
 ## Setup and verification
 
 ```bash
-swift test
+swift test --enable-swift-testing --no-parallel --filter BloomFileManagerTests
 ./script/build_and_run.sh --verify
 ```
 
@@ -34,7 +34,7 @@ with full Xcode installed.
 
 ```bash
 env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
-  /usr/bin/xcrun swift test --disable-sandbox --no-parallel
+  /usr/bin/xcrun swift test --disable-sandbox --enable-swift-testing --no-parallel --filter BloomFileManagerTests
 env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
   ./script/build_and_run.sh --verify
 open dist/Pengrid.app
@@ -89,9 +89,10 @@ Create and inspect the unsigned local app with:
 codesign --verify --deep --strict --verbose=2 dist/release/Pengrid.app
 ```
 
-The `--unsigned` mode ad-hoc signs and replaces only
-`dist/release/Pengrid.app`; it does not produce or replace
-`dist/release/Pengrid.zip`. The `--signed` mode produces and publishes both the
-app and ZIP. Any ZIP already present after an unsigned run may be an older signed
-release. SwiftPM commands and the internal `Sources/BloomFileManager` and
-`Tests/BloomFileManagerTests` module paths remain unchanged.
+The `--unsigned` mode ad-hoc signs and replaces
+`dist/release/Pengrid.app` and `dist/release/Pengrid.dmg`; it does not produce
+or replace `dist/release/Pengrid.zip`. The `--signed` mode produces and
+publishes the app, DMG, and ZIP. Any ZIP already present after an unsigned run
+may be an older signed release. SwiftPM commands and the internal
+`Sources/BloomFileManager` and `Tests/BloomFileManagerTests` module paths
+remain unchanged.
