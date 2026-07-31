@@ -47,7 +47,7 @@ actor ArchiveOperationService: ArchiveOperating {
                 try validate(request)
                 await progress(ArchiveOperationProgress(
                     kind: request.kind,
-                    currentDisplayName: request.finalDestination.lastPathComponent
+                    currentDisplayName: request.progressDisplayName
                 ))
                 try await perform(request)
                 outcomes.append(.succeeded(

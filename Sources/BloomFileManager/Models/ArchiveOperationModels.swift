@@ -28,6 +28,29 @@ struct ArchiveRequest: Sendable, Equatable {
     let kind: ArchiveOperationKind
     let verifiedSources: [URL]
     let finalDestination: URL
+    let progressDisplayName: String
+
+    init(
+        kind: ArchiveOperationKind,
+        verifiedSources: [URL],
+        finalDestination: URL,
+        progressDisplayName: String? = nil
+    ) {
+        self.kind = kind
+        self.verifiedSources = verifiedSources
+        self.finalDestination = finalDestination
+        if let progressDisplayName {
+            self.progressDisplayName = progressDisplayName
+        } else {
+            self.progressDisplayName = switch kind {
+            case .compress:
+                finalDestination.lastPathComponent
+            case .extract:
+                verifiedSources.first?.lastPathComponent
+                    ?? finalDestination.lastPathComponent
+            }
+        }
+    }
 }
 
 enum ArchiveOperationError: LocalizedError, Sendable, Equatable {

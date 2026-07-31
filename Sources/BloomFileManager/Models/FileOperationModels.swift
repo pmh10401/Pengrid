@@ -52,10 +52,13 @@ enum ArchiveSelectionEligibility {
 struct ArchiveDestinationPlan: Sendable, Equatable {
     let kind: ArchiveOperationKind
     let selectedSources: [URL]
+    let sourceDisplayNames: [String]
     let destinations: [URL]
 
     func requests(for verifiedSources: [URL]) -> [ArchiveRequest]? {
-        guard verifiedSources.count == selectedSources.count else { return nil }
+        guard verifiedSources.count == selectedSources.count,
+              sourceDisplayNames.count == selectedSources.count
+        else { return nil }
         switch kind {
         case .compress:
             guard destinations.count == 1 else { return nil }
@@ -63,16 +66,18 @@ struct ArchiveDestinationPlan: Sendable, Equatable {
                 ArchiveRequest(
                     kind: .compress,
                     verifiedSources: verifiedSources,
-                    finalDestination: destinations[0]
+                    finalDestination: destinations[0],
+                    progressDisplayName: destinations[0].lastPathComponent
                 )
             ]
         case .extract:
             guard destinations.count == verifiedSources.count else { return nil }
-            return zip(verifiedSources, destinations).map { source, destination in
+            return verifiedSources.indices.map { index in
                 ArchiveRequest(
                     kind: .extract,
-                    verifiedSources: [source],
-                    finalDestination: destination
+                    verifiedSources: [verifiedSources[index]],
+                    finalDestination: destinations[index],
+                    progressDisplayName: sourceDisplayNames[index]
                 )
             }
         }
@@ -96,6 +101,7 @@ enum ArchiveDestinationPlanner {
         return ArchiveDestinationPlan(
             kind: .compress,
             selectedSources: selectedItems.map(\.url),
+            sourceDisplayNames: selectedItems.map(\.name),
             destinations: [directory.appending(path: destinationName)]
         )
     }
@@ -125,6 +131,7 @@ enum ArchiveDestinationPlanner {
         return ArchiveDestinationPlan(
             kind: .extract,
             selectedSources: selectedItems.map(\.url),
+            sourceDisplayNames: selectedItems.map(\.name),
             destinations: destinations
         )
     }

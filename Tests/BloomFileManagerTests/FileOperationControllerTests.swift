@@ -44,13 +44,15 @@ struct FileOperationControllerTests {
         #expect(await controller.compressSelection(workspace))
         await waitUntilIdle(controller)
 
-        #expect(await archiveService.recordedRequests() == [
+        let requests = await archiveService.recordedRequests()
+        #expect(requests == [
             ArchiveRequest(
                 kind: .compress,
                 verifiedSources: [source],
                 finalDestination: directory.appending(path: "Project Notes 2.zip")
             )
         ])
+        #expect(requests.first?.progressDisplayName == "Project Notes 2.zip")
     }
 
     @Test func multipleItemsCompressToTheFirstAvailableArchiveName() async {
@@ -147,6 +149,73 @@ struct FileOperationControllerTests {
                 )
             )
         ])
+    }
+
+    @Test func extractionKeepsSelectedZIPDisplayNameAcrossInitialAndRealServiceProgress() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let source = root.url.appending(path: "provider-token")
+        let otherDirectory = root.url.appending(path: "other", directoryHint: .isDirectory)
+        try Data("archive".utf8).write(to: source)
+        try FileManager.default.createDirectory(
+            at: otherDirectory,
+            withIntermediateDirectories: false
+        )
+        let selectedItem = FileItem(
+            url: source,
+            name: "Backup.zip",
+            isDirectory: false,
+            isPackage: false,
+            modifiedAt: nil,
+            byteSize: nil,
+            typeDescription: "ZIP archive"
+        )
+        let workspace = WorkspaceState(
+            leftURL: root.url,
+            rightURL: otherDirectory,
+            listingService: StubDirectoryListingService(values: [
+                root.url: [selectedItem],
+                otherDirectory: []
+            ])
+        )
+        await workspace.loadInitialDirectories()
+        workspace.left.selection = [source]
+        let fileSystem = LiveFileSystemAccess()
+        let archiveService = GatedControllerArchiveOperator(underlying: ArchiveOperationService(
+            fileSystem: fileSystem,
+            commandRunner: CompletingControllerArchiveCommandRunner()
+        ))
+        let controller = FileOperationController(
+            service: FileOperationService(fileSystem: fileSystem),
+            materializer: InMemoryCloudMaterializer(),
+            archiveService: archiveService
+        )
+
+        let didStart = await controller.extractSelection(workspace)
+        #expect(didStart)
+        guard didStart else { return }
+        let expectedStage = FileOperationStage.archiving(ArchiveOperationProgress(
+            kind: .extract,
+            currentDisplayName: "Backup.zip"
+        ))
+        await archiveService.waitUntilStarted()
+        #expect(controller.stage == expectedStage)
+
+        await archiveService.proceed()
+        await waitUntilIdle(controller)
+        #expect(controller.stage == expectedStage)
+        #expect(await archiveService.recordedProgress() == [
+            ArchiveOperationProgress(
+                kind: .extract,
+                currentDisplayName: "Backup.zip"
+            )
+        ])
+        #expect(FileManager.default.fileExists(
+            atPath: root.url.appending(
+                path: "Backup",
+                directoryHint: .isDirectory
+            ).path
+        ))
     }
 
     @Test func archiveServiceWaitsForArchivePurposeMaterialization() async {
@@ -1010,6 +1079,69 @@ private actor RecordingArchiveOperator: ArchiveOperating {
 
     func recordedRequests() -> [ArchiveRequest] {
         requests
+    }
+}
+
+private struct CompletingControllerArchiveCommandRunner: ArchiveCommandRunning {
+    func run(
+        kind: ArchiveOperationKind,
+        sources: [URL],
+        destination: URL
+    ) async throws {
+        switch kind {
+        case .compress:
+            try Data("archive".utf8).write(to: destination)
+        case .extract:
+            try FileManager.default.createDirectory(
+                at: destination,
+                withIntermediateDirectories: false
+            )
+        }
+    }
+}
+
+private actor GatedControllerArchiveOperator: ArchiveOperating {
+    private let underlying: any ArchiveOperating
+    private var hasStarted = false
+    private var startWaiters: [CheckedContinuation<Void, Never>] = []
+    private var release: CheckedContinuation<Void, Never>?
+    private var emittedProgress: [ArchiveOperationProgress] = []
+
+    init(underlying: any ArchiveOperating) {
+        self.underlying = underlying
+    }
+
+    func perform(
+        _ requests: [ArchiveRequest],
+        progress: ArchiveProgressHandler
+    ) async -> FileOperationResult {
+        hasStarted = true
+        let waiters = startWaiters
+        startWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+        await withCheckedContinuation { release = $0 }
+        return await underlying.perform(requests) { update in
+            await self.record(update)
+            await progress(update)
+        }
+    }
+
+    func waitUntilStarted() async {
+        if hasStarted { return }
+        await withCheckedContinuation { startWaiters.append($0) }
+    }
+
+    func proceed() {
+        release?.resume()
+        release = nil
+    }
+
+    func recordedProgress() -> [ArchiveOperationProgress] {
+        emittedProgress
+    }
+
+    private func record(_ progress: ArchiveOperationProgress) {
+        emittedProgress.append(progress)
     }
 }
 

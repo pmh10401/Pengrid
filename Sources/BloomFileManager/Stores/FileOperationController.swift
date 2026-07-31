@@ -182,10 +182,10 @@ final class FileOperationController {
         in workspace: WorkspaceState
     ) -> Bool {
         let sources = plan.selectedSources
-        let firstDestinationName = plan.destinations.first?.lastPathComponent ?? ""
+        let initialName = plan.destinations.first?.lastPathComponent ?? ""
         return beginOperation(
             totalCount: plan.destinations.count,
-            initialName: firstDestinationName,
+            initialName: initialName,
             initialStage: .preparing(CloudMaterializationProgress(
                 completedCount: 0,
                 totalCount: sources.count,
@@ -271,12 +271,14 @@ final class FileOperationController {
 
             guard let archiveRequests = plan.requests(
                 for: prepared.map(\.url)
-            ) else {
+            ),
+            let firstRequest = archiveRequests.first
+            else {
                 return self.archiveIdentityChangedResult(for: sources)
             }
             self.stage = .archiving(ArchiveOperationProgress(
-                kind: plan.kind,
-                currentDisplayName: firstDestinationName
+                kind: firstRequest.kind,
+                currentDisplayName: firstRequest.progressDisplayName
             ))
             return await archiveService.perform(archiveRequests) { [weak self] progress in
                 await MainActor.run {
