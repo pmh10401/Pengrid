@@ -10,6 +10,7 @@ CI_WORKFLOW="$SOURCE_ROOT/.github/workflows/ci.yml"
 VERSION_1_CHECKLIST="$SOURCE_ROOT/docs/verification/version-1-checklist.md"
 VERSION_11_CHECKLIST="$SOURCE_ROOT/docs/verification/version-1.1-checklist.md"
 VERSION_12_CHECKLIST="$SOURCE_ROOT/docs/verification/version-1.2-checklist.md"
+VERSION_13_CHECKLIST="$SOURCE_ROOT/docs/verification/version-1.3-archive-checklist.md"
 RELEASE_GUIDE="$SOURCE_ROOT/docs/release.md"
 RAW_TEST_TEMP_DIR="$(/usr/bin/getconf DARWIN_USER_TEMP_DIR)"
 TEST_TEMP_DIR="$(cd -P "$RAW_TEST_TEMP_DIR" && pwd -P)"
@@ -68,16 +69,23 @@ test_version_12_release_contract_is_documented() {
   assert_file_contains "$RELEASE_GUIDE" 'Developer Preview'
 }
 
+test_version_13_release_contract_is_documented() {
+  [[ -f "$VERSION_13_CHECKLIST" ]] || fail 'version 1.3 verification checklist is absent'
+  assert_file_contains "$VERSION_13_CHECKLIST" '## Release gate'
+  assert_file_contains "$RELEASE_GUIDE" 'Version 1.3 release gates'
+  assert_file_contains "$RELEASE_GUIDE" 'Developer Preview'
+}
+
 test_release_tests_run_nonparallel() {
   assert_file_contains "$SOURCE_SCRIPT" 'test --enable-swift-testing --no-parallel --filter BloomFileManagerTests --package-path'
   assert_file_contains "$CI_WORKFLOW" 'swift test --enable-swift-testing --no-parallel --filter BloomFileManagerTests'
 }
 
-test_version_12_bundle_version_is_declared() {
-  assert_file_contains "$SOURCE_SCRIPT" 'APP_VERSION="1.2.0"'
-  assert_file_contains "$SOURCE_SCRIPT" 'BUILD_VERSION="3"'
-  assert_file_contains "$SOURCE_BUILD_SCRIPT" 'APP_VERSION="1.2.0"'
-  assert_file_contains "$SOURCE_BUILD_SCRIPT" 'BUILD_VERSION="3"'
+test_version_13_bundle_version_is_declared() {
+  assert_file_contains "$SOURCE_SCRIPT" 'APP_VERSION="1.3.0"'
+  assert_file_contains "$SOURCE_SCRIPT" 'BUILD_VERSION="4"'
+  assert_file_contains "$SOURCE_BUILD_SCRIPT" 'APP_VERSION="1.3.0"'
+  assert_file_contains "$SOURCE_BUILD_SCRIPT" 'BUILD_VERSION="4"'
 }
 
 new_fixture() {
@@ -567,8 +575,9 @@ test_malformed_notary_ids_are_never_used_for_log_requests() {
 run_all_contract_tests() {
   test_version_11_release_contract_is_documented
   test_version_12_release_contract_is_documented
+  test_version_13_release_contract_is_documented
   test_release_tests_run_nonparallel
-  test_version_12_bundle_version_is_declared
+  test_version_13_bundle_version_is_declared
   test_pengrid_release_identity_preserves_legacy_executable_and_icon
   test_icon_source_symlink_is_rejected
   test_icon_source_replacement_cannot_change_staged_bytes

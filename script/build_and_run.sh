@@ -7,8 +7,8 @@ EXECUTABLE_NAME="BloomFileManager"
 ICON_NAME="Pengrid.icns"
 BUNDLE_ID="com.minho.BloomFileManager"
 MIN_SYSTEM_VERSION="15.0"
-APP_VERSION="1.2.0"
-BUILD_VERSION="3"
+APP_VERSION="1.3.0"
+BUILD_VERSION="4"
 
 die() { echo "$*" >&2; exit 1; }
 

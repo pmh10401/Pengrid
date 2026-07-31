@@ -2,14 +2,22 @@
 
 Pengrid is distributed directly for Apple Silicon Macs running macOS 15 or newer. The release does not use App Sandbox entitlements. Its executable filename and compatibility-sensitive internal identity remain `BloomFileManager`.
 
+## Version 1.3 release gates
+
+Version 1.3 adds ZIP compression and extraction, including safe staged
+publication, multi-item compression, cloud File Provider access, selected
+symbolic-link preservation, cancellation safety, and VoiceOver-aware archive
+status. The feature gate is not passed until every required automated and
+static check is current and every physical-manual scenario in
+[`docs/verification/version-1.3-archive-checklist.md`](verification/version-1.3-archive-checklist.md)
+has recorded evidence.
+
 ## Version 1.2 release gates
 
-Version 1.2 adds pane-local filename filtering, bounded Back and Forward
-history, in-session selection and scroll restoration, and live Quick Look
-updates. The feature gate is not passed until every required automated and
-static check is current and every physical-manual scenario in
-[`docs/verification/version-1.2-checklist.md`](verification/version-1.2-checklist.md)
-has recorded evidence.
+Version 1.2 introduced pane-local filename filtering, navigation history,
+session restoration, and live Quick Look. Its historical verification record
+remains in
+[`docs/verification/version-1.2-checklist.md`](verification/version-1.2-checklist.md).
 
 In particular, a release candidate still requires physical checks with local, external,
 and case-sensitive volumes; disconnect/reconnect during comparison and transfer; large

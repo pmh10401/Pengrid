@@ -28,7 +28,7 @@ cd Pengrid
 ```
 
 An unsigned compiled DMG is also available from the
-[Pengrid 1.2 Developer Preview](https://github.com/pmh10401/Pengrid/releases/tag/v1.2.0-developer-preview.1).
+[Pengrid 1.3 Developer Preview](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.1).
 It is not Developer ID signed or notarized, so only open it when you downloaded
 it directly from this repository's GitHub release page.
 
@@ -96,10 +96,11 @@ formats are not supported in this release.
 See `docs/release.md`, `docs/verification/version-1.1-checklist.md`,
 `docs/verification/version-1.2-checklist.md`,
 `docs/verification/version-1.3-archive-checklist.md`, and
-`docs/verification/storage-inspector-checklist.md`. An unsigned package is for
-local inspection only; distribution requires the documented Developer ID,
-notarization, stapling, Gatekeeper, and physical-manual gates.
-There is no signed prebuilt GitHub Release available yet.
+`docs/verification/storage-inspector-checklist.md`. The 1.3 GitHub release is
+an explicitly unsigned Developer Preview DMG: it has not been Developer ID
+signed or notarized, and macOS may show a Gatekeeper warning. A signed public
+release still requires the documented Developer ID, notarization, stapling,
+Gatekeeper, and physical-manual gates.
 
 Create and inspect the unsigned local app with:
 
