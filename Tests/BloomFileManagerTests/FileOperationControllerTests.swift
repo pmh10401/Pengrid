@@ -41,7 +41,7 @@ struct FileOperationControllerTests {
             archiveService: archiveService
         )
 
-        #expect(controller.compressSelection(workspace))
+        #expect(await controller.compressSelection(workspace))
         await waitUntilIdle(controller)
 
         #expect(await archiveService.recordedRequests() == [
@@ -83,7 +83,7 @@ struct FileOperationControllerTests {
             archiveService: archiveService
         )
 
-        #expect(controller.compressSelection(workspace))
+        #expect(await controller.compressSelection(workspace))
         await waitUntilIdle(controller)
 
         #expect(await archiveService.recordedRequests() == [
@@ -126,7 +126,7 @@ struct FileOperationControllerTests {
             archiveService: archiveService
         )
 
-        #expect(controller.extractSelection(workspace))
+        #expect(await controller.extractSelection(workspace))
         await waitUntilIdle(controller)
 
         #expect(await archiveService.recordedRequests() == [
@@ -174,7 +174,7 @@ struct FileOperationControllerTests {
             archiveService: archiveService
         )
 
-        #expect(controller.compressSelection(workspace))
+        #expect(await controller.compressSelection(workspace))
         await materializer.waitUntilStarted()
 
         #expect(await archiveService.recordedRequests().isEmpty)
@@ -214,7 +214,7 @@ struct FileOperationControllerTests {
             archiveService: archiveService
         )
 
-        #expect(controller.compressSelection(workspace))
+        #expect(await controller.compressSelection(workspace))
         await materializer.waitUntilStarted()
         controller.cancel()
         await materializer.resume()
@@ -264,13 +264,48 @@ struct FileOperationControllerTests {
             archiveService: archiveService
         )
 
-        #expect(controller.compressSelection(workspace))
+        #expect(await controller.compressSelection(workspace))
         await waitUntilIdle(controller)
 
         #expect(await archiveService.recordedRequests().isEmpty)
         #expect(controller.lastPreparationFailures == [
             CloudMaterializationFailure(name: "cloud.txt", reason: .itemChanged)
         ])
+    }
+
+    @Test func replacementBeforeArchiveOperationTaskNeverReachesArchiveService() async throws {
+        let temporaryDirectory = try TemporaryDirectory()
+        defer { temporaryDirectory.remove() }
+        let directory = temporaryDirectory.url
+        let otherDirectory = directory.appending(
+            path: "Other",
+            directoryHint: .isDirectory
+        )
+        let source = directory.appending(path: "Selected.txt")
+        try Data("selected".utf8).write(to: source)
+        let workspace = WorkspaceState(
+            leftURL: directory,
+            rightURL: otherDirectory,
+            listingService: StubDirectoryListingService(values: [
+                directory: [fileItem(at: source)],
+                otherDirectory: []
+            ])
+        )
+        await workspace.loadInitialDirectories()
+        workspace.left.selection = [source]
+        let archiveService = RecordingArchiveOperator()
+        let controller = FileOperationController(
+            service: FileOperationService(fileSystem: LiveFileSystemAccess()),
+            materializer: InMemoryCloudMaterializer(),
+            archiveService: archiveService
+        )
+
+        #expect(await controller.compressSelection(workspace))
+        try FileManager.default.removeItem(at: source)
+        try Data("replacement".utf8).write(to: source)
+        await waitUntilIdle(controller)
+
+        #expect(await archiveService.recordedRequests().isEmpty)
     }
 
     @Test func invalidExtractionSelectionsAreRejectedBeforeOperationStart() async {
@@ -303,11 +338,11 @@ struct FileOperationControllerTests {
             archiveService: archiveService
         )
 
-        #expect(controller.extractSelection(workspace) == false)
+        #expect(await controller.extractSelection(workspace) == false)
         workspace.left.selection = [zipDirectory]
-        #expect(controller.extractSelection(workspace) == false)
+        #expect(await controller.extractSelection(workspace) == false)
         workspace.left.selection = [archive, text]
-        #expect(controller.extractSelection(workspace) == false)
+        #expect(await controller.extractSelection(workspace) == false)
 
         #expect(controller.isRunning == false)
         #expect(await archiveService.recordedRequests().isEmpty)
@@ -336,7 +371,7 @@ struct FileOperationControllerTests {
             archiveService: RecordingArchiveOperator()
         )
 
-        #expect(controller.compressSelection(workspace))
+        #expect(await controller.compressSelection(workspace))
         await waitUntilIdle(controller)
 
         #expect(await listingService.requestCount(for: directory) == 2)

@@ -110,7 +110,7 @@ final class FileOperationController {
     }
 
     @discardableResult
-    func compressSelection(_ workspace: WorkspaceState) -> Bool {
+    func compressSelection(_ workspace: WorkspaceState) async -> Bool {
         guard let capture = archiveSelectionCapture(in: workspace),
               let plan = ArchiveDestinationPlanner.compression(
                 selectedItems: capture.selectedItems,
@@ -118,11 +118,12 @@ final class FileOperationController {
                 occupiedNames: capture.occupiedNames
               )
         else { return false }
-        return runArchive(plan, in: workspace)
+        let identityCapture = await captureArchiveIdentities(for: plan.selectedSources)
+        return runArchive(plan, identityCapture: identityCapture, in: workspace)
     }
 
     @discardableResult
-    func extractSelection(_ workspace: WorkspaceState) -> Bool {
+    func extractSelection(_ workspace: WorkspaceState) async -> Bool {
         guard let capture = archiveSelectionCapture(in: workspace),
               let plan = ArchiveDestinationPlanner.extraction(
                 selectedItems: capture.selectedItems,
@@ -130,7 +131,8 @@ final class FileOperationController {
                 occupiedNames: capture.occupiedNames
               )
         else { return false }
-        return runArchive(plan, in: workspace)
+        let identityCapture = await captureArchiveIdentities(for: plan.selectedSources)
+        return runArchive(plan, identityCapture: identityCapture, in: workspace)
     }
 
     private func archiveSelectionCapture(
@@ -149,8 +151,33 @@ final class FileOperationController {
         )
     }
 
+    private func captureArchiveIdentities(
+        for sources: [URL]
+    ) async -> ArchiveIdentityCapture {
+        do {
+            var requests: [IdentifiedFileRequest] = []
+            for source in sources {
+                try Task.checkCancellation()
+                requests.append(IdentifiedFileRequest(
+                    url: source,
+                    identity: try await service.identity(of: source)
+                ))
+            }
+            return .ready(requests)
+        } catch is CancellationError {
+            return .rejected(FileOperationResult(outcomes: sources.map {
+                .cancelled(source: $0)
+            }))
+        } catch {
+            return .rejected(FileOperationResult(outcomes: sources.map {
+                .failed(source: $0, message: error.localizedDescription)
+            }))
+        }
+    }
+
     private func runArchive(
         _ plan: ArchiveDestinationPlan,
+        identityCapture: ArchiveIdentityCapture,
         in workspace: WorkspaceState
     ) -> Bool {
         let sources = plan.selectedSources
@@ -173,24 +200,11 @@ final class FileOperationController {
             }
 
             let captured: [IdentifiedFileRequest]
-            do {
-                var requests: [IdentifiedFileRequest] = []
-                for source in sources {
-                    try Task.checkCancellation()
-                    requests.append(IdentifiedFileRequest(
-                        url: source,
-                        identity: try await service.identity(of: source)
-                    ))
-                }
+            switch identityCapture {
+            case let .ready(requests):
                 captured = requests
-            } catch is CancellationError {
-                return FileOperationResult(outcomes: sources.map {
-                    .cancelled(source: $0)
-                })
-            } catch {
-                return FileOperationResult(outcomes: sources.map {
-                    .failed(source: $0, message: error.localizedDescription)
-                })
+            case let .rejected(result):
+                return result
             }
 
             let materialization = await materializer.materialize(
@@ -860,6 +874,11 @@ private struct ArchiveSelectionCapture {
     let selectedItems: [FileItem]
     let directory: URL
     let occupiedNames: Set<String>
+}
+
+private enum ArchiveIdentityCapture {
+    case ready([IdentifiedFileRequest])
+    case rejected(FileOperationResult)
 }
 
 private final class IdentifiedRequestCapture: @unchecked Sendable {
