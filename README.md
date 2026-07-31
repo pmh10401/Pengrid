@@ -78,10 +78,24 @@ The filename filter works only on the directory listing already loaded in
 memory. It is not recursive or file-content search, and it does not download
 cloud-only files.
 
+## ZIP archives
+
+Pengrid can create and extract ZIP archives from **File Operations** or a file
+row's contextual menu. ZIP compression and extraction are the only archive
+operations delivered in this release. Archive work is performed locally beside
+the selected destination; a cloud-backed source may be downloaded first when
+macOS File Provider needs to materialize it.
+
+Archive destinations are never overwritten. Pengrid chooses an available name
+before starting and exclusive publication rejects a late collision, leaving the
+existing item unchanged. Password-protected archives and 7z, RAR, and tar
+formats are not supported in this release.
+
 ## Release status
 
 See `docs/release.md`, `docs/verification/version-1.1-checklist.md`,
-`docs/verification/version-1.2-checklist.md`, and
+`docs/verification/version-1.2-checklist.md`,
+`docs/verification/version-1.3-archive-checklist.md`, and
 `docs/verification/storage-inspector-checklist.md`. An unsigned package is for
 local inspection only; distribution requires the documented Developer ID,
 notarization, stapling, Gatekeeper, and physical-manual gates.
