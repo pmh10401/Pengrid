@@ -4,6 +4,7 @@ import Observation
 enum FileOperationStage: Equatable {
     case preparing(CloudMaterializationProgress)
     case operating(FileOperationProgress)
+    case archiving(ArchiveOperationProgress)
 }
 
 enum CloudOperationRequestGate {
@@ -273,18 +274,13 @@ final class FileOperationController {
             ) else {
                 return self.archiveIdentityChangedResult(for: sources)
             }
-            self.stage = .operating(FileOperationProgress(
-                completedCount: 0,
-                totalCount: archiveRequests.count,
-                currentName: firstDestinationName
+            self.stage = .archiving(ArchiveOperationProgress(
+                kind: plan.kind,
+                currentDisplayName: firstDestinationName
             ))
             return await archiveService.perform(archiveRequests) { [weak self] progress in
                 await MainActor.run {
-                    self?.stage = .operating(FileOperationProgress(
-                        completedCount: 0,
-                        totalCount: archiveRequests.count,
-                        currentName: progress.currentDisplayName
-                    ))
+                    self?.stage = .archiving(progress)
                 }
             }
         }

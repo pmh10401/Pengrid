@@ -142,6 +142,26 @@ private extension FileOperationItemOutcome {
     }
 }
 
+struct ArchiveOperationStatusPresentation: Equatable, Sendable {
+    let title: String
+    let currentItemName: String
+    let statusAccessibilityLabel: String
+    let cancelAccessibilityLabel: String
+
+    init(progress: ArchiveOperationProgress) {
+        title = progress.kind.title
+        currentItemName = progress.currentDisplayName
+        statusAccessibilityLabel = "\(progress.kind.accessibilityLabel), "
+            + "current item \(progress.currentDisplayName)"
+        cancelAccessibilityLabel = switch progress.kind {
+        case .compress:
+            "Cancel ZIP compression"
+        case .extract:
+            "Cancel ZIP extraction"
+        }
+    }
+}
+
 struct OperationStatusView: View {
     let controller: FileOperationController
 
@@ -162,6 +182,8 @@ struct OperationStatusView: View {
                 preparationStatus(progress)
             case let .operating(progress):
                 operationStatus(progress)
+            case let .archiving(progress):
+                archiveStatus(progress)
             }
         }
         .accessibilityIdentifier(AccessibilityIdentifiers.operationStatus)
@@ -198,6 +220,35 @@ struct OperationStatusView: View {
         .accessibilityLabel(
             "Preparing Download, \(progress.completedCount) of \(progress.totalCount), current item \(progress.currentName)"
         )
+        .modifier(StatusBarStyle())
+    }
+
+    private func archiveStatus(_ progress: ArchiveOperationProgress) -> some View {
+        let presentation = ArchiveOperationStatusPresentation(progress: progress)
+        return HStack(spacing: 10) {
+            HStack(spacing: 10) {
+                Text(presentation.title)
+                    .font(.caption.weight(.semibold))
+
+                ProgressView()
+                    .controlSize(.small)
+
+                Text(presentation.currentItemName)
+                    .font(.caption)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(presentation.statusAccessibilityLabel)
+
+            Spacer(minLength: 8)
+
+            Button("Cancel") {
+                controller.cancel()
+            }
+            .controlSize(.small)
+            .accessibilityLabel(presentation.cancelAccessibilityLabel)
+        }
         .modifier(StatusBarStyle())
     }
 

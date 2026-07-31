@@ -214,6 +214,7 @@ struct FilePaneView: View {
                 renameRequestID: state.renameRequestID,
                 scrollRequest: state.scrollRestoreRequest,
                 isOperationRunning: operationController.isRunning,
+                isTextEditing: workspace.activeTextEditingSession != nil,
                 onActivatePane: onActivate,
                 onOpen: open,
                 onSortChange: { state.sort = $0 },
@@ -238,6 +239,8 @@ struct FilePaneView: View {
                 },
                 onCopy: copySelection,
                 onPaste: paste,
+                onCompress: compressSelection,
+                onExtract: extractSelection,
                 onRequestTrashConfirmation: requestTrashConfirmation
             )
         }
@@ -410,6 +413,20 @@ struct FilePaneView: View {
             mode: .copy,
             workspace: workspace
         )
+    }
+
+    private func compressSelection() {
+        onActivate()
+        Task {
+            _ = await operationController.compressSelection(workspace)
+        }
+    }
+
+    private func extractSelection() {
+        onActivate()
+        Task {
+            _ = await operationController.extractSelection(workspace)
+        }
     }
 
     private func performDrop(_ urls: [URL], _ destination: URL, _ intent: DropIntent) {

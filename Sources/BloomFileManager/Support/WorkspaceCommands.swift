@@ -21,6 +21,7 @@ struct WorkspaceCommandPolicy: Equatable {
     let selectionCount: Int
     let isOperationRunning: Bool
     let pasteboardHasFileURLs: Bool
+    var selectedItems: [FileItem] = []
     var isTextEditing = false
 
     var canCreateFolder: Bool { !isOperationRunning && !isTextEditing }
@@ -31,6 +32,19 @@ struct WorkspaceCommandPolicy: Equatable {
     var canOpen: Bool { !isTextEditing && selectionCount > 0 }
     var canQuickLook: Bool { !isTextEditing && selectionCount > 0 }
     var canNavigate: Bool { !isTextEditing }
+    var canCompress: Bool {
+        canRunArchiveOperation && ArchiveSelectionEligibility.canCompress(selectedItems)
+    }
+    var canExtract: Bool {
+        canRunArchiveOperation && ArchiveSelectionEligibility.canExtract(selectedItems)
+    }
+
+    private var canRunArchiveOperation: Bool {
+        !isOperationRunning
+            && !isTextEditing
+            && selectionCount > 0
+            && selectedItems.count == selectionCount
+    }
 
     var copyRoute: PasteboardCommandRoute {
         if isTextEditing { return .textResponder }
@@ -472,6 +486,24 @@ struct WorkspaceCommands: Commands {
         }
 
         CommandMenu("File Operations") {
+            Button("Compress to ZIP") {
+                guard let workspace, policy.canCompress else { return }
+                Task {
+                    _ = await operationController.compressSelection(workspace)
+                }
+            }
+            .disabled(!policy.canCompress)
+
+            Button("Extract ZIP") {
+                guard let workspace, policy.canExtract else { return }
+                Task {
+                    _ = await operationController.extractSelection(workspace)
+                }
+            }
+            .disabled(!policy.canExtract)
+
+            Divider()
+
             Button("Move to Trash…") {
                 guard let workspace, policy.canTrash else { return }
                 Task {
@@ -637,8 +669,17 @@ struct WorkspaceCommands: Commands {
             selectionCount: workspace?.selectedURLsForCommands.count ?? 0,
             isOperationRunning: operationController.isRunning,
             pasteboardHasFileURLs: FileURLPasteboard.containsFileURLs(in: .general),
+            selectedItems: selectedItemsForCommands,
             isTextEditing: workspace?.activeTextEditingSession != nil
         )
+    }
+
+    private var selectedItemsForCommands: [FileItem] {
+        guard let workspace else { return [] }
+        let itemsByURL = Dictionary(
+            uniqueKeysWithValues: workspace.activePane.items.map { ($0.url, $0) }
+        )
+        return workspace.selectedURLsForCommands.compactMap { itemsByURL[$0] }
     }
 
     private var comparisonPolicy: ComparisonCommandPolicy {

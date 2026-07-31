@@ -69,6 +69,7 @@ struct FileTableView: NSViewRepresentable {
     let renameRequestID: UUID?
     let scrollRequest: PaneScrollRequest?
     let isOperationRunning: Bool
+    let isTextEditing: Bool
     let dropModifierFlags: () -> NSEvent.ModifierFlags
     let onActivatePane: () -> Void
     let onOpen: (FileItem) -> Void
@@ -87,6 +88,8 @@ struct FileTableView: NSViewRepresentable {
     let onRequestRename: () -> Void
     let onCopy: () -> Void
     let onPaste: () -> Void
+    let onCompress: () -> Void
+    let onExtract: () -> Void
     let onRequestTrashConfirmation: () -> Void
 
     init(
@@ -98,6 +101,7 @@ struct FileTableView: NSViewRepresentable {
         renameRequestID: UUID? = nil,
         scrollRequest: PaneScrollRequest? = nil,
         isOperationRunning: Bool = false,
+        isTextEditing: Bool = false,
         dropModifierFlags: @escaping () -> NSEvent.ModifierFlags = {
             NSEvent.modifierFlags.intersection(.deviceIndependentFlagsMask)
         },
@@ -118,6 +122,8 @@ struct FileTableView: NSViewRepresentable {
         onRequestRename: @escaping () -> Void = {},
         onCopy: @escaping () -> Void = {},
         onPaste: @escaping () -> Void = {},
+        onCompress: @escaping () -> Void = {},
+        onExtract: @escaping () -> Void = {},
         onRequestTrashConfirmation: @escaping () -> Void = {}
     ) {
         self.items = items
@@ -128,6 +134,7 @@ struct FileTableView: NSViewRepresentable {
         self.renameRequestID = renameRequestID
         self.scrollRequest = scrollRequest
         self.isOperationRunning = isOperationRunning
+        self.isTextEditing = isTextEditing
         self.dropModifierFlags = dropModifierFlags
         self.onActivatePane = onActivatePane
         self.onOpen = onOpen
@@ -146,6 +153,8 @@ struct FileTableView: NSViewRepresentable {
         self.onRequestRename = onRequestRename
         self.onCopy = onCopy
         self.onPaste = onPaste
+        self.onCompress = onCompress
+        self.onExtract = onExtract
         self.onRequestTrashConfirmation = onRequestTrashConfirmation
     }
 
@@ -581,10 +590,13 @@ extension FileTableView {
 
         func menuNeedsUpdate(_ menu: NSMenu) {
             prepareSelectionForContextMenu()
+            let selectedItems = items.filter { parent.selection.contains($0.url) }
             let policy = WorkspaceCommandPolicy(
                 selectionCount: parent.selection.count,
                 isOperationRunning: parent.isOperationRunning,
-                pasteboardHasFileURLs: FileURLPasteboard.containsFileURLs(in: .general)
+                pasteboardHasFileURLs: FileURLPasteboard.containsFileURLs(in: .general),
+                selectedItems: selectedItems,
+                isTextEditing: parent.isTextEditing
             )
             menu.removeAllItems()
             addMenuItem("New Folder", action: #selector(createFolderFromMenu), enabled: policy.canCreateFolder, to: menu)
@@ -599,6 +611,19 @@ extension FileTableView {
             addMenuItem("Copy", action: #selector(copyFromMenu), enabled: policy.canCopy, to: menu)
             addMenuItem("Paste", action: #selector(pasteFromMenu), enabled: policy.canPaste, to: menu)
             menu.addItem(.separator())
+            addMenuItem(
+                "Compress to ZIP",
+                action: #selector(compressFromMenu),
+                enabled: policy.canCompress,
+                to: menu
+            )
+            addMenuItem(
+                "Extract ZIP",
+                action: #selector(extractFromMenu),
+                enabled: policy.canExtract,
+                to: menu
+            )
+            menu.addItem(.separator())
             addMenuItem("Move to Trash…", action: #selector(trashFromMenu), enabled: policy.canTrash, to: menu)
         }
 
@@ -610,6 +635,8 @@ extension FileTableView {
         @objc private func renameFromMenu() { parent.onRequestRename() }
         @objc private func copyFromMenu() { parent.onCopy() }
         @objc private func pasteFromMenu() { parent.onPaste() }
+        @objc private func compressFromMenu() { parent.onCompress() }
+        @objc private func extractFromMenu() { parent.onExtract() }
         @objc private func trashFromMenu() { parent.onRequestTrashConfirmation() }
 
         private func makeCell(
