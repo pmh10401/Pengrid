@@ -111,6 +111,16 @@ protocol FileSystemAccess: Sendable {
 }
 
 extension FileSystemAccess {
+    func removeStagedPayload(_ reservation: StagingReservation) async throws {
+        guard let payloadIdentity = try await identity(of: reservation.item) else {
+            guard await !exists(reservation.item) else {
+                throw FileSystemAccessError.identityMismatch(reservation.item)
+            }
+            return
+        }
+        try await remove(reservation.item, identifiedBy: payloadIdentity)
+    }
+
     func quarantineForTrash(
         _ url: URL,
         identifiedBy identity: FileIdentity
