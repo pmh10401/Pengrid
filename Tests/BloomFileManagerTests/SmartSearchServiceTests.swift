@@ -14,13 +14,21 @@ import Testing
     }
 
     @Test func deDuplicatesExplicitRoots() async throws {
-        let fixture = try TemporaryDirectory()
-        defer { fixture.remove() }
-        try write("report", to: fixture.url.appending(path: "report.txt"))
+        let first = try TemporaryDirectory()
+        defer { first.remove() }
+        let second = try TemporaryDirectory()
+        defer { second.remove() }
+        try write("first", to: first.url.appending(path: "report-first.txt"))
+        try write("second", to: second.url.appending(path: "report-second.txt"))
 
-        let results = try await service().search(query("report", roots: [fixture.url, fixture.url.appending(path: ".", directoryHint: .isDirectory)]))
+        let results = try await service().search(query("report", roots: [
+            first.url,
+            first.url.appending(path: ".", directoryHint: .isDirectory),
+            second.url
+        ]))
 
-        #expect(results.map(\.item.name) == ["report.txt"])
+        #expect(Set(results.map(\.item.name)) == ["report-first.txt", "report-second.txt"])
+        #expect(results.count == 2)
     }
 
     @Test func ranksFilenameMatchesBeforePathMatchesAndEnforcesResultCap() async throws {

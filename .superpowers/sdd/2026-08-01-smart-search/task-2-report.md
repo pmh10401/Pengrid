@@ -63,3 +63,10 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test --enable-swi
 
 Passed: 9 tests in 1 suite, 0 failures. `git diff --check` passed. Existing
 unrelated `NSDraggingInfo` preconcurrency warnings remain in the test target.
+
+## Distinct-root coverage follow-up
+
+Expanded the explicit-root test to search two separate temporary directories
+while repeating the first as `root/.`. It now asserts both distinct matching
+files are returned exactly once. The focused Xcode command above passed again:
+9 tests in 1 suite, 0 failures.
