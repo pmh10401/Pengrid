@@ -154,7 +154,7 @@ struct SmartSearchView: View {
             TextField("Search filenames and folders", text: $bindableStore.queryText)
                 .textFieldStyle(.roundedBorder)
                 .focused($queryIsFocused)
-                .onSubmit(store.search)
+                .onSubmit(submitSearch)
                 .accessibilityIdentifier(AccessibilityIdentifiers.smartSearchQuery)
                 .accessibilityLabel("Search filenames and folders")
 
@@ -217,7 +217,7 @@ struct SmartSearchView: View {
             }
 
             HStack(spacing: 12) {
-                Button("Search", action: store.search)
+                Button("Search", action: submitSearch)
                     .keyboardShortcut(.defaultAction)
                     .disabled(!SmartSearchPresentation.canSubmitSearch(
                         queryText: store.queryText,
@@ -325,6 +325,17 @@ struct SmartSearchView: View {
 
     private var rootSummary: String {
         SmartSearchPresentation.rootSummary(for: store.roots)
+    }
+
+    private func submitSearch() {
+        guard SmartSearchPresentation.canSubmitSearch(
+            queryText: store.queryText,
+            roots: store.roots,
+            state: store.state
+        ) else {
+            return
+        }
+        store.search()
     }
 
     private func saveCurrentSearch() {
