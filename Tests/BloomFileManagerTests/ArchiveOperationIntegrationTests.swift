@@ -89,30 +89,53 @@ struct ArchiveOperationIntegrationTests {
         #expect(try Data(contentsOf: extractedFile) == expectedContent)
     }
 
-    @Test func tarGzipRoundTripUsesAnAggregateRootAndCreatesTheExtractionDirectory() async throws {
+    @Test(arguments: [
+        ArchiveFormat.tar,
+        ArchiveFormat.tarGzip,
+        ArchiveFormat.tarBzip2,
+        ArchiveFormat.tarXz
+    ])
+    func tarFamilyRoundTripArchivesMultipleSpacedSourcesAtTheArchiveRoot(
+        format: ArchiveFormat
+    ) async throws {
         let root = try TemporaryDirectory()
         defer { root.remove() }
-        let source = root.url.appending(path: "Source.txt")
-        let archive = root.url.appending(path: "Archive.tar.gz")
+        let sources = [
+            ("First Source.txt", Data("first tar selection".utf8)),
+            ("Second Source.txt", Data("second tar selection".utf8)),
+            ("Third Source.txt", Data("third tar selection".utf8)),
+            ("Fourth Source.txt", Data("fourth tar selection".utf8)),
+            ("Fifth Source.txt", Data("fifth tar selection".utf8))
+        ]
+        let sourceURLs = sources.map { root.url.appending(path: $0.0) }
+        let archive = root.url.appending(path: "Archive\(format.canonicalSuffix)")
         let extraction = root.url.appending(path: "Extracted", directoryHint: .isDirectory)
-        let content = Data("native tar gzip round trip".utf8)
-        try content.write(to: source)
+        for (source, content) in zip(sourceURLs, sources.map(\.1)) {
+            try content.write(to: source)
+        }
 
         let runner = LiveArchiveCommandRunner()
         try await runner.run(
             kind: .compress,
-            format: .tarGzip,
-            sources: [source],
+            format: format,
+            sources: sourceURLs,
             destination: archive
         )
         try await runner.run(
             kind: .extract,
-            format: .tarGzip,
+            format: format,
             sources: [archive],
             destination: extraction
         )
 
-        #expect(try Data(contentsOf: extraction.appending(path: "Source.txt")) == content)
+        for (name, content) in sources {
+            #expect(try Data(contentsOf: extraction.appending(path: name)) == content)
+        }
+        let extractedNames = try FileManager.default.contentsOfDirectory(
+            at: extraction,
+            includingPropertiesForKeys: nil
+        ).map(\.lastPathComponent)
+        #expect(Set(extractedNames) == Set(sources.map(\.0)))
         try expectNoAggregateSourceDirectories(in: root.url)
     }
 

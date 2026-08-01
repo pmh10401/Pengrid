@@ -18,7 +18,7 @@ struct LiveArchiveCommandRunner: ArchiveCommandRunning {
         sources: [URL],
         destination: URL
     ) async throws {
-        let preparedCommand = try Self.prepareCommand(
+        let preparedCommand = try await Self.prepareCommand(
             kind: kind,
             format: format,
             sources: sources,
@@ -125,7 +125,7 @@ struct LiveArchiveCommandRunner: ArchiveCommandRunning {
         format: ArchiveFormat,
         sources: [URL],
         destination: URL
-    ) throws -> PreparedArchiveCommand {
+    ) async throws -> PreparedArchiveCommand {
         guard kind == .compress else {
             let arguments = try arguments(
                 kind: kind,
@@ -147,6 +147,14 @@ struct LiveArchiveCommandRunner: ArchiveCommandRunning {
             throw ArchiveOperationError.invalidRequest
         }
 
+        var selectedNames: Set<String> = []
+        for source in sources {
+            let name = source.lastPathComponent
+            guard !name.isEmpty, selectedNames.insert(name).inserted else {
+                throw ArchiveOperationError.invalidRequest
+            }
+        }
+
         let aggregateRoot = destination
             .deletingLastPathComponent()
             .appending(
@@ -158,18 +166,10 @@ struct LiveArchiveCommandRunner: ArchiveCommandRunning {
                 at: aggregateRoot,
                 withIntermediateDirectories: false
             )
-            var selectedNames: Set<String> = []
-            for source in sources {
-                try Task.checkCancellation()
-                let name = source.lastPathComponent
-                guard !name.isEmpty, selectedNames.insert(name).inserted else {
-                    throw ArchiveOperationError.invalidRequest
-                }
-                try FileManager.default.copyItem(
-                    at: source,
-                    to: aggregateRoot.appending(path: name)
-                )
-            }
+            try await prepareAggregateSource(
+                sources: sources,
+                aggregateRoot: aggregateRoot
+            )
             try Task.checkCancellation()
         } catch {
             try? FileManager.default.removeItem(at: aggregateRoot)
@@ -177,14 +177,56 @@ struct LiveArchiveCommandRunner: ArchiveCommandRunning {
         }
 
         return PreparedArchiveCommand(
-            arguments: compressionArguments(
-                sourcePaths: [aggregateRoot.path],
+            arguments: preparedCompressionArguments(
+                format: format,
+                aggregateRoot: aggregateRoot,
                 destination: destination,
-                keepParent: false,
-                format: format
             ),
             aggregateRoot: aggregateRoot
         )
+    }
+
+    static func preparedCompressionArguments(
+        format: ArchiveFormat,
+        aggregateRoot: URL,
+        destination: URL
+    ) -> [String] {
+        compressionArguments(
+            sourcePaths: [aggregateRoot.path],
+            destination: destination,
+            keepParent: false,
+            format: format
+        )
+    }
+
+    private static func prepareAggregateSource(
+        sources: [URL],
+        aggregateRoot: URL
+    ) async throws {
+        let queue = ArchiveCopyWorkQueue(count: sources.count)
+        let workerCount = min(4, sources.count)
+
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            for _ in 0..<workerCount {
+                group.addTask {
+                    while let index = await queue.nextIndex() {
+                        try Task.checkCancellation()
+                        let source = sources[index]
+                        try FileManager.default.copyItem(
+                            at: source,
+                            to: aggregateRoot.appending(path: source.lastPathComponent)
+                        )
+                    }
+                }
+            }
+
+            do {
+                while try await group.next() != nil {}
+            } catch {
+                group.cancelAll()
+                throw error
+            }
+        }
     }
 
     private static func compressionArguments(
@@ -212,6 +254,21 @@ struct LiveArchiveCommandRunner: ArchiveCommandRunning {
 
     private static func tarCompressionArguments(for format: ArchiveFormat) -> [String] {
         format.tarCompressionFlag.map { [$0] } ?? []
+    }
+}
+
+private actor ArchiveCopyWorkQueue {
+    private let count: Int
+    private var next = 0
+
+    init(count: Int) {
+        self.count = count
+    }
+
+    func nextIndex() -> Int? {
+        guard next < count else { return nil }
+        defer { next += 1 }
+        return next
     }
 }
 

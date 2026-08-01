@@ -87,6 +87,37 @@ import Testing
     }
 
     @Test(arguments: [
+        (ArchiveFormat.zip, ["-c", "-k", "--sequesterRsrc"]),
+        (ArchiveFormat.tar, ["-c"]),
+        (ArchiveFormat.tarGzip, ["-c", "-z"]),
+        (ArchiveFormat.tarBzip2, ["-c", "-j"]),
+        (ArchiveFormat.tarXz, ["-c", "-J"])
+    ])
+    func preparedMultiSourceCompressionUsesOneAggregateSource(
+        format: ArchiveFormat,
+        prefix: [String]
+    ) {
+        let aggregateRoot = URL(filePath: "/tmp/.archive-source")
+        let destination = URL(filePath: "/tmp/Archive\(format.canonicalSuffix)")
+
+        let arguments = LiveArchiveCommandRunner.preparedCompressionArguments(
+            format: format,
+            aggregateRoot: aggregateRoot,
+            destination: destination
+        )
+
+        if format == .zip {
+            #expect(arguments == prefix + [aggregateRoot.path, destination.path])
+        } else {
+            #expect(arguments == prefix + [
+                "-f", destination.path,
+                "-C", aggregateRoot.path,
+                "."
+            ])
+        }
+    }
+
+    @Test(arguments: [
         (ArchiveFormat.tar, []),
         (ArchiveFormat.tarGzip, ["-z"]),
         (ArchiveFormat.tarBzip2, ["-j"]),
