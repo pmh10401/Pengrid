@@ -15,7 +15,7 @@ struct SmartSearchQuery: Codable, Equatable, Sendable {
     var includeHidden: Bool
     var includePackages: Bool
     var includeDirectories: Bool
-    var maximumResults: Int
+    private(set) var maximumResults: Int
 
     init(
         text: String,
@@ -36,7 +36,10 @@ struct SmartSearchQuery: Codable, Equatable, Sendable {
         var standardizedRoots: [URL] = []
         var paths = Set<String>()
         for root in roots {
-            guard root.isFileURL, root.path.hasPrefix("/") else {
+            let host = root.host ?? ""
+            guard root.isFileURL,
+                  root.path.hasPrefix("/"),
+                  host.isEmpty || host.caseInsensitiveCompare("localhost") == .orderedSame else {
                 throw SmartSearchValidationError.invalidRoot
             }
             let standardizedRoot = root.standardizedFileURL
@@ -51,6 +54,31 @@ struct SmartSearchQuery: Codable, Equatable, Sendable {
         self.includePackages = includePackages
         self.includeDirectories = includeDirectories
         self.maximumResults = maximumResults.clamped(to: Self.maximumResultRange)
+    }
+
+    mutating func setMaximumResults(_ maximumResults: Int) {
+        self.maximumResults = maximumResults.clamped(to: Self.maximumResultRange)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case text
+        case roots
+        case includeHidden
+        case includePackages
+        case includeDirectories
+        case maximumResults
+    }
+
+    init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            text: values.decode(String.self, forKey: .text),
+            roots: values.decode([URL].self, forKey: .roots),
+            includeHidden: values.decode(Bool.self, forKey: .includeHidden),
+            includePackages: values.decode(Bool.self, forKey: .includePackages),
+            includeDirectories: values.decode(Bool.self, forKey: .includeDirectories),
+            maximumResults: values.decode(Int.self, forKey: .maximumResults)
+        )
     }
 }
 
@@ -119,7 +147,16 @@ enum SmartSearchRanker {
             if lhs.score != rhs.score {
                 return lhs.score > rhs.score
             }
-            return lhs.item.url.standardizedFileURL.path.localizedStandardCompare(rhs.item.url.standardizedFileURL.path) == .orderedAscending
+            let leftPath = lhs.item.url.standardizedFileURL.path
+            let rightPath = rhs.item.url.standardizedFileURL.path
+            let comparison = leftPath.localizedStandardCompare(rightPath)
+            if comparison == .orderedSame {
+                if leftPath != rightPath {
+                    return leftPath < rightPath
+                }
+                return lhs.relativePath < rhs.relativePath
+            }
+            return comparison == .orderedAscending
         }
     }
 
