@@ -25,16 +25,21 @@ VoiceOver checks below.
   ```
 
   The suite creates temporary local files, round-trips spaced and multi-item
-  selections with macOS `ditto`, verifies a selected symbolic link remains a
-  link, and verifies malformed-ZIP failure cleanup. Current multi-format
-  automated evidence must additionally cover **ZIP**, **TAR**, **TAR.GZ** and
-  **TGZ**, **TAR.BZ2**, **TBZ**, and **TBZ2**, and **TAR.XZ** and **TXZ**.
-  The TAR aliases are extraction inputs; newly compressed TAR-family archives
-  use canonical `.tar`, `.tar.gz`, `.tar.bz2`, and `.tar.xz` names.
+  selections with macOS `ditto`, verifies selected symbolic links remain
+  links for ZIP and every TAR-family format, and verifies malformed-ZIP
+  cleanup. It also exercises renamed TAR aliases (**TGZ**, **TBZ**, **TBZ2**,
+  and **TXZ**) and rejects a hostile TAR fixture containing both `..` traversal
+  and a symlink escape without publishing a destination or writing outside it.
+  Current multi-format automated evidence must additionally cover **ZIP**,
+  **TAR**, **TAR.GZ** and **TGZ**, **TAR.BZ2**, **TBZ**, and **TBZ2**, and
+  **TAR.XZ** and **TXZ**. The TAR aliases are extraction inputs; newly
+  compressed TAR-family archives use canonical `.tar`, `.tar.gz`, `.tar.bz2`,
+  and `.tar.xz` names.
 
-- [x] **PASS — 2026-08-01 — candidate `a9b6c8f`:** The required serial suite,
-  release packaging contract checks, and Apple Silicon production build all
-  completed successfully for the documented multi-format archive candidate:
+- [x] **PASS — 2026-08-01 — final candidate
+  `multi-format-archive-verified`:** The required serial suite, release
+  packaging contract checks, and Apple Silicon production build completed for
+  the final multi-format archive candidate:
 
   ```bash
   DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
@@ -46,7 +51,9 @@ VoiceOver checks below.
 
   Each command exited 0. The serial suite covered `BloomFileManagerTests`; the
   release contract script passed; and SwiftPM reported `Build complete!` for
-  the arm64 release build.
+  the arm64 release build. The stable verification marker
+  `multi-format-archive-verified` points to this final verified HEAD; it is
+  created only after these commands are rerun against that exact HEAD.
 
 ## Manual verification
 

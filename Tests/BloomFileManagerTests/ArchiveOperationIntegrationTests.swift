@@ -139,6 +139,118 @@ struct ArchiveOperationIntegrationTests {
         try expectNoAggregateSourceDirectories(in: root.url)
     }
 
+    @Test(arguments: [
+        (ArchiveFormat.tarGzip, ".tgz"),
+        (ArchiveFormat.tarBzip2, ".tbz"),
+        (ArchiveFormat.tarBzip2, ".tbz2"),
+        (ArchiveFormat.tarXz, ".txz")
+    ])
+    func tarFamilyExtractionSupportsRenamedCompressedAliases(
+        format: ArchiveFormat,
+        aliasSuffix: String
+    ) async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let source = root.url.appending(path: "Alias fixture.txt")
+        let canonicalArchive = root.url.appending(path: "Archive\(format.canonicalSuffix)")
+        let aliasArchive = root.url.appending(path: "Archive\(aliasSuffix)")
+        let extraction = root.url.appending(path: "Extracted", directoryHint: .isDirectory)
+        let expectedContent = Data("renamed TAR-family alias".utf8)
+        try expectedContent.write(to: source)
+
+        let runner = LiveArchiveCommandRunner()
+        try await runner.run(
+            kind: .compress,
+            format: format,
+            sources: [source],
+            destination: canonicalArchive
+        )
+        try FileManager.default.moveItem(at: canonicalArchive, to: aliasArchive)
+        try await runner.run(
+            kind: .extract,
+            format: format,
+            sources: [aliasArchive],
+            destination: extraction
+        )
+
+        #expect(try Data(contentsOf: extraction.appending(path: source.lastPathComponent))
+            == expectedContent)
+    }
+
+    @Test(arguments: [
+        ArchiveFormat.tar,
+        ArchiveFormat.tarGzip,
+        ArchiveFormat.tarBzip2,
+        ArchiveFormat.tarXz
+    ])
+    func tarFamilyCompressionPreservesATopLevelSelectedSymbolicLink(
+        format: ArchiveFormat
+    ) async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let target = root.url.appending(path: "Target.txt")
+        let selectedLink = root.url.appending(path: "Selected Link.txt")
+        let archive = root.url.appending(path: "Link\(format.canonicalSuffix)")
+        let extraction = root.url.appending(path: "Extracted", directoryHint: .isDirectory)
+        try Data("target bytes must not be followed".utf8).write(to: target)
+        try FileManager.default.createSymbolicLink(
+            atPath: selectedLink.path,
+            withDestinationPath: target.lastPathComponent
+        )
+
+        let runner = LiveArchiveCommandRunner()
+        try await runner.run(
+            kind: .compress,
+            format: format,
+            sources: [selectedLink],
+            destination: archive
+        )
+        try await runner.run(
+            kind: .extract,
+            format: format,
+            sources: [archive],
+            destination: extraction
+        )
+
+        let extractedLink = extraction.appending(path: selectedLink.lastPathComponent)
+        #expect(try FileManager.default.destinationOfSymbolicLink(
+            atPath: extractedLink.path
+        ) == target.lastPathComponent)
+        #expect(FileManager.default.fileExists(
+            atPath: extraction.appending(path: target.lastPathComponent).path
+        ) == false)
+    }
+
+    @Test func hostileTarTraversalAndSymbolicLinkEscapeIsRejectedWithoutWritingOutside() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let archive = root.url.appending(path: "Hostile.tar")
+        let destination = root.url.appending(path: "Extracted", directoryHint: .isDirectory)
+        let outsideTarget = root.url.appending(path: "outside-target.txt")
+        try writeHostileTarFixture(to: archive)
+
+        let service = ArchiveOperationService(
+            fileSystem: LiveFileSystemAccess(),
+            commandRunner: LiveArchiveCommandRunner()
+        )
+        let request = ArchiveRequest(
+            kind: .extract,
+            verifiedSources: [archive],
+            finalDestination: destination,
+            format: .tar
+        )
+
+        let result = await service.perform([request]) { _ in }
+
+        guard case .failed = result.outcomes.first else {
+            Issue.record("Expected hostile TAR extraction to fail")
+            return
+        }
+        #expect(FileManager.default.fileExists(atPath: destination.path) == false)
+        #expect(FileManager.default.fileExists(atPath: outsideTarget.path) == false)
+        try expectNoStagingDirectories(in: root.url)
+    }
+
     @Test func malformedArchiveFailureLeavesNoStagingDirectoryOrPartialDestination() async throws {
         let root = try TemporaryDirectory()
         defer { root.remove() }
@@ -183,4 +295,69 @@ private func expectNoAggregateSourceDirectories(in directory: URL) throws {
     #expect(children.contains {
         $0.lastPathComponent.hasPrefix(".archive-source-")
     } == false)
+}
+
+private func writeHostileTarFixture(to destination: URL) throws {
+    let entries = [
+        USTARFixtureEntry(name: "../direct-outside.txt", data: Data("direct escape".utf8)),
+        USTARFixtureEntry(name: "escape", type: 0x32, linkName: ".."),
+        USTARFixtureEntry(name: "escape/outside-target.txt", data: Data("symlink escape".utf8))
+    ]
+    var archive = Data()
+    for entry in entries {
+        archive.append(try entry.encoded())
+    }
+    archive.append(Data(repeating: 0, count: 1_024))
+    try archive.write(to: destination)
+}
+
+private struct USTARFixtureEntry {
+    let name: String
+    var type: UInt8 = 0x30
+    var linkName = ""
+    var data = Data()
+
+    func encoded() throws -> Data {
+        precondition(name.utf8.count <= 100)
+        precondition(linkName.utf8.count <= 100)
+        precondition(data.count <= 512)
+
+        var header = Data(repeating: 0, count: 512)
+        header.writeUTF8(name, at: 0, maximumLength: 100)
+        header.writeOctal(0o644, at: 100, length: 8)
+        header.writeOctal(0, at: 108, length: 8)
+        header.writeOctal(0, at: 116, length: 8)
+        header.writeOctal(data.count, at: 124, length: 12)
+        header.writeOctal(0, at: 136, length: 12)
+        header.replaceSubrange(148..<156, with: Data(repeating: 0x20, count: 8))
+        header[156] = type
+        header.writeUTF8(linkName, at: 157, maximumLength: 100)
+        header.writeUTF8("ustar", at: 257, maximumLength: 6)
+        header.writeUTF8("00", at: 263, maximumLength: 2)
+        header.writeUTF8("root", at: 265, maximumLength: 32)
+        header.writeUTF8("root", at: 297, maximumLength: 32)
+        let checksum = header.reduce(0) { $0 + Int($1) }
+        header.writeOctal(checksum, at: 148, length: 8)
+
+        var encoded = header
+        encoded.append(data)
+        let padding = (512 - data.count % 512) % 512
+        encoded.append(Data(repeating: 0, count: padding))
+        return encoded
+    }
+}
+
+private extension Data {
+    mutating func writeUTF8(_ value: String, at offset: Int, maximumLength: Int) {
+        let bytes = Array(value.utf8)
+        replaceSubrange(offset..<(offset + Swift.min(bytes.count, maximumLength)), with: bytes)
+    }
+
+    mutating func writeOctal(_ value: Int, at offset: Int, length: Int) {
+        let digits = String(value, radix: 8)
+        precondition(digits.count < length)
+        let field = String(repeating: "0", count: length - 1 - digits.count)
+            + digits + "\0"
+        writeUTF8(field, at: offset, maximumLength: length)
+    }
 }
