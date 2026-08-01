@@ -30,7 +30,9 @@ import Testing
         try write("b", to: fixture.url.appending(path: "meeting-report.txt"))
         try write("c", to: fixture.url.appending(path: "report.txt"))
 
-        let results = try await service().search(query("report", roots: [fixture.url], maximumResults: 2))
+        let results = try await service().search(query(
+            "report", roots: [fixture.url], includeDirectories: false, maximumResults: 2
+        ))
 
         #expect(results.map(\.item.name) == ["report.txt", "meeting-report.txt"])
     }
@@ -38,11 +40,12 @@ import Testing
     @Test func excludesHiddenPackageAndSymlinkDescendantsByDefaultButIncludesThemWhenEnabled() async throws {
         let fixture = try TemporaryDirectory()
         defer { fixture.remove() }
+        let symlinkTarget = try TemporaryDirectory()
+        defer { symlinkTarget.remove() }
         try write("hidden", to: fixture.url.appending(path: ".private/report-hidden.txt"))
         try write("package", to: fixture.url.appending(path: "Reports.app/report-package.txt"))
-        let target = fixture.url.appending(path: "target", directoryHint: .isDirectory)
-        try write("linked", to: target.appending(path: "report-linked.txt"))
-        try FileManager.default.createSymbolicLink(at: fixture.url.appending(path: "linked", directoryHint: .isDirectory), withDestinationURL: target)
+        try write("linked", to: symlinkTarget.url.appending(path: "report-linked.txt"))
+        try FileManager.default.createSymbolicLink(at: fixture.url.appending(path: "linked", directoryHint: .isDirectory), withDestinationURL: symlinkTarget.url)
         try write("regular", to: fixture.url.appending(path: "report-regular.txt"))
 
         let defaults = try await service().search(query("report", roots: [fixture.url]))

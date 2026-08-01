@@ -45,3 +45,21 @@ Swift Testing installed. The service target itself compiles successfully with
 the available Command Line Tools. Symlink entries are always excluded as an
 unsafe traversal boundary; the query model exposes opt-in controls only for
 hidden and package descendants.
+
+## Traversal hardening follow-up
+
+The focused Xcode run initially exposed three issues: the ranking assertion
+included directories despite the model's default, the symlink fixture placed
+its target inside the searched root, and package directories could appear as
+directory results. The test now disables directory results for its file-ranking
+assertion and places the symlink target outside the root. The service performs
+no-follow file-attribute checks at each enumerated URL and along its root-relative
+path boundary, skips symlink descendants, and omits package directory entries
+while still allowing opted-in package descendants.
+
+```text
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test --enable-swift-testing --no-parallel --filter SmartSearchServiceTests
+```
+
+Passed: 9 tests in 1 suite, 0 failures. `git diff --check` passed. Existing
+unrelated `NSDraggingInfo` preconcurrency warnings remain in the test target.

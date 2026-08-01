@@ -73,6 +73,13 @@ final class LocalSmartSearchService: SmartSearching, @unchecked Sendable {
             try Task.checkCancellation()
             do {
                 try traversalHook(url)
+                let isSymbolicLink = try fileManager.attributesOfItem(atPath: url.path)[.type]
+                    as? FileAttributeType == .typeSymbolicLink
+                let hasSymbolicLinkBoundary = try hasSymbolicLinkBoundary(for: url, below: root)
+                if isSymbolicLink || hasSymbolicLinkBoundary {
+                    enumerator.skipDescendants()
+                    continue
+                }
                 let values = try url.resourceValues(forKeys: keys)
                 let hidden = values.isHidden == true || url.lastPathComponent.hasPrefix(".")
                 let directory = values.isDirectory == true
@@ -91,7 +98,8 @@ final class LocalSmartSearchService: SmartSearching, @unchecked Sendable {
                     if directory { enumerator.skipDescendants() }
                     continue
                 }
-                guard query.includeDirectories || !directory,
+                guard (query.includeDirectories || !directory),
+                      !(directory && package),
                       matches(url: url, relativeTo: root, query: query) else { continue }
 
                 let standardizedURL = url.standardizedFileURL
@@ -121,6 +129,20 @@ final class LocalSmartSearchService: SmartSearching, @unchecked Sendable {
         return SmartSearchRanker.tokens(in: query.text).allSatisfy { haystack.contains($0) }
     }
 
+    private func hasSymbolicLinkBoundary(for url: URL, below root: URL) throws -> Bool {
+        let path = url.path
+        guard let rootRange = path.range(of: root.path) else { return false }
+        var candidatePath = String(path[..<rootRange.upperBound])
+        for component in path[rootRange.upperBound...].split(separator: "/") {
+            candidatePath += "/" + component
+            let attributes = try fileManager.attributesOfItem(atPath: candidatePath)
+            if attributes[.type] as? FileAttributeType == .typeSymbolicLink {
+                return true
+            }
+        }
+        return false
+    }
+
     private func relativePath(of url: URL, from root: URL) -> String {
         let rootPath = root.standardizedFileURL.path
         let path = url.standardizedFileURL.path
@@ -132,4 +154,5 @@ final class LocalSmartSearchService: SmartSearching, @unchecked Sendable {
         text.precomposedStringWithCanonicalMapping
             .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
     }
+
 }
