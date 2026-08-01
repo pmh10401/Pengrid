@@ -4,6 +4,42 @@ import Testing
 
 @MainActor
 struct FileOperationControllerTests {
+    @Test func compressionUsesTheRequestedArchiveFormat() async {
+        let directory = URL(filePath: "/workspace")
+        let otherDirectory = URL(filePath: "/other")
+        let source = directory.appending(path: "Project Notes")
+        let workspace = WorkspaceState(
+            leftURL: directory,
+            rightURL: otherDirectory,
+            listingService: StubDirectoryListingService(values: [
+                directory: [fileItem(at: source)],
+                otherDirectory: []
+            ])
+        )
+        await workspace.loadInitialDirectories()
+        workspace.left.selection = [source]
+        let archiveService = RecordingArchiveOperator()
+        let controller = FileOperationController(
+            service: FileOperationService(
+                fileSystem: RecordingFileSystem(existingURLs: [directory, source])
+            ),
+            materializer: InMemoryCloudMaterializer(),
+            archiveService: archiveService
+        )
+
+        #expect(await controller.compressSelection(workspace, format: .tarGzip))
+        await waitUntilIdle(controller)
+
+        #expect(await archiveService.recordedRequests() == [
+            ArchiveRequest(
+                kind: .compress,
+                verifiedSources: [source],
+                finalDestination: directory.appending(path: "Project Notes.tar.gz"),
+                format: .tarGzip
+            )
+        ])
+    }
+
     @Test func compressionUsesDisplayNameAndKeepBothDestination() async {
         let directory = URL(filePath: "/workspace")
         let otherDirectory = URL(filePath: "/other")

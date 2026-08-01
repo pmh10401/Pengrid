@@ -88,7 +88,7 @@ struct FileTableView: NSViewRepresentable {
     let onRequestRename: () -> Void
     let onCopy: () -> Void
     let onPaste: () -> Void
-    let onCompress: () -> Void
+    let onCompress: (ArchiveFormat) -> Void
     let onExtract: () -> Void
     let onRequestTrashConfirmation: () -> Void
 
@@ -122,7 +122,7 @@ struct FileTableView: NSViewRepresentable {
         onRequestRename: @escaping () -> Void = {},
         onCopy: @escaping () -> Void = {},
         onPaste: @escaping () -> Void = {},
-        onCompress: @escaping () -> Void = {},
+        onCompress: @escaping (ArchiveFormat) -> Void = { _ in },
         onExtract: @escaping () -> Void = {},
         onRequestTrashConfirmation: @escaping () -> Void = {}
     ) {
@@ -617,8 +617,9 @@ extension FileTableView {
                 enabled: policy.canCompress,
                 to: menu
             )
+            addCompressSubmenu(enabled: policy.canCompress, to: menu)
             addMenuItem(
-                "Extract ZIP",
+                "Extract Archive",
                 action: #selector(extractFromMenu),
                 enabled: policy.canExtract,
                 to: menu
@@ -635,7 +636,11 @@ extension FileTableView {
         @objc private func renameFromMenu() { parent.onRequestRename() }
         @objc private func copyFromMenu() { parent.onCopy() }
         @objc private func pasteFromMenu() { parent.onPaste() }
-        @objc private func compressFromMenu() { parent.onCompress() }
+        @objc private func compressFromMenu() { parent.onCompress(.zip) }
+        @objc private func compressAsFromMenu(_ sender: NSMenuItem) {
+            guard ArchiveFormat.allCases.indices.contains(sender.tag) else { return }
+            parent.onCompress(ArchiveFormat.allCases[sender.tag])
+        }
         @objc private func extractFromMenu() { parent.onExtract() }
         @objc private func trashFromMenu() { parent.onRequestTrashConfirmation() }
 
@@ -775,6 +780,25 @@ extension FileTableView {
             item.target = self
             item.isEnabled = enabled
             menu.addItem(item)
+        }
+
+        private func addCompressSubmenu(enabled: Bool, to menu: NSMenu) {
+            let submenu = NSMenu(title: "Compress as…")
+            for (index, format) in ArchiveFormat.allCases.enumerated() {
+                let item = NSMenuItem(
+                    title: format.displayName,
+                    action: #selector(compressAsFromMenu(_:)),
+                    keyEquivalent: ""
+                )
+                item.target = self
+                item.tag = index
+                item.isEnabled = enabled
+                submenu.addItem(item)
+            }
+            let parentItem = NSMenuItem(title: "Compress as…", action: nil, keyEquivalent: "")
+            parentItem.submenu = submenu
+            parentItem.isEnabled = enabled
+            menu.addItem(parentItem)
         }
     }
 }

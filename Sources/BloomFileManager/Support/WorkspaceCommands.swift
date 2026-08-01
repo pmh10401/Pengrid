@@ -494,7 +494,19 @@ struct WorkspaceCommands: Commands {
             }
             .disabled(!policy.canCompress)
 
-            Button("Extract ZIP") {
+            Menu("Compress as…") {
+                ForEach(ArchiveFormat.allCases, id: \.self) { format in
+                    Button(format.displayName) {
+                        guard let workspace, policy.canCompress else { return }
+                        Task {
+                            _ = await operationController.compressSelection(workspace, format: format)
+                        }
+                    }
+                }
+            }
+            .disabled(!policy.canCompress)
+
+            Button("Extract Archive") {
                 guard let workspace, policy.canExtract else { return }
                 Task {
                     _ = await operationController.extractSelection(workspace)

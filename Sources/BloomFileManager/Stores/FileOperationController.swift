@@ -110,12 +110,16 @@ final class FileOperationController {
     }
 
     @discardableResult
-    func compressSelection(_ workspace: WorkspaceState) async -> Bool {
+    func compressSelection(
+        _ workspace: WorkspaceState,
+        format: ArchiveFormat = .zip
+    ) async -> Bool {
         guard let capture = archiveSelectionCapture(in: workspace),
               let plan = ArchiveDestinationPlanner.compression(
                 selectedItems: capture.selectedItems,
                 in: capture.directory,
-                occupiedNames: capture.occupiedNames
+                occupiedNames: capture.occupiedNames,
+                format: format
               )
         else { return false }
         let identityCapture = await captureArchiveIdentities(for: plan.selectedSources)
@@ -277,7 +281,8 @@ final class FileOperationController {
             }
             self.stage = .archiving(ArchiveOperationProgress(
                 kind: firstRequest.kind,
-                currentDisplayName: firstRequest.progressDisplayName
+                currentDisplayName: firstRequest.progressDisplayName,
+                format: firstRequest.format
             ))
             return await archiveService.perform(archiveRequests) { [weak self] progress in
                 await MainActor.run {

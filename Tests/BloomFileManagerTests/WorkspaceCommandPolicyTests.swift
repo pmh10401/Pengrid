@@ -83,6 +83,22 @@ import Testing
     ).canExtract == false)
 }
 
+@Test func extractionAcceptsEverySupportedRegularArchiveSuffix() {
+    let suffixes = [
+        "zip", "tar", "tar.gz", "tgz", "tar.bz2", "tbz", "tbz2", "tar.xz", "txz"
+    ]
+
+    for suffix in suffixes {
+        let archive = commandPolicyItem(named: "Backup.\(suffix)")
+        #expect(WorkspaceCommandPolicy(
+            selectionCount: 1,
+            isOperationRunning: false,
+            pasteboardHasFileURLs: false,
+            selectedItems: [archive]
+        ).canExtract, "Expected .\(suffix) to be extractable")
+    }
+}
+
 private func commandPolicyItem(
     named name: String,
     isDirectory: Bool = false

@@ -415,10 +415,10 @@ struct FilePaneView: View {
         )
     }
 
-    private func compressSelection() {
+    private func compressSelection(format: ArchiveFormat = .zip) {
         onActivate()
         Task {
-            _ = await operationController.compressSelection(workspace)
+            _ = await operationController.compressSelection(workspace, format: format)
         }
     }
 

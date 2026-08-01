@@ -149,15 +149,15 @@ struct ArchiveOperationStatusPresentation: Equatable, Sendable {
     let cancelAccessibilityLabel: String
 
     init(progress: ArchiveOperationProgress) {
-        title = progress.kind.title
+        title = "\(progress.kind.title) \(progress.format.accessibilityName)"
         currentItemName = progress.currentDisplayName
-        statusAccessibilityLabel = "\(progress.kind.accessibilityLabel), "
+        statusAccessibilityLabel = "\(title), "
             + "current item \(progress.currentDisplayName)"
         cancelAccessibilityLabel = switch progress.kind {
         case .compress:
-            "Cancel ZIP compression"
+            "Cancel \(progress.format.displayName) compression"
         case .extract:
-            "Cancel ZIP extraction"
+            "Cancel \(progress.format.displayName) extraction"
         }
     }
 }
