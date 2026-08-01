@@ -199,12 +199,22 @@ struct LiveArchiveCommandRunner: ArchiveCommandRunning {
         )
     }
 
+    static func aggregatePreparationWorkerCount(
+        sourceCount: Int,
+        activeProcessorCount: Int
+    ) -> Int {
+        min(4, max(1, activeProcessorCount), sourceCount)
+    }
+
     private static func prepareAggregateSource(
         sources: [URL],
         aggregateRoot: URL
     ) async throws {
         let queue = ArchiveCopyWorkQueue(count: sources.count)
-        let workerCount = min(4, sources.count)
+        let workerCount = aggregatePreparationWorkerCount(
+            sourceCount: sources.count,
+            activeProcessorCount: ProcessInfo.processInfo.activeProcessorCount
+        )
 
         try await withThrowingTaskGroup(of: Void.self) { group in
             for _ in 0..<workerCount {

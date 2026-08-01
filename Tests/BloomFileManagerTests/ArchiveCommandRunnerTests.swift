@@ -118,6 +118,24 @@ import Testing
     }
 
     @Test(arguments: [
+        (sourceCount: 2, processorCount: 16, expected: 2),
+        (sourceCount: 9, processorCount: 8, expected: 4),
+        (sourceCount: 9, processorCount: 3, expected: 3),
+        (sourceCount: 9, processorCount: 1, expected: 1),
+        (sourceCount: 9, processorCount: 0, expected: 1)
+    ])
+    func aggregatePreparationWorkerCountCapsSourcesAndProcessors(
+        sourceCount: Int,
+        processorCount: Int,
+        expected: Int
+    ) {
+        #expect(LiveArchiveCommandRunner.aggregatePreparationWorkerCount(
+            sourceCount: sourceCount,
+            activeProcessorCount: processorCount
+        ) == expected)
+    }
+
+    @Test(arguments: [
         (ArchiveFormat.tar, []),
         (ArchiveFormat.tarGzip, ["-z"]),
         (ArchiveFormat.tarBzip2, ["-j"]),
