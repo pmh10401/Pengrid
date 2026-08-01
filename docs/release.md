@@ -4,11 +4,19 @@ Pengrid is distributed directly for Apple Silicon Macs running macOS 15 or newer
 
 ## Version 1.3 release gates
 
-Version 1.3 adds ZIP compression and extraction, including safe staged
-publication, multi-item compression, cloud File Provider access, selected
-symbolic-link preservation, cancellation safety, and VoiceOver-aware archive
-status. The feature gate is not passed until every required automated and
-static check is current and every physical-manual scenario in
+Version 1.3 adds ZIP and TAR-family compression and extraction: **ZIP**,
+**TAR**, **TAR.GZ**/**TGZ**, **TAR.BZ2**/**TBZ**/**TBZ2**, and
+**TAR.XZ**/**TXZ**. New TAR-family archives use canonical `.tar`, `.tar.gz`,
+`.tar.bz2`, and `.tar.xz` extensions; the short forms are recognized for
+extraction. The feature also includes safe staged publication, multi-item
+compression, cloud File Provider access, selected symbolic-link preservation,
+cancellation safety, and VoiceOver-aware archive status. During multi-source
+compression, parallelism is limited to staging copies in the private aggregate
+directory, bounded to at most four workers and never beyond available
+processors or sources; archiving and extraction remain single native tool
+operations. Password-protected archives and RAR and 7z archives are excluded.
+The feature gate is not passed until every required automated and static check
+is current and every physical-manual scenario in
 [`docs/verification/version-1.3-archive-checklist.md`](verification/version-1.3-archive-checklist.md)
 has recorded evidence.
 

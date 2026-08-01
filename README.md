@@ -78,18 +78,26 @@ The filename filter works only on the directory listing already loaded in
 memory. It is not recursive or file-content search, and it does not download
 cloud-only files.
 
-## ZIP archives
+## Archives
 
-Pengrid can create and extract ZIP archives from **File Operations** or a file
-row's contextual menu. ZIP compression and extraction are the only archive
-operations delivered in this release. Archive work is performed locally beside
-the selected destination; a cloud-backed source may be downloaded first when
-macOS File Provider needs to materialize it.
+Pengrid can create and extract ZIP and TAR-family archives from **File
+Operations** or a file row's contextual menu. Supported archive names are
+**ZIP**, **TAR**, **TAR.GZ** (including **TGZ**), **TAR.BZ2** (including
+**TBZ** and **TBZ2**), and **TAR.XZ** (including **TXZ**). New TAR-family
+archives use the canonical `.tar`, `.tar.gz`, `.tar.bz2`, or `.tar.xz`
+extension; the short extensions are recognized when extracting.
+
+For a multi-item compression, Pengrid first stages the selected sources in a
+private aggregate directory. Only that staging-copy phase runs in parallel,
+with a bounded worker count of no more than four and no more than the available
+processor or source count; the archive command itself is a single local native
+operation. A cloud-backed source may be downloaded first when macOS File
+Provider needs to materialize it.
 
 Archive destinations are never overwritten. Pengrid chooses an available name
 before starting and exclusive publication rejects a late collision, leaving the
-existing item unchanged. Password-protected archives and 7z, RAR, and tar
-formats are not supported in this release.
+existing item unchanged. Password-protected archives and 7z and RAR archives
+are not supported in this release.
 
 ## Release status
 
