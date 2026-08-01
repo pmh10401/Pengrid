@@ -31,6 +31,21 @@ import Testing
         #expect(results.count == 2)
     }
 
+    @Test func overlappingParentAndDescendantRootsDoNotDuplicateAResultURL() async throws {
+        let fixture = try TemporaryDirectory()
+        defer { fixture.remove() }
+        let descendant = fixture.url.appending(path: "nested", directoryHint: .isDirectory)
+        try write("report", to: descendant.appending(path: "report.txt"))
+
+        let results = try await service().search(query(
+            "report",
+            roots: [descendant, fixture.url],
+            includeDirectories: false
+        ))
+
+        #expect(results.map(\.item.url) == [descendant.appending(path: "report.txt").standardizedFileURL])
+    }
+
     @Test func ranksFilenameMatchesBeforePathMatchesAndEnforcesResultCap() async throws {
         let fixture = try TemporaryDirectory()
         defer { fixture.remove() }
@@ -45,6 +60,27 @@ import Testing
         #expect(results.map(\.item.name) == ["report.txt", "meeting-report.txt"])
     }
 
+    @Test func matchingCandidateCollectionStopsAtTheDocumentedHardBudget() async throws {
+        let fixture = try TemporaryDirectory()
+        defer { fixture.remove() }
+        for index in 0...2_000 {
+            try write("report", to: fixture.url.appending(path: "report-\(index).txt"))
+        }
+        let traversalCount = LockedCounter()
+
+        let results = try await service(traversalHook: { _ in
+            traversalCount.increment()
+        }).search(query(
+            "report",
+            roots: [fixture.url],
+            includeDirectories: false,
+            maximumResults: 1
+        ))
+
+        #expect(results.count == 1)
+        #expect(traversalCount.value == 2_000)
+    }
+
     @Test func excludesHiddenPackageAndSymlinkDescendantsByDefaultButIncludesThemWhenEnabled() async throws {
         let fixture = try TemporaryDirectory()
         defer { fixture.remove() }
@@ -52,8 +88,16 @@ import Testing
         defer { symlinkTarget.remove() }
         try write("hidden", to: fixture.url.appending(path: ".private/report-hidden.txt"))
         try write("package", to: fixture.url.appending(path: "Reports.app/report-package.txt"))
-        try write("linked", to: symlinkTarget.url.appending(path: "report-linked.txt"))
-        try FileManager.default.createSymbolicLink(at: fixture.url.appending(path: "linked", directoryHint: .isDirectory), withDestinationURL: symlinkTarget.url)
+        let linkedFile = symlinkTarget.url.appending(path: "report-linked.txt")
+        try write("linked", to: linkedFile)
+        try FileManager.default.createSymbolicLink(
+            at: fixture.url.appending(path: "linked", directoryHint: .isDirectory),
+            withDestinationURL: symlinkTarget.url
+        )
+        try FileManager.default.createSymbolicLink(
+            at: fixture.url.appending(path: "report-zz-linked.txt"),
+            withDestinationURL: linkedFile
+        )
         try write("regular", to: fixture.url.appending(path: "report-regular.txt"))
 
         let defaults = try await service().search(query("report", roots: [fixture.url]))
@@ -61,6 +105,21 @@ import Testing
 
         #expect(defaults.map(\.item.name) == ["report-regular.txt"])
         #expect(Set(optedIn.map(\.item.name)) == ["report-hidden.txt", "report-package.txt", "report-regular.txt"])
+    }
+
+    @Test func reportsExaminedEntryProgressDuringTraversal() async throws {
+        let fixture = try TemporaryDirectory()
+        defer { fixture.remove() }
+        try write("report", to: fixture.url.appending(path: "nested/report.txt"))
+        let progress = LockedValues<Int>()
+
+        let results = try await service().search(
+            query("report", roots: [fixture.url], includeDirectories: false),
+            progress: { progress.append($0) }
+        )
+
+        #expect(results.map(\.item.name) == ["report.txt"])
+        #expect(progress.values == [1, 2])
     }
 
     @Test func includesDirectoryResultsOnlyWhenRequested() async throws {
@@ -128,16 +187,36 @@ import Testing
 
         await #expect(throws: CancellationError.self) { try await task.value }
     }
+
+    @Test func cancellationAfterEnumerationHasCompletedStopsRanking() async throws {
+        let fixture = try TemporaryDirectory()
+        defer { fixture.remove() }
+        for index in 0..<250 {
+            try write("report", to: fixture.url.appending(path: "report-\(index).txt"))
+        }
+        let rankingProbe = RankingCancellationProbe()
+        let search = service(rankingHook: rankingProbe.checkCancellation)
+        let task = Task {
+            try await search.search(query("report", roots: [fixture.url], includeDirectories: false))
+        }
+        await rankingProbe.waitUntilStarted()
+
+        task.cancel()
+
+        await #expect(throws: CancellationError.self) { try await task.value }
+    }
 }
 
 private func service(
     availabilityReader: any CloudItemAvailabilityReading = StubAvailabilityReader(),
-    traversalHook: @escaping LocalSmartSearchService.TraversalHook = { _ in }
+    traversalHook: @escaping LocalSmartSearchService.TraversalHook = { _ in },
+    rankingHook: @escaping LocalSmartSearchService.RankingHook = {}
 ) -> LocalSmartSearchService {
     LocalSmartSearchService(
         fileManager: .default,
         availabilityReader: availabilityReader,
-        traversalHook: traversalHook
+        traversalHook: traversalHook,
+        rankingHook: rankingHook
     )
 }
 
@@ -166,5 +245,50 @@ private actor StubAvailabilityReader: CloudItemAvailabilityReading {
 
     func availability(of url: URL) -> CloudItemAvailability {
         values[url.standardizedFileURL] ?? .availableLocally
+    }
+}
+
+private final class LockedCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    var value: Int {
+        lock.withLock { count }
+    }
+
+    func increment() {
+        lock.withLock { count += 1 }
+    }
+}
+
+private final class LockedValues<Value: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: [Value] = []
+
+    var values: [Value] {
+        lock.withLock { storage }
+    }
+
+    func append(_ value: Value) {
+        lock.withLock { storage.append(value) }
+    }
+}
+
+private final class RankingCancellationProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private var started = false
+
+    func checkCancellation() throws {
+        lock.withLock { started = true }
+        while !Task.isCancelled {
+            usleep(100)
+        }
+        try Task.checkCancellation()
+    }
+
+    func waitUntilStarted() async {
+        while !lock.withLock({ started }) {
+            await Task.yield()
+        }
     }
 }

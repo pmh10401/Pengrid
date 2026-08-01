@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct SmartSearchStatePresentation: Equatable {
@@ -79,6 +80,19 @@ enum SmartSearchPresentation {
 }
 
 @MainActor
+enum SmartSearchRootPanelConfiguration {
+    static func apply(to panel: NSOpenPanel) {
+        panel.title = "Add Search Folders"
+        panel.prompt = "Add"
+        panel.message = "Choose one or more folders to search."
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = true
+        panel.canCreateDirectories = false
+    }
+}
+
+@MainActor
 enum SmartSearchResultNavigationRouter {
     static func destination(for result: SmartSearchResult) -> URL {
         result.item.isDirectory
@@ -87,7 +101,15 @@ enum SmartSearchResultNavigationRouter {
     }
 
     static func open(_ result: SmartSearchResult, in workspace: WorkspaceState) async {
-        await workspace.activePane.navigate(to: destination(for: result))
+        let pane = workspace.activePane
+        await pane.navigate(to: destination(for: result))
+        guard !result.item.isDirectory else { return }
+        let resultPath = result.item.url.standardizedFileURL.path
+        if let loadedURL = pane.items.first(where: {
+            $0.url.standardizedFileURL.path == resultPath
+        })?.url {
+            pane.selection = [loadedURL]
+        }
     }
 }
 
@@ -97,7 +119,10 @@ struct SmartSearchView: View {
 
     @Bindable private var bindableStore: SmartSearchStore
     @FocusState private var queryIsFocused: Bool
+    @FocusState private var savedNameIsFocused: Bool
     @State private var savedSearchName = ""
+    @State private var queryEditingSession: WorkspaceTextEditingSession?
+    @State private var savedNameEditingSession: WorkspaceTextEditingSession?
 
     init(workspace: WorkspaceState, store: SmartSearchStore) {
         self.workspace = workspace
@@ -129,6 +154,50 @@ struct SmartSearchView: View {
                     .foregroundStyle(.secondary)
                     .accessibilityLabel("Search root, \(rootSummary)")
 
+                HStack {
+                    Button("Add Folders…", action: chooseRoots)
+                        .accessibilityIdentifier(AccessibilityIdentifiers.smartSearchAddRoots)
+
+                    Spacer()
+
+                    Stepper(
+                        "Maximum results: \(store.maximumResults)",
+                        value: $bindableStore.maximumResults,
+                        in: SmartSearchQuery.maximumResultRange,
+                        step: 50
+                    )
+                    .fixedSize()
+                    .accessibilityIdentifier(AccessibilityIdentifiers.smartSearchMaximumResults)
+                }
+
+                if !store.roots.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(store.roots, id: \.self) { root in
+                            HStack(spacing: 8) {
+                                Image(systemName: "folder")
+                                    .foregroundStyle(.secondary)
+                                    .accessibilityHidden(true)
+                                Text(rootDisplayName(root))
+                                    .lineLimit(1)
+                                Spacer()
+                                Button {
+                                    store.removeRoot(root)
+                                } label: {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .accessibilityHidden(true)
+                                }
+                                .buttonStyle(.borderless)
+                                .help("Remove \(rootDisplayName(root))")
+                                .accessibilityLabel("Remove \(rootDisplayName(root)) from search")
+                                .accessibilityIdentifier(AccessibilityIdentifiers.smartSearchRemoveRoot(root))
+                            }
+                        }
+                    }
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier(AccessibilityIdentifiers.smartSearchRoots)
+                    .accessibilityLabel("Search folders")
+                }
+
                 Toggle("Include hidden items", isOn: $bindableStore.includeHidden)
                     .accessibilityIdentifier(AccessibilityIdentifiers.smartSearchIncludeHidden)
                 Toggle("Include packages", isOn: $bindableStore.includePackages)
@@ -148,6 +217,9 @@ struct SmartSearchView: View {
                         .controlSize(.small)
                         .accessibilityLabel(store.progressMessage ?? "Searching files")
                         .accessibilityIdentifier(AccessibilityIdentifiers.smartSearchProgress)
+                    Text(store.progressMessage ?? "Searching files…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     Button("Cancel", action: store.cancelSearch)
                         .accessibilityIdentifier(AccessibilityIdentifiers.smartSearchCancel)
                 }
@@ -162,6 +234,8 @@ struct SmartSearchView: View {
             HStack {
                 TextField("Saved search name", text: $savedSearchName)
                     .textFieldStyle(.roundedBorder)
+                    .focused($savedNameIsFocused)
+                    .accessibilityIdentifier(AccessibilityIdentifiers.smartSearchSavedName)
                 Button("Save Search", action: saveCurrentSearch)
                     .disabled(store.queryText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || store.roots.isEmpty)
                     .accessibilityIdentifier(AccessibilityIdentifiers.smartSearchSave)
@@ -175,6 +249,15 @@ struct SmartSearchView: View {
         .accessibilityLabel("Smart Search")
         .onAppear {
             queryIsFocused = true
+        }
+        .onChange(of: queryIsFocused) { _, isFocused in
+            updateQueryEditingSession(isFocused: isFocused)
+        }
+        .onChange(of: savedNameIsFocused) { _, isFocused in
+            updateSavedNameEditingSession(isFocused: isFocused)
+        }
+        .onDisappear {
+            endEditingSessions()
         }
     }
 
@@ -196,25 +279,27 @@ struct SmartSearchView: View {
             }
 
             if !store.results.isEmpty {
-                List(store.results.prefix(SmartSearchQuery.defaultMaximumResults)) { result in
-                    Button {
-                        Task {
-                            await SmartSearchResultNavigationRouter.open(result, in: workspace)
-                            store.dismiss()
-                        }
-                    } label: {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(result.item.name)
-                            Text(result.relativePath)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            Text(SmartSearchPresentation.availabilityDescription(result.item.availability))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
+                List(store.results.prefix(store.maximumResults)) { result in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(result.item.name)
+                        Text(result.relativePath)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Text(SmartSearchPresentation.availabilityDescription(result.item.availability))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
-                    .buttonStyle(.plain)
+                    .contentShape(Rectangle())
+                    .onTapGesture(count: 2) {
+                        activate(result)
+                    }
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityAddTraits(.isButton)
                     .accessibilityLabel(SmartSearchPresentation.resultAccessibilityLabel(for: result))
+                    .accessibilityIdentifier(AccessibilityIdentifiers.smartSearchResultRow(result.item.url))
+                    .accessibilityAction {
+                        activate(result)
+                    }
                 }
                 .listStyle(.inset)
                 .frame(minHeight: 180)
@@ -232,6 +317,69 @@ struct SmartSearchView: View {
         let name = savedSearchName.trimmingCharacters(in: .whitespacesAndNewlines)
         _ = store.saveCurrentSearch(named: name.isEmpty ? store.queryText : name)
         savedSearchName = ""
+    }
+
+    private func chooseRoots() {
+        let panel = NSOpenPanel()
+        SmartSearchRootPanelConfiguration.apply(to: panel)
+        guard panel.runModal() == .OK else { return }
+        store.addRoots(panel.urls)
+    }
+
+    private func rootDisplayName(_ root: URL) -> String {
+        if root.standardizedFileURL == FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL {
+            return "Home"
+        }
+        let name = root.standardizedFileURL.lastPathComponent
+        return name.isEmpty ? "Root folder" : name
+    }
+
+    private func activate(_ result: SmartSearchResult) {
+        Task {
+            await SmartSearchResultNavigationRouter.open(result, in: workspace)
+            store.dismiss()
+        }
+    }
+
+    private func updateQueryEditingSession(isFocused: Bool) {
+        if isFocused {
+            guard queryEditingSession == nil else { return }
+            let session = WorkspaceTextEditingSession(
+                paneID: workspace.activePaneID,
+                kind: .smartSearchQuery
+            )
+            queryEditingSession = session
+            workspace.beginTextEditing(session)
+        } else if let session = queryEditingSession {
+            queryEditingSession = nil
+            workspace.endTextEditing(session)
+        }
+    }
+
+    private func updateSavedNameEditingSession(isFocused: Bool) {
+        if isFocused {
+            guard savedNameEditingSession == nil else { return }
+            let session = WorkspaceTextEditingSession(
+                paneID: workspace.activePaneID,
+                kind: .smartSearchName
+            )
+            savedNameEditingSession = session
+            workspace.beginTextEditing(session)
+        } else if let session = savedNameEditingSession {
+            savedNameEditingSession = nil
+            workspace.endTextEditing(session)
+        }
+    }
+
+    private func endEditingSessions() {
+        if let queryEditingSession {
+            workspace.endTextEditing(queryEditingSession)
+            self.queryEditingSession = nil
+        }
+        if let savedNameEditingSession {
+            workspace.endTextEditing(savedNameEditingSession)
+            self.savedNameEditingSession = nil
+        }
     }
 }
 

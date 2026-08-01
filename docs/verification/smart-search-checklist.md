@@ -8,8 +8,8 @@ VoiceOver checks below.
 
 ## Automated evidence
 
-- [ ] **NOT RUN — serial Swift Testing:** Run the full feature suite against
-  the candidate and record its dated result and test count:
+- [x] **PASS — serial Swift Testing (2026-08-01):** The final-fix candidate
+  completed 687 tests in 55 suites with zero failures:
 
   ```bash
   DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
@@ -18,12 +18,14 @@ VoiceOver checks below.
 
   The suite must cover recursive filename/path matching; ranking and the
   500-result default cap; invalid and duplicate roots; default exclusion and
-  explicit inclusion of hidden items and packages; no symbolic-link traversal;
+  explicit inclusion of hidden items and packages; exclusion of symbolic-link
+  entries and descendants;
   optional folder results; cancellation; unreadable-entry tolerance; saved
   search persistence; and cloud-only availability without materialization.
 
-- [ ] **NOT RUN — release and static contracts:** Run each command against the
-  same candidate and record its dated result:
+- [x] **PASS — release and static contracts (2026-08-01):** The package release
+  contract script reported `PASS`, the arm64 release build completed, and both
+  working-tree and branch diff checks reported no whitespace errors:
 
   ```bash
   ./script/tests/package_release_contract_tests.sh
@@ -34,7 +36,7 @@ VoiceOver checks below.
 
 ## Manual verification
 
-- [ ] **NOT RUN — command and scope:** In an active pane, use **File > Search
+- [ ] **NOT RUN — command and scope:** In an active pane, use **Edit > Search
   Files…** and **Command-Shift-F**. Confirm Smart Search opens with keyboard
   focus in its query field and names the active pane's current directory as
   its only initial root. Change the active pane and repeat; confirm the root
@@ -47,9 +49,10 @@ VoiceOver checks below.
   and relative paths recursively, ranks exact filename matches ahead of
   path-only matches, and does not report file-content-only matches.
 
-- [ ] **NOT RUN — result bound and cancellation:** Create more than 500
-  matching local entries. Confirm the displayed result list contains no more
-  than 500 ranked results. Start a sufficiently large search, select
+- [ ] **NOT RUN — result bound and cancellation:** With the default cap, create
+  more than 500 matching local entries. Confirm the displayed result list
+  contains no more than 500 ranked results. Change the cap and confirm it
+  remains within 1...2,000. Start a sufficiently large search, select
   **Cancel**, and confirm the search changes to cancelled without navigating
   or modifying any searched item.
 
@@ -57,8 +60,9 @@ VoiceOver checks below.
   root, create a hidden directory, a package, and a symbolic link to a
   directory outside the root. Confirm hidden and package descendants are
   absent by default and appear only after enabling their respective options.
-  Confirm the symbolic link and its target descendants never appear, even when
-  the inclusion options are enabled. Confirm the **Include folders** option
+  Confirm the symbolic-link entry itself and its target descendants never
+  appear, even when the inclusion options are enabled. Confirm the **Include
+  folders** option
   controls folder results.
 
 - [ ] **NOT RUN — unreadable entries:** Include an entry the current user
@@ -68,8 +72,9 @@ VoiceOver checks below.
 
 - [ ] **NOT RUN — saved searches:** Save a query with a distinct name, quit and
   reopen Pengrid, then select it from **Places > Smart Searches**. Confirm its
-  text, explicit roots, and inclusion options are restored and it runs again.
-  Delete the saved search and confirm it is removed after relaunch.
+  text, explicit roots, inclusion options, and a non-default result cap are
+  restored and it runs again. Delete the saved search and confirm it is removed
+  after relaunch.
 
 - [ ] **NOT RUN — cloud-only behavior:** In a Google Drive or OneDrive File
   Provider folder shown by Pengrid, select an online-only item that has not

@@ -73,6 +73,23 @@ import Testing
         #expect(query.maximumResults == 2_000)
     }
 
+    @Test func candidateBudgetIsHardBoundedWhileScalingWithRequestedResults() throws {
+        let smallQuery = try SmartSearchQuery(
+            text: "report",
+            roots: [URL(filePath: "/search/root")],
+            maximumResults: 1
+        )
+        let largestQuery = try SmartSearchQuery(
+            text: "report",
+            roots: [URL(filePath: "/search/root")],
+            maximumResults: SmartSearchQuery.maximumResultRange.upperBound
+        )
+
+        #expect(smallQuery.candidateBudget == 2_000)
+        #expect(largestQuery.candidateBudget == 40_000)
+        #expect(largestQuery.candidateBudget <= 50_000)
+    }
+
     @Test func tokenizationIsLocalizedCaseAndDiacriticInsensitive() {
         #expect(SmartSearchRanker.tokens(in: "Café 보고서") == ["cafe", "보고서"])
     }

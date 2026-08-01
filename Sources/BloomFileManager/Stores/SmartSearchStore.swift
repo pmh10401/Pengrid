@@ -17,8 +17,20 @@ final class SmartSearchStore {
     var includeHidden = false
     var includePackages = false
     var includeDirectories = true
+    var maximumResults = SmartSearchQuery.defaultMaximumResults {
+        didSet {
+            let clamped = min(
+                max(maximumResults, SmartSearchQuery.maximumResultRange.lowerBound),
+                SmartSearchQuery.maximumResultRange.upperBound
+            )
+            if clamped != maximumResults {
+                maximumResults = clamped
+            }
+        }
+    }
     private(set) var results: [SmartSearchResult] = []
     private(set) var state: SmartSearchStoreState = .idle
+    private(set) var examinedEntryCount = 0
     private(set) var progressMessage: String?
     private(set) var errorMessage: String?
     private(set) var savedSearches: [SmartSearchRecord]
@@ -39,6 +51,7 @@ final class SmartSearchStore {
         roots = [root.standardizedFileURL]
         isPresented = true
         results = []
+        examinedEntryCount = 0
         progressMessage = nil
         errorMessage = nil
         state = .idle
@@ -52,6 +65,7 @@ final class SmartSearchStore {
     func search() {
         cancelSearchTask()
         results = []
+        examinedEntryCount = 0
         progressMessage = nil
         errorMessage = nil
         guard !queryText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -66,7 +80,8 @@ final class SmartSearchStore {
                 roots: roots,
                 includeHidden: includeHidden,
                 includePackages: includePackages,
-                includeDirectories: includeDirectories
+                includeDirectories: includeDirectories,
+                maximumResults: maximumResults
             )
         } catch {
             state = .failed
@@ -81,7 +96,11 @@ final class SmartSearchStore {
         let service = service
         searchTask = Task { [weak self] in
             do {
-                let found = try await service.search(query)
+                let found = try await service.search(query, progress: { [weak self] count in
+                    Task { @MainActor [weak self] in
+                        self?.publishProgress(count, generation: generation)
+                    }
+                })
                 guard !Task.isCancelled,
                       let self,
                       generation == self.searchGeneration
@@ -112,6 +131,33 @@ final class SmartSearchStore {
         cancelSearchTask()
         state = .cancelled
         progressMessage = nil
+    }
+
+    func addRoots(_ urls: [URL]) {
+        var seen = Set(roots.map { $0.standardizedFileURL.path })
+        for url in urls where url.isFileURL && url.path.hasPrefix("/") {
+            let standardized = url.standardizedFileURL
+            if seen.insert(standardized.path).inserted {
+                roots.append(standardized)
+            }
+        }
+    }
+
+    func removeRoot(_ url: URL) {
+        let path = url.standardizedFileURL.path
+        roots.removeAll { $0.standardizedFileURL.path == path }
+    }
+
+    func openSavedSearch(_ record: SmartSearchRecord) {
+        cancelSearchTask()
+        queryText = record.query.text
+        roots = record.query.roots
+        includeHidden = record.query.includeHidden
+        includePackages = record.query.includePackages
+        includeDirectories = record.query.includeDirectories
+        maximumResults = record.query.maximumResults
+        isPresented = true
+        search()
     }
 
     @discardableResult
@@ -152,8 +198,20 @@ final class SmartSearchStore {
             roots: roots,
             includeHidden: includeHidden,
             includePackages: includePackages,
-            includeDirectories: includeDirectories
+            includeDirectories: includeDirectories,
+            maximumResults: maximumResults
         )
+    }
+
+    private func publishProgress(_ count: Int, generation: Int) {
+        guard generation == searchGeneration,
+              state == .searching,
+              count >= examinedEntryCount
+        else { return }
+        examinedEntryCount = count
+        progressMessage = count == 1
+            ? "Examined 1 entry…"
+            : "Examined \(count) entries…"
     }
 
     private func cancelSearchTask() {

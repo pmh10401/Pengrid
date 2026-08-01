@@ -9,6 +9,9 @@ enum SmartSearchValidationError: Error, Equatable, Sendable {
 struct SmartSearchQuery: Codable, Equatable, Sendable {
     static let defaultMaximumResults = 500
     static let maximumResultRange = 1...2_000
+    static let maximumCandidateBudget = 50_000
+    static let minimumCandidateBudget = 2_000
+    static let candidateBudgetMultiplier = 20
 
     let text: String
     let roots: [URL]
@@ -16,6 +19,15 @@ struct SmartSearchQuery: Codable, Equatable, Sendable {
     var includePackages: Bool
     var includeDirectories: Bool
     private(set) var maximumResults: Int
+
+    /// The hard upper bound on matching metadata retained before ranking.
+    /// This keeps every query bounded independently of the size of its roots.
+    var candidateBudget: Int {
+        min(
+            Self.maximumCandidateBudget,
+            max(Self.minimumCandidateBudget, maximumResults * Self.candidateBudgetMultiplier)
+        )
+    }
 
     init(
         text: String,
@@ -125,25 +137,57 @@ enum SmartSearchRanker {
     }
 
     static func ranked(_ candidates: [SmartSearchResult], for query: SmartSearchQuery) -> [SmartSearchResult] {
+        // The non-throwing entry point keeps pure model callers source-compatible.
+        // Search services use the cancellable overload below.
+        try! ranked(candidates, for: query, cancellationCheck: {})
+    }
+
+    static func ranked(
+        _ candidates: [SmartSearchResult],
+        for query: SmartSearchQuery,
+        cancellationCheck: @Sendable () throws -> Void
+    ) throws -> [SmartSearchResult] {
+        try cancellationCheck()
         let queryTokens = tokens(in: query.text)
         guard !queryTokens.isEmpty else { return candidates }
 
-        let documentTokens = candidates.map { tokens(in: $0.relativePath) }
+        var documentTokens: [[String]] = []
+        documentTokens.reserveCapacity(candidates.count)
+        for candidate in candidates {
+            try cancellationCheck()
+            documentTokens.append(tokens(in: candidate.relativePath))
+        }
         let documentCount = Double(candidates.count)
         let averageLength = Double(max(1, documentTokens.map(\.count).reduce(0, +))) / max(1, documentCount)
 
-        return zip(candidates, documentTokens).map { candidate, pathTokens in
+        var documentFrequencies: [String: Double] = [:]
+        for token in Set(queryTokens) {
+            try cancellationCheck()
+            documentFrequencies[token] = Double(documentTokens.count { $0.contains(token) })
+        }
+
+        var scored: [SmartSearchResult] = []
+        scored.reserveCapacity(candidates.count)
+        for (candidate, pathTokens) in zip(candidates, documentTokens) {
+            try cancellationCheck()
             let filenameTokens = tokens(in: candidate.item.name)
-            let score = queryTokens.reduce(0.0) { total, token in
-                let documentFrequency = Double(documentTokens.count { $0.contains(token) })
+            var score = 0.0
+            for token in queryTokens {
+                try cancellationCheck()
+                let documentFrequency = documentFrequencies[token] ?? 0
                 let idf = log((documentCount - documentFrequency + 0.5) / (documentFrequency + 0.5) + 1)
                 let pathScore = bm25(token: token, tokens: pathTokens, averageLength: averageLength, idf: idf)
                 let filenameScore = bm25(token: token, tokens: filenameTokens, averageLength: averageLength, idf: idf)
-                return total + pathScore + (filenameScore * 3) + filenameBonus(token: token, filename: candidate.item.name)
+                score += pathScore + (filenameScore * 3) + filenameBonus(token: token, filename: candidate.item.name)
             }
-            return SmartSearchResult(item: candidate.item, relativePath: candidate.relativePath, score: score)
+            scored.append(SmartSearchResult(
+                item: candidate.item,
+                relativePath: candidate.relativePath,
+                score: score
+            ))
         }
-        .sorted { lhs, rhs in
+
+        let sorted = scored.sorted { lhs, rhs in
             if lhs.score != rhs.score {
                 return lhs.score > rhs.score
             }
@@ -158,6 +202,8 @@ enum SmartSearchRanker {
             }
             return comparison == .orderedAscending
         }
+        try cancellationCheck()
+        return sorted
     }
 
     private static func bm25(token: String, tokens: [String], averageLength: Double, idf: Double) -> Double {

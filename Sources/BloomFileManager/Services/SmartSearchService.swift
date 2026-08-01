@@ -2,6 +2,19 @@ import Foundation
 
 protocol SmartSearching: Sendable {
     func search(_ query: SmartSearchQuery) async throws -> [SmartSearchResult]
+    func search(
+        _ query: SmartSearchQuery,
+        progress: @escaping @Sendable (Int) -> Void
+    ) async throws -> [SmartSearchResult]
+}
+
+extension SmartSearching {
+    func search(
+        _ query: SmartSearchQuery,
+        progress: @escaping @Sendable (Int) -> Void
+    ) async throws -> [SmartSearchResult] {
+        try await search(query)
+    }
 }
 
 enum SmartSearchServiceError: Error, Equatable, Sendable {
@@ -10,35 +23,78 @@ enum SmartSearchServiceError: Error, Equatable, Sendable {
 
 final class LocalSmartSearchService: SmartSearching, @unchecked Sendable {
     typealias TraversalHook = @Sendable (URL) throws -> Void
+    typealias RankingHook = @Sendable () throws -> Void
 
     private let fileManager: FileManager
     private let availabilityReader: any CloudItemAvailabilityReading
     private let scopedAccessCoordinator: CloudLocationScopedAccessCoordinator
     private let traversalHook: TraversalHook
+    private let rankingHook: RankingHook
 
     init(
         fileManager: FileManager = .default,
         availabilityReader: any CloudItemAvailabilityReading = LiveCloudItemAvailabilityService(),
         scopedAccessCoordinator: CloudLocationScopedAccessCoordinator = CloudLocationScopedAccessCoordinator(),
-        traversalHook: @escaping TraversalHook = { _ in }
+        traversalHook: @escaping TraversalHook = { _ in },
+        rankingHook: @escaping RankingHook = {}
     ) {
         self.fileManager = fileManager
         self.availabilityReader = availabilityReader
         self.scopedAccessCoordinator = scopedAccessCoordinator
         self.traversalHook = traversalHook
+        self.rankingHook = rankingHook
     }
 
     func search(_ query: SmartSearchQuery) async throws -> [SmartSearchResult] {
+        try await search(query, progress: { _ in })
+    }
+
+    func search(
+        _ query: SmartSearchQuery,
+        progress: @escaping @Sendable (Int) -> Void
+    ) async throws -> [SmartSearchResult] {
         let roots = try validatedRoots(from: query.roots)
         let leases = try scopedAccessCoordinator.acquireAccess(for: roots)
         defer { leases.forEach { $0.finish() } }
 
         var allCandidates: [SmartSearchResult] = []
+        allCandidates.reserveCapacity(query.candidateBudget)
+        var seenCandidatePaths = Set<String>()
+        var examinedEntryCount = 0
+        let queryTokens = SmartSearchRanker.tokens(in: query.text)
         for root in roots {
             try Task.checkCancellation()
-            allCandidates += try await candidates(in: root, query: query)
+            let remainingBudget = query.candidateBudget - allCandidates.count
+            guard remainingBudget > 0 else { break }
+            let batch = try await candidates(
+                in: root,
+                query: query,
+                queryTokens: queryTokens,
+                maximumCandidates: remainingBudget,
+                examinedEntryCount: examinedEntryCount,
+                progress: progress
+            )
+            examinedEntryCount = batch.examinedEntryCount
+            for candidate in batch.results where allCandidates.count < query.candidateBudget {
+                let path = candidate.item.url.standardizedFileURL.path
+                if seenCandidatePaths.insert(path).inserted {
+                    allCandidates.append(candidate)
+                }
+            }
         }
-        return Array(SmartSearchRanker.ranked(allCandidates, for: query).prefix(query.maximumResults))
+        try Task.checkCancellation()
+        let ranked = try SmartSearchRanker.ranked(
+            allCandidates,
+            for: query,
+            cancellationCheck: {
+                try Task.checkCancellation()
+                try rankingHook()
+            }
+        )
+        try Task.checkCancellation()
+        let limited = Array(ranked.prefix(query.maximumResults))
+        try Task.checkCancellation()
+        return limited
     }
 
     private func validatedRoots(from roots: [URL]) throws -> [URL] {
@@ -53,10 +109,21 @@ final class LocalSmartSearchService: SmartSearching, @unchecked Sendable {
             guard seen.insert(standardized.path).inserted else { continue }
             validated.append(standardized)
         }
-        return validated
+        return validated.filter { candidate in
+            !validated.contains { possibleParent in
+                possibleParent != candidate && contains(candidate, within: possibleParent)
+            }
+        }
     }
 
-    private func candidates(in root: URL, query: SmartSearchQuery) async throws -> [SmartSearchResult] {
+    private func candidates(
+        in root: URL,
+        query: SmartSearchQuery,
+        queryTokens: [String],
+        maximumCandidates: Int,
+        examinedEntryCount: Int,
+        progress: @escaping @Sendable (Int) -> Void
+    ) async throws -> (results: [SmartSearchResult], examinedEntryCount: Int) {
         let keys: Set<URLResourceKey> = [
             .isDirectoryKey, .isPackageKey, .isSymbolicLinkKey, .isHiddenKey,
             .contentModificationDateKey, .fileSizeKey, .localizedTypeDescriptionKey
@@ -69,14 +136,26 @@ final class LocalSmartSearchService: SmartSearching, @unchecked Sendable {
         ) else { throw SmartSearchServiceError.invalidRoot }
 
         var results: [SmartSearchResult] = []
-        while let url = enumerator.nextObject() as? URL {
+        results.reserveCapacity(maximumCandidates)
+        var examinedEntryCount = examinedEntryCount
+        while results.count < maximumCandidates,
+              let url = enumerator.nextObject() as? URL {
             try Task.checkCancellation()
+            examinedEntryCount += 1
+            progress(examinedEntryCount)
             do {
                 try traversalHook(url)
                 let isSymbolicLink = try fileManager.attributesOfItem(atPath: url.path)[.type]
                     as? FileAttributeType == .typeSymbolicLink
                 let hasSymbolicLinkBoundary = try hasSymbolicLinkBoundary(for: url, below: root)
-                if isSymbolicLink || hasSymbolicLinkBoundary {
+                // FileManager does not descend through a symlink entry. Calling
+                // skipDescendants() on that non-directory entry can instead skip
+                // the next sibling directory, so only use it for an observed
+                // descendant boundary.
+                if isSymbolicLink {
+                    continue
+                }
+                if hasSymbolicLinkBoundary {
                     enumerator.skipDescendants()
                     continue
                 }
@@ -100,7 +179,7 @@ final class LocalSmartSearchService: SmartSearching, @unchecked Sendable {
                 }
                 guard (query.includeDirectories || !directory),
                       !(directory && package),
-                      matches(url: url, relativeTo: root, query: query) else { continue }
+                      matches(url: url, relativeTo: root, queryTokens: queryTokens) else { continue }
 
                 let standardizedURL = url.standardizedFileURL
                 let availability = await availabilityReader.availability(of: standardizedURL)
@@ -121,12 +200,19 @@ final class LocalSmartSearchService: SmartSearching, @unchecked Sendable {
                 continue
             }
         }
-        return results
+        return (results, examinedEntryCount)
     }
 
-    private func matches(url: URL, relativeTo root: URL, query: SmartSearchQuery) -> Bool {
+    private func matches(url: URL, relativeTo root: URL, queryTokens: [String]) -> Bool {
         let haystack = fold(relativePath(of: url, from: root))
-        return SmartSearchRanker.tokens(in: query.text).allSatisfy { haystack.contains($0) }
+        return queryTokens.allSatisfy { haystack.contains($0) }
+    }
+
+    private func contains(_ candidate: URL, within root: URL) -> Bool {
+        let candidatePath = candidate.standardizedFileURL.path
+        let rootPath = root.standardizedFileURL.path
+        if rootPath == "/" { return candidatePath.hasPrefix("/") }
+        return candidatePath.hasPrefix(rootPath + "/")
     }
 
     private func hasSymbolicLinkBoundary(for url: URL, below root: URL) throws -> Bool {

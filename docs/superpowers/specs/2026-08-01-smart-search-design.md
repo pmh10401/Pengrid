@@ -44,11 +44,12 @@ deliberately deferred.
 
 ## User flow
 
-1. The user chooses `Search Files…` from the Search menu (Command-Shift-F) or
+1. The user chooses `Search Files…` from the Edit menu (Command-Shift-F) or
    activates a saved search in the sidebar.
 2. The panel opens with the active pane's current directory as its root. The
-   user types a non-empty query and can toggle hidden files, package contents,
-   and directory results. The default result cap is 500.
+   user can add or remove explicit roots, types a non-empty query, and can
+   toggle hidden files, package contents, and directory results. The default
+   result cap is 500 and its control is capped to `1...2_000`.
 3. Search runs against the selected root(s). A progress label reports the number
    of examined entries and a cancel button stops the task. The panel never
    downloads an online-only item; its availability is shown in the row.
@@ -78,21 +79,30 @@ support; no file contents or cloud credentials are persisted.
 
 ### Search service
 
-`SmartSearching` is the small async boundary used by the store and tests:
+`SmartSearching` is the small async boundary used by the store and tests. Its
+progress overload reports examined-entry counts; a default implementation
+delegates to `search(_:)` so simple fakes remain source-compatible:
 
 ```swift
 protocol SmartSearching: Sendable {
     func search(_ query: SmartSearchQuery) async throws -> [SmartSearchResult]
+    func search(
+        _ query: SmartSearchQuery,
+        progress: @escaping @Sendable (Int) -> Void
+    ) async throws -> [SmartSearchResult]
 }
 ```
 
 `LocalSmartSearchService` uses `FileManager` directory enumeration with an
 error handler that continues past unreadable descendants. It collects bounded
-metadata candidates, computes document frequency, then applies the scorer and
-returns the top `maximumResults` rows. Each iteration checks cancellation.
+metadata candidates, computes document frequency once per query token, then
+applies the scorer and returns the top `maximumResults` rows. Candidate count
+is hard-bounded by `min(50_000, max(2_000, maximumResults * 20))` and ranking
+also checks cancellation while scoring. Each traversal iteration reports the
+number of examined entries and checks cancellation.
 Resource values include directory/package/symbolic-link state, dates, size,
-and localized type. A symbolic link is emitted only as a result when it matches;
-its descendants are always skipped. Package descendants are skipped unless
+and localized type. Symbolic-link entries are always excluded, and their
+descendants are never traversed. Package descendants are skipped unless
 `includePackages` is true. Hidden entries are skipped unless `includeHidden` is
 true. Root URLs are standardized, deduplicated, required to be absolute file
 URLs, and are never replaced by a broader parent.
@@ -131,15 +141,15 @@ the complete list and writes sorted JSON.
   action. It supplies explicit accessibility labels and stable identifiers.
 - `PlacesRailView` adds a Smart Searches section. Activating a row loads its
   saved query into the panel; a context menu removes it.
-- `WorkspaceCommands` adds `Search Files…` on Command-Shift-F. Existing
+- `WorkspaceCommands` adds `Edit > Search Files…` on Command-Shift-F. Existing
   `Command-F` continues to open the pane-local filename filter.
 
 ## Safety and performance constraints
 
 - Search roots must be absolute local file URLs and are never implicitly
   expanded to home or a volume root.
-- No symlink-following, package descent, or hidden-file descent is enabled by
-  default.
+- Symbolic-link entries and descendants are always excluded. Package and
+  hidden-file descent are disabled by default.
 - Only metadata is read. Search does not materialize cloud files or read file
   contents.
 - Cancellation is checked during traversal and before publishing results.

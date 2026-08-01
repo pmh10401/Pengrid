@@ -265,6 +265,54 @@ struct WorkspaceCommandTests {
         }
     }
 
+    @Test func presentedSmartSearchAndBothSearchFieldsRouteCommandsAwayFromHiddenPaneFiles() {
+        let workspace = WorkspaceState(
+            leftURL: URL(filePath: "/left"),
+            rightURL: URL(filePath: "/right"),
+            listingService: StubDirectoryListingService(values: [:])
+        )
+        let store = SmartSearchStore(
+            service: EmptySmartSearchService(),
+            persistence: WorkspacePersistence(
+                defaults: UserDefaults(suiteName: "WorkspaceCommandTests.\(UUID().uuidString)")!
+            )
+        )
+        store.present(for: workspace.activePane.currentDirectory)
+
+        for kind in [
+            WorkspaceTextEditingSession.Kind.smartSearchQuery,
+            .smartSearchName
+        ] {
+            let session = WorkspaceTextEditingSession(paneID: .left, kind: kind)
+            workspace.beginTextEditing(session)
+            let policy = WorkspaceCommandPolicy(
+                selectionCount: 1,
+                isOperationRunning: false,
+                pasteboardHasFileURLs: true,
+                isTextEditing: workspace.activeTextEditingSession != nil,
+                isSmartSearchPresented: store.isPresented
+            )
+
+            #expect(policy.copyRoute == .textResponder)
+            #expect(policy.pasteRoute == .textResponder)
+            #expect(!policy.canRename)
+            #expect(!policy.canTrash)
+            #expect(!policy.canOpen)
+            #expect(!policy.canNavigate)
+            workspace.endTextEditing(session)
+        }
+
+        let unfocusedOverlayPolicy = WorkspaceCommandPolicy(
+            selectionCount: 1,
+            isOperationRunning: false,
+            pasteboardHasFileURLs: true,
+            isSmartSearchPresented: store.isPresented
+        )
+        #expect(unfocusedOverlayPolicy.copyRoute == .textResponder)
+        #expect(unfocusedOverlayPolicy.pasteRoute == .textResponder)
+        #expect(!unfocusedOverlayPolicy.canTrash)
+    }
+
     @Test func filterEditingIsATextSessionAndCommandFTargetsOnlyTheActivePane() {
         let workspace = WorkspaceState(
             leftURL: URL(filePath: "/left"),

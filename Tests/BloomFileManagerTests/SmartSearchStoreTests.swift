@@ -59,6 +59,66 @@ struct SmartSearchStoreTests {
         #expect(store.errorMessage == "Search failed.")
     }
 
+    @Test func examinedEntryProgressIsPublishedAndStaleGenerationProgressIsRejected() async {
+        let service = ProgressReplacingSearchService()
+        let store = SmartSearchStore(
+            service: service,
+            persistence: WorkspacePersistence(defaults: isolatedDefaults())
+        )
+        store.present(for: URL(filePath: "/search", directoryHint: .isDirectory))
+        store.queryText = "old"
+        store.search()
+        await service.waitForFirstRequest()
+        await service.reportProgress(3, forRequest: 1)
+        await waitForStore { store.examinedEntryCount == 3 }
+
+        #expect(store.progressMessage == "Examined 3 entries…")
+
+        store.queryText = "new"
+        store.search()
+        await waitForStore { store.results.map(\.item.name) == ["new.txt"] }
+        await service.reportProgress(99, forRequest: 1)
+        await Task.yield()
+
+        #expect(store.examinedEntryCount == 7)
+        #expect(store.results.map(\.item.name) == ["new.txt"])
+        await service.releaseFirstRequest()
+    }
+
+    @Test func openingPersistedSavedSearchRestoresAndUsesItsNonDefaultResultCap() async throws {
+        let persistence = WorkspacePersistence(defaults: isolatedDefaults())
+        let savingStore = SmartSearchStore(service: ReplacingSearchService(), persistence: persistence)
+        savingStore.present(for: URL(filePath: "/search", directoryHint: .isDirectory))
+        savingStore.queryText = "report"
+        savingStore.maximumResults = 37
+        _ = try #require(savingStore.saveCurrentSearch(named: "Capped reports"))
+
+        let service = QueryCapturingSearchService()
+        let relaunchedStore = SmartSearchStore(service: service, persistence: persistence)
+        let record = try #require(relaunchedStore.savedSearches.first)
+        relaunchedStore.openSavedSearch(record)
+        await service.waitForRequest()
+
+        #expect(relaunchedStore.maximumResults == 37)
+        #expect(await service.lastQuery()?.maximumResults == 37)
+    }
+
+    @Test func addingAndRemovingRootsKeepsOnlyExplicitExactSelections() {
+        let store = SmartSearchStore(
+            service: ReplacingSearchService(),
+            persistence: WorkspacePersistence(defaults: isolatedDefaults())
+        )
+        let parent = URL(filePath: "/search", directoryHint: .isDirectory)
+        let child = parent.appending(path: "nested", directoryHint: .isDirectory)
+        store.present(for: parent)
+
+        store.addRoots([child, child.appending(path: ".", directoryHint: .isDirectory)])
+        #expect(store.roots == [parent.standardizedFileURL, child.standardizedFileURL])
+
+        store.removeRoot(parent)
+        #expect(store.roots == [child.standardizedFileURL])
+    }
+
     @Test func savedSearchCrudPreservesInsertionOrderAcrossRelaunch() throws {
         let persistence = WorkspacePersistence(defaults: isolatedDefaults())
         let root = URL(filePath: "/search", directoryHint: .isDirectory)
@@ -116,6 +176,61 @@ private actor CancellingThenFailingSearchService: SmartSearching {
             return []
         }
         throw SmartSearchServiceError.invalidRoot
+    }
+}
+
+private actor ProgressReplacingSearchService: SmartSearching {
+    private var requestCount = 0
+    private var progressCallbacks: [Int: @Sendable (Int) -> Void] = [:]
+    private var firstRequestWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func search(_ query: SmartSearchQuery) async throws -> [SmartSearchResult] {
+        []
+    }
+
+    func search(
+        _ query: SmartSearchQuery,
+        progress: @escaping @Sendable (Int) -> Void
+    ) async throws -> [SmartSearchResult] {
+        requestCount += 1
+        let request = requestCount
+        progressCallbacks[request] = progress
+        if request == 1 {
+            await withCheckedContinuation { firstRequestWaiters.append($0) }
+            return [searchResult(named: "old.txt")]
+        }
+        progress(7)
+        return [searchResult(named: "new.txt")]
+    }
+
+    func waitForFirstRequest() async {
+        while progressCallbacks[1] == nil { await Task.yield() }
+    }
+
+    func reportProgress(_ count: Int, forRequest request: Int) {
+        progressCallbacks[request]?(count)
+    }
+
+    func releaseFirstRequest() {
+        firstRequestWaiters.forEach { $0.resume() }
+        firstRequestWaiters = []
+    }
+}
+
+private actor QueryCapturingSearchService: SmartSearching {
+    private var queries: [SmartSearchQuery] = []
+
+    func search(_ query: SmartSearchQuery) async throws -> [SmartSearchResult] {
+        queries.append(query)
+        return []
+    }
+
+    func waitForRequest() async {
+        while queries.isEmpty { await Task.yield() }
+    }
+
+    func lastQuery() -> SmartSearchQuery? {
+        queries.last
     }
 }
 

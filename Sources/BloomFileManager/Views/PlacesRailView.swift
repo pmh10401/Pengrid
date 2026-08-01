@@ -398,14 +398,7 @@ struct PlacesRailView: View {
     }
 
     private func open(_ record: SmartSearchRecord) {
-        smartSearch.cancelSearch()
-        smartSearch.queryText = record.query.text
-        smartSearch.roots = record.query.roots
-        smartSearch.includeHidden = record.query.includeHidden
-        smartSearch.includePackages = record.query.includePackages
-        smartSearch.includeDirectories = record.query.includeDirectories
-        smartSearch.isPresented = true
-        smartSearch.search()
+        smartSearch.openSavedSearch(record)
     }
 
     private func addDroppedFavorites(_ urls: [URL]) {

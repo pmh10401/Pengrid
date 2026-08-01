@@ -23,15 +23,16 @@ struct WorkspaceCommandPolicy: Equatable {
     let pasteboardHasFileURLs: Bool
     var selectedItems: [FileItem] = []
     var isTextEditing = false
+    var isSmartSearchPresented = false
 
-    var canCreateFolder: Bool { !isOperationRunning && !isTextEditing }
-    var canRename: Bool { !isOperationRunning && !isTextEditing && selectionCount == 1 }
-    var canCopy: Bool { !isTextEditing && selectionCount > 0 }
-    var canPaste: Bool { !isOperationRunning && !isTextEditing && pasteboardHasFileURLs }
-    var canTrash: Bool { !isOperationRunning && !isTextEditing && selectionCount > 0 }
-    var canOpen: Bool { !isTextEditing && selectionCount > 0 }
-    var canQuickLook: Bool { !isTextEditing && selectionCount > 0 }
-    var canNavigate: Bool { !isTextEditing }
+    var canCreateFolder: Bool { !isOperationRunning && !blocksFileCommands }
+    var canRename: Bool { !isOperationRunning && !blocksFileCommands && selectionCount == 1 }
+    var canCopy: Bool { !blocksFileCommands && selectionCount > 0 }
+    var canPaste: Bool { !isOperationRunning && !blocksFileCommands && pasteboardHasFileURLs }
+    var canTrash: Bool { !isOperationRunning && !blocksFileCommands && selectionCount > 0 }
+    var canOpen: Bool { !blocksFileCommands && selectionCount > 0 }
+    var canQuickLook: Bool { !blocksFileCommands && selectionCount > 0 }
+    var canNavigate: Bool { !blocksFileCommands }
     var canCompress: Bool {
         canRunArchiveOperation && ArchiveSelectionEligibility.canCompress(selectedItems)
     }
@@ -42,18 +43,23 @@ struct WorkspaceCommandPolicy: Equatable {
     private var canRunArchiveOperation: Bool {
         !isOperationRunning
             && !isTextEditing
+            && !isSmartSearchPresented
             && selectionCount > 0
             && selectedItems.count == selectionCount
     }
 
     var copyRoute: PasteboardCommandRoute {
-        if isTextEditing { return .textResponder }
+        if blocksFileCommands { return .textResponder }
         return canCopy ? .fileSelection : .unavailable
     }
 
     var pasteRoute: PasteboardCommandRoute {
-        if isTextEditing { return .textResponder }
+        if blocksFileCommands { return .textResponder }
         return canPaste ? .fileSelection : .unavailable
+    }
+
+    private var blocksFileCommands: Bool {
+        isTextEditing || isSmartSearchPresented
     }
 }
 
@@ -717,7 +723,8 @@ struct WorkspaceCommands: Commands {
             isOperationRunning: operationController.isRunning,
             pasteboardHasFileURLs: FileURLPasteboard.containsFileURLs(in: .general),
             selectedItems: selectedItemsForCommands,
-            isTextEditing: workspace?.activeTextEditingSession != nil
+            isTextEditing: workspace?.activeTextEditingSession != nil,
+            isSmartSearchPresented: smartSearch?.isPresented == true
         )
     }
 

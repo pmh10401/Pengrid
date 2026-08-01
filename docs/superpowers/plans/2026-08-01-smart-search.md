@@ -13,7 +13,7 @@
 - Preserve the existing dual-pane behavior and keep `Command-F` mapped to the pane-local filename filter; Smart Search uses Command-Shift-F.
 - Search is local and metadata-only. Do not add network calls, remote embeddings, document-content reads, Spotlight requirements, or automatic cloud materialization.
 - Search roots are explicit, absolute local file URLs. Standardize and deduplicate them; never broaden a root to its parent or a volume.
-- Traversal defaults are safe: skip hidden entries, package descendants, and symbolic-link descendants. A matching symlink may be returned as a row but must never be traversed.
+- Traversal defaults are safe: skip hidden entries and package descendants. Symbolic-link entries themselves are always excluded and their descendants are never traversed.
 - Query text is trimmed; empty queries do not start a search. `maximumResults` is clamped to `1...2_000` and defaults to `500`.
 - Every traversal loop and result publication checks cancellation. Starting a new store search cancels the previous generation and stale results must not overwrite the current query.
 - Rank filename matches above path-only matches with deterministic BM25-style scoring. Equal scores sort by standardized path using localized numeric comparison.
@@ -85,7 +85,7 @@ Use `TemporaryDirectory` fixtures and a fake availability reader. Cover:
 - recursive matching across nested directories;
 - multiple explicit roots with duplicate-root de-duplication;
 - filename ranking preference and result-cap enforcement;
-- hidden-file, package-descendant, and symlink-descendant defaults plus opt-in behavior;
+- hidden-file/package opt-in behavior and symbolic-link entry/descendant exclusion;
 - directory-result toggling;
 - cloud availability copied to the result without materialization;
 - invalid/non-directory roots throwing a stable error;
@@ -101,6 +101,10 @@ Define:
 ```swift
 protocol SmartSearching: Sendable {
     func search(_ query: SmartSearchQuery) async throws -> [SmartSearchResult]
+    func search(
+        _ query: SmartSearchQuery,
+        progress: @escaping @Sendable (Int) -> Void
+    ) async throws -> [SmartSearchResult]
 }
 ```
 
@@ -154,8 +158,9 @@ Make `SmartSearchStore` `@MainActor @Observable`, inject `SmartSearching` and
 increasing generation. Add `WorkspacePersistence.loadSavedSearches()` and
 `saveSavedSearches(_:)` using `smartSearches.v1`. Initialize the store in
 `WorkspaceState`/`BloomFileManagerApp`, expose it as a focused scene value, and
-add a `Search Files…` command with Command-Shift-F. Keep command actions pure
-enough to test and do not alter the existing filter command.
+add an `Edit > Search Files…` command with Command-Shift-F after the pasteboard
+command group. Keep command actions pure enough to test and do not alter the
+existing filter command.
 
 ### Step 3: Verify and commit
 

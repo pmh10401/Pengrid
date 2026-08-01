@@ -4,12 +4,13 @@ Pengrid is distributed directly for Apple Silicon Macs running macOS 15 or newer
 
 ## Next unreleased feature: Smart Search
 
-Smart Search opens with **Command-Shift-F** or **File > Search Files…** and
+Smart Search opens with **Command-Shift-F** or **Edit > Search Files…** and
 recursively searches filenames and relative paths under explicit local
 directory roots, initially the active pane's current directory. Searches may
-be saved and reused from the Places rail, and the interface displays at most
-500 ranked results. Hidden items and packages remain excluded unless the user
-enables their respective inclusion options; symbolic links are not followed.
+be saved and reused from the Places rail, including a user-selected result cap
+from 1 through 2,000 (default 500). Hidden items and packages remain excluded unless the user
+enables their respective inclusion options. Symbolic-link entries are excluded
+and their descendants are never traversed.
 
 This is local File Provider traversal only. Smart Search is not file-content
 search or remote-provider search, does not request provider credentials, does

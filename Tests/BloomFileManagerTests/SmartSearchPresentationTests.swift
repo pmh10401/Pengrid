@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 @testable import BloomFileManager
@@ -71,6 +72,31 @@ struct SmartSearchPresentationTests {
         #expect(AccessibilityIdentifiers.smartSearchProgress == "smartSearch.progress")
     }
 
+    @Test func smartSearchEditingRootAndResultControlsHaveStableAccessibilityIdentifiers() {
+        let resultURL = URL(filePath: "/search/report.txt")
+
+        #expect(AccessibilityIdentifiers.smartSearchSavedName == "smartSearch.savedName")
+        #expect(AccessibilityIdentifiers.smartSearchRoots == "smartSearch.roots")
+        #expect(AccessibilityIdentifiers.smartSearchAddRoots == "smartSearch.addRoots")
+        #expect(AccessibilityIdentifiers.smartSearchMaximumResults == "smartSearch.maximumResults")
+        #expect(
+            AccessibilityIdentifiers.smartSearchResultRow(resultURL)
+                == "smartSearch.result.L3NlYXJjaC9yZXBvcnQudHh0"
+        )
+    }
+
+    @Test func rootChooserAcceptsMultipleDirectoriesOnly() {
+        let panel = NSOpenPanel()
+
+        SmartSearchRootPanelConfiguration.apply(to: panel)
+
+        #expect(panel.canChooseDirectories)
+        #expect(!panel.canChooseFiles)
+        #expect(panel.allowsMultipleSelection)
+        #expect(!panel.canCreateDirectories)
+        #expect(panel.prompt == "Add")
+    }
+
     @Test func openingResultsNavigatesTheActivePaneToDirectoryOrContainingFolder() async throws {
         let root = try TemporaryDirectory()
         defer { root.remove() }
@@ -119,6 +145,7 @@ struct SmartSearchPresentationTests {
         workspace.activate(.right)
         await SmartSearchResultNavigationRouter.open(fileResult, in: workspace)
         #expect(workspace.right.currentDirectory.standardizedFileURL == folder.standardizedFileURL)
+        #expect(workspace.right.selection == [file.standardizedFileURL])
         #expect(workspace.left.currentDirectory.standardizedFileURL == left.standardizedFileURL)
 
         workspace.activate(.left)
