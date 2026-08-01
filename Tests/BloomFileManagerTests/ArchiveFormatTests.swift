@@ -19,6 +19,7 @@ import Testing
 
     @Test(arguments: [
         ("backup.TGZ", ArchiveFormat.tarGzip),
+        ("backup.TBZ", .tarBzip2),
         ("backup.TBZ2", .tarBzip2),
         ("backup.TXZ", .tarXz),
         ("backup.TAR.GZ", .tarGzip)

@@ -58,6 +58,7 @@ enum ArchiveFormat: CaseIterable, Hashable, Sendable, Equatable {
         (".tar.bz2", .tarBzip2),
         (".tar.gz", .tarGzip),
         (".tar.xz", .tarXz),
+        (".tbz", .tarBzip2),
         (".tbz2", .tarBzip2),
         (".tgz", .tarGzip),
         (".txz", .tarXz),
