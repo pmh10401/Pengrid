@@ -1,3 +1,5 @@
+import Foundation
+
 enum AccessibilityIdentifiers {
     static let placesRail = "placesRail"
     static let cloudSection = "cloudSection"
@@ -15,6 +17,22 @@ enum AccessibilityIdentifiers {
     static let leftPaneFilterResults = "leftPane.filterResults"
     static let rightPaneFilterResults = "rightPane.filterResults"
     static let operationStatus = "operationStatus"
+    static let smartSearch = "smartSearch"
+    static let smartSearchQuery = "smartSearch.query"
+    static let smartSearchResults = "smartSearch.results"
+    static let smartSearchSavedSearches = "smartSearch.savedSearches"
+    static let smartSearchClose = "smartSearch.close"
+    static let smartSearchSubmit = "smartSearch.submit"
+    static let smartSearchCancel = "smartSearch.cancel"
+    static let smartSearchSave = "smartSearch.save"
+    static let smartSearchProgress = "smartSearch.progress"
+    static let smartSearchIncludeHidden = "smartSearch.includeHidden"
+    static let smartSearchIncludePackages = "smartSearch.includePackages"
+    static let smartSearchIncludeDirectories = "smartSearch.includeDirectories"
+    static let smartSearchSavedName = "smartSearch.savedName"
+    static let smartSearchRoots = "smartSearch.roots"
+    static let smartSearchAddRoots = "smartSearch.addRoots"
+    static let smartSearchMaximumResults = "smartSearch.maximumResults"
     static let conflictSheet = "conflictSheet"
     static let comparisonWorkspace = "comparisonWorkspace"
     static let comparisonToolbar = "comparisonToolbar"
@@ -37,6 +55,20 @@ enum AccessibilityIdentifiers {
     static let storageInspectorProgress = "storageInspector.progress"
     static let storageInspectorGroupNavigation = "storageInspector.groupNavigation"
     static let storageInspectorGroupMembers = "storageInspector.groupMembers"
+
+    static func smartSearchResultRow(_ url: URL) -> String {
+        let path = url.standardizedFileURL.path
+        return "smartSearch.result.\(Data(path.utf8).base64EncodedString())"
+    }
+
+    static func smartSearchSavedSearchRow(_ id: UUID) -> String {
+        "smartSearch.savedSearch.\(id.uuidString.lowercased())"
+    }
+
+    static func smartSearchRemoveRoot(_ url: URL) -> String {
+        let path = url.standardizedFileURL.path
+        return "smartSearch.removeRoot.\(Data(path.utf8).base64EncodedString())"
+    }
 
     static func storageInspectorSection(_ section: StorageAnalysisSection) -> String {
         "storageInspector.section.\(section.rawValue)"

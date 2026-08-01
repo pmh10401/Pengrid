@@ -22,6 +22,7 @@ struct WorkspaceView: View {
     let comparison: ComparisonCoordinator
     let storage: StorageAnalysisStore
     let storageCleanupController: StorageCleanupController
+    let smartSearch: SmartSearchStore
     let quickLookController: QuickLookController
     let materializer: any CloudMaterializing
     let fileSystem: any FileSystemAccess
@@ -31,7 +32,7 @@ struct WorkspaceView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        let hasOverlay = comparison.isActive || storage.isActive
+        let hasOverlay = comparison.isActive || storage.isActive || smartSearch.isPresented
 
         VStack(spacing: 0) {
             ZStack {
@@ -58,6 +59,8 @@ struct WorkspaceView: View {
                         operationController: operationController,
                         accessCoordinator: cloudAccessCoordinator
                     )
+                } else if smartSearch.isPresented {
+                    SmartSearchView(workspace: workspace, store: smartSearch)
                 }
             }
 
@@ -81,6 +84,16 @@ struct WorkspaceView: View {
         }
         .onDisappear {
             workspace.flushPendingPersistence()
+        }
+        .onChange(of: comparison.isActive) { _, isActive in
+            if isActive, smartSearch.isPresented {
+                smartSearch.dismiss()
+            }
+        }
+        .onChange(of: storage.isActive) { _, isActive in
+            if isActive, smartSearch.isPresented {
+                smartSearch.dismiss()
+            }
         }
         .sheet(item: pendingConflict) { item in
             ConflictResolutionSheet(conflict: item.conflict) { decision, applyToAll in
@@ -114,6 +127,7 @@ struct WorkspaceView: View {
             PlacesRailView(
                 favorites: favorites,
                 cloudLocations: cloudLocations,
+                smartSearch: smartSearch,
                 activePane: workspace.activePane,
                 cloudWorkspaceActions: cloudWorkspaceActions,
                 cloudAccessCoordinator: cloudAccessCoordinator

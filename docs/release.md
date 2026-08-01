@@ -2,6 +2,24 @@
 
 Pengrid is distributed directly for Apple Silicon Macs running macOS 15 or newer. The release does not use App Sandbox entitlements. Its executable filename and compatibility-sensitive internal identity remain `BloomFileManager`.
 
+## Next unreleased feature: Smart Search
+
+Smart Search opens with **Command-Shift-F** or **Edit > Search Files…** and
+recursively searches filenames and relative paths under explicit local
+directory roots, initially the active pane's current directory. Searches may
+be saved and reused from the Places rail, including a user-selected result cap
+from 1 through 2,000 (default 500). Hidden items and packages remain excluded unless the user
+enables their respective inclusion options. Symbolic-link entries are excluded
+and their descendants are never traversed.
+
+This is local File Provider traversal only. Smart Search is not file-content
+search or remote-provider search, does not request provider credentials, does
+not background-index, and does not automatically download cloud-only items.
+Cloud-only matches may be identified as such. The feature gate remains open
+until the automated and physical evidence in
+[`docs/verification/smart-search-checklist.md`](verification/smart-search-checklist.md)
+is recorded for the exact candidate.
+
 ## Version 1.3 release gates
 
 Version 1.3 adds ZIP and TAR-family compression and extraction: **ZIP**,

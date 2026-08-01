@@ -72,6 +72,7 @@ struct BloomFileManagerApp: App {
     @State private var storage: StorageAnalysisStore
     @State private var storageCleanupController: StorageCleanupController
     @State private var workspace: WorkspaceState
+    @State private var smartSearch: SmartSearchStore
     private let cloudDependencies: CloudRuntimeDependencies
     private let storageDependencies: StorageInspectorRuntimeDependencies
     private let cloudWorkspaceActions: LiveCloudLocationWorkspaceActions
@@ -118,6 +119,13 @@ struct BloomFileManagerApp: App {
         ))
 
         let persistence = WorkspacePersistence()
+        _smartSearch = State(initialValue: SmartSearchStore(
+            service: LocalSmartSearchService(
+                availabilityReader: LiveCloudItemAvailabilityService(),
+                scopedAccessCoordinator: cloudDependencies.accessCoordinator
+            ),
+            persistence: persistence
+        ))
         let home = FileManager.default.homeDirectoryForCurrentUser
         let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
             ?? home
@@ -142,12 +150,14 @@ struct BloomFileManagerApp: App {
                 comparison: comparison,
                 storage: storage,
                 storageCleanupController: storageCleanupController,
+                smartSearch: smartSearch,
                 quickLookController: quickLookController,
                 materializer: cloudDependencies.materializer,
                 fileSystem: cloudDependencies.fileSystem,
                 cloudWorkspaceActions: cloudWorkspaceActions,
                 cloudAccessCoordinator: cloudDependencies.accessCoordinator
             )
+            .focusedSceneValue(\.smartSearchStore, smartSearch)
             .task {
                 try? await cloudLocations.scanInitially()
             }

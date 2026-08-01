@@ -17,6 +17,8 @@ struct WorkspaceTextEditingSession: Equatable, Sendable {
         case path
         case inlineName
         case filter
+        case smartSearchQuery
+        case smartSearchName
     }
 
     let id: UUID

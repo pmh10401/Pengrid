@@ -4,6 +4,21 @@ import Testing
 
 @MainActor
 struct WorkspacePersistenceTests {
+    @Test func savedSearchesUseTheirOwnKeyAndIgnoreMalformedPayloads() throws {
+        let fixture = DefaultsFixture()
+        defer { fixture.remove() }
+        let persistence = WorkspacePersistence(defaults: fixture.defaults)
+        let query = try SmartSearchQuery(text: "report", roots: [URL(filePath: "/search")])
+        let record = SmartSearchRecord(displayName: "Reports", query: query)
+
+        persistence.saveSavedSearches([record])
+        #expect(fixture.defaults.data(forKey: WorkspacePersistence.storageKey) == nil)
+        #expect(persistence.loadSavedSearches() == [record])
+
+        fixture.defaults.set(Data("not-json".utf8), forKey: WorkspacePersistence.savedSearchesStorageKey)
+        #expect(persistence.loadSavedSearches().isEmpty)
+    }
+
     @Test func restoreUsesOnlyTheInjectedCheapDirectoryProbe() {
         let fixture = DefaultsFixture()
         defer { fixture.remove() }

@@ -23,15 +23,16 @@ struct WorkspaceCommandPolicy: Equatable {
     let pasteboardHasFileURLs: Bool
     var selectedItems: [FileItem] = []
     var isTextEditing = false
+    var isSmartSearchPresented = false
 
-    var canCreateFolder: Bool { !isOperationRunning && !isTextEditing }
-    var canRename: Bool { !isOperationRunning && !isTextEditing && selectionCount == 1 }
-    var canCopy: Bool { !isTextEditing && selectionCount > 0 }
-    var canPaste: Bool { !isOperationRunning && !isTextEditing && pasteboardHasFileURLs }
-    var canTrash: Bool { !isOperationRunning && !isTextEditing && selectionCount > 0 }
-    var canOpen: Bool { !isTextEditing && selectionCount > 0 }
-    var canQuickLook: Bool { !isTextEditing && selectionCount > 0 }
-    var canNavigate: Bool { !isTextEditing }
+    var canCreateFolder: Bool { !isOperationRunning && !blocksFileCommands }
+    var canRename: Bool { !isOperationRunning && !blocksFileCommands && selectionCount == 1 }
+    var canCopy: Bool { !blocksFileCommands && selectionCount > 0 }
+    var canPaste: Bool { !isOperationRunning && !blocksFileCommands && pasteboardHasFileURLs }
+    var canTrash: Bool { !isOperationRunning && !blocksFileCommands && selectionCount > 0 }
+    var canOpen: Bool { !blocksFileCommands && selectionCount > 0 }
+    var canQuickLook: Bool { !blocksFileCommands && selectionCount > 0 }
+    var canNavigate: Bool { !blocksFileCommands }
     var canCompress: Bool {
         canRunArchiveOperation && ArchiveSelectionEligibility.canCompress(selectedItems)
     }
@@ -42,18 +43,23 @@ struct WorkspaceCommandPolicy: Equatable {
     private var canRunArchiveOperation: Bool {
         !isOperationRunning
             && !isTextEditing
+            && !isSmartSearchPresented
             && selectionCount > 0
             && selectedItems.count == selectionCount
     }
 
     var copyRoute: PasteboardCommandRoute {
-        if isTextEditing { return .textResponder }
+        if blocksFileCommands { return .textResponder }
         return canCopy ? .fileSelection : .unavailable
     }
 
     var pasteRoute: PasteboardCommandRoute {
-        if isTextEditing { return .textResponder }
+        if blocksFileCommands { return .textResponder }
         return canPaste ? .fileSelection : .unavailable
+    }
+
+    private var blocksFileCommands: Bool {
+        isTextEditing || isSmartSearchPresented
     }
 }
 
@@ -88,6 +94,19 @@ enum WorkspaceFilterCommandActions {
     static func showFilter(in workspace: WorkspaceState, canNavigate: Bool) {
         guard canNavigate else { return }
         workspace.activePane.requestFilterFocus()
+    }
+}
+
+@MainActor
+enum WorkspaceSmartSearchCommandActions {
+    static func showSearch(
+        in workspace: WorkspaceState,
+        store: SmartSearchStore,
+        canNavigate: Bool,
+        canPresent: Bool = true
+    ) {
+        guard canNavigate, canPresent else { return }
+        store.present(for: workspace.activePane.currentDirectory)
     }
 }
 
@@ -248,6 +267,10 @@ private struct StorageAnalysisFocusedValueKey: FocusedValueKey {
     typealias Value = StorageAnalysisStore
 }
 
+private struct SmartSearchFocusedValueKey: FocusedValueKey {
+    typealias Value = SmartSearchStore
+}
+
 extension FocusedValues {
     var workspaceState: WorkspaceState? {
         get { self[WorkspaceFocusedValueKey.self] }
@@ -262,6 +285,11 @@ extension FocusedValues {
     var storageAnalysisStore: StorageAnalysisStore? {
         get { self[StorageAnalysisFocusedValueKey.self] }
         set { self[StorageAnalysisFocusedValueKey.self] = newValue }
+    }
+
+    var smartSearchStore: SmartSearchStore? {
+        get { self[SmartSearchFocusedValueKey.self] }
+        set { self[SmartSearchFocusedValueKey.self] = newValue }
     }
 }
 
@@ -396,6 +424,7 @@ struct WorkspaceCommands: Commands {
     @FocusedValue(\.workspaceState) private var workspace
     @FocusedValue(\.comparisonCoordinator) private var comparison
     @FocusedValue(\.storageAnalysisStore) private var focusedStorage
+    @FocusedValue(\.smartSearchStore) private var smartSearch
 
     let quickLookController: QuickLookController
     let operationController: FileOperationController
@@ -483,6 +512,18 @@ struct WorkspaceCommands: Commands {
             }
             .keyboardShortcut("f", modifiers: .command)
             .disabled(workspace == nil || !policy.canNavigate)
+
+            Button("Search Files…") {
+                guard let workspace, let smartSearch else { return }
+                WorkspaceSmartSearchCommandActions.showSearch(
+                    in: workspace,
+                    store: smartSearch,
+                    canNavigate: policy.canNavigate,
+                    canPresent: canPresentSmartSearch
+                )
+            }
+            .keyboardShortcut("f", modifiers: [.command, .shift])
+            .disabled(workspace == nil || smartSearch == nil || !policy.canNavigate || !canPresentSmartSearch)
         }
 
         CommandMenu("File Operations") {
@@ -682,7 +723,8 @@ struct WorkspaceCommands: Commands {
             isOperationRunning: operationController.isRunning,
             pasteboardHasFileURLs: FileURLPasteboard.containsFileURLs(in: .general),
             selectedItems: selectedItemsForCommands,
-            isTextEditing: workspace?.activeTextEditingSession != nil
+            isTextEditing: workspace?.activeTextEditingSession != nil,
+            isSmartSearchPresented: smartSearch?.isPresented == true
         )
     }
 
@@ -692,6 +734,10 @@ struct WorkspaceCommands: Commands {
             uniqueKeysWithValues: workspace.activePane.items.map { ($0.url, $0) }
         )
         return workspace.selectedURLsForCommands.compactMap { itemsByURL[$0] }
+    }
+
+    private var canPresentSmartSearch: Bool {
+        comparison?.isActive != true && activeStorage?.isActive != true
     }
 
     private var comparisonPolicy: ComparisonCommandPolicy {

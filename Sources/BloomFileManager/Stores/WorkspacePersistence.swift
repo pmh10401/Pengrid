@@ -18,6 +18,7 @@ struct RestoredWorkspace: Equatable, Sendable {
 
 final class WorkspacePersistence {
     static let storageKey = "workspace.snapshot.v1"
+    static let savedSearchesStorageKey = "smartSearches.v1"
 
     private let defaults: UserDefaults
 
@@ -46,6 +47,18 @@ final class WorkspacePersistence {
         )
         guard let data = try? encoder.encode(snapshot) else { return }
         defaults.set(data, forKey: Self.storageKey)
+    }
+
+    func loadSavedSearches() -> [SmartSearchRecord] {
+        guard let data = defaults.data(forKey: Self.savedSearchesStorageKey) else { return [] }
+        return (try? JSONDecoder().decode([SmartSearchRecord].self, from: data)) ?? []
+    }
+
+    func saveSavedSearches(_ searches: [SmartSearchRecord]) {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let data = try? encoder.encode(searches) else { return }
+        defaults.set(data, forKey: Self.savedSearchesStorageKey)
     }
 
     func restore(

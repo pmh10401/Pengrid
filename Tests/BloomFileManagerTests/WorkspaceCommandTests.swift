@@ -4,6 +4,50 @@ import Testing
 
 @MainActor
 struct WorkspaceCommandTests {
+    @Test func smartSearchCommandUsesTheActivePaneDirectoryWhileCommandFFilterRemainsPaneLocal() {
+        let workspace = WorkspaceState(
+            leftURL: URL(filePath: "/left", directoryHint: .isDirectory),
+            rightURL: URL(filePath: "/right", directoryHint: .isDirectory),
+            listingService: StubDirectoryListingService(values: [:])
+        )
+        let store = SmartSearchStore(
+            service: EmptySmartSearchService(),
+            persistence: WorkspacePersistence(defaults: UserDefaults(suiteName: "WorkspaceCommandTests.\(UUID().uuidString)")!)
+        )
+        workspace.activate(.right)
+
+        WorkspaceSmartSearchCommandActions.showSearch(in: workspace, store: store, canNavigate: true)
+        WorkspaceFilterCommandActions.showFilter(in: workspace, canNavigate: true)
+
+        #expect(store.isPresented)
+        #expect(store.roots == [URL(filePath: "/right", directoryHint: .isDirectory)])
+        #expect(!workspace.left.isFilterPresented)
+        #expect(workspace.right.isFilterPresented)
+    }
+
+    @Test func smartSearchCommandStaysUnavailableWhileAnotherWorkspaceOverlayIsActive() {
+        let workspace = WorkspaceState(
+            leftURL: URL(filePath: "/left", directoryHint: .isDirectory),
+            rightURL: URL(filePath: "/right", directoryHint: .isDirectory),
+            listingService: StubDirectoryListingService(values: [:])
+        )
+        let store = SmartSearchStore(
+            service: EmptySmartSearchService(),
+            persistence: WorkspacePersistence(defaults: UserDefaults(suiteName: "WorkspaceCommandTests.\(UUID().uuidString)")!)
+        )
+
+        WorkspaceSmartSearchCommandActions.showSearch(
+            in: workspace,
+            store: store,
+            canNavigate: true,
+            canPresent: false
+        )
+        WorkspaceFilterCommandActions.showFilter(in: workspace, canNavigate: true)
+
+        #expect(!store.isPresented)
+        #expect(workspace.activePane.isFilterPresented)
+    }
+
     @Test func newFolderCommandCapturesCreatedIdentityInItsOriginalPaneThroughReturn() async throws {
         let root = try TemporaryDirectory()
         defer { root.remove() }
@@ -221,6 +265,54 @@ struct WorkspaceCommandTests {
         }
     }
 
+    @Test func presentedSmartSearchAndBothSearchFieldsRouteCommandsAwayFromHiddenPaneFiles() {
+        let workspace = WorkspaceState(
+            leftURL: URL(filePath: "/left"),
+            rightURL: URL(filePath: "/right"),
+            listingService: StubDirectoryListingService(values: [:])
+        )
+        let store = SmartSearchStore(
+            service: EmptySmartSearchService(),
+            persistence: WorkspacePersistence(
+                defaults: UserDefaults(suiteName: "WorkspaceCommandTests.\(UUID().uuidString)")!
+            )
+        )
+        store.present(for: workspace.activePane.currentDirectory)
+
+        for kind in [
+            WorkspaceTextEditingSession.Kind.smartSearchQuery,
+            .smartSearchName
+        ] {
+            let session = WorkspaceTextEditingSession(paneID: .left, kind: kind)
+            workspace.beginTextEditing(session)
+            let policy = WorkspaceCommandPolicy(
+                selectionCount: 1,
+                isOperationRunning: false,
+                pasteboardHasFileURLs: true,
+                isTextEditing: workspace.activeTextEditingSession != nil,
+                isSmartSearchPresented: store.isPresented
+            )
+
+            #expect(policy.copyRoute == .textResponder)
+            #expect(policy.pasteRoute == .textResponder)
+            #expect(!policy.canRename)
+            #expect(!policy.canTrash)
+            #expect(!policy.canOpen)
+            #expect(!policy.canNavigate)
+            workspace.endTextEditing(session)
+        }
+
+        let unfocusedOverlayPolicy = WorkspaceCommandPolicy(
+            selectionCount: 1,
+            isOperationRunning: false,
+            pasteboardHasFileURLs: true,
+            isSmartSearchPresented: store.isPresented
+        )
+        #expect(unfocusedOverlayPolicy.copyRoute == .textResponder)
+        #expect(unfocusedOverlayPolicy.pasteRoute == .textResponder)
+        #expect(!unfocusedOverlayPolicy.canTrash)
+    }
+
     @Test func filterEditingIsATextSessionAndCommandFTargetsOnlyTheActivePane() {
         let workspace = WorkspaceState(
             leftURL: URL(filePath: "/left"),
@@ -286,4 +378,8 @@ struct WorkspaceCommandTests {
             #expect(policy.canCancel)
         }
     }
+}
+
+private actor EmptySmartSearchService: SmartSearching {
+    func search(_ query: SmartSearchQuery) async throws -> [SmartSearchResult] { [] }
 }
