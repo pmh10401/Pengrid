@@ -9,6 +9,7 @@ import Testing
 
         let arguments = try LiveArchiveCommandRunner.arguments(
             kind: .compress,
+            format: .zip,
             sources: [source],
             destination: destination
         )
@@ -27,6 +28,7 @@ import Testing
         #expect(throws: ArchiveOperationError.invalidRequest) {
             try LiveArchiveCommandRunner.arguments(
                 kind: .compress,
+                format: .zip,
                 sources: [
                     URL(filePath: "/tmp/First.txt"),
                     URL(filePath: "/tmp/Second.txt")
@@ -42,6 +44,7 @@ import Testing
 
         let arguments = try LiveArchiveCommandRunner.arguments(
             kind: .extract,
+            format: .zip,
             sources: [source],
             destination: destination
         )
@@ -51,6 +54,64 @@ import Testing
             "-k",
             "/tmp/Project Archive.zip",
             "/tmp/Project Archive"
+        ])
+    }
+
+    @Test(arguments: [
+        (ArchiveFormat.tar, []),
+        (ArchiveFormat.tarGzip, ["-z"]),
+        (ArchiveFormat.tarBzip2, ["-j"]),
+        (ArchiveFormat.tarXz, ["-J"])
+    ])
+    func tarCompressionArgumentsUseTheAggregateSourceRoot(
+        format: ArchiveFormat,
+        compressionFlag: [String]
+    ) throws {
+        let aggregateRoot = URL(filePath: "/tmp/.archive-source")
+        let destination = URL(filePath: "/tmp/Archive\(format.canonicalSuffix)")
+
+        let arguments = try LiveArchiveCommandRunner.arguments(
+            kind: .compress,
+            format: format,
+            sources: [aggregateRoot],
+            destination: destination
+        )
+
+        #expect(arguments == ["-c"] + compressionFlag + [
+            "-f",
+            destination.path,
+            "-C",
+            aggregateRoot.path,
+            "."
+        ])
+    }
+
+    @Test(arguments: [
+        (ArchiveFormat.tar, []),
+        (ArchiveFormat.tarGzip, ["-z"]),
+        (ArchiveFormat.tarBzip2, ["-j"]),
+        (ArchiveFormat.tarXz, ["-J"])
+    ])
+    func tarExtractionArgumentsUseTheRequestedCompressionFlag(
+        format: ArchiveFormat,
+        compressionFlag: [String]
+    ) throws {
+        let archive = URL(filePath: "/tmp/Archive\(format.canonicalSuffix)")
+        let destination = URL(filePath: "/tmp/Extracted")
+
+        let arguments = try LiveArchiveCommandRunner.arguments(
+            kind: .extract,
+            format: format,
+            sources: [archive],
+            destination: destination
+        )
+
+        #expect(arguments == ["-x"] + compressionFlag + [
+            "-k",
+            "-f",
+            archive.path,
+            "-C",
+            destination.path
         ])
     }
 }

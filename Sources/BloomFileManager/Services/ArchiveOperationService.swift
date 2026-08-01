@@ -47,7 +47,8 @@ actor ArchiveOperationService: ArchiveOperating {
                 try validate(request)
                 await progress(ArchiveOperationProgress(
                     kind: request.kind,
-                    currentDisplayName: request.progressDisplayName
+                    currentDisplayName: request.progressDisplayName,
+                    format: request.format
                 ))
                 try await perform(request)
                 outcomes.append(.succeeded(
@@ -92,6 +93,7 @@ actor ArchiveOperationService: ArchiveOperating {
             try Task.checkCancellation()
             try await commandRunner.run(
                 kind: request.kind,
+                format: request.format,
                 sources: request.verifiedSources,
                 destination: reservation.item
             )

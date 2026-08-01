@@ -17,11 +17,12 @@ struct ArchiveOperationIntegrationTests {
         let runner = LiveArchiveCommandRunner()
         try await runner.run(
             kind: .compress,
+            format: .zip,
             sources: [firstSource, secondSource],
             destination: archive
         )
         try expectNoAggregateSourceDirectories(in: root.url)
-        try await runner.run(kind: .extract, sources: [archive], destination: extraction)
+        try await runner.run(kind: .extract, format: .zip, sources: [archive], destination: extraction)
 
         #expect(try Data(contentsOf: extraction.appending(path: "First.txt"))
             == Data("first selection".utf8))
@@ -48,10 +49,11 @@ struct ArchiveOperationIntegrationTests {
         let runner = LiveArchiveCommandRunner()
         try await runner.run(
             kind: .compress,
+            format: .zip,
             sources: [selectedLink],
             destination: archive
         )
-        try await runner.run(kind: .extract, sources: [archive], destination: extraction)
+        try await runner.run(kind: .extract, format: .zip, sources: [archive], destination: extraction)
 
         let extractedLink = extraction.appending(path: selectedLink.lastPathComponent)
         #expect(try FileManager.default.destinationOfSymbolicLink(
@@ -74,17 +76,44 @@ struct ArchiveOperationIntegrationTests {
         try expectedContent.write(to: source)
 
         let runner = LiveArchiveCommandRunner()
-        try await runner.run(kind: .compress, sources: [keptParent], destination: archive)
+        try await runner.run(kind: .compress, format: .zip, sources: [keptParent], destination: archive)
         #expect(FileManager.default.fileExists(atPath: archive.path))
         #expect(try archive.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0 > 0)
 
-        try await runner.run(kind: .extract, sources: [archive], destination: extraction)
+        try await runner.run(kind: .extract, format: .zip, sources: [archive], destination: extraction)
 
         let extractedFile = extraction
             .appending(path: "Kept Parent", directoryHint: .isDirectory)
             .appending(path: "Report with spaces.txt")
         #expect(FileManager.default.fileExists(atPath: extractedFile.path))
         #expect(try Data(contentsOf: extractedFile) == expectedContent)
+    }
+
+    @Test func tarGzipRoundTripUsesAnAggregateRootAndCreatesTheExtractionDirectory() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let source = root.url.appending(path: "Source.txt")
+        let archive = root.url.appending(path: "Archive.tar.gz")
+        let extraction = root.url.appending(path: "Extracted", directoryHint: .isDirectory)
+        let content = Data("native tar gzip round trip".utf8)
+        try content.write(to: source)
+
+        let runner = LiveArchiveCommandRunner()
+        try await runner.run(
+            kind: .compress,
+            format: .tarGzip,
+            sources: [source],
+            destination: archive
+        )
+        try await runner.run(
+            kind: .extract,
+            format: .tarGzip,
+            sources: [archive],
+            destination: extraction
+        )
+
+        #expect(try Data(contentsOf: extraction.appending(path: "Source.txt")) == content)
+        try expectNoAggregateSourceDirectories(in: root.url)
     }
 
     @Test func malformedArchiveFailureLeavesNoStagingDirectoryOrPartialDestination() async throws {

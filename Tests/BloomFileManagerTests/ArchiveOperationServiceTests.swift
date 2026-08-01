@@ -13,7 +13,7 @@ struct ArchiveOperationServiceTests {
         try Data("first".utf8).write(to: firstSource)
         try Data("second".utf8).write(to: secondSource)
         let publishedData = Data("completed zip".utf8)
-        let runner = RecordingArchiveCommandRunner { kind, _, stagedDestination in
+        let runner = RecordingArchiveCommandRunner { kind, _, _, stagedDestination in
             #expect(kind == .compress)
             try publishedData.write(to: stagedDestination)
         }
@@ -33,6 +33,7 @@ struct ArchiveOperationServiceTests {
 
         #expect(invocations.count == 1)
         #expect(invocations.first?.kind == .compress)
+        #expect(invocations.first?.format == .zip)
         #expect(invocations.first?.sources == [firstSource, secondSource])
         let stagedDestination = try #require(invocations.first?.destination)
         #expect(stagedDestination.lastPathComponent == "payload")
@@ -47,6 +48,31 @@ struct ArchiveOperationServiceTests {
         try expectNoStagingDirectories(in: root.url)
     }
 
+    @Test func compressionForwardsTheRequestedFormatToTheCommandRunner() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let source = root.url.appending(path: "Source.txt")
+        let destination = root.url.appending(path: "Archive.tar.gz")
+        try Data("source".utf8).write(to: source)
+        let runner = RecordingArchiveCommandRunner { _, _, _, stagedDestination in
+            try Data("archive".utf8).write(to: stagedDestination)
+        }
+        let service = ArchiveOperationService(
+            fileSystem: LiveFileSystemAccess(),
+            commandRunner: runner
+        )
+        let request = ArchiveRequest(
+            kind: .compress,
+            verifiedSources: [source],
+            finalDestination: destination,
+            format: .tarGzip
+        )
+
+        _ = await service.perform([request]) { _ in }
+
+        #expect(await runner.invocations.first?.format == .tarGzip)
+    }
+
     @Test func extractionPublishesCompletedDirectoryAfterRunnerSuccess() async throws {
         let root = try TemporaryDirectory()
         defer { root.remove() }
@@ -54,7 +80,7 @@ struct ArchiveOperationServiceTests {
         let destination = root.url.appending(path: "Package", directoryHint: .isDirectory)
         try Data("source archive".utf8).write(to: source)
         let extractedData = Data("extracted".utf8)
-        let runner = RecordingArchiveCommandRunner { kind, sources, stagedDestination in
+        let runner = RecordingArchiveCommandRunner { kind, _, sources, stagedDestination in
             #expect(kind == .extract)
             #expect(sources == [source])
             try FileManager.default.createDirectory(
@@ -90,7 +116,7 @@ struct ArchiveOperationServiceTests {
         let source = root.url.appending(path: "Source.txt")
         let destination = root.url.appending(path: "Archive.zip")
         try Data("source".utf8).write(to: source)
-        let runner = RecordingArchiveCommandRunner { _, _, stagedDestination in
+        let runner = RecordingArchiveCommandRunner { _, _, _, stagedDestination in
             try Data("partial".utf8).write(to: stagedDestination)
             throw ArchiveServiceTestError.commandFailed
         }
@@ -127,7 +153,7 @@ struct ArchiveOperationServiceTests {
         let secondDestination = root.url.appending(path: "Second", directoryHint: .isDirectory)
         try Data("first".utf8).write(to: firstSource)
         try Data("second".utf8).write(to: secondSource)
-        let runner = RecordingArchiveCommandRunner { _, _, stagedDestination in
+        let runner = RecordingArchiveCommandRunner { _, _, _, stagedDestination in
             try FileManager.default.createDirectory(
                 at: stagedDestination,
                 withIntermediateDirectories: false
@@ -177,7 +203,7 @@ struct ArchiveOperationServiceTests {
         let sourceData = Data("source".utf8)
         let introducedData = Data("introduced destination".utf8)
         try sourceData.write(to: source)
-        let runner = RecordingArchiveCommandRunner { _, _, stagedDestination in
+        let runner = RecordingArchiveCommandRunner { _, _, _, stagedDestination in
             try Data("completed archive".utf8).write(to: stagedDestination)
             try introducedData.write(to: destination)
         }
@@ -212,7 +238,7 @@ struct ArchiveOperationServiceTests {
         try Data("second".utf8).write(to: secondSource)
         let firstDestination = root.url.appending(path: "First", directoryHint: .isDirectory)
         let secondDestination = root.url.appending(path: "Second", directoryHint: .isDirectory)
-        let runner = RecordingArchiveCommandRunner { _, _, stagedDestination in
+        let runner = RecordingArchiveCommandRunner { _, _, _, stagedDestination in
             let stagingDirectory = stagedDestination.deletingLastPathComponent()
             try FileManager.default.removeItem(at: stagingDirectory)
             try FileManager.default.createDirectory(
@@ -275,7 +301,7 @@ struct ArchiveOperationServiceTests {
         let source = root.url.appending(path: "Source.txt")
         let destination = root.url.appending(path: "Archive.zip")
         try Data("source".utf8).write(to: source)
-        let runner = RecordingArchiveCommandRunner { _, _, _ in }
+        let runner = RecordingArchiveCommandRunner { _, _, _, _ in }
         let service = ArchiveOperationService(
             fileSystem: LiveFileSystemAccess(),
             commandRunner: runner
@@ -306,7 +332,7 @@ struct ArchiveOperationServiceTests {
             existingURLs: [root, source],
             suspendExistsOfLastPathComponent: "payload"
         )
-        let runner = RecordingArchiveCommandRunner { _, _, stagedDestination in
+        let runner = RecordingArchiveCommandRunner { _, _, _, stagedDestination in
             try await fileSystem.createDirectory(stagedDestination)
         }
         let service = ArchiveOperationService(
@@ -365,7 +391,7 @@ struct ArchiveOperationServiceTests {
             destinationRoot.url
         ])
         let observation = ArchiveRunObservation()
-        let runner = RecordingArchiveCommandRunner { _, _, stagedDestination in
+        let runner = RecordingArchiveCommandRunner { _, _, _, stagedDestination in
             let call = observation.beginCall()
             let snapshot = driver.snapshot
             if call == 0 {
@@ -409,6 +435,7 @@ struct ArchiveOperationServiceTests {
 
 private struct ArchiveCommandInvocation: Sendable, Equatable {
     let kind: ArchiveOperationKind
+    let format: ArchiveFormat
     let sources: [URL]
     let destination: URL
 }
@@ -416,6 +443,7 @@ private struct ArchiveCommandInvocation: Sendable, Equatable {
 private actor RecordingArchiveCommandRunner: ArchiveCommandRunning {
     typealias Handler = @Sendable (
         ArchiveOperationKind,
+        ArchiveFormat,
         [URL],
         URL
     ) async throws -> Void
@@ -430,15 +458,17 @@ private actor RecordingArchiveCommandRunner: ArchiveCommandRunning {
 
     func run(
         kind: ArchiveOperationKind,
+        format: ArchiveFormat,
         sources: [URL],
         destination: URL
     ) async throws {
         invocations.append(ArchiveCommandInvocation(
             kind: kind,
+            format: format,
             sources: sources,
             destination: destination
         ))
-        try await handler(kind, sources, destination)
+        try await handler(kind, format, sources, destination)
     }
 }
 

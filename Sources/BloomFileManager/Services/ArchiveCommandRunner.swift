@@ -3,6 +3,7 @@ import Foundation
 protocol ArchiveCommandRunning: Sendable {
     func run(
         kind: ArchiveOperationKind,
+        format: ArchiveFormat,
         sources: [URL],
         destination: URL
     ) async throws
@@ -13,11 +14,13 @@ struct LiveArchiveCommandRunner: ArchiveCommandRunning {
 
     func run(
         kind: ArchiveOperationKind,
+        format: ArchiveFormat,
         sources: [URL],
         destination: URL
     ) async throws {
         let preparedCommand = try Self.prepareCommand(
             kind: kind,
+            format: format,
             sources: sources,
             destination: destination
         )
@@ -27,11 +30,18 @@ struct LiveArchiveCommandRunner: ArchiveCommandRunning {
         }
 
         let process = Process()
-        process.executableURL = URL(filePath: "/usr/bin/ditto")
+        process.executableURL = format == .zip
+            ? URL(filePath: "/usr/bin/ditto")
+            : URL(filePath: "/usr/bin/tar")
         process.arguments = preparedCommand.arguments
 
         let standardErrorPipe = Pipe()
         process.standardError = standardErrorPipe
+
+        let terminationLatch = ProcessTerminationLatch()
+        process.terminationHandler = { process in
+            terminationLatch.record(process.terminationStatus)
+        }
 
         do {
             try process.run()
@@ -46,13 +56,8 @@ struct LiveArchiveCommandRunner: ArchiveCommandRunning {
                 limit: Self.standardErrorLimit
             )
         }
-        let processWaiter = Task.detached(priority: .utility) {
-            process.waitUntilExit()
-            return process.terminationStatus
-        }
-
         let status = await withTaskCancellationHandler {
-            await processWaiter.value
+            await terminationLatch.wait()
         } onCancel: {
             runningProcess.cancel()
         }
@@ -71,6 +76,7 @@ struct LiveArchiveCommandRunner: ArchiveCommandRunning {
 
     static func arguments(
         kind: ArchiveOperationKind,
+        format: ArchiveFormat,
         sources: [URL],
         destination: URL
     ) throws -> [String] {
@@ -78,8 +84,8 @@ struct LiveArchiveCommandRunner: ArchiveCommandRunning {
             throw ArchiveOperationError.invalidRequest
         }
 
-        switch kind {
-        case .compress:
+        switch (kind, format) {
+        case (.compress, .zip):
             guard sources.count == 1 else {
                 throw ArchiveOperationError.invalidRequest
             }
@@ -88,26 +94,53 @@ struct LiveArchiveCommandRunner: ArchiveCommandRunning {
                 destination: destination,
                 keepParent: true
             )
-        case .extract:
+        case (.extract, .zip):
             guard sources.count == 1 else {
                 throw ArchiveOperationError.invalidRequest
             }
             return ["-x", "-k", sources[0].path, destination.path]
+        case (.compress, let format):
+            guard sources.count == 1 else {
+                throw ArchiveOperationError.invalidRequest
+            }
+            return ["-c"] + tarCompressionArguments(for: format) + [
+                "-f", destination.path,
+                "-C", sources[0].path,
+                "."
+            ]
+        case (.extract, let format):
+            guard sources.count == 1 else {
+                throw ArchiveOperationError.invalidRequest
+            }
+            return ["-x"] + tarCompressionArguments(for: format) + [
+                "-k",
+                "-f", sources[0].path,
+                "-C", destination.path
+            ]
         }
     }
 
     private static func prepareCommand(
         kind: ArchiveOperationKind,
+        format: ArchiveFormat,
         sources: [URL],
         destination: URL
     ) throws -> PreparedArchiveCommand {
         guard kind == .compress else {
-            return PreparedArchiveCommand(
-                arguments: try arguments(
-                    kind: kind,
-                    sources: sources,
-                    destination: destination
+            let arguments = try arguments(
+                kind: kind,
+                format: format,
+                sources: sources,
+                destination: destination
+            )
+            if format != .zip {
+                try FileManager.default.createDirectory(
+                    at: destination,
+                    withIntermediateDirectories: false
                 )
+            }
+            return PreparedArchiveCommand(
+                arguments: arguments
             )
         }
         guard !sources.isEmpty else {
@@ -147,7 +180,8 @@ struct LiveArchiveCommandRunner: ArchiveCommandRunning {
             arguments: compressionArguments(
                 sourcePaths: [aggregateRoot.path],
                 destination: destination,
-                keepParent: false
+                keepParent: false,
+                format: format
             ),
             aggregateRoot: aggregateRoot
         )
@@ -156,8 +190,16 @@ struct LiveArchiveCommandRunner: ArchiveCommandRunning {
     private static func compressionArguments(
         sourcePaths: [String],
         destination: URL,
-        keepParent: Bool
+        keepParent: Bool,
+        format: ArchiveFormat = .zip
     ) -> [String] {
+        guard format == .zip else {
+            return ["-c"] + tarCompressionArguments(for: format) + [
+                "-f", destination.path,
+                "-C", sourcePaths[0],
+                "."
+            ]
+        }
         var arguments = ["-c", "-k"]
         if keepParent {
             arguments.append("--keepParent")
@@ -166,6 +208,10 @@ struct LiveArchiveCommandRunner: ArchiveCommandRunning {
         arguments.append(contentsOf: sourcePaths)
         arguments.append(destination.path)
         return arguments
+    }
+
+    private static func tarCompressionArguments(for format: ArchiveFormat) -> [String] {
+        format.tarCompressionFlag.map { [$0] } ?? []
     }
 }
 
@@ -202,6 +248,34 @@ private final class RunningArchiveProcess: @unchecked Sendable {
             cancellationRequested = true
             if process.isRunning {
                 process.terminate()
+            }
+        }
+    }
+}
+
+private final class ProcessTerminationLatch: @unchecked Sendable {
+    private let lock = NSLock()
+    private var status: Int32?
+    private var waiter: CheckedContinuation<Int32, Never>?
+
+    func record(_ status: Int32) {
+        let waiter = lock.withLock { () -> CheckedContinuation<Int32, Never>? in
+            self.status = status
+            defer { self.waiter = nil }
+            return self.waiter
+        }
+        waiter?.resume(returning: status)
+    }
+
+    func wait() async -> Int32 {
+        await withCheckedContinuation { continuation in
+            let status = lock.withLock { () -> Int32? in
+                if let recordedStatus = self.status { return recordedStatus }
+                waiter = continuation
+                return nil
+            }
+            if let status {
+                continuation.resume(returning: status)
             }
         }
     }

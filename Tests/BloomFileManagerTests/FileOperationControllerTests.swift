@@ -1085,6 +1085,7 @@ private actor RecordingArchiveOperator: ArchiveOperating {
 private struct CompletingControllerArchiveCommandRunner: ArchiveCommandRunning {
     func run(
         kind: ArchiveOperationKind,
+        format: ArchiveFormat,
         sources: [URL],
         destination: URL
     ) async throws {
