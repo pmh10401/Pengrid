@@ -78,6 +78,27 @@ The filename filter works only on the directory listing already loaded in
 memory. It is not recursive or file-content search, and it does not download
 cloud-only files.
 
+## Smart Search
+
+Press **Command-Shift-F** (or choose **Search Files…** from the File menu) to
+search recursively from the active pane's current directory. Smart Search
+matches filename and relative-path words; it does not search file contents.
+The search view shows its explicit root before a search starts, and saved
+searches keep that query and its selected roots in the Places rail for later
+reuse. A search returns at most 500 ranked results in the interface.
+
+Smart Search is a local File Provider traversal. It has no remote-search
+service and does not automatically download or materialize cloud-only items.
+Cloud-only matches can appear with their availability indicated, but opening a
+result follows Pengrid's normal navigation and File Provider behavior.
+
+For traversal safety, a query must have one or more local directory roots.
+Pengrid does not follow symbolic links, skips hidden items and packages unless
+their explicit options are enabled, and continues past individual unreadable
+entries. It does not index in the background. See
+`docs/verification/smart-search-checklist.md` for the remaining physical
+release checks.
+
 ## Archives
 
 Pengrid can create and extract ZIP and TAR-family archives from **File
@@ -104,7 +125,8 @@ are not supported in this release.
 See `docs/release.md`, `docs/verification/version-1.1-checklist.md`,
 `docs/verification/version-1.2-checklist.md`,
 `docs/verification/version-1.3-archive-checklist.md`, and
-`docs/verification/storage-inspector-checklist.md`. The 1.3 GitHub release is
+`docs/verification/storage-inspector-checklist.md`, and
+`docs/verification/smart-search-checklist.md`. The 1.3 GitHub release is
 an explicitly unsigned Developer Preview DMG: it has not been Developer ID
 signed or notarized, and macOS may show a Gatekeeper warning. A signed public
 release still requires the documented Developer ID, notarization, stapling,
