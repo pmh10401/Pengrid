@@ -44,7 +44,7 @@ enum ArchiveSelectionEligibility {
     static func canExtract(_ items: [FileItem]) -> Bool {
         !items.isEmpty && items.allSatisfy {
             !$0.isDirectory
-                && URL(filePath: $0.name).pathExtension.lowercased() == "zip"
+                && ArchiveFormat.detect(filename: $0.name) != nil
         }
     }
 }
@@ -54,6 +54,7 @@ struct ArchiveDestinationPlan: Sendable, Equatable {
     let selectedSources: [URL]
     let sourceDisplayNames: [String]
     let destinations: [URL]
+    let formats: [ArchiveFormat]
 
     func requests(for verifiedSources: [URL]) -> [ArchiveRequest]? {
         guard verifiedSources.count == selectedSources.count,
@@ -61,23 +62,27 @@ struct ArchiveDestinationPlan: Sendable, Equatable {
         else { return nil }
         switch kind {
         case .compress:
-            guard destinations.count == 1 else { return nil }
+            guard destinations.count == 1, formats.count == 1 else { return nil }
             return [
                 ArchiveRequest(
                     kind: .compress,
                     verifiedSources: verifiedSources,
                     finalDestination: destinations[0],
-                    progressDisplayName: destinations[0].lastPathComponent
+                    progressDisplayName: destinations[0].lastPathComponent,
+                    format: formats[0]
                 )
             ]
         case .extract:
-            guard destinations.count == verifiedSources.count else { return nil }
+            guard destinations.count == verifiedSources.count,
+                  formats.count == verifiedSources.count
+            else { return nil }
             return verifiedSources.indices.map { index in
                 ArchiveRequest(
                     kind: .extract,
                     verifiedSources: [verifiedSources[index]],
                     finalDestination: destinations[index],
-                    progressDisplayName: sourceDisplayNames[index]
+                    progressDisplayName: sourceDisplayNames[index],
+                    format: formats[index]
                 )
             }
         }
@@ -88,12 +93,13 @@ enum ArchiveDestinationPlanner {
     static func compression(
         selectedItems: [FileItem],
         in directory: URL,
-        occupiedNames: Set<String>
+        occupiedNames: Set<String>,
+        format: ArchiveFormat = .zip
     ) -> ArchiveDestinationPlan? {
         guard ArchiveSelectionEligibility.canCompress(selectedItems) else { return nil }
         let proposedName = selectedItems.count == 1
-            ? "\(selectedItems[0].name).zip"
-            : "Archive.zip"
+            ? "\(selectedItems[0].name)\(format.canonicalSuffix)"
+            : "Archive\(format.canonicalSuffix)"
         let destinationName = KeepBothNamer.availableName(
             for: proposedName,
             existing: occupiedNames
@@ -102,7 +108,8 @@ enum ArchiveDestinationPlanner {
             kind: .compress,
             selectedSources: selectedItems.map(\.url),
             sourceDisplayNames: selectedItems.map(\.name),
-            destinations: [directory.appending(path: destinationName)]
+            destinations: [directory.appending(path: destinationName)],
+            formats: [format]
         )
     }
 
@@ -114,10 +121,12 @@ enum ArchiveDestinationPlanner {
         guard ArchiveSelectionEligibility.canExtract(selectedItems) else { return nil }
         var occupied = occupiedNames
         var destinations: [URL] = []
+        var formats: [ArchiveFormat] = []
         for item in selectedItems {
-            let stem = URL(filePath: item.name)
-                .deletingPathExtension()
-                .lastPathComponent
+            guard let format = ArchiveFormat.detect(filename: item.name),
+                  let stem = ArchiveFormat.removingRecognizedSuffix(from: item.name),
+                  !stem.isEmpty
+            else { return nil }
             let destinationName = KeepBothNamer.availableName(
                 for: stem,
                 existing: occupied
@@ -127,12 +136,14 @@ enum ArchiveDestinationPlanner {
                 path: destinationName,
                 directoryHint: .isDirectory
             ))
+            formats.append(format)
         }
         return ArchiveDestinationPlan(
             kind: .extract,
             selectedSources: selectedItems.map(\.url),
             sourceDisplayNames: selectedItems.map(\.name),
-            destinations: destinations
+            destinations: destinations,
+            formats: formats
         )
     }
 }

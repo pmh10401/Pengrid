@@ -22,6 +22,7 @@ enum ArchiveOperationKind: Sendable, Equatable {
 struct ArchiveOperationProgress: Sendable, Equatable {
     let kind: ArchiveOperationKind
     let currentDisplayName: String
+    let format: ArchiveFormat = .zip
 }
 
 struct ArchiveRequest: Sendable, Equatable {
@@ -29,16 +30,19 @@ struct ArchiveRequest: Sendable, Equatable {
     let verifiedSources: [URL]
     let finalDestination: URL
     let progressDisplayName: String
+    let format: ArchiveFormat
 
     init(
         kind: ArchiveOperationKind,
         verifiedSources: [URL],
         finalDestination: URL,
-        progressDisplayName: String? = nil
+        progressDisplayName: String? = nil,
+        format: ArchiveFormat = .zip
     ) {
         self.kind = kind
         self.verifiedSources = verifiedSources
         self.finalDestination = finalDestination
+        self.format = format
         if let progressDisplayName {
             self.progressDisplayName = progressDisplayName
         } else {
