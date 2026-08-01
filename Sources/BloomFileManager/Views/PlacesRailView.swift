@@ -249,6 +249,7 @@ enum CloudLocationContextActions {
 struct PlacesRailView: View {
     let favorites: FavoritesStore
     let cloudLocations: CloudLocationsStore
+    let smartSearch: SmartSearchStore
     let activePane: FilePaneState
     let cloudWorkspaceActions: any CloudLocationWorkspaceActions
     let cloudAccessCoordinator: CloudLocationScopedAccessCoordinator
@@ -321,12 +322,37 @@ struct PlacesRailView: View {
                     .accessibilityLabel("Favorites")
                 }
             }
+
+            Section("Smart Searches") {
+                if smartSearch.savedSearches.isEmpty {
+                    Text("No saved searches")
+                        .foregroundStyle(.secondary)
+                }
+
+                ForEach(smartSearch.savedSearches) { record in
+                    Button {
+                        open(record)
+                    } label: {
+                        Label(record.displayName, systemImage: "magnifyingglass")
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(SmartSearchPresentation.savedSearchAccessibilityLabel(for: record))
+                    .contextMenu {
+                        Button(SmartSearchPresentation.deleteSavedSearchLabel, role: .destructive) {
+                            _ = smartSearch.deleteSavedSearch(id: record.id)
+                        }
+                    }
+                }
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier(AccessibilityIdentifiers.smartSearchSavedSearches)
+            .accessibilityLabel("Saved searches")
         }
         .listStyle(.sidebar)
         .frame(width: 184)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier(AccessibilityIdentifiers.placesRail)
-        .accessibilityLabel("Places, Cloud, and Favorites")
+        .accessibilityLabel("Places, Cloud, Favorites, and Smart Searches")
         .task(id: favorites.records) {
             refreshResolutions()
         }
@@ -369,6 +395,17 @@ struct PlacesRailView: View {
                 )
             }
         }
+    }
+
+    private func open(_ record: SmartSearchRecord) {
+        smartSearch.cancelSearch()
+        smartSearch.queryText = record.query.text
+        smartSearch.roots = record.query.roots
+        smartSearch.includeHidden = record.query.includeHidden
+        smartSearch.includePackages = record.query.includePackages
+        smartSearch.includeDirectories = record.query.includeDirectories
+        smartSearch.isPresented = true
+        smartSearch.search()
     }
 
     private func addDroppedFavorites(_ urls: [URL]) {

@@ -150,6 +150,7 @@ struct BloomFileManagerApp: App {
                 comparison: comparison,
                 storage: storage,
                 storageCleanupController: storageCleanupController,
+                smartSearch: smartSearch,
                 quickLookController: quickLookController,
                 materializer: cloudDependencies.materializer,
                 fileSystem: cloudDependencies.fileSystem,
