@@ -337,6 +337,7 @@ struct PlacesRailView: View {
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(SmartSearchPresentation.savedSearchAccessibilityLabel(for: record))
+                    .accessibilityIdentifier(AccessibilityIdentifiers.smartSearchSavedSearchRow(record.id))
                     .contextMenu {
                         Button(SmartSearchPresentation.deleteSavedSearchLabel, role: .destructive) {
                             _ = smartSearch.deleteSavedSearch(id: record.id)

@@ -85,6 +85,21 @@ struct SmartSearchStoreTests {
         await service.releaseFirstRequest()
     }
 
+    @Test func burstProgressKeepsOnlyTheNewestPendingCount() async {
+        let relay = SmartSearchProgressRelay()
+
+        for count in 1...10_000 {
+            relay.yield(count)
+        }
+        relay.finish()
+
+        var received: [Int] = []
+        for await count in relay.stream {
+            received.append(count)
+        }
+        #expect(received == [10_000])
+    }
+
     @Test func openingPersistedSavedSearchRestoresAndUsesItsNonDefaultResultCap() async throws {
         let persistence = WorkspacePersistence(defaults: isolatedDefaults())
         let savingStore = SmartSearchStore(service: ReplacingSearchService(), persistence: persistence)

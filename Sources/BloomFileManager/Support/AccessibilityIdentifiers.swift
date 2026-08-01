@@ -61,6 +61,10 @@ enum AccessibilityIdentifiers {
         return "smartSearch.result.\(Data(path.utf8).base64EncodedString())"
     }
 
+    static func smartSearchSavedSearchRow(_ id: UUID) -> String {
+        "smartSearch.savedSearch.\(id.uuidString.lowercased())"
+    }
+
     static func smartSearchRemoveRoot(_ url: URL) -> String {
         let path = url.standardizedFileURL.path
         return "smartSearch.removeRoot.\(Data(path.utf8).base64EncodedString())"

@@ -1,6 +1,25 @@
 import Foundation
 import Observation
 
+struct SmartSearchProgressRelay: Sendable {
+    let stream: AsyncStream<Int>
+    private let continuation: AsyncStream<Int>.Continuation
+
+    init() {
+        let pair = AsyncStream<Int>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        stream = pair.stream
+        continuation = pair.continuation
+    }
+
+    func yield(_ count: Int) {
+        continuation.yield(count)
+    }
+
+    func finish() {
+        continuation.finish()
+    }
+}
+
 enum SmartSearchStoreState: Equatable {
     case idle
     case searching
@@ -38,6 +57,7 @@ final class SmartSearchStore {
     private let service: any SmartSearching
     private let persistence: WorkspacePersistence
     private var searchTask: Task<Void, Never>?
+    private var progressConsumerTask: Task<Void, Never>?
     private var searchGeneration = 0
 
     init(service: any SmartSearching, persistence: WorkspacePersistence) {
@@ -94,13 +114,19 @@ final class SmartSearchStore {
         state = .searching
         progressMessage = "Searching files…"
         let service = service
+        let progressRelay = SmartSearchProgressRelay()
+        let progressConsumer = Task { @MainActor [weak self] in
+            for await count in progressRelay.stream {
+                guard !Task.isCancelled else { return }
+                self?.publishProgress(count, generation: generation)
+            }
+        }
+        progressConsumerTask = progressConsumer
         searchTask = Task { [weak self] in
             do {
-                let found = try await service.search(query, progress: { [weak self] count in
-                    Task { @MainActor [weak self] in
-                        self?.publishProgress(count, generation: generation)
-                    }
-                })
+                let found = try await service.search(query, progress: progressRelay.yield)
+                progressRelay.finish()
+                await progressConsumer.value
                 guard !Task.isCancelled,
                       let self,
                       generation == self.searchGeneration
@@ -108,13 +134,21 @@ final class SmartSearchStore {
                 self.results = found
                 self.state = .results
                 self.progressMessage = nil
+                self.progressConsumerTask = nil
                 self.searchTask = nil
             } catch is CancellationError {
+                progressRelay.finish()
+                progressConsumer.cancel()
+                await progressConsumer.value
                 guard let self, generation == self.searchGeneration else { return }
                 self.state = .cancelled
                 self.progressMessage = nil
+                self.progressConsumerTask = nil
                 self.searchTask = nil
             } catch {
+                progressRelay.finish()
+                progressConsumer.cancel()
+                await progressConsumer.value
                 guard !Task.isCancelled,
                       let self,
                       generation == self.searchGeneration
@@ -122,6 +156,7 @@ final class SmartSearchStore {
                 self.state = .failed
                 self.progressMessage = nil
                 self.errorMessage = "Search failed."
+                self.progressConsumerTask = nil
                 self.searchTask = nil
             }
         }
@@ -216,6 +251,8 @@ final class SmartSearchStore {
 
     private func cancelSearchTask() {
         searchGeneration += 1
+        progressConsumerTask?.cancel()
+        progressConsumerTask = nil
         searchTask?.cancel()
         searchTask = nil
     }

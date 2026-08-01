@@ -9,6 +9,16 @@ struct SmartSearchStatePresentation: Equatable {
 enum SmartSearchPresentation {
     static let deleteSavedSearchLabel = "Delete saved search"
 
+    static func canSubmitSearch(
+        queryText: String,
+        roots: [URL],
+        state: SmartSearchStoreState
+    ) -> Bool {
+        !queryText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !roots.isEmpty
+            && state != .searching
+    }
+
     static func availabilityDescription(_ availability: CloudItemAvailability) -> String {
         return switch availability {
         case .availableLocally: "Available locally"
@@ -209,7 +219,11 @@ struct SmartSearchView: View {
             HStack(spacing: 12) {
                 Button("Search", action: store.search)
                     .keyboardShortcut(.defaultAction)
-                    .disabled(store.queryText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || store.state == .searching)
+                    .disabled(!SmartSearchPresentation.canSubmitSearch(
+                        queryText: store.queryText,
+                        roots: store.roots,
+                        state: store.state
+                    ))
                     .accessibilityIdentifier(AccessibilityIdentifiers.smartSearchSubmit)
 
                 if store.state == .searching {

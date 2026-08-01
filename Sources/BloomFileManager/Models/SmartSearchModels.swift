@@ -145,7 +145,8 @@ enum SmartSearchRanker {
     static func ranked(
         _ candidates: [SmartSearchResult],
         for query: SmartSearchQuery,
-        cancellationCheck: @Sendable () throws -> Void
+        cancellationCheck: @Sendable () throws -> Void,
+        sortingHook: @Sendable () throws -> Void = {}
     ) throws -> [SmartSearchResult] {
         try cancellationCheck()
         let queryTokens = tokens(in: query.text)
@@ -187,7 +188,12 @@ enum SmartSearchRanker {
             ))
         }
 
-        let sorted = scored.sorted { lhs, rhs in
+        let sorted = try cancellableSorted(
+            scored,
+            cancellationCheck: cancellationCheck
+        ) { lhs, rhs in
+            try sortingHook()
+            try cancellationCheck()
             if lhs.score != rhs.score {
                 return lhs.score > rhs.score
             }
@@ -204,6 +210,46 @@ enum SmartSearchRanker {
         }
         try cancellationCheck()
         return sorted
+    }
+
+    private static func cancellableSorted<Element>(
+        _ values: [Element],
+        cancellationCheck: @Sendable () throws -> Void,
+        by areInIncreasingOrder: (Element, Element) throws -> Bool
+    ) throws -> [Element] {
+        guard values.count > 1 else { return values }
+        var source = values
+        var destination = values
+        var width = 1
+
+        while width < source.count {
+            try cancellationCheck()
+            for start in stride(from: 0, to: source.count, by: width * 2) {
+                let middle = min(start + width, source.count)
+                let end = min(start + width * 2, source.count)
+                var left = start
+                var right = middle
+
+                for output in start..<end {
+                    try cancellationCheck()
+                    if left < middle,
+                       right < end,
+                       try !areInIncreasingOrder(source[right], source[left]) {
+                        destination[output] = source[left]
+                        left += 1
+                    } else if right < end {
+                        destination[output] = source[right]
+                        right += 1
+                    } else {
+                        destination[output] = source[left]
+                        left += 1
+                    }
+                }
+            }
+            swap(&source, &destination)
+            width *= 2
+        }
+        return source
     }
 
     private static func bm25(token: String, tokens: [String], averageLength: Double, idf: Double) -> Double {

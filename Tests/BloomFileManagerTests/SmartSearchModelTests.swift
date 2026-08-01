@@ -155,6 +155,27 @@ import Testing
         #expect(ranked.map(\.relativePath) == ["a-report.txt", "z-report.txt"])
     }
 
+    @Test func cancellationAfterMergeSortStartsStopsRanking() async throws {
+        let query = try SmartSearchQuery(text: "report", roots: [URL(filePath: "/search/root")])
+        let candidates = (0..<500).map { index in
+            result(name: "report-\(index).txt", path: "folder/report-\(index).txt")
+        }
+        let sortingProbe = SortingCancellationProbe()
+        let task = Task {
+            try SmartSearchRanker.ranked(
+                candidates,
+                for: query,
+                cancellationCheck: { try Task.checkCancellation() },
+                sortingHook: sortingProbe.checkCancellation
+            )
+        }
+        await sortingProbe.waitUntilStarted()
+
+        task.cancel()
+
+        await #expect(throws: CancellationError.self) { try await task.value }
+    }
+
     @Test func savedSearchRecordRoundTripsURLsAndDatesThroughCodable() throws {
         let query = try SmartSearchQuery(
             text: "résumé",
@@ -174,6 +195,25 @@ import Testing
         let decoded = try JSONDecoder().decode(SmartSearchRecord.self, from: JSONEncoder().encode(record))
 
         #expect(decoded == record)
+    }
+}
+
+private final class SortingCancellationProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private var started = false
+
+    func checkCancellation() throws {
+        lock.withLock { started = true }
+        while !Task.isCancelled {
+            usleep(100)
+        }
+        try Task.checkCancellation()
+    }
+
+    func waitUntilStarted() async {
+        while !lock.withLock({ started }) {
+            await Task.yield()
+        }
     }
 }
 

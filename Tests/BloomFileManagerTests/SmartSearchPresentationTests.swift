@@ -74,6 +74,7 @@ struct SmartSearchPresentationTests {
 
     @Test func smartSearchEditingRootAndResultControlsHaveStableAccessibilityIdentifiers() {
         let resultURL = URL(filePath: "/search/report.txt")
+        let savedSearchID = UUID(uuidString: "01234567-89AB-CDEF-0123-456789ABCDEF")!
 
         #expect(AccessibilityIdentifiers.smartSearchSavedName == "smartSearch.savedName")
         #expect(AccessibilityIdentifiers.smartSearchRoots == "smartSearch.roots")
@@ -83,6 +84,19 @@ struct SmartSearchPresentationTests {
             AccessibilityIdentifiers.smartSearchResultRow(resultURL)
                 == "smartSearch.result.L3NlYXJjaC9yZXBvcnQudHh0"
         )
+        #expect(
+            AccessibilityIdentifiers.smartSearchSavedSearchRow(savedSearchID)
+                == "smartSearch.savedSearch.01234567-89ab-cdef-0123-456789abcdef"
+        )
+    }
+
+    @Test func searchSubmissionRequiresQueryRootsAndAnIdleSearchState() {
+        let root = URL(filePath: "/search", directoryHint: .isDirectory)
+
+        #expect(!SmartSearchPresentation.canSubmitSearch(queryText: "report", roots: [], state: .idle))
+        #expect(!SmartSearchPresentation.canSubmitSearch(queryText: "   ", roots: [root], state: .idle))
+        #expect(!SmartSearchPresentation.canSubmitSearch(queryText: "report", roots: [root], state: .searching))
+        #expect(SmartSearchPresentation.canSubmitSearch(queryText: "report", roots: [root], state: .idle))
     }
 
     @Test func rootChooserAcceptsMultipleDirectoriesOnly() {
