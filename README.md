@@ -28,7 +28,7 @@ cd Pengrid
 ```
 
 An unsigned compiled DMG is also available from the
-[Pengrid 1.3 Developer Preview](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.1).
+[Pengrid 1.3 Developer Preview 2](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.2).
 It is not Developer ID signed or notarized, so only open it when you downloaded
 it directly from this repository's GitHub release page.
 
