@@ -93,8 +93,13 @@ enum WorkspaceFilterCommandActions {
 
 @MainActor
 enum WorkspaceSmartSearchCommandActions {
-    static func showSearch(in workspace: WorkspaceState, store: SmartSearchStore, canNavigate: Bool) {
-        guard canNavigate else { return }
+    static func showSearch(
+        in workspace: WorkspaceState,
+        store: SmartSearchStore,
+        canNavigate: Bool,
+        canPresent: Bool = true
+    ) {
+        guard canNavigate, canPresent else { return }
         store.present(for: workspace.activePane.currentDirectory)
     }
 }
@@ -507,11 +512,12 @@ struct WorkspaceCommands: Commands {
                 WorkspaceSmartSearchCommandActions.showSearch(
                     in: workspace,
                     store: smartSearch,
-                    canNavigate: policy.canNavigate
+                    canNavigate: policy.canNavigate,
+                    canPresent: canPresentSmartSearch
                 )
             }
             .keyboardShortcut("f", modifiers: [.command, .shift])
-            .disabled(workspace == nil || smartSearch == nil || !policy.canNavigate)
+            .disabled(workspace == nil || smartSearch == nil || !policy.canNavigate || !canPresentSmartSearch)
         }
 
         CommandMenu("File Operations") {
@@ -721,6 +727,10 @@ struct WorkspaceCommands: Commands {
             uniqueKeysWithValues: workspace.activePane.items.map { ($0.url, $0) }
         )
         return workspace.selectedURLsForCommands.compactMap { itemsByURL[$0] }
+    }
+
+    private var canPresentSmartSearch: Bool {
+        comparison?.isActive != true && activeStorage?.isActive != true
     }
 
     private var comparisonPolicy: ComparisonCommandPolicy {

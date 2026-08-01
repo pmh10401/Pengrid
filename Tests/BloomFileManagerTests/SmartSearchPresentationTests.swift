@@ -48,6 +48,18 @@ struct SmartSearchPresentationTests {
         #expect(SmartSearchPresentation.deleteSavedSearchLabel == "Delete saved search")
     }
 
+    @Test func rootSummaryUsesPrivacySafeFolderNamesInsteadOfAbsolutePaths() {
+        let home = URL(filePath: "/Users/alice", directoryHint: .isDirectory)
+        let privateRoot = home.appending(path: "Private/Projects", directoryHint: .isDirectory)
+
+        let summary = SmartSearchPresentation.rootSummary(for: [privateRoot], home: home)
+
+        #expect(summary == "Searching in Projects")
+        #expect(summary.contains("alice") == false)
+        #expect(summary.contains(privateRoot.path) == false)
+        #expect(SmartSearchPresentation.rootSummary(for: [home], home: home) == "Searching in Home")
+    }
+
     @Test func searchStatesProvideDistinctEmptyLoadingErrorAndCompletePresentation() {
         #expect(SmartSearchPresentation.state(for: .idle, resultCount: 0, errorMessage: nil).title == "Ready to search")
         #expect(SmartSearchPresentation.state(for: .searching, resultCount: 0, errorMessage: nil).title == "Searching files")

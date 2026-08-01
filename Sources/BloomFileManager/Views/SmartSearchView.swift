@@ -33,6 +33,21 @@ enum SmartSearchPresentation {
         "Saved search, \(record.displayName), query \(record.query.text)"
     }
 
+    static func rootSummary(
+        for roots: [URL],
+        home: URL = FileManager.default.homeDirectoryForCurrentUser
+    ) -> String {
+        guard !roots.isEmpty else { return "No search folder selected" }
+        let homePath = home.standardizedFileURL.path
+        let names = roots.map { root in
+            let standardizedRoot = root.standardizedFileURL
+            if standardizedRoot.path == homePath { return "Home" }
+            let name = standardizedRoot.lastPathComponent
+            return name.isEmpty ? "Root folder" : name
+        }
+        return "Searching in \(names.joined(separator: ", "))"
+    }
+
     static func state(
         for state: SmartSearchStoreState,
         resultCount: Int,
@@ -210,8 +225,7 @@ struct SmartSearchView: View {
     }
 
     private var rootSummary: String {
-        let roots = store.roots.map { $0.path }.joined(separator: ", ")
-        return roots.isEmpty ? "No search folder selected" : "Searching in \(roots)"
+        SmartSearchPresentation.rootSummary(for: store.roots)
     }
 
     private func saveCurrentSearch() {

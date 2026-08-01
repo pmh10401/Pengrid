@@ -85,6 +85,16 @@ struct WorkspaceView: View {
         .onDisappear {
             workspace.flushPendingPersistence()
         }
+        .onChange(of: comparison.isActive) { _, isActive in
+            if isActive, smartSearch.isPresented {
+                smartSearch.dismiss()
+            }
+        }
+        .onChange(of: storage.isActive) { _, isActive in
+            if isActive, smartSearch.isPresented {
+                smartSearch.dismiss()
+            }
+        }
         .sheet(item: pendingConflict) { item in
             ConflictResolutionSheet(conflict: item.conflict) { decision, applyToAll in
                 operationController.resolvePendingConflict(

@@ -25,6 +25,29 @@ struct WorkspaceCommandTests {
         #expect(workspace.right.isFilterPresented)
     }
 
+    @Test func smartSearchCommandStaysUnavailableWhileAnotherWorkspaceOverlayIsActive() {
+        let workspace = WorkspaceState(
+            leftURL: URL(filePath: "/left", directoryHint: .isDirectory),
+            rightURL: URL(filePath: "/right", directoryHint: .isDirectory),
+            listingService: StubDirectoryListingService(values: [:])
+        )
+        let store = SmartSearchStore(
+            service: EmptySmartSearchService(),
+            persistence: WorkspacePersistence(defaults: UserDefaults(suiteName: "WorkspaceCommandTests.\(UUID().uuidString)")!)
+        )
+
+        WorkspaceSmartSearchCommandActions.showSearch(
+            in: workspace,
+            store: store,
+            canNavigate: true,
+            canPresent: false
+        )
+        WorkspaceFilterCommandActions.showFilter(in: workspace, canNavigate: true)
+
+        #expect(!store.isPresented)
+        #expect(workspace.activePane.isFilterPresented)
+    }
+
     @Test func newFolderCommandCapturesCreatedIdentityInItsOriginalPaneThroughReturn() async throws {
         let root = try TemporaryDirectory()
         defer { root.remove() }
