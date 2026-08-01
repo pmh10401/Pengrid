@@ -233,4 +233,3 @@ git commit -m "docs: document multi-format archive support"
 - [ ] **Step 4: Review the final diff and branch state**
 
 Run `git diff main...HEAD --check`, `git status -sb`, and `git log --oneline --decorate -8`; confirm no generated artifacts are tracked and every plan task has a test result.
-

@@ -32,6 +32,22 @@ VoiceOver checks below.
   The TAR aliases are extraction inputs; newly compressed TAR-family archives
   use canonical `.tar`, `.tar.gz`, `.tar.bz2`, and `.tar.xz` names.
 
+- [x] **PASS — 2026-08-01 — candidate `a9b6c8f`:** The required serial suite,
+  release packaging contract checks, and Apple Silicon production build all
+  completed successfully for the documented multi-format archive candidate:
+
+  ```bash
+  DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+    swift test --enable-swift-testing --no-parallel --filter BloomFileManagerTests
+  ./script/tests/package_release_contract_tests.sh
+  DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+    swift build -c release --arch arm64
+  ```
+
+  Each command exited 0. The serial suite covered `BloomFileManagerTests`; the
+  release contract script passed; and SwiftPM reported `Build complete!` for
+  the arm64 release build.
+
 ## Manual verification
 
 - [ ] **NOT RUN — keyboard and menu discovery:** In an active file pane, select
