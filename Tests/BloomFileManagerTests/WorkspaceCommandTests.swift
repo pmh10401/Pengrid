@@ -4,6 +4,27 @@ import Testing
 
 @MainActor
 struct WorkspaceCommandTests {
+    @Test func smartSearchCommandUsesTheActivePaneDirectoryWhileCommandFFilterRemainsPaneLocal() {
+        let workspace = WorkspaceState(
+            leftURL: URL(filePath: "/left", directoryHint: .isDirectory),
+            rightURL: URL(filePath: "/right", directoryHint: .isDirectory),
+            listingService: StubDirectoryListingService(values: [:])
+        )
+        let store = SmartSearchStore(
+            service: EmptySmartSearchService(),
+            persistence: WorkspacePersistence(defaults: UserDefaults(suiteName: "WorkspaceCommandTests.\(UUID().uuidString)")!)
+        )
+        workspace.activate(.right)
+
+        WorkspaceSmartSearchCommandActions.showSearch(in: workspace, store: store, canNavigate: true)
+        WorkspaceFilterCommandActions.showFilter(in: workspace, canNavigate: true)
+
+        #expect(store.isPresented)
+        #expect(store.roots == [URL(filePath: "/right", directoryHint: .isDirectory)])
+        #expect(!workspace.left.isFilterPresented)
+        #expect(workspace.right.isFilterPresented)
+    }
+
     @Test func newFolderCommandCapturesCreatedIdentityInItsOriginalPaneThroughReturn() async throws {
         let root = try TemporaryDirectory()
         defer { root.remove() }
@@ -286,4 +307,8 @@ struct WorkspaceCommandTests {
             #expect(policy.canCancel)
         }
     }
+}
+
+private actor EmptySmartSearchService: SmartSearching {
+    func search(_ query: SmartSearchQuery) async throws -> [SmartSearchResult] { [] }
 }

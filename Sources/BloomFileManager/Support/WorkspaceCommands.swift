@@ -92,6 +92,14 @@ enum WorkspaceFilterCommandActions {
 }
 
 @MainActor
+enum WorkspaceSmartSearchCommandActions {
+    static func showSearch(in workspace: WorkspaceState, store: SmartSearchStore, canNavigate: Bool) {
+        guard canNavigate else { return }
+        store.present(for: workspace.activePane.currentDirectory)
+    }
+}
+
+@MainActor
 protocol WorkspaceOpening {
     func open(_ url: URL)
 }
@@ -248,6 +256,10 @@ private struct StorageAnalysisFocusedValueKey: FocusedValueKey {
     typealias Value = StorageAnalysisStore
 }
 
+private struct SmartSearchFocusedValueKey: FocusedValueKey {
+    typealias Value = SmartSearchStore
+}
+
 extension FocusedValues {
     var workspaceState: WorkspaceState? {
         get { self[WorkspaceFocusedValueKey.self] }
@@ -262,6 +274,11 @@ extension FocusedValues {
     var storageAnalysisStore: StorageAnalysisStore? {
         get { self[StorageAnalysisFocusedValueKey.self] }
         set { self[StorageAnalysisFocusedValueKey.self] = newValue }
+    }
+
+    var smartSearchStore: SmartSearchStore? {
+        get { self[SmartSearchFocusedValueKey.self] }
+        set { self[SmartSearchFocusedValueKey.self] = newValue }
     }
 }
 
@@ -396,6 +413,7 @@ struct WorkspaceCommands: Commands {
     @FocusedValue(\.workspaceState) private var workspace
     @FocusedValue(\.comparisonCoordinator) private var comparison
     @FocusedValue(\.storageAnalysisStore) private var focusedStorage
+    @FocusedValue(\.smartSearchStore) private var smartSearch
 
     let quickLookController: QuickLookController
     let operationController: FileOperationController
@@ -483,6 +501,17 @@ struct WorkspaceCommands: Commands {
             }
             .keyboardShortcut("f", modifiers: .command)
             .disabled(workspace == nil || !policy.canNavigate)
+
+            Button("Search Files…") {
+                guard let workspace, let smartSearch else { return }
+                WorkspaceSmartSearchCommandActions.showSearch(
+                    in: workspace,
+                    store: smartSearch,
+                    canNavigate: policy.canNavigate
+                )
+            }
+            .keyboardShortcut("f", modifiers: [.command, .shift])
+            .disabled(workspace == nil || smartSearch == nil || !policy.canNavigate)
         }
 
         CommandMenu("File Operations") {
