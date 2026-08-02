@@ -106,12 +106,26 @@ Korean-initial projections:
    full initial string. `한국` becomes `ㅎㄱ`; `드라이브` becomes `ㄷㄹㅇㅂ`.
 2. **Run heads**: the first initial from each adjacent Hangul-containing text
    segment is concatenated. `구글 드라이브` becomes `ㄱㄷ`.
+3. **Explicit-initial runs**: standalone compatibility or modern choseong jamo
+   are canonicalized to compatibility jamo. This lets a literal filename
+   `ㅎㄱ.txt` receive literal evidence when the query is `ㅎㄱ`.
 
-Whitespace, `/`, `-`, `_`, and `.` terminate a segment. A clause matches when
-it is a consecutive substring of one syllable run or a consecutive substring
-of a run-head string. Arbitrary subsequences are forbidden. Thus `ㄱㄷ`
-matches `구글 드라이브`, while it does not match `개인 사진 다운로드`
-whose run-head projection is `ㄱㅅㄷ`.
+A segment is a maximal sequence of Unicode letters or decimal digits. Every
+other scalar, including whitespace, `/`, `-`, `_`, `.`, parentheses, and other
+punctuation, terminates the segment. A segment contributes at most one run head:
+the first modern Hangul syllable or explicit supported initial in that segment.
+Consecutive Hangul-containing segments form one run-head group. A segment with
+no supported Hangul syllable or initial ends the group. Consequently:
+
+- `구글(드라이브)` and `구글/드라이브` produce run-head group `ㄱㄷ`;
+- `구글/2026/드라이브` produces separate groups `ㄱ` and `ㄷ`; and
+- `구글Drive드라이브` is one segment and contributes only head `ㄱ`.
+
+An initial clause first checks canonicalized explicit-initial runs as literal
+evidence. Otherwise it matches when it is a consecutive substring of one
+syllable run or a consecutive substring of one run-head group. Arbitrary
+subsequences are forbidden. Thus `ㄱㄷ` matches `구글 드라이브`, while it does
+not match `개인 사진 다운로드` whose run-head projection is `ㄱㅅㄷ`.
 
 The analyzer creates initial projections only when the query plan contains an
 initial clause. Literal-only searches remain on the current fast path.
@@ -154,20 +168,38 @@ Literal clauses retain the current tokenization, BM25 calculation, filename
 multiplier, and exact/prefix/contains bonuses. A literal-only query must produce
 the same candidate set, scores, and order as before this change.
 
-Initial clauses add deterministic match-quality bonuses. The ordering contract
-is:
+Initial clauses add deterministic evidence and a virtual BM25 field. Every
+matching initial clause records a tuple:
 
-1. literal filename exact/prefix/contains behavior remains strongest;
-2. filename syllable-run exact, prefix, then contains;
-3. filename run-head exact/prefix/contains;
-4. relative-path syllable-run and run-head matches; and
-5. existing standardized-path tie ordering.
+`(field, representation, relation)`
 
-Initial bonuses are lower than the corresponding literal bonuses, and filename
-bonuses are greater than path-only bonuses. This makes a literal filename
-`ㅎㄱ` outrank `한국`, makes `한국.pdf` outrank a path-only initial match, and
-makes a compact syllable match outrank a word-head match when other evidence is
-equal. Tests assert the ordering contract, not private numeric constants.
+- `field`: filename `2`, relative path `1`;
+- `representation`: canonicalized explicit-initial literal `3`, syllable run
+  `2`, run head `1`; and
+- `relation`: exact `3`, prefix `2`, contains `1`.
+
+Tuples compare lexicographically, higher first. For multiple initial clauses,
+each candidate's tuples are sorted weakest-first and the tuple arrays compare
+lexicographically. This max-min ordering prevents one excellent clause from
+hiding a poor match for another clause. It also guarantees that a literal
+filename `ㅎㄱ` outranks derived `한국`, filename syllable evidence outranks
+filename run-head evidence, and every filename match outranks path-only
+evidence.
+
+Within the same evidence tuple array, initial relevance uses the existing BM25
+constants `k1 = 1.2` and `b = 0.75`. A consecutive occurrence in a syllable or
+explicit-initial run contributes TF `1.0`; an occurrence in a run-head group
+contributes TF `0.5`. Filename TF is multiplied by `3`; path TF is not. Document
+length is the count of supported initials in that virtual field, clamped to at
+least `1`; average length is computed across prepared candidates. IDF uses the
+current formula and the number of candidates whose corresponding field contains
+the clause. The existing literal BM25 score and the initial virtual-field score
+are added only after evidence tuples compare equal.
+
+The final comparison order is: initial evidence tuple array when present,
+combined relevance score, then the existing standardized-path tie ordering.
+Literal-only queries bypass initial evidence and therefore retain the exact
+current score and ordering behavior.
 
 ### Store and persistence
 
@@ -244,13 +276,17 @@ suite, release contract, arm64 build, and manual checklist are final gates.
 - Initial feature preparation is linear in the filename/path scalar count.
 - No unbounded cache or index is introduced.
 - Existing candidate and result bounds remain authoritative.
-- A synthetic 50,000-candidate test guards cancellation and prevents accidental
-  superlinear initial analysis.
+- A synthetic 50,000-candidate test guards cancellation and bounded memory.
+- An internal analyzer step hook, defaulting to a no-op, is invoked once per
+  analyzed scalar. Tests compare work units for one and two copies of the same
+  input and require the doubled input to stay within `2x + constant` work. This
+  verifies linear projection work without a brittle wall-clock threshold.
 
 ## Design self-review
 
-- **Ambiguity:** matching is explicitly consecutive within syllable runs or
-  run heads; arbitrary subsequences are excluded.
+- **Ambiguity:** segment boundaries, run-head grouping, literal initial
+  fallback, and consecutive matching are explicit; arbitrary subsequences are
+  excluded.
 - **Compatibility:** literal-only candidate, score, ordering, persistence, and
   safety contracts are unchanged.
 - **Unicode:** supported scalar sets, normalization form, and unsupported-jamo
@@ -258,7 +294,8 @@ suite, release contract, arm64 build, and manual checklist are final gates.
 - **Scope:** indexing, highlighting, fuzzy search, new settings, and UI redesign
   are deferred.
 - **Consistency:** the service and ranker consume one query-plan/analyzer
-  contract, preventing a candidate/ranking mismatch.
+  contract, and ranking has a complete evidence tuple plus virtual-BM25 order,
+  preventing candidate/ranking mismatches or unbounded bonus interactions.
 - **Completeness:** architecture, data flow, failure handling, accessibility,
   performance, and automated/manual verification have concrete gates and no
   placeholders.
