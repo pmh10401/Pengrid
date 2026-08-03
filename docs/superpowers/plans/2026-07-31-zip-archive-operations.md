@@ -197,4 +197,3 @@
    ```
 
 4. Push the verified commits to `origin/main`; rely on the existing GitHub Actions workflow for a clean CI run. Do not create a public release/DMG or change the release version until a separate release review is requested.
-
