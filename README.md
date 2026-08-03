@@ -88,6 +88,12 @@ such as `한국` and `한글`, while `ㄱㄷ` can match a segmented name such as
 `구글 드라이브`. Compatibility jamo and modern choseong input are equivalent,
 and space-separated initial and literal terms such as `ㅎㄱ report` use AND
 semantics. No search-mode toggle or network index is required.
+New searches are limited to 512 Unicode scalars and 16 compiled terms so
+matching metadata stays bounded even at the 50,000-candidate ceiling. Older
+saved searches that exceed those limits remain listed; Pengrid asks you to
+shorten them before running them instead of discarding the saved-search list.
+Queries made only of punctuation or emoji are rejected before folder traversal
+because they contain no searchable filename, path, or Korean-initial term.
 The search view lets you add or remove explicit roots before a search starts,
 and saved searches keep that query, its selected roots, and its result cap in
 the Places rail for later reuse. The default cap is 500 ranked results and the

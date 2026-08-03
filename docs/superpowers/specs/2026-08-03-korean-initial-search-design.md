@@ -10,8 +10,8 @@ Korean initial-consonant query such as `ㅎㄱ` against `한국`, because the qu
 and document do not share literal text.
 
 This increment adds Korean initial-consonant search without changing the saved
-search schema, root safety rules, candidate bounds, cancellation behavior, or
-the existing literal-search ranking contract.
+search JSON schema, root safety rules, candidate bounds, cancellation behavior,
+or the existing literal-search ranking contract.
 
 ## Goals
 
@@ -94,8 +94,16 @@ literal and supported-initial scalar runs inside a token. Therefore:
 - `한국` stays a literal clause and is not automatically expanded to `ㅎㄱ`;
 - extensions and punctuation retain their current literal behavior.
 
-If compilation yields no searchable clauses, the service returns no results.
-It never interprets such a query as matching every item.
+If compilation yields no searchable clauses, a new query fails validation with
+clear guidance. A legacy saved query in that form still decodes, but execution
+fails before traversal. Pengrid never interprets it as matching every item.
+
+New queries accept at most 512 Unicode scalars and 16 compiled clauses. The
+scalar limit is checked before compilation, and the clause limit is checked
+before traversal, so retained evidence is bounded by candidates times 16.
+Decoding remains migration-safe: an older saved query over either limit keeps
+its original text and roots but has no executable plan until the user shortens
+it.
 
 ### Document projections
 
@@ -147,7 +155,8 @@ small value types that can be tested without mocks.
 
 ### Candidate preparation and search service
 
-`LocalSmartSearchService` compiles one query plan before traversal. For each
+`SmartSearchQuery` prepares one bounded query plan during validation, and
+`LocalSmartSearchService` reuses it before traversal. For each
 eligible entry it prepares path features and applies every clause. Only
 matching entries request cloud availability metadata and enter the bounded
 candidate array.
@@ -160,7 +169,8 @@ for existing tests and callers.
 
 The current root validation, hidden/package/symlink policies, 50,000 hard
 candidate bound, progress reporting, and cancellation checks remain unchanged.
-Query compilation and long analysis/ranking loops also check cancellation.
+Query compilation and long analysis, matching, document-frequency, scoring,
+and merge-sort loops expose cancellation checks.
 
 ### Ranking
 
@@ -203,9 +213,15 @@ current score and ordering behavior.
 
 ### Store and persistence
 
-`SmartSearchStore`, `SmartSearchQuery`, and `SmartSearchRecord` do not gain new
-stored fields. Existing saved searches containing initials begin using the new
-matching behavior automatically. No persistence migration is needed.
+The saved-search JSON schema does not gain a field. `SmartSearchQuery` retains
+its compiled plan only in memory and omits it from `Codable`. Existing saved
+searches containing initials begin using the new matching behavior
+automatically. Legacy searches over the new complexity limits still decode and
+remain visible alongside other saved searches; opening one produces the clear
+`Search is too long. Use fewer terms.` state without touching the filesystem.
+Queries that cannot execute also disable **Save Search**, and the saved-name
+draft is cleared only after a record is actually created. No persistence
+migration is needed.
 
 ## UI and accessibility
 
@@ -226,6 +242,10 @@ guidance and that the existing accessibility label remains intact.
 - Unsupported or malformed jamo remain literal and cannot broaden a search.
 - Unicode analysis is pure and cannot fail traversal. If no clause matches,
   the entry is skipped before cloud metadata access.
+- A query over 512 Unicode scalars or 16 compiled clauses fails before
+  filesystem traversal and asks the user to shorten it.
+- A punctuation- or emoji-only query fails before traversal with
+  `Search needs a filename, path, or Korean initials.`
 - Errors continue to avoid exposing absolute paths in user-visible messages.
 - Search remains metadata-only and never materializes cloud content.
 
@@ -274,13 +294,17 @@ suite, release contract, arm64 build, and manual checklist are final gates.
 - Query plans are compiled once per search.
 - Literal-only searches do not create initial projections.
 - Initial feature preparation is linear in the filename/path scalar count.
+- Initial substring matching uses a precomputed KMP failure table, counts
+  overlapping matches, and stays linear in pattern plus candidate length.
 - No unbounded cache or index is introduced.
-- Existing candidate and result bounds remain authoritative.
-- A synthetic 50,000-candidate test guards cancellation and bounded memory.
-- An internal analyzer step hook, defaulting to a no-op, is invoked once per
-  analyzed scalar. Tests compare work units for one and two copies of the same
-  input and require the doubled input to stay within `2x + constant` work. This
-  verifies linear projection work without a brittle wall-clock threshold.
+- Existing candidate and result bounds remain authoritative, and each query
+  retains evidence for no more than 16 clauses per candidate.
+- A synthetic 50,000-candidate test guards cancellation after merge sort has
+  started; a separate probe interrupts initial-field statistics collection.
+- An internal analyzer step hook, defaulting to a no-op, is invoked during
+  scalar analysis, failure-table construction, and initial matching. Tests
+  compare work units for proportionally doubled adversarial inputs and require
+  the work to stay within `2x + constant`, avoiding a brittle wall-clock gate.
 
 ## Design self-review
 

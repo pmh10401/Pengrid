@@ -8,46 +8,42 @@ VoiceOver checks below.
 
 ## Automated evidence
 
-- [x] **PASS — focused Swift Testing (2026-08-03):** The Korean-initial-search
-  candidate completed 55 tests in five independently selected suites with zero
-  failures: analyzer 12, ranking/model 18, service 16, Store 8, and presentation
-  guidance 1.
+- [x] **PASS — focused Swift Testing (2026-08-03):** Commit `3219636` completed
+  84 Smart Search tests in six suites with zero failures: analyzer 17,
+  ranking/model 26, service 19, Store 11, presentation 10, and command routing 1.
 
   ```bash
   DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
-    swift test --no-parallel --filter SmartSearchTextAnalyzerTests
-  DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
-    swift test --no-parallel --filter SmartSearchModelTests
-  DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
-    swift test --no-parallel --filter SmartSearchServiceTests
-  DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
-    swift test --no-parallel --filter SmartSearchStoreTests
-  DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
-    swift test --no-parallel \
-      --filter searchGuidanceExplainsAutomaticKoreanInitialMatching
+    swift test --no-parallel --filter SmartSearch
   ```
 
   These suites cover compatibility-jamo and modern-choseong equivalence;
   NFC/NFD filenames; all 19 modern initials; mixed literal-and-initial AND
-  queries; deterministic evidence-based ranking; linear analysis work;
-  recursive filename/path matching; cancellation; saved-search state; and
-  cloud-only availability without materialization. A ranking mutation that
+  queries; deterministic evidence-based ranking; KMP linear-work and overlap
+  behavior; 50,000-candidate sorting cancellation; cancellable initial-field
+  statistics; recursive filename/path matching; command routing; and cloud-only
+  availability without materialization. Migration tests additionally verify
+  that legacy searches above the 512-scalar/16-clause limits remain persisted
+  while execution fails before traversal with clear guidance. A ranking mutation that
   reversed evidence order made
   `weakestInitialClauseWinsBeforeOneExcellentClause` fail, and the test passed
   again after restoring the production comparator.
 
-- [ ] **FAIL — full serial Swift Testing (2026-08-03):** The unfiltered run is
-  not a release gate on this host. It recorded failures outside Smart Search
-  before an AppKit `NSOpenPanel` XPC helper ended the run. Narrow reproduction
-  confirmed `CloudItemAvailabilityTests.directoryListingDoesNotCallTheMaterializer`
-  fails because LaunchServices returns `kLSDataUnavailableErr (-10813)` for a
-  temporary file's optional kind string; the checksum timestamp fixture also
-  remains empty. These host failures are recorded separately and must not be
-  described as passing.
+- [x] **PASS — full serial Swift Testing (2026-08-03):** A fresh isolated
+  worktree run at commit `3219636` completed 731 tests in 56 suites with zero
+  failures in 40.043 seconds. The earlier host-only LaunchServices and checksum
+  failures did not reproduce, so this newer complete run supersedes that failed
+  attempt without erasing its diagnostic history.
 
-- [x] **PASS — release and static contracts (2026-08-03):** The package release
-  contract script reported `PASS`, the arm64 release build completed, and both
-  working-tree and branch diff checks reported no whitespace errors:
+  ```bash
+  DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+    swift test --no-parallel
+  ```
+
+- [x] **PASS — release and static contracts (2026-08-03):** In the isolated
+  final worktree, the package release contract script reported `PASS` and the
+  arm64 release build completed in 31.18 seconds. Working-tree and branch diff
+  whitespace checks are rerun after the verification record is committed:
 
   ```bash
   ./script/tests/package_release_contract_tests.sh
@@ -56,6 +52,11 @@ VoiceOver checks below.
   git diff --check
   git diff origin/feature/smart-search...HEAD --check
   ```
+
+- [x] **PASS — Sol Max implementation review (2026-08-03):** The final scoped
+  re-review of `1cd5aca` reported no P0, P1, or P2 findings. It confirmed
+  migration-safe pre-traversal rejection, literal BM25 numeric compatibility,
+  invalid-save gating, and saved-name draft preservation.
 
 ## Local UI smoke evidence
 

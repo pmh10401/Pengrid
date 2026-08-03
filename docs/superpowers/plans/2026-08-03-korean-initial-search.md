@@ -4,7 +4,7 @@
 
 **Goal:** Add automatic Korean initial-consonant matching and deterministic ranking to Pengrid Smart Search while preserving every literal-only search contract.
 
-**Architecture:** A pure `SmartSearchTextAnalyzer` compiles a query into literal and Korean-initial clauses and prepares bounded document projections. `LocalSmartSearchService` uses the same plan and prepared features for candidate filtering, while `SmartSearchRanker` compares explicit evidence tuples before BM25-style relevance. Existing Store and persistence models remain unchanged.
+**Architecture:** A pure `SmartSearchTextAnalyzer` compiles a query into literal and Korean-initial clauses and prepares bounded document projections. `SmartSearchQuery` retains one non-Codable, validated plan, `LocalSmartSearchService` uses it for candidate filtering, and `SmartSearchRanker` compares the same evidence before BM25-style relevance. The saved-search JSON schema remains unchanged and legacy over-limit searches remain decodable.
 
 **Tech Stack:** Swift 6.1, Foundation Unicode scalars and normalization, Swift Testing, SwiftUI/AppKit, Swift Package Manager on macOS 15+.
 
@@ -16,7 +16,9 @@
 - Compile query clauses once per search and create initial projections only when an initial clause exists.
 - Preserve literal-only candidate sets, BM25 scores, filename multiplier, bonuses, and standardized-path ordering.
 - Preserve explicit local roots, hidden/package/symlink rules, metadata-only cloud behavior, 50,000 candidate bound, 2,000 result bound, progress, and cancellation.
-- Do not change `SmartSearchQuery`, `SmartSearchRecord`, saved-search persistence, or add a search-mode toggle.
+- Keep the `SmartSearchRecord` JSON schema stable and add no search-mode toggle.
+- Bound new queries to 512 Unicode scalars and 16 compiled clauses; preserve
+  legacy over-limit records on decode but reject execution before traversal.
 - Keep Unicode analysis linear and dependency-free.
 - Follow strict red-green-refactor: each production behavior begins with a focused test observed failing for the expected reason.
 
