@@ -726,7 +726,7 @@ struct FileOperationControllerTests {
         ]))
     }
 
-    @Test func runningOperationRejectsASecondOperationWithoutReplacingItsConflict() async {
+    @Test func runningOperationQueuesASecondOperationWithoutReplacingItsConflict() async {
         let firstSource = URL(filePath: "/source/first")
         let secondSource = URL(filePath: "/source/second")
         let destinationDirectory = URL(filePath: "/destination")
@@ -763,10 +763,11 @@ struct FileOperationControllerTests {
             workspace: workspace
         )
 
-        #expect(didStartSecond == false)
+        #expect(didStartSecond)
+        #expect(controller.queuedJobs.count == 1)
         #expect(controller.pendingConflict?.source == firstSource)
         controller.resolvePendingConflict(.skip, applyToAll: false)
-        await waitUntilIdle(controller)
+        await waitUntilQueueIsIdle(controller)
     }
 
     @Test func applyToAllDecisionResetsBetweenCompletedOperations() async {
@@ -1033,6 +1034,165 @@ struct FileOperationControllerTests {
         ]))
     }
 
+    @Test func queuedOperationsRunFIFOWithOnlyOneActiveJob() async {
+        let source = URL(filePath: "/source/first")
+        let destinationDirectory = URL(filePath: "/destination")
+        let collision = destinationDirectory.appending(path: "first")
+        let fileSystem = RecordingFileSystem(
+            existingURLs: [source, destinationDirectory, collision]
+        )
+        let controller = FileOperationController(
+            service: FileOperationService(fileSystem: fileSystem)
+        )
+        let workspace = WorkspaceState(
+            leftURL: destinationDirectory,
+            rightURL: URL(filePath: "/elsewhere"),
+            listingService: StubDirectoryListingService(values: [:])
+        )
+
+        #expect(controller.runTransfer(
+            [source],
+            to: destinationDirectory,
+            mode: .copy,
+            workspace: workspace
+        ))
+        await waitForPendingConflict(controller)
+        #expect(controller.createFolder(
+            in: destinationDirectory,
+            named: "Second",
+            workspace: workspace
+        ))
+        #expect(controller.createFolder(
+            in: destinationDirectory,
+            named: "Third",
+            workspace: workspace
+        ))
+
+        #expect(controller.activeJob?.kind == .copy)
+        #expect(controller.queuedJobs.map(\.kind) == [.createFolder, .createFolder])
+        #expect(controller.queuedJobs.map(\.itemDisplayName) == ["Second", "Third"])
+
+        controller.resolvePendingConflict(.skip, applyToAll: false)
+        await waitUntilQueueIsIdle(controller)
+
+        #expect(await fileSystem.existingURLs.contains(
+            destinationDirectory.appending(path: "Second", directoryHint: .isDirectory)
+        ))
+        #expect(await fileSystem.existingURLs.contains(
+            destinationDirectory.appending(path: "Third", directoryHint: .isDirectory)
+        ))
+        #expect(controller.operationHistory.map(\.kind) == [
+            .createFolder, .createFolder, .copy
+        ])
+    }
+
+    @Test func queuedJobCanBeCancelledWithoutExecuting() async {
+        let source = URL(filePath: "/source/first")
+        let destinationDirectory = URL(filePath: "/destination")
+        let collision = destinationDirectory.appending(path: "first")
+        let fileSystem = RecordingFileSystem(
+            existingURLs: [source, destinationDirectory, collision]
+        )
+        let controller = FileOperationController(
+            service: FileOperationService(fileSystem: fileSystem)
+        )
+        let workspace = WorkspaceState(
+            leftURL: destinationDirectory,
+            rightURL: URL(filePath: "/elsewhere"),
+            listingService: StubDirectoryListingService(values: [:])
+        )
+
+        #expect(controller.runTransfer(
+            [source],
+            to: destinationDirectory,
+            mode: .copy,
+            workspace: workspace
+        ))
+        await waitForPendingConflict(controller)
+        #expect(controller.createFolder(
+            in: destinationDirectory,
+            named: "Never Created",
+            workspace: workspace
+        ))
+        let queuedID = controller.queuedJobs[0].id
+
+        #expect(controller.cancelQueuedJob(queuedID))
+        controller.resolvePendingConflict(.skip, applyToAll: false)
+        await waitUntilQueueIsIdle(controller)
+
+        #expect(await !fileSystem.existingURLs.contains(
+            destinationDirectory.appending(path: "Never Created", directoryHint: .isDirectory)
+        ))
+        #expect(controller.operationHistory.first { $0.id == queuedID }?.state == .cancelled)
+    }
+
+    @Test func activeJobPauseResumeAndCancelUpdateOperationCenterState() async {
+        let source = URL(filePath: "/source/first")
+        let destinationDirectory = URL(filePath: "/destination")
+        let collision = destinationDirectory.appending(path: "first")
+        let controller = FileOperationController(
+            service: FileOperationService(fileSystem: RecordingFileSystem(
+                existingURLs: [source, destinationDirectory, collision]
+            ))
+        )
+        let workspace = WorkspaceState(
+            leftURL: destinationDirectory,
+            rightURL: URL(filePath: "/elsewhere"),
+            listingService: StubDirectoryListingService(values: [:])
+        )
+        controller.runTransfer(
+            [source],
+            to: destinationDirectory,
+            mode: .copy,
+            workspace: workspace
+        )
+        await waitForPendingConflict(controller)
+
+        await controller.pauseActiveJob()
+        #expect(controller.isPaused)
+        #expect(controller.activeJob?.state == .paused)
+        await controller.resumeActiveJob()
+        #expect(!controller.isPaused)
+        #expect(controller.activeJob?.state == .running)
+
+        controller.cancelActiveJob()
+        await waitUntilQueueIsIdle(controller)
+        #expect(controller.operationHistory.first?.state == .cancelled)
+    }
+
+    @Test func failedJobRetryCreatesANewAttemptAndHistoryIsBounded() async {
+        let directory = URL(filePath: "/workspace")
+        let existing = directory.appending(path: "Existing", directoryHint: .isDirectory)
+        let controller = FileOperationController(
+            service: FileOperationService(fileSystem: RecordingFileSystem(
+                existingURLs: [directory, existing]
+            )),
+            materializer: InMemoryCloudMaterializer(),
+            historyLimit: 2
+        )
+        let workspace = WorkspaceState(
+            leftURL: directory,
+            rightURL: URL(filePath: "/elsewhere"),
+            listingService: StubDirectoryListingService(values: [:])
+        )
+
+        controller.createFolder(in: directory, named: "Existing", workspace: workspace)
+        await waitUntilQueueIsIdle(controller)
+        let firstAttempt = controller.operationHistory[0]
+        #expect(firstAttempt.state == .failed)
+        #expect(firstAttempt.canRetry)
+
+        #expect(controller.retryJob(firstAttempt.id))
+        await waitUntilQueueIsIdle(controller)
+        #expect(controller.operationHistory.count == 2)
+        #expect(controller.operationHistory[0].id != controller.operationHistory[1].id)
+
+        controller.createFolder(in: directory, named: "Existing", workspace: workspace)
+        await waitUntilQueueIsIdle(controller)
+        #expect(controller.operationHistory.count == 2)
+        #expect(!controller.operationHistory.contains { $0.id == firstAttempt.id })
+    }
+
     @Test func operationStatusSummaryCountsEveryOutcomeForAccessibility() {
         let result = FileOperationResult(outcomes: [
             .succeeded(source: URL(filePath: "/a"), destination: URL(filePath: "/dest/a")),
@@ -1069,6 +1229,12 @@ struct FileOperationControllerTests {
 
     private func waitUntilIdle(_ controller: FileOperationController) async {
         while controller.isRunning {
+            await Task.yield()
+        }
+    }
+
+    private func waitUntilQueueIsIdle(_ controller: FileOperationController) async {
+        while controller.isRunning || !controller.queuedJobs.isEmpty {
             await Task.yield()
         }
     }

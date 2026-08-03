@@ -39,6 +39,10 @@ final class FileOperationController {
     private(set) var lastResult: FileOperationResult?
     private(set) var lastPreparationFailures: [CloudMaterializationFailure] = []
     private(set) var isRunning = false
+    private(set) var activeJob: FileOperationJobSnapshot?
+    private(set) var queuedJobs: [FileOperationJobSnapshot] = []
+    private(set) var operationHistory: [FileOperationJobSnapshot] = []
+    private(set) var isPaused = false
 
     var progress: FileOperationProgress? {
         guard case let .operating(progress) = stage else { return nil }
@@ -49,16 +53,23 @@ final class FileOperationController {
     @ObservationIgnored private var conflictContinuation: CheckedContinuation<ConflictDecision, Never>?
     @ObservationIgnored private var conflictRequestID: UUID?
     @ObservationIgnored private var applyToAllDecision: ConflictDecision?
+    @ObservationIgnored private var pendingOperations: [PendingFileOperation] = []
+    @ObservationIgnored private var activeOperation: PendingFileOperation?
+    @ObservationIgnored private var activeControl: FileOperationControl?
+    @ObservationIgnored private var retryOperations: [UUID: PendingFileOperation] = [:]
+    @ObservationIgnored private let historyLimit: Int
 
     init(
         service: FileOperationService,
         materializer: any CloudMaterializing,
-        archiveService: (any ArchiveOperating)? = nil
+        archiveService: (any ArchiveOperating)? = nil,
+        historyLimit: Int = 100
     ) {
         self.service = service
         self.materializer = materializer
         self.archiveService = archiveService
             ?? service.makeArchiveOperationService()
+        self.historyLimit = max(historyLimit, 1)
     }
 
     func requestDecision(for conflict: FileConflict) async -> ConflictDecision {
@@ -100,8 +111,60 @@ final class FileOperationController {
     }
 
     func cancel() {
+        cancelActiveJob()
+    }
+
+    func cancelActiveJob() {
         operationTask?.cancel()
+        if let activeControl {
+            Task { await activeControl.cancel() }
+        }
         resolvePendingConflict(.cancel, applyToAll: false)
+    }
+
+    func pauseActiveJob() async {
+        guard let activeControl, let activeJob else { return }
+        await activeControl.pause()
+        isPaused = true
+        self.activeJob = snapshot(
+            for: activeJob,
+            state: .paused,
+            progress: activeJob.progress,
+            canUndo: false
+        )
+    }
+
+    func resumeActiveJob() async {
+        guard let activeControl, let activeJob else { return }
+        await activeControl.resume()
+        isPaused = false
+        self.activeJob = snapshot(
+            for: activeJob,
+            state: .running,
+            progress: activeJob.progress,
+            canUndo: false
+        )
+    }
+
+    @discardableResult
+    func cancelQueuedJob(_ id: UUID) -> Bool {
+        guard let index = pendingOperations.firstIndex(where: { $0.id == id }) else {
+            return false
+        }
+        let pending = pendingOperations.remove(at: index)
+        queuedJobs.removeAll { $0.id == id }
+        retryOperations[id] = pending
+        recordHistory(pending.snapshot(state: .cancelled))
+        return true
+    }
+
+    @discardableResult
+    func retryJob(_ id: UUID) -> Bool {
+        guard operationHistory.first(where: { $0.id == id })?.canRetry == true,
+              let original = retryOperations[id]
+        else { return false }
+        enqueue(original.retryAttempt())
+        return true
     }
 
     private func cancelPendingDecision(requestID: UUID) {
@@ -186,7 +249,14 @@ final class FileOperationController {
     ) -> Bool {
         let sources = plan.selectedSources
         let initialName = plan.destinations.first?.lastPathComponent ?? ""
+        let jobKind: FileOperationJobKind = switch plan.kind {
+        case .compress:
+            .compress(plan.formats.first ?? .zip)
+        case .extract:
+            .extract(plan.formats.first ?? .zip)
+        }
         return beginOperation(
+            kind: jobKind,
             totalCount: plan.destinations.count,
             initialName: initialName,
             initialStage: .preparing(CloudMaterializationProgress(
@@ -320,6 +390,7 @@ final class FileOperationController {
             sources.map { $0.deletingLastPathComponent() } + [directory]
         )
         return beginOperation(
+            kind: mode == .copy ? .copy : .move,
             totalCount: sources.count,
             initialName: sources.first?.lastPathComponent ?? "",
             initialStage: .preparing(CloudMaterializationProgress(
@@ -403,6 +474,7 @@ final class FileOperationController {
                 + requests.map(\.destinationRoot)
         )
         return beginOperation(
+            kind: mode == .copy ? .copy : .move,
             totalCount: requests.count,
             initialName: sources.first?.lastPathComponent ?? "",
             initialStage: .preparing(CloudMaterializationProgress(
@@ -592,6 +664,7 @@ final class FileOperationController {
         let proposedURL = directory.appending(path: name, directoryHint: .isDirectory)
         let renameCapture = IdentifiedRequestCapture()
         return beginOperation(
+            kind: .createFolder,
             totalCount: 1,
             initialName: name,
             touchedDirectories: [directory],
@@ -629,6 +702,7 @@ final class FileOperationController {
         workspace: WorkspaceState
     ) -> Bool {
         return beginOperation(
+            kind: .rename,
             totalCount: 1,
             initialName: source.lastPathComponent,
             touchedDirectories: [source.deletingLastPathComponent()],
@@ -677,6 +751,7 @@ final class FileOperationController {
     ) -> Bool {
         let source = target.url
         return beginOperation(
+            kind: .rename,
             totalCount: 1,
             initialName: source.lastPathComponent,
             touchedDirectories: [source.deletingLastPathComponent()],
@@ -715,6 +790,7 @@ final class FileOperationController {
     func trash(_ sources: [URL], workspace: WorkspaceState) -> Bool {
         let touchedDirectories = Set(sources.map { $0.deletingLastPathComponent() })
         return beginOperation(
+            kind: .trash,
             totalCount: sources.count,
             initialName: sources.first?.lastPathComponent ?? "",
             touchedDirectories: touchedDirectories,
@@ -749,6 +825,7 @@ final class FileOperationController {
         let sources = requests.map(\.url)
         let touchedDirectories = Set(sources.map { $0.deletingLastPathComponent() })
         return beginOperation(
+            kind: .trash,
             totalCount: sources.count,
             initialName: privacySafeProgress
                 ? "Item"
@@ -778,6 +855,7 @@ final class FileOperationController {
         let entries = groups.flatMap(\.trash)
         let touchedDirectories = Set(entries.map { $0.url.deletingLastPathComponent() })
         return beginOperation(
+            kind: .trash,
             totalCount: entries.count,
             initialName: "Item",
             touchedDirectories: touchedDirectories,
@@ -797,6 +875,7 @@ final class FileOperationController {
     }
 
     private func beginOperation(
+        kind: FileOperationJobKind,
         totalCount: Int,
         initialName: String,
         initialStage: FileOperationStage? = nil,
@@ -805,38 +884,60 @@ final class FileOperationController {
         onCompletion: (@MainActor (FileOperationResult) -> Void)? = nil,
         operation: @escaping @MainActor () async -> FileOperationResult
     ) -> Bool {
-        guard !isRunning else { return false }
+        enqueue(PendingFileOperation(
+            kind: kind,
+            itemDisplayName: initialName,
+            itemCount: totalCount,
+            initialStage: initialStage,
+            touchedDirectories: touchedDirectories,
+            workspace: workspace,
+            onCompletion: onCompletion,
+            operation: operation
+        ))
+        return true
+    }
 
+    private func enqueue(_ pending: PendingFileOperation) {
+        pendingOperations.append(pending)
+        queuedJobs.append(pending.snapshot(state: .queued))
+        startNextOperationIfNeeded()
+    }
+
+    private func startNextOperationIfNeeded() {
+        guard activeOperation == nil, !pendingOperations.isEmpty else { return }
+        let pending = pendingOperations.removeFirst()
+        queuedJobs.removeAll { $0.id == pending.id }
+
+        activeOperation = pending
+        activeControl = FileOperationControl()
+        activeJob = pending.snapshot(state: .running)
+        isPaused = false
         isRunning = true
-        stage = initialStage ?? .operating(FileOperationProgress(
+        stage = pending.initialStage ?? .operating(FileOperationProgress(
             completedCount: 0,
-            totalCount: totalCount,
-            currentName: initialName
+            totalCount: pending.itemCount,
+            currentName: pending.itemDisplayName
         ))
         lastResult = nil
         lastPreparationFailures = []
         applyToAllDecision = nil
 
-        operationTask = Task { [weak self, workspace] in
+        operationTask = Task { [weak self] in
             guard let self else { return }
-            let result = await operation()
-            let completionTask = Task { @MainActor [weak self, workspace] in
-                await self?.completeOperation(
-                    with: result,
-                    touching: touchedDirectories,
-                    in: workspace
-                )
-                onCompletion?(result)
+            let result = await pending.operation()
+            let completionTask = Task { @MainActor [weak self] in
+                guard let self else { return }
+                await self.completeOperation(with: result, pending: pending)
+                pending.onCompletion?(result)
+                self.startNextOperationIfNeeded()
             }
             await completionTask.value
         }
-        return true
     }
 
     private func completeOperation(
         with result: FileOperationResult,
-        touching directories: Set<URL>,
-        in workspace: WorkspaceState
+        pending: PendingFileOperation
     ) async {
         lastResult = result
         if let progress {
@@ -846,10 +947,65 @@ final class FileOperationController {
                 currentName: progress.currentName
             ))
         }
-        await refreshVisiblePanes(in: workspace, touching: directories)
+        await refreshVisiblePanes(
+            in: pending.workspace,
+            touching: pending.touchedDirectories
+        )
+        let completedState = terminalState(for: result)
+        retryOperations[pending.id] = pending
+        recordHistory(pending.snapshot(state: completedState))
+        activeJob = nil
+        activeOperation = nil
+        activeControl = nil
+        isPaused = false
         isRunning = false
         operationTask = nil
         applyToAllDecision = nil
+    }
+
+    private func terminalState(for result: FileOperationResult) -> FileOperationJobState {
+        var sawFailure = false
+        var sawCancellation = false
+        for outcome in result.outcomes {
+            switch outcome {
+            case .failed, .recoveryNeeded:
+                sawFailure = true
+            case .cancelled:
+                sawCancellation = true
+            case .succeeded, .skipped:
+                break
+            }
+        }
+        if sawFailure { return .failed }
+        if sawCancellation { return .cancelled }
+        return .succeeded
+    }
+
+    private func recordHistory(_ snapshot: FileOperationJobSnapshot) {
+        operationHistory.insert(snapshot, at: 0)
+        guard operationHistory.count > historyLimit else { return }
+        let removed = Array(operationHistory.suffix(from: historyLimit))
+        operationHistory.removeSubrange(historyLimit...)
+        for item in removed {
+            retryOperations.removeValue(forKey: item.id)
+        }
+    }
+
+    private func snapshot(
+        for original: FileOperationJobSnapshot,
+        state: FileOperationJobState,
+        progress: FileOperationJobProgress?,
+        canUndo: Bool
+    ) -> FileOperationJobSnapshot {
+        FileOperationJobSnapshot(
+            id: original.id,
+            kind: original.kind,
+            itemDisplayName: original.itemDisplayName,
+            itemCount: original.itemCount,
+            state: state,
+            progress: progress,
+            canUndo: canUndo
+        )
     }
 
     private func refreshVisiblePanes(
@@ -869,6 +1025,74 @@ final class FileOperationController {
             path.removeLast()
         }
         return path
+    }
+}
+
+@MainActor
+private struct PendingFileOperation {
+    let id: UUID
+    let kind: FileOperationJobKind
+    let itemDisplayName: String
+    let itemCount: Int
+    let initialStage: FileOperationStage?
+    let touchedDirectories: Set<URL>
+    let workspace: WorkspaceState
+    let onCompletion: (@MainActor (FileOperationResult) -> Void)?
+    let operation: @MainActor () async -> FileOperationResult
+
+    init(
+        id: UUID = UUID(),
+        kind: FileOperationJobKind,
+        itemDisplayName: String,
+        itemCount: Int,
+        initialStage: FileOperationStage?,
+        touchedDirectories: Set<URL>,
+        workspace: WorkspaceState,
+        onCompletion: (@MainActor (FileOperationResult) -> Void)?,
+        operation: @escaping @MainActor () async -> FileOperationResult
+    ) {
+        self.id = id
+        self.kind = kind
+        self.itemCount = max(itemCount, 0)
+        self.initialStage = initialStage
+        self.touchedDirectories = touchedDirectories
+        self.workspace = workspace
+        self.onCompletion = onCompletion
+        self.operation = operation
+        self.itemDisplayName = FileOperationJobSnapshot(
+            id: id,
+            kind: kind,
+            itemDisplayName: itemDisplayName,
+            itemCount: itemCount,
+            state: .queued,
+            progress: nil,
+            canUndo: false
+        ).itemDisplayName
+    }
+
+    func snapshot(state: FileOperationJobState) -> FileOperationJobSnapshot {
+        FileOperationJobSnapshot(
+            id: id,
+            kind: kind,
+            itemDisplayName: itemDisplayName,
+            itemCount: itemCount,
+            state: state,
+            progress: nil,
+            canUndo: false
+        )
+    }
+
+    func retryAttempt() -> PendingFileOperation {
+        PendingFileOperation(
+            kind: kind,
+            itemDisplayName: itemDisplayName,
+            itemCount: itemCount,
+            initialStage: initialStage,
+            touchedDirectories: touchedDirectories,
+            workspace: workspace,
+            onCompletion: onCompletion,
+            operation: operation
+        )
     }
 }
 
