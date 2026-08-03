@@ -84,6 +84,8 @@ struct SmartSearchMatch: Sendable, Equatable {
 }
 
 enum SmartSearchTextAnalyzer {
+    typealias AnalysisStep = @Sendable () throws -> Void
+
     static func queryPlan(for text: String) -> SmartSearchQueryPlan {
         let normalized = normalizedLiteralText(text)
         var clauses: [SmartSearchClause] = []
@@ -115,12 +117,30 @@ enum SmartSearchTextAnalyzer {
         filename: String,
         relativePath: String
     ) -> SmartSearchMatch? {
+        try! match(
+            plan: plan,
+            filename: filename,
+            relativePath: relativePath,
+            analysisStep: {}
+        )
+    }
+
+    static func match(
+        plan: SmartSearchQueryPlan,
+        filename: String,
+        relativePath: String,
+        analysisStep: AnalysisStep
+    ) throws -> SmartSearchMatch? {
         guard !plan.clauses.isEmpty else { return nil }
 
         let foldedPath = normalizedLiteralText(relativePath)
         let needsInitials = plan.containsInitials
-        let filenameFeatures = needsInitials ? initialFeatures(in: filename) : nil
-        let pathFeatures = needsInitials ? initialFeatures(in: relativePath) : nil
+        let filenameFeatures = needsInitials
+            ? try initialFeatures(in: filename, analysisStep: analysisStep)
+            : nil
+        let pathFeatures = needsInitials
+            ? try initialFeatures(in: relativePath, analysisStep: analysisStep)
+            : nil
         var initialEvidence: [SmartSearchInitialEvidence] = []
 
         for clause in plan.clauses {
@@ -192,7 +212,10 @@ enum SmartSearchTextAnalyzer {
         let documentLength: Int
     }
 
-    private static func initialFeatures(in text: String) -> InitialFeatures {
+    private static func initialFeatures(
+        in text: String,
+        analysisStep: AnalysisStep
+    ) throws -> InitialFeatures {
         let normalized = text.precomposedStringWithCanonicalMapping
         var explicitRuns: [[SmartSearchInitial]] = []
         var syllableRuns: [[SmartSearchInitial]] = []
@@ -234,6 +257,7 @@ enum SmartSearchTextAnalyzer {
         }
 
         for scalar in normalized.unicodeScalars {
+            try analysisStep()
             let explicitInitial = initial(for: scalar)
             let syllableInitial = initialForHangulSyllable(scalar)
 

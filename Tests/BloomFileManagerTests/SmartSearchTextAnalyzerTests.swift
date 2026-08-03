@@ -19,6 +19,10 @@ import Testing
             .literal("2026"),
             .hangulInitials([.hieuh, .kiyeok])
         ])
+        #expect(SmartSearchTextAnalyzer.queryPlan(for: "ㅎ ㄱ").clauses == [
+            .hangulInitials([.hieuh]),
+            .hangulInitials([.kiyeok])
+        ])
     }
 
     @Test func unsupportedCompoundFinalRemainsLiteral() {
@@ -138,5 +142,52 @@ import Testing
             filename: "Cafe 보고서.txt",
             relativePath: "Archive/Cafe 보고서.txt"
         ) != nil)
+    }
+
+    @Test func explicitInitialFilenameUsesLiteralEvidenceBeforeDerivedPathEvidence() {
+        let match = SmartSearchTextAnalyzer.match(
+            plan: SmartSearchTextAnalyzer.queryPlan(for: "ㅎㄱ"),
+            filename: "ㅎㄱ.txt",
+            relativePath: "한국/ㅎㄱ.txt"
+        )
+
+        #expect(match?.initialEvidence.first?.key == SmartSearchInitialEvidenceKey(
+            field: .filename,
+            representation: .literal,
+            relation: .exact
+        ))
+    }
+
+    @Test func initialAnalysisVisitsScalarsLinearly() throws {
+        let plan = SmartSearchTextAnalyzer.queryPlan(for: "ㅎㄱ")
+        let singleText = String(repeating: "한국-report-", count: 32)
+        let singleCounter = AnalyzerStepCounter()
+        _ = try SmartSearchTextAnalyzer.match(
+            plan: plan,
+            filename: singleText,
+            relativePath: singleText,
+            analysisStep: singleCounter.increment
+        )
+
+        let doubledCounter = AnalyzerStepCounter()
+        _ = try SmartSearchTextAnalyzer.match(
+            plan: plan,
+            filename: singleText + singleText,
+            relativePath: singleText + singleText,
+            analysisStep: doubledCounter.increment
+        )
+
+        #expect(doubledCounter.value <= (singleCounter.value * 2) + 2)
+    }
+}
+
+private final class AnalyzerStepCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    var value: Int { lock.withLock { count } }
+
+    func increment() {
+        lock.withLock { count += 1 }
     }
 }
