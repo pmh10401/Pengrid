@@ -1,5 +1,7 @@
 import Foundation
 
+typealias ArchiveCommandProgressHandler = @Sendable (ArchiveOperationPhase) async -> Void
+
 protocol ArchiveCommandRunning: Sendable {
     func run(
         kind: ArchiveOperationKind,
@@ -7,6 +9,32 @@ protocol ArchiveCommandRunning: Sendable {
         sources: [URL],
         destination: URL
     ) async throws
+
+    func run(
+        kind: ArchiveOperationKind,
+        format: ArchiveFormat,
+        sources: [URL],
+        destination: URL,
+        progress: @escaping ArchiveCommandProgressHandler
+    ) async throws
+}
+
+extension ArchiveCommandRunning {
+    func run(
+        kind: ArchiveOperationKind,
+        format: ArchiveFormat,
+        sources: [URL],
+        destination: URL,
+        progress: @escaping ArchiveCommandProgressHandler
+    ) async throws {
+        await progress(.encoding)
+        try await run(
+            kind: kind,
+            format: format,
+            sources: sources,
+            destination: destination
+        )
+    }
 }
 
 struct LiveArchiveCommandRunner: ArchiveCommandRunning {
@@ -18,16 +46,36 @@ struct LiveArchiveCommandRunner: ArchiveCommandRunning {
         sources: [URL],
         destination: URL
     ) async throws {
+        try await run(
+            kind: kind,
+            format: format,
+            sources: sources,
+            destination: destination,
+            progress: { _ in }
+        )
+    }
+
+    func run(
+        kind: ArchiveOperationKind,
+        format: ArchiveFormat,
+        sources: [URL],
+        destination: URL,
+        progress: @escaping ArchiveCommandProgressHandler
+    ) async throws {
         let preparedCommand = try await Self.prepareCommand(
             kind: kind,
             format: format,
             sources: sources,
-            destination: destination
+            destination: destination,
+            progress: progress
         )
         defer { preparedCommand.cleanup() }
         guard !Task.isCancelled else {
             throw ArchiveOperationError.cancelled
         }
+
+        await progress(.encoding)
+        try Task.checkCancellation()
 
         let process = Process()
         process.executableURL = format == .zip
@@ -124,7 +172,8 @@ struct LiveArchiveCommandRunner: ArchiveCommandRunning {
         kind: ArchiveOperationKind,
         format: ArchiveFormat,
         sources: [URL],
-        destination: URL
+        destination: URL,
+        progress: @escaping ArchiveCommandProgressHandler
     ) async throws -> PreparedArchiveCommand {
         guard kind == .compress else {
             let arguments = try arguments(
@@ -168,7 +217,8 @@ struct LiveArchiveCommandRunner: ArchiveCommandRunning {
             )
             try await prepareAggregateSource(
                 sources: sources,
-                aggregateRoot: aggregateRoot
+                aggregateRoot: aggregateRoot,
+                progress: progress
             )
             try Task.checkCancellation()
         } catch {
@@ -208,13 +258,20 @@ struct LiveArchiveCommandRunner: ArchiveCommandRunning {
 
     private static func prepareAggregateSource(
         sources: [URL],
-        aggregateRoot: URL
+        aggregateRoot: URL,
+        progress: @escaping ArchiveCommandProgressHandler
     ) async throws {
         let queue = ArchiveCopyWorkQueue(count: sources.count)
+        let reporter = ArchivePreparationProgressReporter(
+            total: sources.count,
+            handler: progress
+        )
         let workerCount = aggregatePreparationWorkerCount(
             sourceCount: sources.count,
             activeProcessorCount: ProcessInfo.processInfo.activeProcessorCount
         )
+
+        await reporter.begin()
 
         try await withThrowingTaskGroup(of: Void.self) { group in
             for _ in 0..<workerCount {
@@ -226,6 +283,7 @@ struct LiveArchiveCommandRunner: ArchiveCommandRunning {
                             at: source,
                             to: aggregateRoot.appending(path: source.lastPathComponent)
                         )
+                        await reporter.completeOne()
                     }
                 }
             }
@@ -264,6 +322,42 @@ struct LiveArchiveCommandRunner: ArchiveCommandRunning {
 
     private static func tarCompressionArguments(for format: ArchiveFormat) -> [String] {
         format.tarCompressionFlag.map { [$0] } ?? []
+    }
+}
+
+private actor ArchivePreparationProgressReporter {
+    private let total: Int
+    private let handler: ArchiveCommandProgressHandler
+    private var completed = 0
+    private var pending: [ArchiveOperationPhase] = []
+    private var isDelivering = false
+
+    init(total: Int, handler: @escaping ArchiveCommandProgressHandler) {
+        self.total = max(total, 0)
+        self.handler = handler
+    }
+
+    func begin() async {
+        await enqueue(.preparingSources(completedCount: 0, totalCount: total))
+    }
+
+    func completeOne() async {
+        completed = min(completed + 1, total)
+        await enqueue(.preparingSources(
+            completedCount: completed,
+            totalCount: total
+        ))
+    }
+
+    private func enqueue(_ phase: ArchiveOperationPhase) async {
+        pending.append(phase)
+        guard !isDelivering else { return }
+        isDelivering = true
+        while !pending.isEmpty {
+            let next = pending.removeFirst()
+            await handler(next)
+        }
+        isDelivering = false
     }
 }
 

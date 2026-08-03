@@ -4,6 +4,65 @@ import Testing
 
 @Suite("ArchiveOperationIntegrationTests")
 struct ArchiveOperationIntegrationTests {
+    @Test func compressionReportsMonotonicPreparationBeforeEncoding() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let firstSource = root.url.appending(path: "First.txt")
+        let secondSource = root.url.appending(path: "Second File.txt")
+        let archive = root.url.appending(path: "Archive.zip")
+        try Data("first".utf8).write(to: firstSource)
+        try Data("second".utf8).write(to: secondSource)
+        let phases = ArchivePhaseCollector()
+
+        try await LiveArchiveCommandRunner().run(
+            kind: .compress,
+            format: .zip,
+            sources: [firstSource, secondSource],
+            destination: archive
+        ) { phase in
+            await phases.append(phase)
+        }
+
+        #expect(await phases.values == [
+            .preparingSources(completedCount: 0, totalCount: 2),
+            .preparingSources(completedCount: 1, totalCount: 2),
+            .preparingSources(completedCount: 2, totalCount: 2),
+            .encoding
+        ])
+        #expect(FileManager.default.fileExists(atPath: archive.path))
+        try expectNoAggregateSourceDirectories(in: root.url)
+    }
+
+    @Test func extractionReportsOnlyEncodingBeforeLaunchingNativeCommand() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let source = root.url.appending(path: "Source.txt")
+        let archive = root.url.appending(path: "Archive.tar")
+        let extraction = root.url.appending(path: "Extracted", directoryHint: .isDirectory)
+        try Data("source".utf8).write(to: source)
+        let runner = LiveArchiveCommandRunner()
+        try await runner.run(
+            kind: .compress,
+            format: .tar,
+            sources: [source],
+            destination: archive
+        )
+        let phases = ArchivePhaseCollector()
+
+        try await runner.run(
+            kind: .extract,
+            format: .tar,
+            sources: [archive],
+            destination: extraction
+        ) { phase in
+            await phases.append(phase)
+        }
+
+        #expect(await phases.values == [.encoding])
+        #expect(try Data(contentsOf: extraction.appending(path: "Source.txt"))
+            == Data("source".utf8))
+    }
+
     @Test func dittoCompressionArchivesMultipleSelectedItemsAtTheZIPRoot() async throws {
         let root = try TemporaryDirectory()
         defer { root.remove() }
@@ -276,6 +335,14 @@ struct ArchiveOperationIntegrationTests {
         #expect(source == malformedArchive)
         #expect(FileManager.default.fileExists(atPath: destination.path) == false)
         try expectNoStagingDirectories(in: root.url)
+    }
+}
+
+private actor ArchivePhaseCollector {
+    private(set) var values: [ArchiveOperationPhase] = []
+
+    func append(_ phase: ArchiveOperationPhase) {
+        values.append(phase)
     }
 }
 
