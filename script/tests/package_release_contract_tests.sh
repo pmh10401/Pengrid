@@ -88,6 +88,11 @@ test_version_13_bundle_version_is_declared() {
   assert_file_contains "$SOURCE_BUILD_SCRIPT" 'BUILD_VERSION="4"'
 }
 
+test_build_and_run_resigns_the_completed_app_bundle() {
+  assert_file_contains "$SOURCE_BUILD_SCRIPT" \
+    '/usr/bin/codesign --force --deep --sign - "$APP_BUNDLE"'
+}
+
 new_fixture() {
   local fixture="$TEST_ROOT/$1"
   /bin/mkdir -p \
@@ -578,6 +583,7 @@ run_all_contract_tests() {
   test_version_13_release_contract_is_documented
   test_release_tests_run_nonparallel
   test_version_13_bundle_version_is_declared
+  test_build_and_run_resigns_the_completed_app_bundle
   test_pengrid_release_identity_preserves_legacy_executable_and_icon
   test_icon_source_symlink_is_rejected
   test_icon_source_replacement_cannot_change_staged_bytes
@@ -618,6 +624,9 @@ case "${1:-all}" in
     ;;
   real-swift-helper-fallback)
     test_real_swift_helper_fallback_receives_production_arguments
+    ;;
+  build-run-signing)
+    test_build_and_run_resigns_the_completed_app_bundle
     ;;
   *)
     fail "unknown contract test selection: $1"
