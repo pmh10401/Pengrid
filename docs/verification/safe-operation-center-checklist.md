@@ -62,6 +62,14 @@ or VoiceOver checks against a release candidate.
   publication, unthrottled phase boundaries, and stale Trash-selection refusal.
   No GUI-launch claim was made while LaunchServices remained unavailable.
 
+- [x] **PASS — 2026-08-03 — final independent code gate:** Sol XHigh found no
+  Critical, Important, or Minor findings in the final scoped re-review. It
+  verified mutation-owned identity and fingerprint propagation, fail-closed
+  Undo recipe construction, post-publication move recovery semantics, stale
+  Trash-selection refusal, and deduplicated ten-hertz archive preparation
+  publication. Verdict: ready for Developer Preview code integration; manual
+  and host-dependent release gates remain separate.
+
 ## App smoke evidence
 
 - [x] **PASS — 2026-08-03 — local new-folder history:** In the built Pengrid
