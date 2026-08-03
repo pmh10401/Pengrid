@@ -49,6 +49,14 @@ VoiceOver checks below.
   and relative paths recursively, ranks exact filename matches ahead of
   path-only matches, and does not report file-content-only matches.
 
+- [ ] **NOT RUN — Korean initial matching:** In a disposable local root, add
+  `한국 보고서.pdf`, `한글 노트.txt`, `구글 드라이브/계획.txt`, and
+  `개인 사진 다운로드/메모.txt`. Confirm `ㅎㄱ` and modern choseong `ᄒᄀ`
+  return the same Korean rows. Confirm `ㄱㄷ` finds the `구글 드라이브`
+  result but does not treat the unrelated `ㄱㅅㄷ` run heads as an arbitrary
+  subsequence. Enter `ㅎㄱ report` and confirm every result satisfies both
+  clauses. Repeat through the Korean IME and submit with Return.
+
 - [ ] **NOT RUN — result bound and cancellation:** With the default cap, create
   more than 500 matching local entries. Confirm the displayed result list
   contains no more than 500 ranked results. Change the cap and confirm it
@@ -88,6 +96,10 @@ VoiceOver checks below.
   inclusion option, run and cancel a search, open a result, save a search, and
   remove it from the Places rail. Confirm controls, root summary, availability,
   progress, results, and saved-search actions have understandable labels.
+  Confirm the query field announces the Korean-initial hint exactly once. In
+  both light and dark appearances, resize the window through narrow and wide
+  layouts and confirm the prompt, idle guidance, and result rows remain
+  readable without truncating the essential query guidance.
 
 ## Release gate
 

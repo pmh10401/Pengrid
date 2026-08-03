@@ -83,6 +83,11 @@ cloud-only files.
 Press **Command-Shift-F** (or choose **Edit > Search Files…**) to
 search recursively from the active pane's current directory. Smart Search
 matches filename and relative-path words; it does not search file contents.
+Korean initial consonants are detected automatically: `ㅎㄱ` matches names
+such as `한국` and `한글`, while `ㄱㄷ` can match a segmented name such as
+`구글 드라이브`. Compatibility jamo and modern choseong input are equivalent,
+and space-separated initial and literal terms such as `ㅎㄱ report` use AND
+semantics. No search-mode toggle or network index is required.
 The search view lets you add or remove explicit roots before a search starts,
 and saved searches keep that query, its selected roots, and its result cap in
 the Places rail for later reuse. The default cap is 500 ranked results and the
