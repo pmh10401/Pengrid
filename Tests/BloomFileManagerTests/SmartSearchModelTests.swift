@@ -155,6 +155,64 @@ import Testing
         #expect(ranked.map(\.relativePath) == ["a-report.txt", "z-report.txt"])
     }
 
+    @Test func literalJamoFilenameOutranksDerivedInitialAndPathMatches() throws {
+        let query = try SmartSearchQuery(text: "ㅎㄱ", roots: [URL(filePath: "/search/root")])
+        let ranked = SmartSearchRanker.ranked([
+            result(name: "notes.txt", path: "한국/notes.txt"),
+            result(name: "한국.txt", path: "한국.txt"),
+            result(name: "ㅎㄱ", path: "ㅎㄱ")
+        ], for: query)
+
+        #expect(ranked.map(\.item.name) == ["ㅎㄱ", "한국.txt", "notes.txt"])
+    }
+
+    @Test func syllableFilenameOutranksRunHeadFilenameAndPathOnlyEvidence() throws {
+        let query = try SmartSearchQuery(text: "ㄱㄷ", roots: [URL(filePath: "/search/root")])
+        let ranked = SmartSearchRanker.ranked([
+            result(name: "notes.txt", path: "구글 드라이브/notes.txt"),
+            result(name: "구글 드라이브", path: "구글 드라이브"),
+            result(name: "기대", path: "기대")
+        ], for: query)
+
+        #expect(ranked.map(\.item.name) == ["기대", "구글 드라이브", "notes.txt"])
+    }
+
+    @Test func weakestInitialClauseWinsBeforeOneExcellentClause() throws {
+        let query = try SmartSearchQuery(text: "ㅎㄱ ㄱㄷ", roots: [URL(filePath: "/search/root")])
+        let ranked = SmartSearchRanker.ranked([
+            result(name: "ㅎㄱ.txt", path: "구글 드라이브/ㅎㄱ.txt"),
+            result(name: "한국 기대.txt", path: "한국 기대.txt")
+        ], for: query)
+
+        #expect(ranked.map(\.item.name) == ["한국 기대.txt", "ㅎㄱ.txt"])
+    }
+
+    @Test func initialRankingIsIndependentOfCandidateInputOrder() throws {
+        let query = try SmartSearchQuery(text: "ㅎㄱ", roots: [URL(filePath: "/search/root")])
+        let candidates = [
+            result(name: "한국2.txt", path: "한국2.txt"),
+            result(name: "한국10.txt", path: "한국10.txt"),
+            result(name: "한글.txt", path: "한글.txt")
+        ]
+
+        let forward = SmartSearchRanker.ranked(candidates, for: query).map(\.item.url)
+        let reversed = SmartSearchRanker.ranked(Array(candidates.reversed()), for: query).map(\.item.url)
+
+        #expect(forward == reversed)
+    }
+
+    @Test func literalOnlyRankingKeepsTheExistingExactPrefixAndContainsOrder() throws {
+        let query = try SmartSearchQuery(text: "report", roots: [URL(filePath: "/search/root")])
+        let ranked = SmartSearchRanker.ranked([
+            result(name: "monthly-report.txt", path: "monthly-report.txt"),
+            result(name: "report-draft.txt", path: "report-draft.txt"),
+            result(name: "report", path: "report")
+        ], for: query)
+
+        #expect(ranked.map(\.item.name) == ["report", "report-draft.txt", "monthly-report.txt"])
+        #expect(ranked.allSatisfy { $0.score > 0 })
+    }
+
     @Test func cancellationAfterMergeSortStartsStopsRanking() async throws {
         let query = try SmartSearchQuery(text: "report", roots: [URL(filePath: "/search/root")])
         let candidates = (0..<500).map { index in

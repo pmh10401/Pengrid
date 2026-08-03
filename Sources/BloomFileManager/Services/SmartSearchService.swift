@@ -89,8 +89,9 @@ final class LocalSmartSearchService: SmartSearching, @unchecked Sendable {
         }
         try Task.checkCancellation()
         let ranked = try SmartSearchRanker.ranked(
-            allCandidates.map(\.result),
+            allCandidates,
             for: query,
+            plan: queryPlan,
             cancellationCheck: {
                 try Task.checkCancellation()
                 try rankingHook()

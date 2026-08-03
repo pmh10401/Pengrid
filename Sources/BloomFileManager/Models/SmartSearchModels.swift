@@ -139,15 +139,48 @@ enum SmartSearchRanker {
         cancellationCheck: @Sendable () throws -> Void,
         sortingHook: @Sendable () throws -> Void = {}
     ) throws -> [SmartSearchResult] {
+        let plan = SmartSearchTextAnalyzer.queryPlan(for: query.text)
+        var prepared: [PreparedSmartSearchCandidate] = []
+        prepared.reserveCapacity(candidates.count)
+        for candidate in candidates {
+            try cancellationCheck()
+            if let match = try SmartSearchTextAnalyzer.match(
+                plan: plan,
+                filename: candidate.item.name,
+                relativePath: candidate.relativePath,
+                analysisStep: cancellationCheck
+            ) {
+                prepared.append(PreparedSmartSearchCandidate(result: candidate, match: match))
+            }
+        }
+        return try ranked(
+            prepared,
+            for: query,
+            plan: plan,
+            cancellationCheck: cancellationCheck,
+            sortingHook: sortingHook
+        )
+    }
+
+    static func ranked(
+        _ candidates: [PreparedSmartSearchCandidate],
+        for query: SmartSearchQuery,
+        plan: SmartSearchQueryPlan,
+        cancellationCheck: @Sendable () throws -> Void,
+        sortingHook: @Sendable () throws -> Void = {}
+    ) throws -> [SmartSearchResult] {
         try cancellationCheck()
-        let queryTokens = tokens(in: query.text)
-        guard !queryTokens.isEmpty else { return candidates }
+        let queryTokens = plan.clauses.compactMap { clause -> String? in
+            guard case let .literal(token) = clause else { return nil }
+            return token
+        }
+        guard !plan.clauses.isEmpty else { return [] }
 
         var documentTokens: [[String]] = []
         documentTokens.reserveCapacity(candidates.count)
         for candidate in candidates {
             try cancellationCheck()
-            documentTokens.append(tokens(in: candidate.relativePath))
+            documentTokens.append(tokens(in: candidate.result.relativePath))
         }
         let documentCount = Double(candidates.count)
         let averageLength = Double(max(1, documentTokens.map(\.count).reduce(0, +))) / max(1, documentCount)
@@ -158,24 +191,54 @@ enum SmartSearchRanker {
             documentFrequencies[token] = Double(documentTokens.count { $0.contains(token) })
         }
 
-        var scored: [SmartSearchResult] = []
+        let initialStatistics = initialClauseStatistics(for: candidates)
+
+        var scored: [RankedCandidate] = []
         scored.reserveCapacity(candidates.count)
         for (candidate, pathTokens) in zip(candidates, documentTokens) {
             try cancellationCheck()
-            let filenameTokens = tokens(in: candidate.item.name)
-            var score = 0.0
+            let filenameTokens = tokens(in: candidate.result.item.name)
+            var literalScore = 0.0
             for token in queryTokens {
                 try cancellationCheck()
                 let documentFrequency = documentFrequencies[token] ?? 0
                 let idf = log((documentCount - documentFrequency + 0.5) / (documentFrequency + 0.5) + 1)
                 let pathScore = bm25(token: token, tokens: pathTokens, averageLength: averageLength, idf: idf)
                 let filenameScore = bm25(token: token, tokens: filenameTokens, averageLength: averageLength, idf: idf)
-                score += pathScore + (filenameScore * 3) + filenameBonus(token: token, filename: candidate.item.name)
+                literalScore += pathScore
+                    + (filenameScore * 3)
+                    + filenameBonus(token: token, filename: candidate.result.item.name)
             }
-            scored.append(SmartSearchResult(
-                item: candidate.item,
-                relativePath: candidate.relativePath,
-                score: score
+
+            var initialScore = 0.0
+            for (index, evidence) in candidate.match.initialEvidence.enumerated() {
+                try cancellationCheck()
+                guard index < initialStatistics.count else { continue }
+                let statistics = initialStatistics[index].statistics(for: evidence.key.field)
+                let documentFrequency = Double(statistics.documentCount)
+                let idf = log(
+                    (documentCount - documentFrequency + 0.5)
+                        / (documentFrequency + 0.5)
+                        + 1
+                )
+                let fieldMultiplier = evidence.key.field == .filename ? 3.0 : 1.0
+                initialScore += bm25(
+                    frequency: evidence.weightedTermFrequency * fieldMultiplier,
+                    length: Double(evidence.documentLength),
+                    averageLength: statistics.averageLength,
+                    idf: idf
+                )
+            }
+
+            let combinedScore = max(0, literalScore + initialScore)
+            scored.append(RankedCandidate(
+                result: SmartSearchResult(
+                    item: candidate.result.item,
+                    relativePath: candidate.result.relativePath,
+                    score: combinedScore
+                ),
+                weakestFirstEvidence: candidate.match.initialEvidence.map(\.key).sorted(),
+                combinedScore: combinedScore
             ))
         }
 
@@ -185,22 +248,98 @@ enum SmartSearchRanker {
         ) { lhs, rhs in
             try sortingHook()
             try cancellationCheck()
-            if lhs.score != rhs.score {
-                return lhs.score > rhs.score
+            if plan.containsInitials {
+                let evidenceComparison = compareEvidence(
+                    lhs.weakestFirstEvidence,
+                    rhs.weakestFirstEvidence
+                )
+                if evidenceComparison != 0 {
+                    return evidenceComparison > 0
+                }
             }
-            let leftPath = lhs.item.url.standardizedFileURL.path
-            let rightPath = rhs.item.url.standardizedFileURL.path
+            if lhs.combinedScore != rhs.combinedScore {
+                return lhs.combinedScore > rhs.combinedScore
+            }
+            let leftPath = lhs.result.item.url.standardizedFileURL.path
+            let rightPath = rhs.result.item.url.standardizedFileURL.path
             let comparison = leftPath.localizedStandardCompare(rightPath)
             if comparison == .orderedSame {
                 if leftPath != rightPath {
                     return leftPath < rightPath
                 }
-                return lhs.relativePath < rhs.relativePath
+                return lhs.result.relativePath < rhs.result.relativePath
             }
             return comparison == .orderedAscending
         }
         try cancellationCheck()
-        return sorted
+        return sorted.map(\.result)
+    }
+
+    private struct RankedCandidate {
+        let result: SmartSearchResult
+        let weakestFirstEvidence: [SmartSearchInitialEvidenceKey]
+        let combinedScore: Double
+    }
+
+    private struct InitialFieldStatistics {
+        var documentCount = 0
+        var totalLength = 0
+
+        var averageLength: Double {
+            guard documentCount > 0 else { return 1 }
+            return Double(max(documentCount, totalLength)) / Double(documentCount)
+        }
+
+        mutating func record(length: Int) {
+            documentCount += 1
+            totalLength += max(1, length)
+        }
+    }
+
+    private struct InitialClauseStatistics {
+        var filename = InitialFieldStatistics()
+        var relativePath = InitialFieldStatistics()
+
+        mutating func record(_ evidence: SmartSearchInitialEvidence) {
+            switch evidence.key.field {
+            case .filename:
+                filename.record(length: evidence.documentLength)
+            case .relativePath:
+                relativePath.record(length: evidence.documentLength)
+            }
+        }
+
+        func statistics(for field: SmartSearchInitialField) -> InitialFieldStatistics {
+            switch field {
+            case .filename: filename
+            case .relativePath: relativePath
+            }
+        }
+    }
+
+    private static func initialClauseStatistics(
+        for candidates: [PreparedSmartSearchCandidate]
+    ) -> [InitialClauseStatistics] {
+        let clauseCount = candidates.map { $0.match.initialEvidence.count }.max() ?? 0
+        var statistics = Array(repeating: InitialClauseStatistics(), count: clauseCount)
+        for candidate in candidates {
+            for (index, evidence) in candidate.match.initialEvidence.enumerated()
+                where index < statistics.count {
+                statistics[index].record(evidence)
+            }
+        }
+        return statistics
+    }
+
+    private static func compareEvidence(
+        _ lhs: [SmartSearchInitialEvidenceKey],
+        _ rhs: [SmartSearchInitialEvidenceKey]
+    ) -> Int {
+        for (left, right) in zip(lhs, rhs) where left != right {
+            return left > right ? 1 : -1
+        }
+        if lhs.count == rhs.count { return 0 }
+        return lhs.count > rhs.count ? 1 : -1
     }
 
     private static func cancellableSorted<Element>(
@@ -245,11 +384,26 @@ enum SmartSearchRanker {
 
     private static func bm25(token: String, tokens: [String], averageLength: Double, idf: Double) -> Double {
         let frequency = Double(tokens.count { $0 == token })
+        return bm25(
+            frequency: frequency,
+            length: Double(tokens.count),
+            averageLength: averageLength,
+            idf: idf
+        )
+    }
+
+    private static func bm25(
+        frequency: Double,
+        length: Double,
+        averageLength: Double,
+        idf: Double
+    ) -> Double {
         guard frequency > 0 else { return 0 }
-        let length = Double(tokens.count)
         let k1 = 1.2
         let b = 0.75
-        return idf * (frequency * (k1 + 1)) / (frequency + k1 * (1 - b + b * length / averageLength))
+        let normalizedAverageLength = max(1, averageLength)
+        return idf * (frequency * (k1 + 1))
+            / (frequency + k1 * (1 - b + b * max(1, length) / normalizedAverageLength))
     }
 
     private static func filenameBonus(token: String, filename: String) -> Double {
