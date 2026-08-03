@@ -4,6 +4,7 @@ enum SmartSearchValidationError: Error, Equatable, Sendable {
     case emptyText
     case missingRoots
     case invalidRoot
+    case queryTooComplex
 }
 
 struct SmartSearchQuery: Codable, Equatable, Sendable {
@@ -12,6 +13,8 @@ struct SmartSearchQuery: Codable, Equatable, Sendable {
     static let maximumCandidateBudget = 50_000
     static let minimumCandidateBudget = 2_000
     static let candidateBudgetMultiplier = 20
+    static let maximumTextScalarCount = 512
+    static let maximumClauseCount = 16
 
     let text: String
     let roots: [URL]
@@ -19,6 +22,11 @@ struct SmartSearchQuery: Codable, Equatable, Sendable {
     var includePackages: Bool
     var includeDirectories: Bool
     private(set) var maximumResults: Int
+    private let preparedPlan: SmartSearchQueryPlan?
+
+    /// Older saved searches remain decodable even when they exceed today's
+    /// execution limits. They stay visible, but must be shortened before use.
+    var isWithinComplexityLimits: Bool { preparedPlan != nil }
 
     /// The hard upper bound on matching metadata retained before ranking.
     /// This keeps every query bounded independently of the size of its roots.
@@ -36,6 +44,26 @@ struct SmartSearchQuery: Codable, Equatable, Sendable {
         includePackages: Bool = false,
         includeDirectories: Bool = true,
         maximumResults: Int = SmartSearchQuery.defaultMaximumResults
+    ) throws {
+        try self.init(
+            text: text,
+            roots: roots,
+            includeHidden: includeHidden,
+            includePackages: includePackages,
+            includeDirectories: includeDirectories,
+            maximumResults: maximumResults,
+            enforceComplexityLimits: true
+        )
+    }
+
+    private init(
+        text: String,
+        roots: [URL],
+        includeHidden: Bool,
+        includePackages: Bool,
+        includeDirectories: Bool,
+        maximumResults: Int,
+        enforceComplexityLimits: Bool
     ) throws {
         let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedText.isEmpty else {
@@ -60,12 +88,33 @@ struct SmartSearchQuery: Codable, Equatable, Sendable {
             }
         }
 
+        let preparedPlan: SmartSearchQueryPlan?
+        if trimmedText.unicodeScalars.count > Self.maximumTextScalarCount {
+            preparedPlan = nil
+        } else {
+            let candidatePlan = SmartSearchTextAnalyzer.queryPlan(for: trimmedText)
+            preparedPlan = candidatePlan.clauses.count <= Self.maximumClauseCount
+                ? candidatePlan
+                : nil
+        }
+        if enforceComplexityLimits, preparedPlan == nil {
+            throw SmartSearchValidationError.queryTooComplex
+        }
+
         self.text = trimmedText
         self.roots = standardizedRoots
         self.includeHidden = includeHidden
         self.includePackages = includePackages
         self.includeDirectories = includeDirectories
         self.maximumResults = maximumResults.clamped(to: Self.maximumResultRange)
+        self.preparedPlan = preparedPlan
+    }
+
+    func executablePlan() throws -> SmartSearchQueryPlan {
+        guard let preparedPlan else {
+            throw SmartSearchValidationError.queryTooComplex
+        }
+        return preparedPlan
     }
 
     mutating func setMaximumResults(_ maximumResults: Int) {
@@ -89,7 +138,8 @@ struct SmartSearchQuery: Codable, Equatable, Sendable {
             includeHidden: values.decode(Bool.self, forKey: .includeHidden),
             includePackages: values.decode(Bool.self, forKey: .includePackages),
             includeDirectories: values.decode(Bool.self, forKey: .includeDirectories),
-            maximumResults: values.decode(Int.self, forKey: .maximumResults)
+            maximumResults: values.decode(Int.self, forKey: .maximumResults),
+            enforceComplexityLimits: false
         )
     }
 }
@@ -130,7 +180,8 @@ enum SmartSearchRanker {
     static func ranked(_ candidates: [SmartSearchResult], for query: SmartSearchQuery) -> [SmartSearchResult] {
         // The non-throwing entry point keeps pure model callers source-compatible.
         // Search services use the cancellable overload below.
-        try! ranked(candidates, for: query, cancellationCheck: {})
+        guard query.isWithinComplexityLimits else { return [] }
+        return try! ranked(candidates, for: query, cancellationCheck: {})
     }
 
     static func ranked(
@@ -139,12 +190,17 @@ enum SmartSearchRanker {
         cancellationCheck: @Sendable () throws -> Void,
         sortingHook: @Sendable () throws -> Void = {}
     ) throws -> [SmartSearchResult] {
-        let plan = SmartSearchTextAnalyzer.queryPlan(for: query.text)
+        let plan = try query.executablePlan()
         var prepared: [PreparedSmartSearchCandidate] = []
         prepared.reserveCapacity(candidates.count)
         for candidate in candidates {
             try cancellationCheck()
-            if let match = try SmartSearchTextAnalyzer.match(
+            if !plan.containsInitials {
+                prepared.append(PreparedSmartSearchCandidate(
+                    result: candidate,
+                    match: .noInitials
+                ))
+            } else if let match = try SmartSearchTextAnalyzer.match(
                 plan: plan,
                 filename: candidate.item.name,
                 relativePath: candidate.relativePath,
@@ -169,6 +225,10 @@ enum SmartSearchRanker {
         cancellationCheck: @Sendable () throws -> Void,
         sortingHook: @Sendable () throws -> Void = {}
     ) throws -> [SmartSearchResult] {
+        guard query.isWithinComplexityLimits,
+              plan.clauses.count <= SmartSearchQuery.maximumClauseCount else {
+            throw SmartSearchValidationError.queryTooComplex
+        }
         try cancellationCheck()
         let queryTokens = plan.clauses.compactMap { clause -> String? in
             guard case let .literal(token) = clause else { return nil }
@@ -178,20 +238,33 @@ enum SmartSearchRanker {
 
         var documentTokens: [[String]] = []
         documentTokens.reserveCapacity(candidates.count)
+        var totalDocumentTokenCount = 0
         for candidate in candidates {
             try cancellationCheck()
-            documentTokens.append(tokens(in: candidate.result.relativePath))
+            let pathTokens = tokens(in: candidate.result.relativePath)
+            documentTokens.append(pathTokens)
+            totalDocumentTokenCount += pathTokens.count
         }
         let documentCount = Double(candidates.count)
-        let averageLength = Double(max(1, documentTokens.map(\.count).reduce(0, +))) / max(1, documentCount)
+        let averageLength = Double(max(1, totalDocumentTokenCount)) / max(1, documentCount)
 
         var documentFrequencies: [String: Double] = [:]
         for token in Set(queryTokens) {
             try cancellationCheck()
-            documentFrequencies[token] = Double(documentTokens.count { $0.contains(token) })
+            var frequency = 0
+            for tokens in documentTokens {
+                try cancellationCheck()
+                if tokens.contains(token) {
+                    frequency += 1
+                }
+            }
+            documentFrequencies[token] = Double(frequency)
         }
 
-        let initialStatistics = initialClauseStatistics(for: candidates)
+        let initialStatistics = try initialClauseStatistics(
+            for: candidates,
+            cancellationCheck: cancellationCheck
+        )
 
         var scored: [RankedCandidate] = []
         scored.reserveCapacity(candidates.count)
@@ -211,11 +284,12 @@ enum SmartSearchRanker {
             }
 
             var initialScore = 0.0
-            for (index, evidence) in candidate.match.initialEvidence.enumerated() {
+            let initialEvidence = candidate.match.initialEvidence
+            for (index, evidence) in initialEvidence.enumerated() {
                 try cancellationCheck()
                 guard index < initialStatistics.count else { continue }
                 let statistics = initialStatistics[index].statistics(for: evidence.key.field)
-                let documentFrequency = Double(statistics.documentCount)
+                let documentFrequency = Double(statistics.documentFrequency)
                 let idf = log(
                     (documentCount - documentFrequency + 0.5)
                         / (documentFrequency + 0.5)
@@ -237,7 +311,7 @@ enum SmartSearchRanker {
                     relativePath: candidate.result.relativePath,
                     score: combinedScore
                 ),
-                weakestFirstEvidence: candidate.match.initialEvidence.map(\.key).sorted(),
+                weakestFirstEvidence: initialEvidence.map(\.key).sorted(),
                 combinedScore: combinedScore
             ))
         }
@@ -282,6 +356,7 @@ enum SmartSearchRanker {
     }
 
     private struct InitialFieldStatistics {
+        var documentFrequency = 0
         var documentCount = 0
         var totalLength = 0
 
@@ -290,24 +365,19 @@ enum SmartSearchRanker {
             return Double(max(documentCount, totalLength)) / Double(documentCount)
         }
 
-        mutating func record(length: Int) {
+        mutating func recordDocument(length: Int) {
             documentCount += 1
             totalLength += max(1, length)
+        }
+
+        mutating func recordMatch() {
+            documentFrequency += 1
         }
     }
 
     private struct InitialClauseStatistics {
         var filename = InitialFieldStatistics()
         var relativePath = InitialFieldStatistics()
-
-        mutating func record(_ evidence: SmartSearchInitialEvidence) {
-            switch evidence.key.field {
-            case .filename:
-                filename.record(length: evidence.documentLength)
-            case .relativePath:
-                relativePath.record(length: evidence.documentLength)
-            }
-        }
 
         func statistics(for field: SmartSearchInitialField) -> InitialFieldStatistics {
             switch field {
@@ -318,14 +388,35 @@ enum SmartSearchRanker {
     }
 
     private static func initialClauseStatistics(
-        for candidates: [PreparedSmartSearchCandidate]
-    ) -> [InitialClauseStatistics] {
-        let clauseCount = candidates.map { $0.match.initialEvidence.count }.max() ?? 0
+        for candidates: [PreparedSmartSearchCandidate],
+        cancellationCheck: @Sendable () throws -> Void
+    ) throws -> [InitialClauseStatistics] {
+        var clauseCount = 0
+        for candidate in candidates {
+            try cancellationCheck()
+            clauseCount = max(clauseCount, candidate.match.initialClauseMatches.count)
+        }
         var statistics = Array(repeating: InitialClauseStatistics(), count: clauseCount)
         for candidate in candidates {
-            for (index, evidence) in candidate.match.initialEvidence.enumerated()
+            try cancellationCheck()
+            for index in statistics.indices {
+                try cancellationCheck()
+                statistics[index].filename.recordDocument(
+                    length: candidate.match.initialFieldLengths.filename
+                )
+                statistics[index].relativePath.recordDocument(
+                    length: candidate.match.initialFieldLengths.relativePath
+                )
+            }
+            for (index, clauseMatch) in candidate.match.initialClauseMatches.enumerated()
                 where index < statistics.count {
-                statistics[index].record(evidence)
+                try cancellationCheck()
+                if clauseMatch.contains(.filename) {
+                    statistics[index].filename.recordMatch()
+                }
+                if clauseMatch.contains(.relativePath) {
+                    statistics[index].relativePath.recordMatch()
+                }
             }
         }
         return statistics

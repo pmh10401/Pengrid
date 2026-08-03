@@ -22,9 +22,56 @@ enum SmartSearchInitial: UInt8, CaseIterable, Sendable, Equatable {
     case hieuh
 }
 
+struct SmartSearchInitialPattern: Sendable, Equatable, ExpressibleByArrayLiteral {
+    let initials: [SmartSearchInitial]
+    let failureTable: [Int]
+
+    init(_ initials: [SmartSearchInitial]) {
+        try! self.init(initials, analysisStep: {})
+    }
+
+    init(
+        _ initials: [SmartSearchInitial],
+        analysisStep: SmartSearchTextAnalyzer.AnalysisStep
+    ) throws {
+        self.initials = initials
+        self.failureTable = try Self.makeFailureTable(
+            for: initials,
+            analysisStep: analysisStep
+        )
+    }
+
+    init(arrayLiteral elements: SmartSearchInitial...) {
+        self.init(elements)
+    }
+
+    private static func makeFailureTable(
+        for pattern: [SmartSearchInitial],
+        analysisStep: SmartSearchTextAnalyzer.AnalysisStep
+    ) throws -> [Int] {
+        guard pattern.count > 1 else {
+            return Array(repeating: 0, count: pattern.count)
+        }
+        var table = Array(repeating: 0, count: pattern.count)
+        var prefixLength = 0
+        for index in 1..<pattern.count {
+            try analysisStep()
+            while prefixLength > 0, pattern[index] != pattern[prefixLength] {
+                try analysisStep()
+                prefixLength = table[prefixLength - 1]
+            }
+            if pattern[index] == pattern[prefixLength] {
+                prefixLength += 1
+                table[index] = prefixLength
+            }
+        }
+        return table
+    }
+}
+
 enum SmartSearchClause: Sendable, Equatable {
     case literal(String)
-    case hangulInitials([SmartSearchInitial])
+    case hangulInitials(SmartSearchInitialPattern)
 }
 
 struct SmartSearchQueryPlan: Sendable, Equatable {
@@ -79,22 +126,90 @@ struct SmartSearchInitialEvidence: Sendable, Equatable {
     let documentLength: Int
 }
 
+struct SmartSearchInitialClauseMatch: Sendable, Equatable {
+    let bestEvidence: SmartSearchInitialEvidence
+    let filenameMatched: Bool
+    let relativePathMatched: Bool
+
+    init?(
+        filenameEvidence: SmartSearchInitialEvidence?,
+        relativePathEvidence: SmartSearchInitialEvidence?
+    ) {
+        guard let bestEvidence = [filenameEvidence, relativePathEvidence]
+            .compactMap({ $0 })
+            .max(by: { $0.key < $1.key }) else {
+            return nil
+        }
+        self.bestEvidence = bestEvidence
+        self.filenameMatched = filenameEvidence != nil
+        self.relativePathMatched = relativePathEvidence != nil
+    }
+
+    func contains(_ field: SmartSearchInitialField) -> Bool {
+        switch field {
+        case .filename: filenameMatched
+        case .relativePath: relativePathMatched
+        }
+    }
+}
+
+struct SmartSearchInitialFieldLengths: Sendable, Equatable {
+    let filename: Int
+    let relativePath: Int
+
+    func length(for field: SmartSearchInitialField) -> Int {
+        switch field {
+        case .filename: filename
+        case .relativePath: relativePath
+        }
+    }
+}
+
 struct SmartSearchMatch: Sendable, Equatable {
-    let initialEvidence: [SmartSearchInitialEvidence]
+    let initialClauseMatches: [SmartSearchInitialClauseMatch]
+    let initialFieldLengths: SmartSearchInitialFieldLengths
+
+    var initialEvidence: [SmartSearchInitialEvidence] {
+        initialClauseMatches.map(\.bestEvidence)
+    }
+
+    static let noInitials = SmartSearchMatch(
+        initialClauseMatches: [],
+        initialFieldLengths: SmartSearchInitialFieldLengths(filename: 1, relativePath: 1)
+    )
 }
 
 enum SmartSearchTextAnalyzer {
     typealias AnalysisStep = @Sendable () throws -> Void
 
     static func queryPlan(for text: String) -> SmartSearchQueryPlan {
+        try! queryPlan(for: text, analysisStep: {})
+    }
+
+    static func queryPlan(
+        for text: String,
+        analysisStep: AnalysisStep
+    ) throws -> SmartSearchQueryPlan {
+        for _ in text.unicodeScalars {
+            try analysisStep()
+        }
         let normalized = normalizedLiteralText(text)
         var clauses: [SmartSearchClause] = []
+        var words: [String] = []
 
         normalized.enumerateSubstrings(
             in: normalized.startIndex...,
             options: [.byWords, .substringNotRequired, .localized]
         ) { _, range, _, _ in
-            appendClauses(from: String(normalized[range]), to: &clauses)
+            words.append(String(normalized[range]))
+        }
+        try analysisStep()
+        for word in words {
+            try appendClauses(
+                from: word,
+                to: &clauses,
+                analysisStep: analysisStep
+            )
         }
 
         return SmartSearchQueryPlan(clauses: clauses)
@@ -141,63 +256,83 @@ enum SmartSearchTextAnalyzer {
         let pathFeatures = needsInitials
             ? try initialFeatures(in: relativePath, analysisStep: analysisStep)
             : nil
-        var initialEvidence: [SmartSearchInitialEvidence] = []
+        var initialClauseMatches: [SmartSearchInitialClauseMatch] = []
 
         for clause in plan.clauses {
+            try analysisStep()
             switch clause {
             case let .literal(token):
                 guard foldedPath.contains(token) else { return nil }
-            case let .hangulInitials(initials):
+            case let .hangulInitials(pattern):
                 guard let filenameFeatures, let pathFeatures else { return nil }
-                let filenameEvidence = bestEvidence(
-                    for: initials,
+                let filenameEvidence = try bestEvidence(
+                    for: pattern,
                     in: filenameFeatures,
-                    field: .filename
+                    field: .filename,
+                    analysisStep: analysisStep
                 )
-                let pathEvidence = bestEvidence(
-                    for: initials,
+                let pathEvidence = try bestEvidence(
+                    for: pattern,
                     in: pathFeatures,
-                    field: .relativePath
+                    field: .relativePath,
+                    analysisStep: analysisStep
                 )
-                guard let evidence = [filenameEvidence, pathEvidence]
-                    .compactMap({ $0 })
-                    .max(by: { $0.key < $1.key }) else {
+                guard let clauseMatch = SmartSearchInitialClauseMatch(
+                    filenameEvidence: filenameEvidence,
+                    relativePathEvidence: pathEvidence
+                ) else {
                     return nil
                 }
-                initialEvidence.append(evidence)
+                initialClauseMatches.append(clauseMatch)
             }
         }
 
-        return SmartSearchMatch(initialEvidence: initialEvidence)
+        return SmartSearchMatch(
+            initialClauseMatches: initialClauseMatches,
+            initialFieldLengths: SmartSearchInitialFieldLengths(
+                filename: filenameFeatures?.documentLength ?? 1,
+                relativePath: pathFeatures?.documentLength ?? 1
+            )
+        )
     }
 
-    private static func appendClauses(from word: String, to clauses: inout [SmartSearchClause]) {
+    private static func appendClauses(
+        from word: String,
+        to clauses: inout [SmartSearchClause],
+        analysisStep: AnalysisStep
+    ) throws {
         var literalBuffer = ""
         var initialBuffer: [SmartSearchInitial] = []
 
-        func flushLiteral() {
+        func flushLiteral() throws {
             guard !literalBuffer.isEmpty else { return }
+            try analysisStep()
             clauses.append(contentsOf: literalTokens(in: literalBuffer).map(SmartSearchClause.literal))
             literalBuffer = ""
         }
 
-        func flushInitials() {
+        func flushInitials() throws {
             guard !initialBuffer.isEmpty else { return }
-            clauses.append(.hangulInitials(initialBuffer))
+            let pattern = try SmartSearchInitialPattern(
+                initialBuffer,
+                analysisStep: analysisStep
+            )
+            clauses.append(.hangulInitials(pattern))
             initialBuffer.removeAll(keepingCapacity: true)
         }
 
         for scalar in word.unicodeScalars {
+            try analysisStep()
             if let initial = initial(for: scalar) {
-                flushLiteral()
+                try flushLiteral()
                 initialBuffer.append(initial)
             } else {
-                flushInitials()
+                try flushInitials()
                 literalBuffer.unicodeScalars.append(scalar)
             }
         }
-        flushLiteral()
-        flushInitials()
+        try flushLiteral()
+        try flushInitials()
     }
 
     private static func normalizedLiteralText(_ text: String) -> String {
@@ -299,60 +434,74 @@ enum SmartSearchTextAnalyzer {
     }
 
     private static func bestEvidence(
-        for query: [SmartSearchInitial],
+        for pattern: SmartSearchInitialPattern,
         in features: InitialFeatures,
-        field: SmartSearchInitialField
-    ) -> SmartSearchInitialEvidence? {
-        let candidates = [
-            evidence(
-                for: query,
-                in: features.explicitRuns,
-                field: field,
-                representation: .literal,
-                occurrenceWeight: 1,
-                documentLength: features.documentLength
-            ),
-            evidence(
-                for: query,
-                in: features.syllableRuns,
-                field: field,
-                representation: .syllableRun,
-                occurrenceWeight: 1,
-                documentLength: features.documentLength
-            ),
-            evidence(
-                for: query,
-                in: features.runHeadGroups,
-                field: field,
-                representation: .runHeads,
-                occurrenceWeight: 0.5,
-                documentLength: features.documentLength
-            )
-        ].compactMap { $0 }
+        field: SmartSearchInitialField,
+        analysisStep: AnalysisStep
+    ) throws -> SmartSearchInitialEvidence? {
+        var candidates: [SmartSearchInitialEvidence] = []
+        if let explicit = try evidence(
+            for: pattern,
+            in: features.explicitRuns,
+            field: field,
+            representation: .literal,
+            occurrenceWeight: 1,
+            documentLength: features.documentLength,
+            analysisStep: analysisStep
+        ) {
+            candidates.append(explicit)
+        }
+        if let syllable = try evidence(
+            for: pattern,
+            in: features.syllableRuns,
+            field: field,
+            representation: .syllableRun,
+            occurrenceWeight: 1,
+            documentLength: features.documentLength,
+            analysisStep: analysisStep
+        ) {
+            candidates.append(syllable)
+        }
+        if let runHeads = try evidence(
+            for: pattern,
+            in: features.runHeadGroups,
+            field: field,
+            representation: .runHeads,
+            occurrenceWeight: 0.5,
+            documentLength: features.documentLength,
+            analysisStep: analysisStep
+        ) {
+            candidates.append(runHeads)
+        }
 
         return candidates.max(by: { $0.key < $1.key })
     }
 
     private static func evidence(
-        for query: [SmartSearchInitial],
+        for pattern: SmartSearchInitialPattern,
         in runs: [[SmartSearchInitial]],
         field: SmartSearchInitialField,
         representation: SmartSearchInitialRepresentation,
         occurrenceWeight: Double,
-        documentLength: Int
-    ) -> SmartSearchInitialEvidence? {
-        guard !query.isEmpty else { return nil }
+        documentLength: Int,
+        analysisStep: AnalysisStep
+    ) throws -> SmartSearchInitialEvidence? {
+        guard !pattern.initials.isEmpty else { return nil }
         var bestRelation: SmartSearchInitialRelation?
         var occurrenceCount = 0
 
         for run in runs {
-            let starts = occurrenceStarts(of: query, in: run)
-            guard !starts.isEmpty else { continue }
-            occurrenceCount += starts.count
+            let occurrences = try occurrenceSummary(
+                of: pattern,
+                in: run,
+                analysisStep: analysisStep
+            )
+            guard occurrences.count > 0 else { continue }
+            occurrenceCount += occurrences.count
             let relation: SmartSearchInitialRelation
-            if run == query {
+            if run == pattern.initials {
                 relation = .exact
-            } else if starts.contains(0) {
+            } else if occurrences.hasPrefix {
                 relation = .prefix
             } else {
                 relation = .contains
@@ -374,14 +523,45 @@ enum SmartSearchTextAnalyzer {
         )
     }
 
-    private static func occurrenceStarts(
-        of query: [SmartSearchInitial],
-        in candidate: [SmartSearchInitial]
-    ) -> [Int] {
-        guard !query.isEmpty, query.count <= candidate.count else { return [] }
-        return (0...(candidate.count - query.count)).filter { start in
-            candidate[start..<(start + query.count)].elementsEqual(query)
+    private struct OccurrenceSummary {
+        var count = 0
+        var hasPrefix = false
+    }
+
+    private static func occurrenceSummary(
+        of pattern: SmartSearchInitialPattern,
+        in candidate: [SmartSearchInitial],
+        analysisStep: AnalysisStep
+    ) throws -> OccurrenceSummary {
+        let query = pattern.initials
+        guard !query.isEmpty, query.count <= candidate.count else {
+            return OccurrenceSummary()
         }
+
+        var summary = OccurrenceSummary()
+        var matchedLength = 0
+        for (index, value) in candidate.enumerated() {
+            while matchedLength > 0 {
+                try analysisStep()
+                if value == query[matchedLength] {
+                    break
+                }
+                matchedLength = pattern.failureTable[matchedLength - 1]
+            }
+
+            if matchedLength == 0 {
+                try analysisStep()
+                guard value == query[0] else { continue }
+            }
+
+            matchedLength += 1
+            guard matchedLength == query.count else { continue }
+            let start = index + 1 - query.count
+            summary.count += 1
+            summary.hasPrefix = summary.hasPrefix || start == 0
+            matchedLength = pattern.failureTable[matchedLength - 1]
+        }
+        return summary
     }
 
     private static func initialForHangulSyllable(_ scalar: Unicode.Scalar) -> SmartSearchInitial? {

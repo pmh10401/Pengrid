@@ -113,6 +113,35 @@ import Testing
         #expect(results.contains { $0.relativePath == "개인 사진 다운로드/메모.txt" } == false)
     }
 
+    @Test func legacyComplexQueryIsRejectedBeforeFilesystemTraversal() async throws {
+        let fixture = try TemporaryDirectory()
+        defer { fixture.remove() }
+        try write("report", to: fixture.url.appending(path: "report.txt"))
+        let legacyText = Array(
+            repeating: "ㄱ",
+            count: SmartSearchQuery.maximumClauseCount + 1
+        ).joined(separator: " ")
+        let legacyQuery = try JSONDecoder().decode(
+            SmartSearchQuery.self,
+            from: JSONEncoder().encode(LegacyServiceQueryPayload(
+                text: legacyText,
+                roots: [fixture.url],
+                includeHidden: false,
+                includePackages: false,
+                includeDirectories: true,
+                maximumResults: 500
+            ))
+        )
+        let traversalCount = LockedCounter()
+
+        await #expect(throws: SmartSearchValidationError.queryTooComplex) {
+            try await service(traversalHook: { _ in
+                traversalCount.increment()
+            }).search(legacyQuery)
+        }
+        #expect(traversalCount.value == 0)
+    }
+
     @Test func matchingCandidateCollectionStopsAtTheDocumentedHardBudget() async throws {
         let fixture = try TemporaryDirectory()
         defer { fixture.remove() }
@@ -199,6 +228,36 @@ import Testing
         #expect(results.first?.item.availability == .onlineOnly)
     }
 
+    @Test func metadataFailureFallsBackWithoutReadingAvailabilityForNonmatches() async throws {
+        let fixture = try TemporaryDirectory()
+        defer { fixture.remove() }
+        let matchingFile = fixture.url.appending(path: "한국.txt")
+        let matchingFolder = fixture.url.appending(path: "한글 폴더")
+        let nonmatch = fixture.url.appending(path: "notes.txt")
+        try write("match", to: matchingFile)
+        try FileManager.default.createDirectory(
+            at: matchingFolder,
+            withIntermediateDirectories: true
+        )
+        try write("nonmatch", to: nonmatch)
+        let reader = RecordingAvailabilityReader()
+
+        let results = try await service(
+            availabilityReader: reader,
+            typeDescriptionReader: { _ in throw MetadataProbeError.unavailable }
+        ).search(query("ㅎㄱ", roots: [fixture.url]))
+
+        let descriptions = Dictionary(uniqueKeysWithValues: results.map {
+            ($0.item.name, $0.item.typeDescription)
+        })
+        #expect(descriptions["한국.txt"] == "File")
+        #expect(descriptions["한글 폴더"] == "Folder")
+        #expect(Set(await reader.requestedURLs()) == Set([
+            matchingFile.standardizedFileURL,
+            matchingFolder.standardizedFileURL
+        ]))
+    }
+
     @Test func rejectsMissingFilesAndNonDirectoryRootsWithStableError() async throws {
         let fixture = try TemporaryDirectory()
         defer { fixture.remove() }
@@ -263,13 +322,17 @@ import Testing
 private func service(
     availabilityReader: any CloudItemAvailabilityReading = StubAvailabilityReader(),
     traversalHook: @escaping LocalSmartSearchService.TraversalHook = { _ in },
-    rankingHook: @escaping LocalSmartSearchService.RankingHook = {}
+    rankingHook: @escaping LocalSmartSearchService.RankingHook = {},
+    typeDescriptionReader: @escaping @Sendable (URL) throws -> String? = {
+        try $0.resourceValues(forKeys: [.localizedTypeDescriptionKey]).localizedTypeDescription
+    }
 ) -> LocalSmartSearchService {
     LocalSmartSearchService(
         fileManager: .default,
         availabilityReader: availabilityReader,
         traversalHook: traversalHook,
-        rankingHook: rankingHook
+        rankingHook: rankingHook,
+        typeDescriptionReader: typeDescriptionReader
     )
 }
 
@@ -289,6 +352,15 @@ private func write(_ contents: String, to url: URL) throws {
     try Data(contents.utf8).write(to: url)
 }
 
+private struct LegacyServiceQueryPayload: Codable {
+    let text: String
+    let roots: [URL]
+    let includeHidden: Bool
+    let includePackages: Bool
+    let includeDirectories: Bool
+    let maximumResults: Int
+}
+
 private actor StubAvailabilityReader: CloudItemAvailabilityReading {
     private let values: [URL: CloudItemAvailability]
 
@@ -298,6 +370,23 @@ private actor StubAvailabilityReader: CloudItemAvailabilityReading {
 
     func availability(of url: URL) -> CloudItemAvailability {
         values[url.standardizedFileURL] ?? .availableLocally
+    }
+}
+
+private enum MetadataProbeError: Error {
+    case unavailable
+}
+
+private actor RecordingAvailabilityReader: CloudItemAvailabilityReading {
+    private var urls: [URL] = []
+
+    func availability(of url: URL) -> CloudItemAvailability {
+        urls.append(url.standardizedFileURL)
+        return .availableLocally
+    }
+
+    func requestedURLs() -> [URL] {
+        urls
     }
 }
 

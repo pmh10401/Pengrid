@@ -10,6 +10,17 @@ import Testing
         )
     }
 
+    @Test func queryCompilationCanBeCancelled() {
+        let probe = AnalyzerCancellationProbe(allowedSteps: 32)
+
+        #expect(throws: AnalyzerProbeError.cancelled) {
+            try SmartSearchTextAnalyzer.queryPlan(
+                for: String(repeating: "ㅎㄱ report ", count: 1_000),
+                analysisStep: probe.step
+            )
+        }
+    }
+
     @Test func mixedAndAdjacentScriptsCompileIntoOrderedAndClauses() {
         #expect(SmartSearchTextAnalyzer.queryPlan(for: "ㅎㄱ report").clauses == [
             .hangulInitials([.hieuh, .kiyeok]),
@@ -27,6 +38,23 @@ import Testing
 
     @Test func unsupportedCompoundFinalRemainsLiteral() {
         #expect(SmartSearchTextAnalyzer.queryPlan(for: "ㄳ").clauses == [.literal("ㄳ")])
+    }
+
+    @Test func oldHangulAndJongseongJamoRemainLiteral() {
+        let oldChoseong = "\u{1113}"
+        let jongseong = "\u{11A8}"
+
+        #expect(SmartSearchTextAnalyzer.queryPlan(for: oldChoseong).clauses == [
+            .literal(oldChoseong)
+        ])
+        #expect(SmartSearchTextAnalyzer.queryPlan(for: jongseong).clauses == [
+            .literal(jongseong)
+        ])
+        #expect(SmartSearchTextAnalyzer.match(
+            plan: SmartSearchTextAnalyzer.queryPlan(for: oldChoseong),
+            filename: "가.txt",
+            relativePath: "가.txt"
+        ) == nil)
     }
 
     @Test func syllableRunsMatchKoreanWordsAcrossCanonicalForms() {
@@ -101,6 +129,26 @@ import Testing
         ) == nil)
     }
 
+    @Test func punctuationJoinsAdjacentKoreanHeadsButDigitsBreakThem() {
+        let plan = SmartSearchTextAnalyzer.queryPlan(for: "ㄱㄷ")
+
+        #expect(SmartSearchTextAnalyzer.match(
+            plan: plan,
+            filename: "구글-드라이브",
+            relativePath: "구글-드라이브"
+        ) != nil)
+        #expect(SmartSearchTextAnalyzer.match(
+            plan: plan,
+            filename: "구글.드라이브",
+            relativePath: "구글.드라이브"
+        ) != nil)
+        #expect(SmartSearchTextAnalyzer.match(
+            plan: plan,
+            filename: "구글2026드라이브",
+            relativePath: "구글2026드라이브"
+        ) == nil)
+    }
+
     @Test func mixedClausesRequireEveryLiteralAndInitialCondition() {
         let plan = SmartSearchTextAnalyzer.queryPlan(for: "ㅎㄱ report")
 
@@ -158,26 +206,86 @@ import Testing
         ))
     }
 
-    @Test func initialAnalysisVisitsScalarsLinearly() throws {
-        let plan = SmartSearchTextAnalyzer.queryPlan(for: "ㅎㄱ")
-        let singleText = String(repeating: "한국-report-", count: 32)
+    @Test func initialOccurrencesCountOverlappingMatches() {
+        let match = SmartSearchTextAnalyzer.match(
+            plan: SmartSearchTextAnalyzer.queryPlan(for: "ㄱㄱ"),
+            filename: "가가가",
+            relativePath: "가가가"
+        )
+
+        #expect(match?.initialEvidence.first?.weightedTermFrequency == 2)
+    }
+
+    @Test func cancellationCanInterruptAdversarialInitialScanning() {
+        let candidate = String(repeating: "가", count: 256)
+        let plan = SmartSearchTextAnalyzer.queryPlan(
+            for: String(repeating: "ㄱ", count: 64) + "ㄴ"
+        )
+        let probe = AnalyzerCancellationProbe(
+            allowedSteps: (candidate.unicodeScalars.count * 2) + 8
+        )
+
+        #expect(throws: AnalyzerProbeError.cancelled) {
+            try SmartSearchTextAnalyzer.match(
+                plan: plan,
+                filename: candidate,
+                relativePath: candidate,
+                analysisStep: probe.step
+            )
+        }
+    }
+
+    @Test func initialAnalysisAndMatchingWorkScaleLinearly() throws {
+        let singleText = String(repeating: "가", count: 64)
+        let singlePlan = SmartSearchTextAnalyzer.queryPlan(
+            for: String(repeating: "ㄱ", count: 16) + "ㄴ"
+        )
         let singleCounter = AnalyzerStepCounter()
         _ = try SmartSearchTextAnalyzer.match(
-            plan: plan,
+            plan: singlePlan,
             filename: singleText,
             relativePath: singleText,
             analysisStep: singleCounter.increment
         )
 
+        let doubledText = String(repeating: "가", count: 128)
+        let doubledPlan = SmartSearchTextAnalyzer.queryPlan(
+            for: String(repeating: "ㄱ", count: 32) + "ㄴ"
+        )
         let doubledCounter = AnalyzerStepCounter()
         _ = try SmartSearchTextAnalyzer.match(
-            plan: plan,
-            filename: singleText + singleText,
-            relativePath: singleText + singleText,
+            plan: doubledPlan,
+            filename: doubledText,
+            relativePath: doubledText,
             analysisStep: doubledCounter.increment
         )
 
-        #expect(doubledCounter.value <= (singleCounter.value * 2) + 2)
+        #expect(singleCounter.value > singleText.unicodeScalars.count * 2)
+        #expect(doubledCounter.value <= (singleCounter.value * 2) + 16)
+    }
+}
+
+private enum AnalyzerProbeError: Error {
+    case cancelled
+}
+
+private final class AnalyzerCancellationProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private let allowedSteps: Int
+    private var count = 0
+
+    init(allowedSteps: Int) {
+        self.allowedSteps = allowedSteps
+    }
+
+    func step() throws {
+        let shouldCancel = lock.withLock {
+            count += 1
+            return count > allowedSteps
+        }
+        if shouldCancel {
+            throw AnalyzerProbeError.cancelled
+        }
     }
 }
 

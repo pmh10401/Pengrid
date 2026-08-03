@@ -29,25 +29,33 @@ struct PreparedSmartSearchCandidate: Sendable {
 final class LocalSmartSearchService: SmartSearching, @unchecked Sendable {
     typealias TraversalHook = @Sendable (URL) throws -> Void
     typealias RankingHook = @Sendable () throws -> Void
+    typealias TypeDescriptionReader = @Sendable (URL) throws -> String?
 
     private let fileManager: FileManager
     private let availabilityReader: any CloudItemAvailabilityReading
     private let scopedAccessCoordinator: CloudLocationScopedAccessCoordinator
     private let traversalHook: TraversalHook
     private let rankingHook: RankingHook
+    private let typeDescriptionReader: TypeDescriptionReader
 
     init(
         fileManager: FileManager = .default,
         availabilityReader: any CloudItemAvailabilityReading = LiveCloudItemAvailabilityService(),
         scopedAccessCoordinator: CloudLocationScopedAccessCoordinator = CloudLocationScopedAccessCoordinator(),
         traversalHook: @escaping TraversalHook = { _ in },
-        rankingHook: @escaping RankingHook = {}
+        rankingHook: @escaping RankingHook = {},
+        typeDescriptionReader: @escaping TypeDescriptionReader = {
+            try $0.resourceValues(
+                forKeys: [.localizedTypeDescriptionKey]
+            ).localizedTypeDescription
+        }
     ) {
         self.fileManager = fileManager
         self.availabilityReader = availabilityReader
         self.scopedAccessCoordinator = scopedAccessCoordinator
         self.traversalHook = traversalHook
         self.rankingHook = rankingHook
+        self.typeDescriptionReader = typeDescriptionReader
     }
 
     func search(_ query: SmartSearchQuery) async throws -> [SmartSearchResult] {
@@ -58,11 +66,10 @@ final class LocalSmartSearchService: SmartSearching, @unchecked Sendable {
         _ query: SmartSearchQuery,
         progress: @escaping @Sendable (Int) -> Void
     ) async throws -> [SmartSearchResult] {
+        let queryPlan = try query.executablePlan()
         let roots = try validatedRoots(from: query.roots)
         let leases = try scopedAccessCoordinator.acquireAccess(for: roots)
         defer { leases.forEach { $0.finish() } }
-
-        let queryPlan = SmartSearchTextAnalyzer.queryPlan(for: query.text)
         var allCandidates: [PreparedSmartSearchCandidate] = []
         allCandidates.reserveCapacity(query.candidateBudget)
         var seenCandidatePaths = Set<String>()
@@ -195,9 +202,8 @@ final class LocalSmartSearchService: SmartSearching, @unchecked Sendable {
 
                 let standardizedURL = url.standardizedFileURL
                 let availability = await availabilityReader.availability(of: standardizedURL)
-                let typeDescription = (try? url.resourceValues(
-                    forKeys: [.localizedTypeDescriptionKey]
-                ).localizedTypeDescription) ?? (directory ? "Folder" : "File")
+                let typeDescription = (try? typeDescriptionReader(url))
+                    ?? (directory ? "Folder" : "File")
                 try Task.checkCancellation()
                 results.append(PreparedSmartSearchCandidate(
                     result: SmartSearchResult(

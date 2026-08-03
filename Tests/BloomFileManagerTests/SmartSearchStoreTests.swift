@@ -38,6 +38,26 @@ struct SmartSearchStoreTests {
         #expect(store.state == .idle)
     }
 
+    @Test func overlyComplexQueryFailsClearlyWithoutCallingService() async {
+        let service = ReplacingSearchService()
+        let store = SmartSearchStore(
+            service: service,
+            persistence: WorkspacePersistence(defaults: isolatedDefaults())
+        )
+        store.present(for: URL(filePath: "/search", directoryHint: .isDirectory))
+        store.queryText = String(
+            repeating: "a",
+            count: SmartSearchQuery.maximumTextScalarCount + 1
+        )
+
+        store.search()
+        await Task.yield()
+
+        #expect(await service.requestCount() == 0)
+        #expect(store.state == .failed)
+        #expect(store.errorMessage == "Search is too long. Use fewer terms.")
+    }
+
     @Test func cancellationAndFailureProduceVisibleTerminalStates() async {
         let service = CancellingThenFailingSearchService()
         let store = SmartSearchStore(service: service, persistence: WorkspacePersistence(defaults: isolatedDefaults()))

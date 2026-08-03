@@ -103,6 +103,10 @@ final class SmartSearchStore {
                 includeDirectories: includeDirectories,
                 maximumResults: maximumResults
             )
+        } catch SmartSearchValidationError.queryTooComplex {
+            state = .failed
+            errorMessage = "Search is too long. Use fewer terms."
+            return
         } catch {
             state = .failed
             errorMessage = "Search failed."

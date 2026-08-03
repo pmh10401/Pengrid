@@ -37,6 +37,30 @@ import Testing
         }
     }
 
+    @Test func validationBoundsQueryTextAndCompiledClauseCount() throws {
+        let root = URL(filePath: "/search/root")
+
+        #expect(throws: SmartSearchValidationError.queryTooComplex) {
+            try SmartSearchQuery(
+                text: String(repeating: "a", count: SmartSearchQuery.maximumTextScalarCount + 1),
+                roots: [root]
+            )
+        }
+        #expect(throws: SmartSearchValidationError.queryTooComplex) {
+            try SmartSearchQuery(
+                text: Array(repeating: "ㄱ", count: SmartSearchQuery.maximumClauseCount + 1)
+                    .joined(separator: " "),
+                roots: [root]
+            )
+        }
+
+        let boundary = try SmartSearchQuery(
+            text: String(repeating: "a", count: SmartSearchQuery.maximumTextScalarCount),
+            roots: [root]
+        )
+        #expect(boundary.isWithinComplexityLimits)
+    }
+
     @Test func decodedQueriesRunTheSameValidationAndNormalization() throws {
         #expect(throws: SmartSearchValidationError.emptyText) {
             try JSONDecoder().decode(
@@ -50,7 +74,6 @@ import Testing
                 from: JSONEncoder().encode(queryPayload(text: "report", roots: [URL(string: "file://fileserver/share")!]))
             )
         }
-
         let decoded = try JSONDecoder().decode(
             SmartSearchQuery.self,
             from: JSONEncoder().encode(queryPayload(
@@ -62,6 +85,20 @@ import Testing
         #expect(decoded.text == "report")
         #expect(decoded.roots == [URL(filePath: "/search/root")])
         #expect(decoded.maximumResults == 2_000)
+
+        let legacyComplexText = Array(
+            repeating: "ㄱ",
+            count: SmartSearchQuery.maximumClauseCount + 1
+        ).joined(separator: " ")
+        let legacyComplexQuery = try JSONDecoder().decode(
+            SmartSearchQuery.self,
+            from: JSONEncoder().encode(queryPayload(
+                text: legacyComplexText,
+                roots: [URL(filePath: "/search/root")]
+            ))
+        )
+        #expect(legacyComplexQuery.text == legacyComplexText)
+        #expect(!legacyComplexQuery.isWithinComplexityLimits)
     }
 
     @Test func maximumResultsStaysClampedAfterMutation() throws {
@@ -187,6 +224,22 @@ import Testing
         #expect(ranked.map(\.item.name) == ["한국 기대.txt", "ㅎㄱ.txt"])
     }
 
+    @Test func initialBM25UsesEveryPreparedFieldLengthAndClauseDocumentFrequency() throws {
+        let query = try SmartSearchQuery(text: "ㅎㄱ", roots: [URL(filePath: "/search/root")])
+        let ranked = SmartSearchRanker.ranked([
+            result(name: "한국", path: "한국"),
+            result(name: "notes.txt", path: "한국/notes.txt")
+        ], for: query)
+
+        let filenameMatch = try #require(ranked.first { $0.item.name == "한국" })
+        let pathOnlyMatch = try #require(ranked.first { $0.item.name == "notes.txt" })
+        let expectedPathScore = log(1.2)
+        let expectedFilenameScore = log(2.0) * (22.0 / 15.0)
+
+        #expect(abs(pathOnlyMatch.score - expectedPathScore) < 0.000_000_001)
+        #expect(abs(filenameMatch.score - expectedFilenameScore) < 0.000_000_001)
+    }
+
     @Test func initialRankingIsIndependentOfCandidateInputOrder() throws {
         let query = try SmartSearchQuery(text: "ㅎㄱ", roots: [URL(filePath: "/search/root")])
         let candidates = [
@@ -213,9 +266,31 @@ import Testing
         #expect(ranked.allSatisfy { $0.score > 0 })
     }
 
-    @Test func cancellationAfterMergeSortStartsStopsRanking() async throws {
+    @Test func literalOnlyRankingPreservesUnmatchedCandidatesAtZeroScore() throws {
         let query = try SmartSearchQuery(text: "report", roots: [URL(filePath: "/search/root")])
-        let candidates = (0..<500).map { index in
+        let ranked = SmartSearchRanker.ranked([
+            result(name: "notes.txt", path: "notes.txt"),
+            result(name: "report.txt", path: "report.txt")
+        ], for: query)
+
+        #expect(ranked.map(\.item.name) == ["report.txt", "notes.txt"])
+        #expect(ranked.last?.score == 0)
+    }
+
+    @Test func literalOnlyExactMatchKeepsItsBaselineScore() throws {
+        let query = try SmartSearchQuery(text: "report", roots: [URL(filePath: "/search/root")])
+        let ranked = SmartSearchRanker.ranked([
+            result(name: "report", path: "report")
+        ], for: query)
+        let result = try #require(ranked.first)
+        let expectedScore = 8.0 + (4.0 * log(4.0 / 3.0))
+
+        #expect(abs(result.score - expectedScore) < 0.000_000_001)
+    }
+
+    @Test func fiftyThousandCandidateRankingCanCancelAfterMergeSortStarts() async throws {
+        let query = try SmartSearchQuery(text: "report", roots: [URL(filePath: "/search/root")])
+        let candidates = (0..<50_000).map { index in
             result(name: "report-\(index).txt", path: "folder/report-\(index).txt")
         }
         let sortingProbe = SortingCancellationProbe()
@@ -232,6 +307,57 @@ import Testing
         task.cancel()
 
         await #expect(throws: CancellationError.self) { try await task.value }
+    }
+
+    @Test func cancellationCanInterruptInitialStatisticsCollection() throws {
+        let query = try SmartSearchQuery(text: "ㅎㄱ", roots: [URL(filePath: "/search/root")])
+        let plan = SmartSearchTextAnalyzer.queryPlan(for: query.text)
+        let match = try #require(SmartSearchTextAnalyzer.match(
+            plan: plan,
+            filename: "한국.txt",
+            relativePath: "한국.txt"
+        ))
+        let candidateCount = 2_000
+        let candidates = (0..<candidateCount).map { index in
+            PreparedSmartSearchCandidate(
+                result: result(name: "한국-\(index).txt", path: "한국-\(index).txt"),
+                match: match
+            )
+        }
+        let probe = RankingStepProbe(allowedSteps: candidateCount + 50)
+
+        #expect(throws: RankingProbeError.cancelled) {
+            try SmartSearchRanker.ranked(
+                candidates,
+                for: query,
+                plan: plan,
+                cancellationCheck: probe.step
+            )
+        }
+        #expect(probe.value > candidateCount + 1)
+        #expect(probe.value < candidateCount * 2)
+    }
+
+    @Test func rankerRejectsAnOverLimitPersistedQueryBeforePreparingCandidates() throws {
+        let legacyQuery = try JSONDecoder().decode(
+            SmartSearchQuery.self,
+            from: JSONEncoder().encode(queryPayload(
+                text: String(repeating: "a", count: SmartSearchQuery.maximumTextScalarCount + 1),
+                roots: [URL(filePath: "/search/root")]
+            ))
+        )
+        let candidates = [result(name: "a.txt", path: "a.txt")]
+        let steps = RankerStepCounter()
+
+        #expect(throws: SmartSearchValidationError.queryTooComplex) {
+            try SmartSearchRanker.ranked(
+                candidates,
+                for: legacyQuery,
+                cancellationCheck: steps.increment
+            )
+        }
+        #expect(steps.value == 0)
+        #expect(SmartSearchRanker.ranked(candidates, for: legacyQuery).isEmpty)
     }
 
     @Test func savedSearchRecordRoundTripsURLsAndDatesThroughCodable() throws {
@@ -272,6 +398,43 @@ private final class SortingCancellationProbe: @unchecked Sendable {
         while !lock.withLock({ started }) {
             await Task.yield()
         }
+    }
+}
+
+private enum RankingProbeError: Error {
+    case cancelled
+}
+
+private final class RankingStepProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private let allowedSteps: Int
+    private var count = 0
+
+    init(allowedSteps: Int) {
+        self.allowedSteps = allowedSteps
+    }
+
+    var value: Int { lock.withLock { count } }
+
+    func step() throws {
+        let shouldCancel = lock.withLock {
+            count += 1
+            return count > allowedSteps
+        }
+        if shouldCancel {
+            throw RankingProbeError.cancelled
+        }
+    }
+}
+
+private final class RankerStepCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    var value: Int { lock.withLock { count } }
+
+    func increment() {
+        lock.withLock { count += 1 }
     }
 }
 
