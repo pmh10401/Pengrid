@@ -19,6 +19,40 @@ struct WorkspacePersistenceTests {
         #expect(persistence.loadSavedSearches().isEmpty)
     }
 
+    @Test func legacyComplexSavedSearchDoesNotHideOtherSavedSearches() throws {
+        let fixture = DefaultsFixture()
+        defer { fixture.remove() }
+        let persistence = WorkspacePersistence(defaults: fixture.defaults)
+        let root = URL(filePath: "/search")
+        let regular = SmartSearchRecord(
+            displayName: "Reports",
+            query: try SmartSearchQuery(text: "report", roots: [root])
+        )
+        let legacyText = Array(
+            repeating: "ㄱ",
+            count: SmartSearchQuery.maximumClauseCount + 1
+        ).joined(separator: " ")
+        let legacyQuery = try JSONDecoder().decode(
+            SmartSearchQuery.self,
+            from: JSONEncoder().encode(LegacySmartSearchQueryPayload(
+                text: legacyText,
+                roots: [root],
+                includeHidden: false,
+                includePackages: false,
+                includeDirectories: true,
+                maximumResults: 500
+            ))
+        )
+        let legacy = SmartSearchRecord(displayName: "Legacy initials", query: legacyQuery)
+
+        persistence.saveSavedSearches([regular, legacy])
+        let restored = persistence.loadSavedSearches()
+
+        #expect(restored.map(\.displayName) == ["Reports", "Legacy initials"])
+        #expect(restored[1].query.text == legacyText)
+        #expect(!restored[1].query.isWithinComplexityLimits)
+    }
+
     @Test func restoreUsesOnlyTheInjectedCheapDirectoryProbe() {
         let fixture = DefaultsFixture()
         defer { fixture.remove() }
@@ -328,6 +362,15 @@ private final class DefaultsFixture {
     func remove() {
         defaults.removePersistentDomain(forName: name)
     }
+}
+
+private struct LegacySmartSearchQueryPayload: Codable {
+    let text: String
+    let roots: [URL]
+    let includeHidden: Bool
+    let includePackages: Bool
+    let includeDirectories: Bool
+    let maximumResults: Int
 }
 
 private struct PersistenceListingService: DirectoryListingService {

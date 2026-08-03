@@ -60,6 +60,113 @@ import Testing
         #expect(results.map(\.item.name) == ["report.txt", "meeting-report.txt"])
     }
 
+    @Test func searchesKoreanInitialsWithBothJamoRepresentations() async throws {
+        let fixture = try TemporaryDirectory()
+        defer { fixture.remove() }
+        try write("report", to: fixture.url.appending(path: "한국 보고서.pdf"))
+        try write("notes", to: fixture.url.appending(path: "한글 노트.txt"))
+
+        let compatibility = try await service().search(query(
+            "ㅎㄱ",
+            roots: [fixture.url],
+            includeDirectories: false
+        ))
+        let choseong = try await service().search(query(
+            "ᄒᄀ",
+            roots: [fixture.url],
+            includeDirectories: false
+        ))
+
+        #expect(compatibility.map(\.item.name) == choseong.map(\.item.name))
+        #expect(Set(compatibility.map(\.item.name)) == ["한국 보고서.pdf", "한글 노트.txt"])
+    }
+
+    @Test func mixedInitialAndLiteralQueryUsesAndSemantics() async throws {
+        let fixture = try TemporaryDirectory()
+        defer { fixture.remove() }
+        for name in ["한국 report.pdf", "한국 notes.pdf", "영문 report.pdf"] {
+            try write(name, to: fixture.url.appending(path: name))
+        }
+
+        let results = try await service().search(query(
+            "ㅎㄱ report",
+            roots: [fixture.url],
+            includeDirectories: false
+        ))
+
+        #expect(results.map(\.item.name) == ["한국 report.pdf"])
+    }
+
+    @Test func runHeadSearchRejectsAnUnrelatedIntermediateInitial() async throws {
+        let fixture = try TemporaryDirectory()
+        defer { fixture.remove() }
+        try write("plan", to: fixture.url.appending(path: "구글 드라이브/계획.txt"))
+        try write("memo", to: fixture.url.appending(path: "개인 사진 다운로드/메모.txt"))
+
+        let results = try await service().search(query(
+            "ㄱㄷ",
+            roots: [fixture.url],
+            includeDirectories: false
+        ))
+
+        #expect(results.contains { $0.relativePath == "구글 드라이브/계획.txt" })
+        #expect(results.contains { $0.relativePath == "개인 사진 다운로드/메모.txt" } == false)
+    }
+
+    @Test func legacyComplexQueryIsRejectedBeforeFilesystemTraversal() async throws {
+        let fixture = try TemporaryDirectory()
+        defer { fixture.remove() }
+        try write("report", to: fixture.url.appending(path: "report.txt"))
+        let legacyText = Array(
+            repeating: "ㄱ",
+            count: SmartSearchQuery.maximumClauseCount + 1
+        ).joined(separator: " ")
+        let legacyQuery = try JSONDecoder().decode(
+            SmartSearchQuery.self,
+            from: JSONEncoder().encode(LegacyServiceQueryPayload(
+                text: legacyText,
+                roots: [fixture.url],
+                includeHidden: false,
+                includePackages: false,
+                includeDirectories: true,
+                maximumResults: 500
+            ))
+        )
+        let traversalCount = LockedCounter()
+
+        await #expect(throws: SmartSearchValidationError.queryTooComplex) {
+            try await service(traversalHook: { _ in
+                traversalCount.increment()
+            }).search(legacyQuery)
+        }
+        #expect(traversalCount.value == 0)
+    }
+
+    @Test func legacyQueryWithoutSearchableTermsIsRejectedBeforeTraversal() async throws {
+        let fixture = try TemporaryDirectory()
+        defer { fixture.remove() }
+        try write("report", to: fixture.url.appending(path: "report.txt"))
+        let legacyQuery = try JSONDecoder().decode(
+            SmartSearchQuery.self,
+            from: JSONEncoder().encode(LegacyServiceQueryPayload(
+                text: "---",
+                roots: [fixture.url],
+                includeHidden: false,
+                includePackages: false,
+                includeDirectories: true,
+                maximumResults: 500
+            ))
+        )
+        let traversalCount = LockedCounter()
+
+        await #expect(throws: SmartSearchValidationError.noSearchableTerms) {
+            try await service(traversalHook: { _ in
+                traversalCount.increment()
+            }).search(legacyQuery)
+        }
+        #expect(traversalCount.value == 0)
+    }
+
     @Test func matchingCandidateCollectionStopsAtTheDocumentedHardBudget() async throws {
         let fixture = try TemporaryDirectory()
         defer { fixture.remove() }
@@ -146,6 +253,36 @@ import Testing
         #expect(results.first?.item.availability == .onlineOnly)
     }
 
+    @Test func metadataFailureFallsBackWithoutReadingAvailabilityForNonmatches() async throws {
+        let fixture = try TemporaryDirectory()
+        defer { fixture.remove() }
+        let matchingFile = fixture.url.appending(path: "한국.txt")
+        let matchingFolder = fixture.url.appending(path: "한글 폴더")
+        let nonmatch = fixture.url.appending(path: "notes.txt")
+        try write("match", to: matchingFile)
+        try FileManager.default.createDirectory(
+            at: matchingFolder,
+            withIntermediateDirectories: true
+        )
+        try write("nonmatch", to: nonmatch)
+        let reader = RecordingAvailabilityReader()
+
+        let results = try await service(
+            availabilityReader: reader,
+            typeDescriptionReader: { _ in throw MetadataProbeError.unavailable }
+        ).search(query("ㅎㄱ", roots: [fixture.url]))
+
+        let descriptions = Dictionary(uniqueKeysWithValues: results.map {
+            ($0.item.name, $0.item.typeDescription)
+        })
+        #expect(descriptions["한국.txt"] == "File")
+        #expect(descriptions["한글 폴더"] == "Folder")
+        #expect(Set(await reader.requestedURLs()) == Set([
+            matchingFile.standardizedFileURL,
+            matchingFolder.standardizedFileURL
+        ]))
+    }
+
     @Test func rejectsMissingFilesAndNonDirectoryRootsWithStableError() async throws {
         let fixture = try TemporaryDirectory()
         defer { fixture.remove() }
@@ -210,13 +347,17 @@ import Testing
 private func service(
     availabilityReader: any CloudItemAvailabilityReading = StubAvailabilityReader(),
     traversalHook: @escaping LocalSmartSearchService.TraversalHook = { _ in },
-    rankingHook: @escaping LocalSmartSearchService.RankingHook = {}
+    rankingHook: @escaping LocalSmartSearchService.RankingHook = {},
+    typeDescriptionReader: @escaping @Sendable (URL) throws -> String? = {
+        try $0.resourceValues(forKeys: [.localizedTypeDescriptionKey]).localizedTypeDescription
+    }
 ) -> LocalSmartSearchService {
     LocalSmartSearchService(
         fileManager: .default,
         availabilityReader: availabilityReader,
         traversalHook: traversalHook,
-        rankingHook: rankingHook
+        rankingHook: rankingHook,
+        typeDescriptionReader: typeDescriptionReader
     )
 }
 
@@ -236,6 +377,15 @@ private func write(_ contents: String, to url: URL) throws {
     try Data(contents.utf8).write(to: url)
 }
 
+private struct LegacyServiceQueryPayload: Codable {
+    let text: String
+    let roots: [URL]
+    let includeHidden: Bool
+    let includePackages: Bool
+    let includeDirectories: Bool
+    let maximumResults: Int
+}
+
 private actor StubAvailabilityReader: CloudItemAvailabilityReading {
     private let values: [URL: CloudItemAvailability]
 
@@ -245,6 +395,23 @@ private actor StubAvailabilityReader: CloudItemAvailabilityReading {
 
     func availability(of url: URL) -> CloudItemAvailability {
         values[url.standardizedFileURL] ?? .availableLocally
+    }
+}
+
+private enum MetadataProbeError: Error {
+    case unavailable
+}
+
+private actor RecordingAvailabilityReader: CloudItemAvailabilityReading {
+    private var urls: [URL] = []
+
+    func availability(of url: URL) -> CloudItemAvailability {
+        urls.append(url.standardizedFileURL)
+        return .availableLocally
+    }
+
+    func requestedURLs() -> [URL] {
+        urls
     }
 }
 

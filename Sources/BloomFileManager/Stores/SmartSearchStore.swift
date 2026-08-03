@@ -54,6 +54,8 @@ final class SmartSearchStore {
     private(set) var errorMessage: String?
     private(set) var savedSearches: [SmartSearchRecord]
 
+    var canSaveCurrentSearch: Bool { currentQuery() != nil }
+
     private let service: any SmartSearching
     private let persistence: WorkspacePersistence
     private var searchTask: Task<Void, Never>?
@@ -103,6 +105,14 @@ final class SmartSearchStore {
                 includeDirectories: includeDirectories,
                 maximumResults: maximumResults
             )
+        } catch SmartSearchValidationError.queryTooComplex {
+            state = .failed
+            errorMessage = "Search is too long. Use fewer terms."
+            return
+        } catch SmartSearchValidationError.noSearchableTerms {
+            state = .failed
+            errorMessage = "Search needs a filename, path, or Korean initials."
+            return
         } catch {
             state = .failed
             errorMessage = "Search failed."
