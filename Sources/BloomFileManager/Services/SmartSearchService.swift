@@ -21,6 +21,11 @@ enum SmartSearchServiceError: Error, Equatable, Sendable {
     case invalidRoot
 }
 
+struct PreparedSmartSearchCandidate: Sendable {
+    let result: SmartSearchResult
+    let match: SmartSearchMatch
+}
+
 final class LocalSmartSearchService: SmartSearching, @unchecked Sendable {
     typealias TraversalHook = @Sendable (URL) throws -> Void
     typealias RankingHook = @Sendable () throws -> Void
@@ -57,11 +62,11 @@ final class LocalSmartSearchService: SmartSearching, @unchecked Sendable {
         let leases = try scopedAccessCoordinator.acquireAccess(for: roots)
         defer { leases.forEach { $0.finish() } }
 
-        var allCandidates: [SmartSearchResult] = []
+        let queryPlan = SmartSearchTextAnalyzer.queryPlan(for: query.text)
+        var allCandidates: [PreparedSmartSearchCandidate] = []
         allCandidates.reserveCapacity(query.candidateBudget)
         var seenCandidatePaths = Set<String>()
         var examinedEntryCount = 0
-        let queryTokens = SmartSearchRanker.tokens(in: query.text)
         for root in roots {
             try Task.checkCancellation()
             let remainingBudget = query.candidateBudget - allCandidates.count
@@ -69,14 +74,14 @@ final class LocalSmartSearchService: SmartSearching, @unchecked Sendable {
             let batch = try await candidates(
                 in: root,
                 query: query,
-                queryTokens: queryTokens,
+                queryPlan: queryPlan,
                 maximumCandidates: remainingBudget,
                 examinedEntryCount: examinedEntryCount,
                 progress: progress
             )
             examinedEntryCount = batch.examinedEntryCount
             for candidate in batch.results where allCandidates.count < query.candidateBudget {
-                let path = candidate.item.url.standardizedFileURL.path
+                let path = candidate.result.item.url.standardizedFileURL.path
                 if seenCandidatePaths.insert(path).inserted {
                     allCandidates.append(candidate)
                 }
@@ -84,7 +89,7 @@ final class LocalSmartSearchService: SmartSearching, @unchecked Sendable {
         }
         try Task.checkCancellation()
         let ranked = try SmartSearchRanker.ranked(
-            allCandidates,
+            allCandidates.map(\.result),
             for: query,
             cancellationCheck: {
                 try Task.checkCancellation()
@@ -119,14 +124,14 @@ final class LocalSmartSearchService: SmartSearching, @unchecked Sendable {
     private func candidates(
         in root: URL,
         query: SmartSearchQuery,
-        queryTokens: [String],
+        queryPlan: SmartSearchQueryPlan,
         maximumCandidates: Int,
         examinedEntryCount: Int,
         progress: @escaping @Sendable (Int) -> Void
-    ) async throws -> (results: [SmartSearchResult], examinedEntryCount: Int) {
+    ) async throws -> (results: [PreparedSmartSearchCandidate], examinedEntryCount: Int) {
         let keys: Set<URLResourceKey> = [
             .isDirectoryKey, .isPackageKey, .isSymbolicLinkKey, .isHiddenKey,
-            .contentModificationDateKey, .fileSizeKey, .localizedTypeDescriptionKey
+            .contentModificationDateKey, .fileSizeKey
         ]
         guard let enumerator = fileManager.enumerator(
             at: root,
@@ -135,7 +140,7 @@ final class LocalSmartSearchService: SmartSearching, @unchecked Sendable {
             errorHandler: { _, _ in true }
         ) else { throw SmartSearchServiceError.invalidRoot }
 
-        var results: [SmartSearchResult] = []
+        var results: [PreparedSmartSearchCandidate] = []
         results.reserveCapacity(maximumCandidates)
         var examinedEntryCount = examinedEntryCount
         while results.count < maximumCandidates,
@@ -177,22 +182,35 @@ final class LocalSmartSearchService: SmartSearching, @unchecked Sendable {
                     if directory { enumerator.skipDescendants() }
                     continue
                 }
+                let relativePath = relativePath(of: url, from: root)
                 guard (query.includeDirectories || !directory),
                       !(directory && package),
-                      matches(url: url, relativeTo: root, queryTokens: queryTokens) else { continue }
+                      let match = try SmartSearchTextAnalyzer.match(
+                          plan: queryPlan,
+                          filename: url.lastPathComponent,
+                          relativePath: relativePath,
+                          analysisStep: { try Task.checkCancellation() }
+                      ) else { continue }
 
                 let standardizedURL = url.standardizedFileURL
                 let availability = await availabilityReader.availability(of: standardizedURL)
+                let typeDescription = (try? url.resourceValues(
+                    forKeys: [.localizedTypeDescriptionKey]
+                ).localizedTypeDescription) ?? (directory ? "Folder" : "File")
                 try Task.checkCancellation()
-                results.append(SmartSearchResult(
-                    item: FileItem(
-                        url: standardizedURL, name: url.lastPathComponent, isDirectory: directory,
-                        isPackage: package, modifiedAt: values.contentModificationDate,
-                        byteSize: values.fileSize.map(Int64.init),
-                        typeDescription: values.localizedTypeDescription ?? "",
-                        availability: availability
+                results.append(PreparedSmartSearchCandidate(
+                    result: SmartSearchResult(
+                        item: FileItem(
+                            url: standardizedURL, name: url.lastPathComponent, isDirectory: directory,
+                            isPackage: package, modifiedAt: values.contentModificationDate,
+                            byteSize: values.fileSize.map(Int64.init),
+                            typeDescription: typeDescription,
+                            availability: availability
+                        ),
+                        relativePath: relativePath,
+                        score: 0
                     ),
-                    relativePath: relativePath(of: url, from: root), score: 0
+                    match: match
                 ))
             } catch is CancellationError {
                 throw CancellationError()
@@ -201,11 +219,6 @@ final class LocalSmartSearchService: SmartSearching, @unchecked Sendable {
             }
         }
         return (results, examinedEntryCount)
-    }
-
-    private func matches(url: URL, relativeTo root: URL, queryTokens: [String]) -> Bool {
-        let haystack = fold(relativePath(of: url, from: root))
-        return queryTokens.allSatisfy { haystack.contains($0) }
     }
 
     private func contains(_ candidate: URL, within root: URL) -> Bool {
@@ -234,11 +247,6 @@ final class LocalSmartSearchService: SmartSearching, @unchecked Sendable {
         let path = url.standardizedFileURL.path
         guard path.hasPrefix(rootPath + "/") else { return url.lastPathComponent }
         return String(path.dropFirst(rootPath.count + 1))
-    }
-
-    private func fold(_ text: String) -> String {
-        text.precomposedStringWithCanonicalMapping
-            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
     }
 
 }

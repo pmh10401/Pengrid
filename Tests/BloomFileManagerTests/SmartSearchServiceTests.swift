@@ -60,6 +60,59 @@ import Testing
         #expect(results.map(\.item.name) == ["report.txt", "meeting-report.txt"])
     }
 
+    @Test func searchesKoreanInitialsWithBothJamoRepresentations() async throws {
+        let fixture = try TemporaryDirectory()
+        defer { fixture.remove() }
+        try write("report", to: fixture.url.appending(path: "한국 보고서.pdf"))
+        try write("notes", to: fixture.url.appending(path: "한글 노트.txt"))
+
+        let compatibility = try await service().search(query(
+            "ㅎㄱ",
+            roots: [fixture.url],
+            includeDirectories: false
+        ))
+        let choseong = try await service().search(query(
+            "ᄒᄀ",
+            roots: [fixture.url],
+            includeDirectories: false
+        ))
+
+        #expect(compatibility.map(\.item.name) == choseong.map(\.item.name))
+        #expect(Set(compatibility.map(\.item.name)) == ["한국 보고서.pdf", "한글 노트.txt"])
+    }
+
+    @Test func mixedInitialAndLiteralQueryUsesAndSemantics() async throws {
+        let fixture = try TemporaryDirectory()
+        defer { fixture.remove() }
+        for name in ["한국 report.pdf", "한국 notes.pdf", "영문 report.pdf"] {
+            try write(name, to: fixture.url.appending(path: name))
+        }
+
+        let results = try await service().search(query(
+            "ㅎㄱ report",
+            roots: [fixture.url],
+            includeDirectories: false
+        ))
+
+        #expect(results.map(\.item.name) == ["한국 report.pdf"])
+    }
+
+    @Test func runHeadSearchRejectsAnUnrelatedIntermediateInitial() async throws {
+        let fixture = try TemporaryDirectory()
+        defer { fixture.remove() }
+        try write("plan", to: fixture.url.appending(path: "구글 드라이브/계획.txt"))
+        try write("memo", to: fixture.url.appending(path: "개인 사진 다운로드/메모.txt"))
+
+        let results = try await service().search(query(
+            "ㄱㄷ",
+            roots: [fixture.url],
+            includeDirectories: false
+        ))
+
+        #expect(results.contains { $0.relativePath == "구글 드라이브/계획.txt" })
+        #expect(results.contains { $0.relativePath == "개인 사진 다운로드/메모.txt" } == false)
+    }
+
     @Test func matchingCandidateCollectionStopsAtTheDocumentedHardBudget() async throws {
         let fixture = try TemporaryDirectory()
         defer { fixture.remove() }
