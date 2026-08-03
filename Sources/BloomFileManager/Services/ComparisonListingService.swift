@@ -323,8 +323,9 @@ private func makeEntry(_ url: URL, root: URL, information: stat) throws -> Compa
     if kind == .symbolicLink {
         typeDescription = "Symbolic Link"
     } else {
-        typeDescription = try url.resourceValues(forKeys: [.localizedTypeDescriptionKey])
-            .localizedTypeDescription ?? kind.rawValue
+        typeDescription = (try? url.resourceValues(
+            forKeys: [.localizedTypeDescriptionKey]
+        ).localizedTypeDescription) ?? kind.rawValue
     }
     return ComparisonEntry(
         relativePath: try relativePath(url, beneath: root),
