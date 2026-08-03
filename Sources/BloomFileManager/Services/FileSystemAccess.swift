@@ -68,6 +68,11 @@ protocol FileSystemAccess: Sendable {
     func exists(_ url: URL) async -> Bool
     func createDirectory(_ url: URL) async throws
     func copyAndCaptureIdentity(_ source: URL, to destination: URL) async throws -> FileIdentity
+    func copyAndCaptureIdentity(
+        _ source: URL,
+        identifiedBy sourceIdentity: FileIdentity,
+        to destination: URL
+    ) async throws -> FileIdentity
     func move(_ source: URL, to destination: URL) async throws
     func moveExclusively(_ source: URL, to destination: URL) async throws
     func remove(_ url: URL) async throws
@@ -131,6 +136,18 @@ protocol FileSystemAccess: Sendable {
 }
 
 extension FileSystemAccess {
+    func copyAndCaptureIdentity(
+        _ source: URL,
+        identifiedBy sourceIdentity: FileIdentity,
+        to destination: URL
+    ) async throws -> FileIdentity {
+        guard try await identity(of: source)?.entryIdentifier
+            == sourceIdentity.entryIdentifier else {
+            throw FileSystemAccessError.identityMismatch(source)
+        }
+        return try await copyAndCaptureIdentity(source, to: destination)
+    }
+
     func reserveStagingDirectory(
         beside destination: URL,
         parentIdentifiedBy parentIdentity: FileIdentity
@@ -190,16 +207,6 @@ extension FileSystemAccess {
     ) async throws -> URL? {
         try await trash(url, identifiedBy: identity)
         return nil
-    }
-
-    func removeStagedPayload(_ reservation: StagingReservation) async throws {
-        guard let payloadIdentity = try await identity(of: reservation.item) else {
-            guard await !exists(reservation.item) else {
-                throw FileSystemAccessError.identityMismatch(reservation.item)
-            }
-            return
-        }
-        try await remove(reservation.item, identifiedBy: payloadIdentity)
     }
 
     func quarantineForTrash(
@@ -387,6 +394,30 @@ actor LiveFileSystemAccess: FileSystemAccess {
     }
 
     func copyAndCaptureIdentity(_ source: URL, to destination: URL) throws -> FileIdentity {
+        try copyAndCaptureIdentity(
+            source,
+            expectedRootIdentity: nil,
+            to: destination
+        )
+    }
+
+    func copyAndCaptureIdentity(
+        _ source: URL,
+        identifiedBy sourceIdentity: FileIdentity,
+        to destination: URL
+    ) throws -> FileIdentity {
+        try copyAndCaptureIdentity(
+            source,
+            expectedRootIdentity: sourceIdentity,
+            to: destination
+        )
+    }
+
+    private func copyAndCaptureIdentity(
+        _ source: URL,
+        expectedRootIdentity: FileIdentity?,
+        to destination: URL
+    ) throws -> FileIdentity {
         var ownedEntries: [OwnedCopyEntry] = []
         var rootDescriptor: Int32?
         let (sourceParentDescriptor, sourceName) = try openParentDirectory(of: source)
@@ -401,6 +432,7 @@ actor LiveFileSystemAccess: FileSystemAccess {
                 to: destination,
                 destinationName: destinationName,
                 destinationParentDescriptor: destinationParentDescriptor,
+                expectedRootIdentity: expectedRootIdentity,
                 relativePath: [],
                 rootDescriptor: &rootDescriptor,
                 ownedEntries: &ownedEntries
@@ -1116,6 +1148,7 @@ actor LiveFileSystemAccess: FileSystemAccess {
         to destination: URL,
         destinationName: String,
         destinationParentDescriptor: Int32,
+        expectedRootIdentity: FileIdentity? = nil,
         relativePath: [String],
         rootDescriptor: inout Int32?,
         ownedEntries: inout [OwnedCopyEntry]
@@ -1126,6 +1159,11 @@ actor LiveFileSystemAccess: FileSystemAccess {
             Darwin.fstatat(sourceParentDescriptor, $0, &information, AT_SYMLINK_NOFOLLOW)
         }
         guard sourceStatus == 0 else { throw currentPOSIXError() }
+        if let expectedRootIdentity,
+           identity(from: information).entryIdentifier
+            != expectedRootIdentity.entryIdentifier {
+            throw FileSystemAccessError.identityMismatch(source)
+        }
 
         switch information.st_mode & S_IFMT {
         case S_IFREG:

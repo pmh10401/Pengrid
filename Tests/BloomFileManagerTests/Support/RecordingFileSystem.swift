@@ -130,7 +130,9 @@ actor RecordingFileSystem: FileSystemAccess {
     private let cancelAfterTrashOf: URL?
     private let caseInsensitivePaths: Bool
     private let forceTrashQuarantineRecovery: Bool
+    private let failTrashQuarantineCommitOnAttempt: Int?
     private let raceDestinationBeforeExclusiveMove: URL?
+    private var trashQuarantineCommitAttempt = 0
     private var suspendedIdentityContinuation: CheckedContinuation<Void, Never>?
     private var suspendedExistsContinuation: CheckedContinuation<Void, Never>?
     private(set) var hasSuspendedIdentity = false
@@ -172,6 +174,7 @@ actor RecordingFileSystem: FileSystemAccess {
         cancelAfterTrashOf: URL? = nil,
         caseInsensitivePaths: Bool = false,
         forceTrashQuarantineRecovery: Bool = false,
+        failTrashQuarantineCommitOnAttempt: Int? = nil,
         raceDestinationBeforeExclusiveMove: URL? = nil
     ) {
         self.existingURLs = existingURLs
@@ -212,6 +215,7 @@ actor RecordingFileSystem: FileSystemAccess {
         self.cancelAfterTrashOf = cancelAfterTrashOf
         self.caseInsensitivePaths = caseInsensitivePaths
         self.forceTrashQuarantineRecovery = forceTrashQuarantineRecovery
+        self.failTrashQuarantineCommitOnAttempt = failTrashQuarantineCommitOnAttempt
         self.raceDestinationBeforeExclusiveMove = raceDestinationBeforeExclusiveMove
     }
 
@@ -692,6 +696,11 @@ actor RecordingFileSystem: FileSystemAccess {
     func moveTrashQuarantineAtomically(
         _ quarantine: StorageTrashQuarantine
     ) async throws -> URL {
+        trashQuarantineCommitAttempt += 1
+        if trashQuarantineCommitAttempt == failTrashQuarantineCommitOnAttempt {
+            try await rollbackTrashQuarantine(quarantine)
+            throw StorageTrashAccessError.failedButRestored
+        }
         if forceTrashQuarantineRecovery {
             throw StorageTrashAccessError.recoveryRequired
         }

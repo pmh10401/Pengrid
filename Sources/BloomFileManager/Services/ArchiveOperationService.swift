@@ -147,25 +147,12 @@ actor ArchiveOperationService: ArchiveOperating {
     }
 
     private func cleanup(_ reservation: StagingReservation) async -> (any Error)? {
-        var payloadCleanupError: (any Error)?
-        do {
-            try await fileSystem.removeStagedPayload(reservation)
-        } catch {
-            payloadCleanupError = error
-        }
-
         do {
             try await fileSystem.removeStagingDirectory(reservation)
+            return nil
         } catch {
-            if let payloadCleanupError {
-                return ArchiveCleanupFailure(
-                    payload: payloadCleanupError,
-                    stagingDirectory: error
-                )
-            }
             return error
         }
-        return payloadCleanupError
     }
 
     private func validate(_ request: ArchiveRequest) throws {
@@ -204,7 +191,9 @@ actor ArchiveOperationService: ArchiveOperating {
         let wasCancelled = primary is CancellationError
             || (primary as? ArchiveOperationError) == .cancelled
             || Task.isCancelled
-        return (wasCancelled, operationFailure?.cleanup != nil)
+        let cleanupFailed = operationFailure?.cleanup != nil
+            || (primary as? ArchiveOperationError) == .recoveryRequired
+        return (wasCancelled, cleanupFailed)
     }
 
     private static func requiresRecovery(_ error: any Error) -> Bool {
@@ -224,16 +213,6 @@ private struct ArchiveOperationFailure: LocalizedError {
             return primary.localizedDescription
         }
         return "\(primary.localizedDescription) (cleanup failed: \(cleanup.localizedDescription))"
-    }
-}
-
-private struct ArchiveCleanupFailure: LocalizedError {
-    let payload: any Error
-    let stagingDirectory: any Error
-
-    var errorDescription: String? {
-        "\(payload.localizedDescription); staging directory: "
-            + stagingDirectory.localizedDescription
     }
 }
 

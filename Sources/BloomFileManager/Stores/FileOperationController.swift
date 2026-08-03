@@ -60,6 +60,7 @@ final class FileOperationController {
     @ObservationIgnored private var activeControl: FileOperationControl?
     @ObservationIgnored private var retryOperations: [UUID: PendingFileOperation] = [:]
     @ObservationIgnored private var undoRecipes: [UUID: FileOperationUndoRecipe] = [:]
+    @ObservationIgnored private var undoDirectoryKeys: [UUID: Set<String>] = [:]
     @ObservationIgnored private var activeOperationDidReplace = false
     @ObservationIgnored private let historyLimit: Int
 
@@ -217,6 +218,7 @@ final class FileOperationController {
               let original = retryOperations[id]
         else { return false }
 
+        undoDirectoryKeys.removeValue(forKey: id)
         setUndoEligibility(for: id, canUndo: false)
         return beginOperation(
             kind: .undo,
@@ -344,7 +346,8 @@ final class FileOperationController {
                 currentName: Self.sanitizedBasename(sources.first)
             )),
             touchedDirectories: Set(plan.destinations.map { $0.deletingLastPathComponent() }),
-            workspace: workspace
+            workspace: workspace,
+            cancellationSources: sources
         ) { [weak self, service, materializer, archiveService] in
             guard let self else {
                 return FileOperationResult(outcomes: sources.map {
@@ -809,7 +812,8 @@ final class FileOperationController {
             totalCount: 1,
             initialName: source.lastPathComponent,
             touchedDirectories: [source.deletingLastPathComponent()],
-            workspace: workspace
+            workspace: workspace,
+            cancellationSources: [source]
         ) { [service] in
             do {
                 let destination = try await service.rename(source, to: name)
@@ -862,7 +866,8 @@ final class FileOperationController {
             totalCount: 1,
             initialName: source.lastPathComponent,
             touchedDirectories: [source.deletingLastPathComponent()],
-            workspace: workspace
+            workspace: workspace,
+            cancellationSources: [source]
         ) { [service] in
             do {
                 let destination = try await service.rename(
@@ -938,7 +943,8 @@ final class FileOperationController {
             totalCount: sources.count,
             initialName: sources.first?.lastPathComponent ?? "",
             touchedDirectories: touchedDirectories,
-            workspace: workspace
+            workspace: workspace,
+            cancellationSources: sources
         ) { [weak self, service] in
             var requests: [IdentifiedFileRequest] = []
             var captureFailures: [FileOperationItemOutcome] = []
@@ -1096,7 +1102,7 @@ final class FileOperationController {
                 try await control.checkpoint()
                 execution = (await pending.operation(), false)
             } catch {
-                execution = (FileOperationResult(outcomes: []), true)
+                execution = (pending.cancellationResult, true)
             }
             let completionTask = Task { @MainActor [weak self] in
                 guard let self else { return }
@@ -1226,6 +1232,9 @@ final class FileOperationController {
         }
         if let recipe {
             undoRecipes[pending.id] = recipe
+            undoDirectoryKeys[pending.id] = Set(
+                recipe.touchedDirectories.flatMap(directoryKeys)
+            )
         }
         retryOperations[pending.id] = pending
         recordHistory(pending.snapshot(
@@ -1275,6 +1284,7 @@ final class FileOperationController {
         for item in removed {
             retryOperations.removeValue(forKey: item.id)
             undoRecipes.removeValue(forKey: item.id)
+            undoDirectoryKeys.removeValue(forKey: item.id)
         }
     }
 
@@ -1293,13 +1303,15 @@ final class FileOperationController {
         let currentKeys = Set(directories.flatMap(directoryKeys))
         guard !currentKeys.isEmpty else { return }
         let invalidated = undoRecipes.compactMap { id, recipe -> UUID? in
-            let recipeKeys = Set(recipe.touchedDirectories.flatMap(directoryKeys))
+            let recipeKeys = undoDirectoryKeys[id]
+                ?? Set(recipe.touchedDirectories.flatMap(directoryKeys))
             return recipeKeys.contains(where: { recipeKey in
                 currentKeys.contains(where: { pathsOverlap(recipeKey, $0) })
             }) ? id : nil
         }
         for id in invalidated {
             undoRecipes.removeValue(forKey: id)
+            undoDirectoryKeys.removeValue(forKey: id)
             setUndoEligibility(for: id, canUndo: false)
         }
     }

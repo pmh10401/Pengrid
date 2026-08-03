@@ -70,6 +70,53 @@ struct ArchiveOperationIntegrationTests {
             == Data("source".utf8))
     }
 
+    @Test func extractionSnapshotsOnlyTheCapturedArchiveIdentity() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let originalFile = root.url.appending(path: "Original.txt")
+        let replacementFile = root.url.appending(path: "Replacement.txt")
+        let archive = root.url.appending(path: "Archive.zip")
+        let replacementArchive = root.url.appending(path: "Replacement.zip")
+        let extraction = root.url.appending(path: "Extracted", directoryHint: .isDirectory)
+        try Data("original".utf8).write(to: originalFile)
+        try Data("replacement".utf8).write(to: replacementFile)
+        let builder = LiveArchiveCommandRunner()
+        try await builder.run(
+            kind: .compress,
+            format: .zip,
+            sources: [originalFile],
+            destination: archive
+        )
+        try await builder.run(
+            kind: .compress,
+            format: .zip,
+            sources: [replacementFile],
+            destination: replacementArchive
+        )
+        let request = ArchiveRequest(
+            kind: .extract,
+            verifiedSources: [archive],
+            finalDestination: extraction
+        )
+        let fileSystem = LiveFileSystemAccess(onBeforeCopySourceEntryOpen: { opened in
+            guard opened.standardizedFileURL == archive.standardizedFileURL else { return }
+            try? FileManager.default.removeItem(at: archive)
+            try? FileManager.default.moveItem(at: replacementArchive, to: archive)
+        })
+        let service = ArchiveOperationService(fileSystem: fileSystem)
+
+        let result = await service.perform([request]) { _ in }
+
+        guard case let .failed(source, _) = result.outcomes.first else {
+            Issue.record("Expected replaced archive input to fail closed")
+            return
+        }
+        #expect(source == archive)
+        #expect(FileManager.default.fileExists(atPath: extraction.path) == false)
+        #expect(try Data(contentsOf: archive) != Data())
+        try expectNoStagingDirectories(in: root.url)
+    }
+
     @Test func dittoCompressionArchivesMultipleSelectedItemsAtTheZIPRoot() async throws {
         let root = try TemporaryDirectory()
         defer { root.remove() }
@@ -308,16 +355,19 @@ struct ArchiveOperationIntegrationTests {
 
         let result = await service.perform([request]) { _ in }
 
-        guard case .failed = result.outcomes.first else {
-            Issue.record("Expected hostile TAR extraction to fail")
+        guard case .recoveryNeeded = result.outcomes.first else {
+            Issue.record("Expected hostile TAR extraction recovery state")
             return
         }
         #expect(FileManager.default.fileExists(atPath: destination.path) == false)
         #expect(FileManager.default.fileExists(atPath: outsideTarget.path) == false)
-        try expectNoStagingDirectories(in: root.url)
+        #expect(try FileManager.default.contentsOfDirectory(
+            at: root.url,
+            includingPropertiesForKeys: nil
+        ).contains { $0.lastPathComponent.hasPrefix(".bloom-staging-") })
     }
 
-    @Test func malformedArchiveFailureLeavesNoStagingDirectoryOrPartialDestination() async throws {
+    @Test func malformedArchivePreservesUnownedPartialOutputForRecovery() async throws {
         let root = try TemporaryDirectory()
         defer { root.remove() }
         let malformedArchive = root.url.appending(path: "Broken.zip")
@@ -335,13 +385,16 @@ struct ArchiveOperationIntegrationTests {
 
         let result = await service.perform([request]) { _ in }
 
-        guard case let .failed(source, _) = result.outcomes.first else {
-            Issue.record("Expected malformed archive extraction to fail")
+        guard case let .recoveryNeeded(source) = result.outcomes.first else {
+            Issue.record("Expected malformed archive extraction recovery state")
             return
         }
         #expect(source == malformedArchive)
         #expect(FileManager.default.fileExists(atPath: destination.path) == false)
-        try expectNoStagingDirectories(in: root.url)
+        #expect(try FileManager.default.contentsOfDirectory(
+            at: root.url,
+            includingPropertiesForKeys: nil
+        ).contains { $0.lastPathComponent.hasPrefix(".bloom-staging-") })
     }
 }
 

@@ -190,17 +190,10 @@ struct LiveArchiveCommandRunner: ArchiveCommandRunning {
         progress: @escaping ArchiveCommandProgressHandler
     ) async throws -> PreparedArchiveCommand {
         guard kind == .compress else {
-            let arguments = try Self.arguments(
-                kind: kind,
+            return try await prepareExtractionCommand(
                 format: format,
-                sources: sources.map(\.url),
+                sources: sources,
                 destination: destination
-            )
-            if format != .zip {
-                try await fileSystem.createDirectory(destination)
-            }
-            return PreparedArchiveCommand(
-                arguments: arguments
             )
         }
         guard !sources.isEmpty else {
@@ -258,6 +251,60 @@ struct LiveArchiveCommandRunner: ArchiveCommandRunning {
         )
     }
 
+    private func prepareExtractionCommand(
+        format: ArchiveFormat,
+        sources: [IdentifiedFileRequest],
+        destination: URL
+    ) async throws -> PreparedArchiveCommand {
+        guard sources.count == 1, let source = sources.first else {
+            throw ArchiveOperationError.invalidRequest
+        }
+        let stagingParent = destination.deletingLastPathComponent()
+        guard let stagingParentIdentity = try await fileSystem.identity(of: stagingParent) else {
+            throw FileSystemAccessError.identityMismatch(stagingParent)
+        }
+        let reservation = try await fileSystem.reserveStagingDirectory(
+            beside: destination,
+            parentIdentifiedBy: stagingParentIdentity
+        )
+        var copiedEntries: [PreparedArchiveCopyEntry] = []
+        do {
+            let copiedIdentity = try await fileSystem.copyAndCaptureIdentity(
+                source.url,
+                identifiedBy: source.identity,
+                to: reservation.item
+            )
+            copiedEntries.append(PreparedArchiveCopyEntry(
+                url: reservation.item,
+                identity: copiedIdentity
+            ))
+            let arguments = try Self.arguments(
+                kind: .extract,
+                format: format,
+                sources: [reservation.item],
+                destination: destination
+            )
+            if format != .zip {
+                try await fileSystem.createDirectory(destination)
+            }
+            return PreparedArchiveCommand(
+                arguments: arguments,
+                reservation: reservation,
+                copiedEntries: copiedEntries
+            )
+        } catch {
+            let prepared = PreparedArchiveCommand(
+                arguments: [],
+                reservation: reservation,
+                copiedEntries: copiedEntries
+            )
+            guard await prepared.cleanup(using: fileSystem) == nil else {
+                throw ArchiveOperationError.recoveryRequired
+            }
+            throw error
+        }
+    }
+
     static func preparedCompressionArguments(
         format: ArchiveFormat,
         aggregateRoot: URL,
@@ -313,6 +360,7 @@ struct LiveArchiveCommandRunner: ArchiveCommandRunning {
                         )
                         let copiedIdentity = try await fileSystem.copyAndCaptureIdentity(
                             source.url,
+                            identifiedBy: source.identity,
                             to: destination
                         )
                         await copied.append(url: destination, identity: copiedIdentity)

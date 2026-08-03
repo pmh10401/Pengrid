@@ -1527,6 +1527,41 @@ struct FileOperationControllerTests {
         await waitUntilQueueIsIdle(controller)
     }
 
+    @Test func cancellingBeforeWorkerStartDeliversPerItemCancellation() async {
+        let source = URL(filePath: "/workspace/queued")
+        let identity = FileIdentity(
+            entryIdentifier: "queued-entry",
+            resolvedIdentifier: "queued-resolved"
+        )
+        let fileSystem = RecordingFileSystem(
+            existingURLs: [source],
+            identities: [source: identity]
+        )
+        let controller = FileOperationController(
+            service: FileOperationService(fileSystem: fileSystem)
+        )
+        let workspace = WorkspaceState(
+            leftURL: URL(filePath: "/workspace"),
+            rightURL: URL(filePath: "/elsewhere"),
+            listingService: StubDirectoryListingService(values: [:])
+        )
+        var completions: [FileOperationResult] = []
+        let accepted = controller.trash(
+            [IdentifiedFileRequest(url: source, identity: identity)],
+            workspace: workspace,
+            onCompletion: { completions.append($0) }
+        )
+        #expect(accepted)
+
+        controller.cancelActiveJob()
+        await waitUntilQueueIsIdle(controller)
+
+        let cancellation = FileOperationResult(outcomes: [.cancelled(source: source)])
+        #expect(controller.lastResult == cancellation)
+        #expect(completions == [cancellation])
+        #expect(await fileSystem.existingURLs.contains(source))
+    }
+
     @Test func queuedJobsCanBeMovedBeforeTheyExecute() async {
         let firstSource = URL(filePath: "/source/first")
         let destinationDirectory = URL(filePath: "/destination", directoryHint: .isDirectory)
@@ -1797,6 +1832,52 @@ struct FileOperationControllerTests {
 
         #expect(controller.operationHistory.first { $0.id == nestedJob.id }?.canUndo == false)
         #expect(controller.undoJob(nestedJob.id) == false)
+    }
+
+    @Test func retargetedAliasCannotHideUndoDirectoryOverlap() async throws {
+        let fixture = try TemporaryDirectory()
+        defer { fixture.remove() }
+        let firstTarget = fixture.url.appending(path: "First", directoryHint: .isDirectory)
+        let secondTarget = fixture.url.appending(path: "Second", directoryHint: .isDirectory)
+        let alias = fixture.url.appending(path: "Alias", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: firstTarget, withIntermediateDirectories: false)
+        try FileManager.default.createDirectory(at: secondTarget, withIntermediateDirectories: false)
+        try FileManager.default.createSymbolicLink(
+            at: alias,
+            withDestinationURL: firstTarget
+        )
+        let fileSystem = RecordingFileSystem(existingURLs: [firstTarget, secondTarget, alias])
+        let controller = FileOperationController(
+            service: FileOperationService(fileSystem: fileSystem)
+        )
+        let workspace = WorkspaceState(
+            leftURL: firstTarget,
+            rightURL: secondTarget,
+            listingService: StubDirectoryListingService(values: [:])
+        )
+
+        #expect(await controller.createFolder(
+            in: alias,
+            named: "Aliased Output",
+            workspace: workspace
+        ))
+        await waitUntilQueueIsIdle(controller)
+        let aliasedJob = try #require(controller.operationHistory.first)
+        #expect(aliasedJob.canUndo)
+
+        try FileManager.default.removeItem(at: alias)
+        try FileManager.default.createSymbolicLink(
+            at: alias,
+            withDestinationURL: secondTarget
+        )
+        #expect(await controller.createFolder(
+            in: firstTarget,
+            named: "Direct Output",
+            workspace: workspace
+        ))
+        await waitUntilQueueIsIdle(controller)
+
+        #expect(controller.operationHistory.first { $0.id == aliasedJob.id }?.canUndo == false)
     }
 
     @Test func operationStatusSummaryCountsEveryOutcomeForAccessibility() {

@@ -122,12 +122,12 @@
 - Modify: `README.md`
 - Create: `docs/verification/safe-operation-center-checklist.md`
 
-- [ ] Document FIFO single-worker behavior, cooperative pause limitations, cancellation cleanup ordering, session-only 100-entry history, identity-safe retry, and conservative undo refusal cases.
-- [ ] Run the full serial Swift Testing suite with full Xcode.
-- [ ] Run the release build and `./script/build_and_run.sh --verify`.
+- [x] Document default-FIFO single-worker behavior and reordering, cooperative pause limitations, cancellation cleanup ordering, session-only 100-entry history, identity-safe retry, and conservative undo refusal cases.
+- [x] Run the full serial Swift Testing suite with full Xcode.
+- [x] Run the release build and `./script/build_and_run.sh --verify`.
 - [ ] Have Luna Max perform only the mechanical UI/VoiceOver smoke checklist.
-- [ ] Have Sol XHigh independently review safety, concurrency, cancellation, identity checks, privacy, and regression risk; resolve every actionable finding.
-- [ ] Rerun full verification after review fixes, record exact evidence, and run `git diff --check`.
+- [x] Have Sol XHigh independently review safety, concurrency, cancellation, identity checks, privacy, and regression risk; resolve every actionable finding.
+- [x] Rerun full verification after review fixes, record exact evidence, and run `git diff --check`.
 
 Verification commands:
 

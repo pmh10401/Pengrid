@@ -9,22 +9,33 @@ or VoiceOver checks against a release candidate.
 ## Automated evidence
 
 - [x] **PASS — 2026-08-03 — queue and presentation:** Automated tests cover
-  FIFO single-worker execution, queued cancellation, cooperative pause/resume,
-  cleanup-before-dequeue, 100-entry session history, safe labels, stable
-  accessibility identifiers, and omission of absolute paths from operation
-  center presentation.
+  default-FIFO single-worker execution, queued reordering and cancellation,
+  exactly-once cancellation callbacks, acknowledged cooperative pause/resume,
+  cleanup-before-dequeue, recovery blocking, exclusive non-retryable cleanup
+  and Undo, 100-entry session history, safe details, stable accessibility
+  identifiers, and omission of absolute paths from operation-center
+  presentation.
 
 - [x] **PASS — 2026-08-03 — captured authority and conservative undo:** Tests
-  replace queued sources and destination roots and confirm mutations fail
-  closed. Move, rename, Trash restore, created-output quarantine, recursive
-  no-follow fingerprint verification, collision refusal, rollback, replacement
-  conflict, and failed-undo behavior are covered. A partially successful
-  multi-item intent is not retryable as a whole.
+  replace queued transfer and Trash sources plus transfer and archive
+  destination roots and confirm mutations fail closed. Move, rename, Trash
+  restore, created-output quarantine, recursive no-follow fingerprint
+  verification, exclusive collision refusal, cancellation rollback, ancestor
+  invalidation, replacement conflict, and failed-undo behavior are covered. A
+  partially successful multi-item intent is not retryable as a whole.
 
 - [x] **PASS — 2026-08-03 — archive progress:** Tests cover ordered exact
-  preparation counts, indeterminate native encoding, verified exclusive
-  publication, bounded parallel staging, cancellation cleanup, phase-aware
+  preparation transitions, indeterminate native encoding, source and
+  destination-parent identity checks, descriptor-anchored exclusive
+  publication, identity-owned bounded parallel staging, cancellation cleanup,
+  preservation of unowned partial output for recovery review, phase-aware
   labels, and basename-only status copy.
+
+- [x] **PASS — 2026-08-03 — full automated suite:** Full Xcode Swift Testing
+  completed **700 tests in 55 suites with zero failures** after the independent
+  review fixes. A release build and `script/build_and_run.sh --verify` had also
+  completed successfully at the pre-review baseline; both are rerun at the
+  final gate below.
 
 ## App smoke evidence
 
@@ -54,8 +65,10 @@ or VoiceOver checks against a release candidate.
   or provider metadata is announced.
 
 - [ ] **NOT RUN — active cancellation cleanup:** Copy or compress a large local
-  fixture, cancel during a cooperative phase, and confirm no partial published
-  output or private staging path remains before the next queued job begins.
+  fixture, cancel during a cooperative phase, and confirm either all owned
+  temporary output is cleaned before the next queued job begins, or unverified
+  residue is preserved without deletion and the queue stops for recovery
+  review. Confirm no partial public destination appears.
 
 - [ ] **NOT RUN — pause limitation:** Pause during multi-item preparation and
   confirm progress stops at the next item boundary. Pause again after native

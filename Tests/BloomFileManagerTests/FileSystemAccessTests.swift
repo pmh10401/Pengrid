@@ -42,6 +42,31 @@ struct FileSystemAccessTests {
         #expect(FileManager.default.fileExists(atPath: stagedItem.path) == false)
     }
 
+    @Test func identifiedCopyRefusesAReplacementSource() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let source = root.url.appending(path: "source.txt")
+        let replacement = root.url.appending(path: "replacement.txt")
+        let destination = root.url.appending(path: "copied.txt")
+        try Data("original".utf8).write(to: source)
+        try Data("replacement".utf8).write(to: replacement)
+        let fileSystem = LiveFileSystemAccess()
+        let expectedIdentity = try #require(await fileSystem.identity(of: source))
+        try FileManager.default.removeItem(at: source)
+        try FileManager.default.moveItem(at: replacement, to: source)
+
+        await #expect(throws: FileSystemAccessError.identityMismatch(source)) {
+            _ = try await fileSystem.copyAndCaptureIdentity(
+                source,
+                identifiedBy: expectedIdentity,
+                to: destination
+            )
+        }
+
+        #expect(try Data(contentsOf: source) == Data("replacement".utf8))
+        #expect(FileManager.default.fileExists(atPath: destination.path) == false)
+    }
+
     @Test func identifiedTrashReturnsTheActualURLAndPreservesIdentity() async throws {
         let root = try TemporaryDirectory()
         defer { root.remove() }

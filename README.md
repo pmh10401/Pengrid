@@ -81,7 +81,9 @@ cloud-only files.
 ## Safe file operation center
 
 Pengrid sends copy, move, Trash, new-folder, rename, compression, extraction,
-and undo work through one first-in, first-out mutation queue. A queued job
+and undo work through one single-worker mutation queue. Waiting jobs start in
+first-in, first-out order and can be moved earlier or later from the operation
+center before they begin. A queued job
 captures the relevant file and destination identities before it waits; if an
 item is replaced or the destination root changes, the job refuses to mutate
 the replacement. The bottom operation-center control shows the current job,
@@ -99,7 +101,9 @@ Queue** action before any waiting mutation can start.
 
 Retry creates a new attempt from the original identity-captured intent. Pengrid
 offers it only when retrying the whole intent cannot repeat an item that already
-succeeded. Undo is deliberately conservative: move, rename, and Trash restore
+succeeded. Storage Inspector cleanup and Undo require an otherwise empty queue
+and cannot be retried as a whole. Undo is deliberately conservative: move,
+rename, and Trash restore
 require the same file identity and an unoccupied original location; removing a
 new folder, copy, archive, or extracted tree requires its entire no-follow
 fingerprint to remain unchanged. A replacement conflict, later change, missing

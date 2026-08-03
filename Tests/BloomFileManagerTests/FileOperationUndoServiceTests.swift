@@ -182,12 +182,18 @@ struct FileOperationUndoServiceTests {
             ]),
             allowsUndo: true
         ))
+        let gate = UndoProgressCancellationGate()
 
-        let result = await service.perform(recipe) { progress in
-            if progress.completedCount == 1 {
-                withUnsafeCurrentTask { $0?.cancel() }
+        let operation = Task {
+            await service.perform(recipe) { progress in
+                guard progress.completedCount == 1 else { return }
+                await gate.suspend()
             }
         }
+        await gate.waitUntilSuspended()
+        operation.cancel()
+        await gate.release()
+        let result = await operation.value
 
         #expect(result.outcomes.count == 2)
         guard case let .succeeded(source, destination) = result.outcomes.first else {
@@ -196,7 +202,38 @@ struct FileOperationUndoServiceTests {
         }
         #expect(source == firstCopy)
         #expect(destination != nil)
-        #expect(result.outcomes.last == .cancelled(source: secondCopy))
+        #expect(result.outcomes.last == .recoveryNeeded(source: secondCopy))
+        #expect(await fileSystem.existingURLs.contains(firstCopy) == false)
+        #expect(await fileSystem.existingURLs.contains(secondCopy))
+    }
+
+    @Test func partialUndoFailureRequiresRecoveryEvenWhenCurrentItemWasRestored() async throws {
+        let firstSource = URL(filePath: "/source/First.txt")
+        let secondSource = URL(filePath: "/source/Second.txt")
+        let firstCopy = URL(filePath: "/destination/First.txt")
+        let secondCopy = URL(filePath: "/destination/Second.txt")
+        let fileSystem = RecordingFileSystem(
+            existingURLs: [firstCopy, secondCopy],
+            failTrashQuarantineCommitOnAttempt: 2
+        )
+        let service = FileOperationUndoService(fileSystem: fileSystem)
+        let recipe = try #require(await service.makeRecipe(
+            kind: .copy,
+            result: FileOperationResult(outcomes: [
+                .succeeded(source: firstSource, destination: firstCopy),
+                .succeeded(source: secondSource, destination: secondCopy)
+            ]),
+            allowsUndo: true
+        ))
+
+        let result = await service.perform(recipe)
+
+        #expect(result.outcomes.count == 2)
+        guard case .succeeded = result.outcomes.first else {
+            Issue.record("Expected the first output to reach Trash")
+            return
+        }
+        #expect(result.outcomes.last == .recoveryNeeded(source: secondCopy))
         #expect(await fileSystem.existingURLs.contains(firstCopy) == false)
         #expect(await fileSystem.existingURLs.contains(secondCopy))
     }
@@ -244,5 +281,29 @@ struct FileOperationUndoServiceTests {
 
         #expect(FileManager.default.fileExists(atPath: created.path) == false)
         #expect(FileManager.default.fileExists(atPath: trashURL.appending(path: "child.txt").path))
+    }
+}
+
+private actor UndoProgressCancellationGate {
+    private var isSuspended = false
+    private var suspensionWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseContinuation: CheckedContinuation<Void, Never>?
+
+    func suspend() async {
+        isSuspended = true
+        let waiters = suspensionWaiters
+        suspensionWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+        await withCheckedContinuation { releaseContinuation = $0 }
+    }
+
+    func waitUntilSuspended() async {
+        if isSuspended { return }
+        await withCheckedContinuation { suspensionWaiters.append($0) }
+    }
+
+    func release() {
+        releaseContinuation?.resume()
+        releaseContinuation = nil
     }
 }

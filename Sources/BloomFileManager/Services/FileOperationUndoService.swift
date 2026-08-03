@@ -276,8 +276,9 @@ actor FileOperationUndoService {
                 let pendingQuarantines = Array(quarantines.dropFirst(index))
                 let pendingEntries = Array(entries.dropFirst(index))
                 let pendingRecovered = await rollback(pendingQuarantines)
+                let mayReportCleanCancellation = pendingRecovered && outcomes.isEmpty
                 outcomes.append(contentsOf: pendingEntries.map {
-                    pendingRecovered
+                    mayReportCleanCancellation
                         ? .cancelled(source: $0.url)
                         : .recoveryNeeded(source: $0.url)
                 })
@@ -286,7 +287,8 @@ actor FileOperationUndoService {
                 let pendingQuarantines = Array(quarantines.dropFirst(index + 1))
                 let pendingEntries = Array(entries.dropFirst(index + 1))
                 let pendingRecovered = await rollback(pendingQuarantines)
-                if error as? StorageTrashAccessError == .failedButRestored {
+                if error as? StorageTrashAccessError == .failedButRestored,
+                   outcomes.isEmpty {
                     outcomes.append(.failed(
                         source: entries[index].url,
                         message: error.localizedDescription
@@ -318,22 +320,26 @@ actor FileOperationUndoService {
     }
 
     private func rollbackMoves(_ entries: [FileOperationUndoMoveEntry]) async -> Bool {
+        var recovered = true
         for entry in entries.reversed() {
             do {
                 guard await !fileSystem.exists(entry.currentURL),
                       let identity = try await fileSystem.identity(of: entry.originalURL),
                       identity.refersToSameItem(as: entry.currentIdentity)
-                else { return false }
+                else {
+                    recovered = false
+                    continue
+                }
                 try await fileSystem.moveExclusively(
                     entry.originalURL,
                     identifiedBy: entry.currentIdentity,
                     to: entry.currentURL
                 )
             } catch {
-                return false
+                recovered = false
             }
         }
-        return true
+        return recovered
     }
 
     private func failureResult(for recipe: FileOperationUndoRecipe) -> FileOperationResult {

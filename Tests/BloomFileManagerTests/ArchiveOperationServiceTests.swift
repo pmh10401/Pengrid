@@ -198,7 +198,7 @@ struct ArchiveOperationServiceTests {
         try expectNoStagingDirectories(in: root.url)
     }
 
-    @Test func commandFailureRemovesPartialPayloadAndNeverPublishes() async throws {
+    @Test func commandFailurePreservesUnownedPartialPayloadForRecovery() async throws {
         let root = try TemporaryDirectory()
         defer { root.remove() }
         let source = root.url.appending(path: "Source.txt")
@@ -223,16 +223,19 @@ struct ArchiveOperationServiceTests {
         #expect(FileManager.default.fileExists(atPath: destination.path) == false)
         #expect(try Data(contentsOf: source) == Data("source".utf8))
         #expect(result.outcomes.count == 1)
-        guard case let .failed(failedSource, message) = result.outcomes.first else {
-            Issue.record("Expected command failure outcome")
+        guard case let .recoveryNeeded(failedSource) = result.outcomes.first else {
+            Issue.record("Expected command failure recovery outcome")
             return
         }
         #expect(failedSource == source)
-        #expect(message == ArchiveServiceTestError.commandFailed.localizedDescription)
-        try expectNoStagingDirectories(in: root.url)
+        let staging = try #require(FileManager.default.contentsOfDirectory(
+            at: root.url,
+            includingPropertiesForKeys: nil
+        ).first { $0.lastPathComponent.hasPrefix(".bloom-staging-") })
+        #expect(try Data(contentsOf: staging.appending(path: "payload")) == Data("partial".utf8))
     }
 
-    @Test func cancellationCleansPartialPayloadAndCancelsUntouchedRequests() async throws {
+    @Test func cancellationPreservesUnownedPartialPayloadAndRequiresRecovery() async throws {
         let root = try TemporaryDirectory()
         defer { root.remove() }
         let firstSource = root.url.appending(path: "First.zip")
@@ -273,14 +276,17 @@ struct ArchiveOperationServiceTests {
 
         #expect(invocationCount == 1)
         #expect(result == FileOperationResult(outcomes: [
-            .cancelled(source: firstSource),
+            .recoveryNeeded(source: firstSource),
             .cancelled(source: secondSource)
         ]))
         #expect(FileManager.default.fileExists(atPath: firstDestination.path) == false)
         #expect(FileManager.default.fileExists(atPath: secondDestination.path) == false)
         #expect(try Data(contentsOf: firstSource) == Data("first".utf8))
         #expect(try Data(contentsOf: secondSource) == Data("second".utf8))
-        try expectNoStagingDirectories(in: root.url)
+        #expect(try FileManager.default.contentsOfDirectory(
+            at: root.url,
+            includingPropertiesForKeys: nil
+        ).contains { $0.lastPathComponent.hasPrefix(".bloom-staging-") })
     }
 
     @Test func lateDestinationCollisionFailsWithoutReplacingEitherItem() async throws {
@@ -309,12 +315,15 @@ struct ArchiveOperationServiceTests {
 
         #expect(try Data(contentsOf: source) == sourceData)
         #expect(try Data(contentsOf: destination) == introducedData)
-        guard case let .failed(failedSource, _) = result.outcomes.first else {
-            Issue.record("Expected exclusive publication collision to fail")
+        guard case let .recoveryNeeded(failedSource) = result.outcomes.first else {
+            Issue.record("Expected exclusive publication collision recovery state")
             return
         }
         #expect(failedSource == source)
-        try expectNoStagingDirectories(in: root.url)
+        #expect(try FileManager.default.contentsOfDirectory(
+            at: root.url,
+            includingPropertiesForKeys: nil
+        ).contains { $0.lastPathComponent.hasPrefix(".bloom-staging-") })
     }
 
     @Test func cancellationCleanupFailureRequiresRecoveryAndCancelsRemaining() async throws {
@@ -375,7 +384,7 @@ struct ArchiveOperationServiceTests {
         let replacementBoundary = try #require(
             children.first { $0.lastPathComponent.hasPrefix(".bloom-staging-") }
         )
-        #expect(try FileManager.default.contentsOfDirectory(
+        #expect(try !FileManager.default.contentsOfDirectory(
             at: replacementBoundary,
             includingPropertiesForKeys: nil
         ).isEmpty)
@@ -442,9 +451,12 @@ struct ArchiveOperationServiceTests {
         let result = await operation.value
 
         #expect(result == FileOperationResult(outcomes: [
-            .cancelled(source: source)
+            .recoveryNeeded(source: source)
         ]))
         #expect(await fileSystem.exists(destination) == false)
+        #expect(await fileSystem.existingURLs.contains { url in
+            url.lastPathComponent == "payload"
+        })
         #expect(await fileSystem.events.contains {
             $0.hasPrefix("moveExclusively:")
         } == false)
