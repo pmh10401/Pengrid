@@ -110,6 +110,17 @@ import Testing
         )
         #expect(legacyComplexQuery.text == legacyComplexText)
         #expect(!legacyComplexQuery.isWithinComplexityLimits)
+
+        let legacyNoTermsQuery = try JSONDecoder().decode(
+            SmartSearchQuery.self,
+            from: JSONEncoder().encode(queryPayload(
+                text: "---",
+                roots: [URL(filePath: "/search/root")]
+            ))
+        )
+        #expect(SmartSearchRanker.ranked([
+            result(name: "report.txt", path: "report.txt")
+        ], for: legacyNoTermsQuery).isEmpty)
     }
 
     @Test func maximumResultsStaysClampedAfterMutation() throws {
