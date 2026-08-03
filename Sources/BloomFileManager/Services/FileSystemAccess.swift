@@ -426,6 +426,7 @@ actor LiveFileSystemAccess: FileSystemAccess {
         }
 
         let descriptor: Int32
+        var currentName = name
         switch kind {
         case .regularFile:
             descriptor = name.withCString {
@@ -437,11 +438,19 @@ actor LiveFileSystemAccess: FileSystemAccess {
                 )
             }
         case .directory:
-            let status = name.withCString {
-                Darwin.mkdirat(parentDescriptor, $0, mode_t(S_IRWXU))
+            while true {
+                try Task.checkCancellation()
+                let candidate = ".bloom-output-\(UUID().uuidString)"
+                let status = candidate.withCString {
+                    Darwin.mkdirat(parentDescriptor, $0, mode_t(S_IRWXU))
+                }
+                if status == 0 {
+                    currentName = candidate
+                    break
+                }
+                guard errno == EEXIST else { throw currentPOSIXError() }
             }
-            guard status == 0 else { throw currentPOSIXError() }
-            descriptor = name.withCString {
+            descriptor = currentName.withCString {
                 Darwin.openat(
                     parentDescriptor,
                     $0,
@@ -455,16 +464,41 @@ actor LiveFileSystemAccess: FileSystemAccess {
         let createdIdentity: FileIdentity
         do {
             createdIdentity = try identity(ofDescriptor: descriptor)
+            guard try identity(
+                named: currentName,
+                in: parentDescriptor,
+                noFollow: true
+            ) == createdIdentity else {
+                throw FileSystemAccessError.identityMismatch(url)
+            }
+            if kind == .directory {
+                try renameExclusive(
+                    from: parentDescriptor,
+                    name: currentName,
+                    to: parentDescriptor,
+                    name: name
+                )
+                currentName = name
+                guard try identity(
+                    named: currentName,
+                    in: parentDescriptor,
+                    noFollow: true
+                ) == createdIdentity else {
+                    throw FileSystemAccessError.identityMismatch(url)
+                }
+            }
             try onAfterEmptyItemCreated(url, createdIdentity)
         } catch {
             let currentIdentity = try? identity(
-                named: name,
+                named: currentName,
                 in: parentDescriptor,
                 noFollow: true
             )
             if currentIdentity == (try? identity(ofDescriptor: descriptor)) {
                 let flags = kind == .directory ? AT_REMOVEDIR : 0
-                _ = name.withCString { Darwin.unlinkat(parentDescriptor, $0, flags) }
+                _ = currentName.withCString {
+                    Darwin.unlinkat(parentDescriptor, $0, flags)
+                }
             }
             Darwin.close(descriptor)
             throw error
