@@ -1994,7 +1994,7 @@ private struct CompletingControllerArchiveCommandRunner: ArchiveCommandRunning {
         format: ArchiveFormat,
         sources: [IdentifiedFileRequest],
         destination: URL
-    ) async throws {
+    ) async throws -> FileIdentity {
         switch kind {
         case .compress:
             try Data("archive".utf8).write(to: destination)
@@ -2004,6 +2004,7 @@ private struct CompletingControllerArchiveCommandRunner: ArchiveCommandRunning {
                 withIntermediateDirectories: false
             )
         }
+        return archiveTestIdentity(for: destination)
     }
 }
 

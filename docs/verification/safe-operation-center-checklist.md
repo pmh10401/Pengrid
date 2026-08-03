@@ -27,15 +27,20 @@ or VoiceOver checks against a release candidate.
 - [x] **PASS — 2026-08-03 — archive progress:** Tests cover ordered exact
   preparation transitions, indeterminate native encoding, source and
   destination-parent identity checks, descriptor-anchored exclusive
-  publication, identity-owned bounded parallel staging, cancellation cleanup,
-  preservation of unowned partial output for recovery review, phase-aware
-  labels, and basename-only status copy.
+  publication bound to the runner-captured output identity, identity-owned
+  bounded parallel staging, cancellation cleanup, preservation of unowned
+  partial output for recovery review, phase-aware labels, and basename-only
+  status copy.
 
 - [x] **PASS — 2026-08-03 — full automated suite:** Full Xcode Swift Testing
-  completed **700 tests in 55 suites with zero failures** after the independent
-  review fixes. A release build and `script/build_and_run.sh --verify` had also
-  completed successfully at the pre-review baseline; both are rerun at the
-  final gate below.
+  completed **701 tests in 55 suites with zero failures** after the independent
+  review fixes. The release build and `script/build_and_run.sh --verify` also
+  completed successfully against the same final source state.
+
+- [x] **PASS — 2026-08-03 — mechanical accessibility wiring:** Luna Max
+  independently confirmed all four queue/details/recovery accessibility
+  identifier connections with no omissions; the seven focused accessibility
+  presentation tests passed. This does not replace the manual VoiceOver gate.
 
 ## App smoke evidence
 

@@ -62,12 +62,13 @@ extension ArchiveRequest {
 }
 
 extension LiveArchiveCommandRunner {
+    @discardableResult
     func run(
         kind: ArchiveOperationKind,
         format: ArchiveFormat,
         sources: [URL],
         destination: URL
-    ) async throws {
+    ) async throws -> FileIdentity {
         try await run(
             kind: kind,
             format: format,
@@ -76,13 +77,14 @@ extension LiveArchiveCommandRunner {
         )
     }
 
+    @discardableResult
     func run(
         kind: ArchiveOperationKind,
         format: ArchiveFormat,
         sources: [URL],
         destination: URL,
         progress: @escaping ArchiveCommandProgressHandler
-    ) async throws {
+    ) async throws -> FileIdentity {
         try await run(
             kind: kind,
             format: format,

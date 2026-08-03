@@ -93,7 +93,7 @@ actor ArchiveOperationService: ArchiveOperating {
         do {
             try Task.checkCancellation()
             try await requireDestinationParentIdentity(request)
-            try await commandRunner.run(
+            let stagedIdentity = try await commandRunner.run(
                 kind: request.kind,
                 format: request.format,
                 sources: request.verifiedSources,
@@ -111,6 +111,9 @@ actor ArchiveOperationService: ArchiveOperating {
             guard await fileSystem.exists(reservation.item) else {
                 throw ArchiveServiceError.missingStagedOutput
             }
+            guard try await fileSystem.identity(of: reservation.item) == stagedIdentity else {
+                throw ArchiveOperationError.recoveryRequired
+            }
             try Task.checkCancellation()
             await progress(ArchiveOperationProgress(
                 kind: request.kind,
@@ -118,9 +121,6 @@ actor ArchiveOperationService: ArchiveOperating {
                 format: request.format,
                 phase: .publishing
             ))
-            guard let stagedIdentity = try await fileSystem.identity(of: reservation.item) else {
-                throw ArchiveServiceError.missingStagedOutput
-            }
             try await fileSystem.moveExclusively(
                 reservation.item,
                 identifiedBy: stagedIdentity,

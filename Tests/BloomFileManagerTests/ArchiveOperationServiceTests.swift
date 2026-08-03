@@ -326,6 +326,43 @@ struct ArchiveOperationServiceTests {
         ).contains { $0.lastPathComponent.hasPrefix(".bloom-staging-") })
     }
 
+    @Test func publicationRefusesOutputReplacedAfterRunnerCapturedIdentity() async {
+        let root = URL(filePath: "/workspace", directoryHint: .isDirectory)
+        let source = root.appending(path: "Source.txt")
+        let destination = root.appending(path: "Archive.zip")
+        let fileSystem = RecordingFileSystem(existingURLs: [root, source])
+        let replacementIdentity = FileIdentity(
+            entryIdentifier: "external-output-entry",
+            resolvedIdentifier: "external-output-resolved"
+        )
+        let runner = ReplacingArchiveOutputRunner(
+            fileSystem: fileSystem,
+            replacementIdentity: replacementIdentity
+        )
+        let service = ArchiveOperationService(
+            fileSystem: fileSystem,
+            commandRunner: runner
+        )
+        let request = ArchiveRequest(
+            kind: .compress,
+            verifiedSources: [source],
+            finalDestination: destination
+        )
+
+        let result = await service.perform([request]) { _ in }
+        let stagedOutput = await runner.stagedOutput
+
+        #expect(result.outcomes == [.recoveryNeeded(source: source)])
+        #expect(await fileSystem.existingURLs.contains(destination) == false)
+        if let stagedOutput {
+            let observedIdentity = try? await fileSystem.identity(of: stagedOutput)
+            #expect(observedIdentity == replacementIdentity)
+            #expect(await fileSystem.existingURLs.contains(stagedOutput))
+        } else {
+            Issue.record("Expected the runner to create a staged output")
+        }
+    }
+
     @Test func cancellationCleanupFailureRequiresRecoveryAndCancelsRemaining() async throws {
         let root = try TemporaryDirectory()
         defer { root.remove() }
@@ -427,7 +464,12 @@ struct ArchiveOperationServiceTests {
             existingURLs: [root, source],
             suspendExistsOfLastPathComponent: "payload"
         )
-        let runner = RecordingArchiveCommandRunner { _, _, _, stagedDestination in
+        let runner = RecordingArchiveCommandRunner(outputIdentity: { stagedDestination in
+            guard let identity = try await fileSystem.identity(of: stagedDestination) else {
+                throw ArchiveOperationError.invalidRequest
+            }
+            return identity
+        }) { _, _, _, stagedDestination in
             try await fileSystem.createDirectory(stagedDestination)
         }
         let service = ArchiveOperationService(
@@ -549,13 +591,18 @@ private actor RecordingArchiveCommandRunner: ArchiveCommandRunning {
     private(set) var invocations: [ArchiveCommandInvocation] = []
     var invocationCount: Int { invocations.count }
     private let phases: [ArchiveOperationPhase]
+    private let outputIdentity: @Sendable (URL) async throws -> FileIdentity
     private let handler: Handler
 
     init(
         phases: [ArchiveOperationPhase] = [],
+        outputIdentity: @escaping @Sendable (URL) async throws -> FileIdentity = {
+            archiveTestIdentity(for: $0)
+        },
         handler: @escaping Handler
     ) {
         self.phases = phases
+        self.outputIdentity = outputIdentity
         self.handler = handler
     }
 
@@ -564,7 +611,7 @@ private actor RecordingArchiveCommandRunner: ArchiveCommandRunning {
         format: ArchiveFormat,
         sources: [IdentifiedFileRequest],
         destination: URL
-    ) async throws {
+    ) async throws -> FileIdentity {
         let sourceURLs = sources.map(\.url)
         invocations.append(ArchiveCommandInvocation(
             kind: kind,
@@ -573,6 +620,7 @@ private actor RecordingArchiveCommandRunner: ArchiveCommandRunning {
             destination: destination
         ))
         try await handler(kind, format, sourceURLs, destination)
+        return try await outputIdentity(destination)
     }
 
     func run(
@@ -581,7 +629,7 @@ private actor RecordingArchiveCommandRunner: ArchiveCommandRunning {
         sources: [IdentifiedFileRequest],
         destination: URL,
         progress: @escaping ArchiveCommandProgressHandler
-    ) async throws {
+    ) async throws -> FileIdentity {
         let sourceURLs = sources.map(\.url)
         invocations.append(ArchiveCommandInvocation(
             kind: kind,
@@ -593,6 +641,33 @@ private actor RecordingArchiveCommandRunner: ArchiveCommandRunning {
             await progress(phase)
         }
         try await handler(kind, format, sourceURLs, destination)
+        return try await outputIdentity(destination)
+    }
+}
+
+private actor ReplacingArchiveOutputRunner: ArchiveCommandRunning {
+    private let fileSystem: RecordingFileSystem
+    private let replacementIdentity: FileIdentity
+    private(set) var stagedOutput: URL?
+
+    init(fileSystem: RecordingFileSystem, replacementIdentity: FileIdentity) {
+        self.fileSystem = fileSystem
+        self.replacementIdentity = replacementIdentity
+    }
+
+    func run(
+        kind: ArchiveOperationKind,
+        format: ArchiveFormat,
+        sources: [IdentifiedFileRequest],
+        destination: URL
+    ) async throws -> FileIdentity {
+        try await fileSystem.createDirectory(destination)
+        guard let captured = try await fileSystem.identity(of: destination) else {
+            throw ArchiveOperationError.invalidRequest
+        }
+        stagedOutput = destination
+        await fileSystem.replaceIdentity(at: destination, with: replacementIdentity)
+        return captured
     }
 }
 

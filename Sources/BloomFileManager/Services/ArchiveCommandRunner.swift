@@ -8,7 +8,7 @@ protocol ArchiveCommandRunning: Sendable {
         format: ArchiveFormat,
         sources: [IdentifiedFileRequest],
         destination: URL
-    ) async throws
+    ) async throws -> FileIdentity
 
     func run(
         kind: ArchiveOperationKind,
@@ -16,7 +16,7 @@ protocol ArchiveCommandRunning: Sendable {
         sources: [IdentifiedFileRequest],
         destination: URL,
         progress: @escaping ArchiveCommandProgressHandler
-    ) async throws
+    ) async throws -> FileIdentity
 }
 
 extension ArchiveCommandRunning {
@@ -26,9 +26,9 @@ extension ArchiveCommandRunning {
         sources: [IdentifiedFileRequest],
         destination: URL,
         progress: @escaping ArchiveCommandProgressHandler
-    ) async throws {
+    ) async throws -> FileIdentity {
         await progress(.encoding)
-        try await run(
+        return try await run(
             kind: kind,
             format: format,
             sources: sources,
@@ -50,7 +50,7 @@ struct LiveArchiveCommandRunner: ArchiveCommandRunning {
         format: ArchiveFormat,
         sources: [IdentifiedFileRequest],
         destination: URL
-    ) async throws {
+    ) async throws -> FileIdentity {
         try await run(
             kind: kind,
             format: format,
@@ -66,7 +66,7 @@ struct LiveArchiveCommandRunner: ArchiveCommandRunning {
         sources: [IdentifiedFileRequest],
         destination: URL,
         progress: @escaping ArchiveCommandProgressHandler
-    ) async throws {
+    ) async throws -> FileIdentity {
         let preparedCommand = try await prepareCommand(
             kind: kind,
             format: format,
@@ -131,9 +131,13 @@ struct LiveArchiveCommandRunner: ArchiveCommandRunning {
             }
             throw error
         }
+        guard let outputIdentity = try await fileSystem.identity(of: destination) else {
+            throw ArchiveOperationError.recoveryRequired
+        }
         guard await preparedCommand.cleanup(using: fileSystem) == nil else {
             throw ArchiveOperationError.recoveryRequired
         }
+        return outputIdentity
     }
 
     static func arguments(
