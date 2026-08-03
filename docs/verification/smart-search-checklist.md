@@ -1,6 +1,6 @@
 # Smart Search verification checklist
 
-Verification record opened: 2026-08-01 (Asia/Seoul)
+Verification record opened: 2026-08-03 (Asia/Seoul)
 
 Use only `PASS`, `FAIL`, or `NOT RUN` for each item. Automated local-fixture
 coverage does not replace the physical macOS, File Provider, keyboard, and
@@ -8,22 +8,44 @@ VoiceOver checks below.
 
 ## Automated evidence
 
-- [x] **PASS — serial Swift Testing (2026-08-01):** The final-fix candidate
-  completed 687 tests in 55 suites with zero failures:
+- [x] **PASS — focused Swift Testing (2026-08-03):** The Korean-initial-search
+  candidate completed 55 tests in five independently selected suites with zero
+  failures: analyzer 12, ranking/model 18, service 16, Store 8, and presentation
+  guidance 1.
 
   ```bash
   DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
-    swift test --enable-swift-testing --no-parallel --filter BloomFileManagerTests
+    swift test --no-parallel --filter SmartSearchTextAnalyzerTests
+  DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+    swift test --no-parallel --filter SmartSearchModelTests
+  DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+    swift test --no-parallel --filter SmartSearchServiceTests
+  DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+    swift test --no-parallel --filter SmartSearchStoreTests
+  DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+    swift test --no-parallel \
+      --filter searchGuidanceExplainsAutomaticKoreanInitialMatching
   ```
 
-  The suite must cover recursive filename/path matching; ranking and the
-  500-result default cap; invalid and duplicate roots; default exclusion and
-  explicit inclusion of hidden items and packages; exclusion of symbolic-link
-  entries and descendants;
-  optional folder results; cancellation; unreadable-entry tolerance; saved
-  search persistence; and cloud-only availability without materialization.
+  These suites cover compatibility-jamo and modern-choseong equivalence;
+  NFC/NFD filenames; all 19 modern initials; mixed literal-and-initial AND
+  queries; deterministic evidence-based ranking; linear analysis work;
+  recursive filename/path matching; cancellation; saved-search state; and
+  cloud-only availability without materialization. A ranking mutation that
+  reversed evidence order made
+  `weakestInitialClauseWinsBeforeOneExcellentClause` fail, and the test passed
+  again after restoring the production comparator.
 
-- [x] **PASS — release and static contracts (2026-08-01):** The package release
+- [ ] **FAIL — full serial Swift Testing (2026-08-03):** The unfiltered run is
+  not a release gate on this host. It recorded failures outside Smart Search
+  before an AppKit `NSOpenPanel` XPC helper ended the run. Narrow reproduction
+  confirmed `CloudItemAvailabilityTests.directoryListingDoesNotCallTheMaterializer`
+  fails because LaunchServices returns `kLSDataUnavailableErr (-10813)` for a
+  temporary file's optional kind string; the checksum timestamp fixture also
+  remains empty. These host failures are recorded separately and must not be
+  described as passing.
+
+- [x] **PASS — release and static contracts (2026-08-03):** The package release
   contract script reported `PASS`, the arm64 release build completed, and both
   working-tree and branch diff checks reported no whitespace errors:
 
@@ -31,8 +53,26 @@ VoiceOver checks below.
   ./script/tests/package_release_contract_tests.sh
   DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
     swift build -c release --arch arm64
-  git diff main...HEAD --check
+  git diff --check
+  git diff origin/feature/smart-search...HEAD --check
   ```
+
+## Local UI smoke evidence
+
+- [x] **PASS — Korean-initial UI smoke (2026-08-03):** A disposable local
+  fixture was opened in both panes, Smart Search was launched with
+  Command-Shift-F, and Return submitted each query. `ㅎㄱ` returned the Korean
+  filename matches; modern choseong `ᄒᄀ` returned the same rows; `ㄱㄷ`
+  returned `구글 드라이브` and its matching descendant without returning the
+  unrelated `ㄱㅅㄷ` path; and `ㅎㄱ report` returned only `한국 report.pdf`.
+
+- [x] **PASS — presentation smoke (2026-08-03):** The query placeholder,
+  idle Korean example, result count, Korean filenames, relative paths, and
+  availability remained readable in dark appearance at wide and narrow window
+  sizes and in an isolated light-appearance build. Accessibility inspection
+  exposed the stable `smartSearch.query` identifier and the Korean-initial
+  help text. The separate VoiceOver, Full Keyboard Access, and live Korean-IME
+  checks remain `NOT RUN` below.
 
 ## Manual verification
 
@@ -49,13 +89,19 @@ VoiceOver checks below.
   and relative paths recursively, ranks exact filename matches ahead of
   path-only matches, and does not report file-content-only matches.
 
-- [ ] **NOT RUN — Korean initial matching:** In a disposable local root, add
-  `한국 보고서.pdf`, `한글 노트.txt`, `구글 드라이브/계획.txt`, and
-  `개인 사진 다운로드/메모.txt`. Confirm `ㅎㄱ` and modern choseong `ᄒᄀ`
-  return the same Korean rows. Confirm `ㄱㄷ` finds the `구글 드라이브`
-  result but does not treat the unrelated `ㄱㅅㄷ` run heads as an arbitrary
-  subsequence. Enter `ㅎㄱ report` and confirm every result satisfies both
-  clauses. Repeat through the Korean IME and submit with Return.
+- [x] **PASS — Korean initial matching through Computer Use (2026-08-03):** A
+  disposable local root contained `한국 보고서.pdf`, `한글 노트.txt`,
+  `구글 드라이브/계획.txt`, `개인 사진 다운로드/메모.txt`, the explicit
+  jamo folder `ㄱㅅㄷ`, and literal English report files. `ㅎㄱ` and modern
+  choseong `ᄒᄀ` returned the same three Korean rows. `ㄱㄷ` returned only the
+  `구글 드라이브` directory and its path match, excluding `개인 사진
+  다운로드`. `ㄱㅅㄷ` ranked the explicit jamo name before derived run-head
+  matches. `ㅎㄱ report`, submitted with Return, returned only `한국
+  report.pdf`.
+
+- [ ] **NOT RUN — physical Korean IME composition:** Repeat the compatibility-
+  jamo queries using the user's installed Korean input source and confirm IME
+  composition and Return submission behave identically.
 
 - [ ] **NOT RUN — result bound and cancellation:** With the default cap, create
   more than 500 matching local entries. Confirm the displayed result list
@@ -91,8 +137,16 @@ VoiceOver checks below.
   not download or materialize the item. Smart Search must not perform remote
   provider search or request Google or Microsoft credentials.
 
-- [ ] **NOT RUN — accessibility:** With VoiceOver and Full Keyboard Access
-  enabled, open Smart Search with Command-Shift-F, enter a query, change every
+- [x] **PASS — accessibility tree and dark layout through Computer Use
+  (2026-08-03):** The query field exposed the Korean-initial accessibility hint,
+  prompt, value, and stable identifier. The disposable result rows exposed
+  filename, relative path, and availability. The dark appearance screenshot at
+  the current window size showed the mixed query, controls, one-result heading,
+  result row, and saved-search controls without overlap or essential clipping.
+
+- [ ] **NOT RUN — physical accessibility matrix:** With VoiceOver and Full
+  Keyboard Access enabled, open Smart Search with Command-Shift-F, enter a
+  query, change every
   inclusion option, run and cancel a search, open a result, save a search, and
   remove it from the Places rail. Confirm controls, root summary, availability,
   progress, results, and saved-search actions have understandable labels.

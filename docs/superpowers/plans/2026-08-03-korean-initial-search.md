@@ -472,7 +472,7 @@ Run analyzer, model, service, Store, and presentation suites individually so an 
 ```bash
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test --no-parallel
 git diff --check origin/feature/smart-search...HEAD
-./script/package_release.sh --verify-contract
+./script/tests/package_release_contract_tests.sh
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift build -c release --arch arm64
 ```
 
