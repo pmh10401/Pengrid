@@ -55,6 +55,27 @@ VoiceOver checks below.
   `multi-format-archive-verified` points to this final verified HEAD; it is
   created only after these commands are rerun against that exact HEAD.
 
+- [x] **PASS — 2026-08-03 — phase-aware archive progress:** The full serial
+  Swift Testing run passed **651 tests in 51 suites** with zero failures. The
+  release build and app-bundle process verification also exited 0. Automated
+  coverage verifies ordered top-level preparation counts, indeterminate native
+  encoding, publication only after staged-output verification, cancellation and
+  failure cleanup, format-aware VoiceOver copy, and omission of absolute parent
+  paths from archive status labels.
+
+  ```bash
+  env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+    /usr/bin/xcrun swift test --disable-sandbox \
+    --enable-swift-testing --no-parallel
+  env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+    /usr/bin/xcrun swift build -c release --disable-sandbox
+  env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+    ./script/build_and_run.sh --verify
+  ```
+
+  The existing `@preconcurrency` and weak-variable compiler warnings remain;
+  this change introduced no new warning category.
+
 ## Manual verification
 
 - [ ] **NOT RUN — keyboard and menu discovery:** In an active file pane, select
@@ -100,7 +121,12 @@ VoiceOver checks below.
   VoiceOver focus to the archive status row and Cancel button. Confirm labels
   announce the selected format (for example, **Compressing TAR.GZ archive** or
   **Extracting TAR.XZ archive**), the current item, and the matching
-  format-aware cancellation label.
+  format-aware cancellation label. During multi-item compression, confirm
+  preparation announces the exact top-level count (for example, **Preparing
+  files, 2 of 5**); native encoding announces **Encoding archive** without a
+  misleading percentage; and exclusive publication announces **Finishing
+  archive**. Confirm none of these announcements exposes an absolute parent
+  path.
 
 - [ ] **NOT RUN — local round trip:** In a local test folder, create a
   directory named `Kept Parent` containing `Report with spaces.txt` with known

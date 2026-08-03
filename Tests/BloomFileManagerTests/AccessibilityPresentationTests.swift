@@ -67,6 +67,38 @@ import Testing
     #expect(!AccessibilityMotionPresentation.allowsNonessentialAnimation(reduceMotion: true))
 }
 
+@Test func archiveProgressAccessibilityDescribesPhasesWithoutLeakingParentPaths() {
+    let displayName = "Report.txt"
+    let privateParentPath = "/Users/example/Confidential"
+    let preparation = ArchiveOperationStatusPresentation(progress: ArchiveOperationProgress(
+        kind: .compress,
+        currentDisplayName: displayName,
+        format: .tarGzip,
+        phase: .preparingSources(completedCount: 2, totalCount: 5)
+    ))
+    let encoding = ArchiveOperationStatusPresentation(progress: ArchiveOperationProgress(
+        kind: .compress,
+        currentDisplayName: displayName,
+        format: .tarGzip,
+        phase: .encoding
+    ))
+    let publishing = ArchiveOperationStatusPresentation(progress: ArchiveOperationProgress(
+        kind: .compress,
+        currentDisplayName: displayName,
+        format: .tarGzip,
+        phase: .publishing
+    ))
+
+    #expect(preparation.progressLabel == "Preparing files, 2 of 5")
+    #expect(preparation.statusAccessibilityLabel.contains("Preparing files, 2 of 5"))
+    #expect(encoding.progressLabel == "Encoding archive")
+    #expect(!encoding.statusAccessibilityLabel.contains("%"))
+    #expect(publishing.progressLabel == "Finishing archive")
+    #expect(!preparation.statusAccessibilityLabel.contains(privateParentPath))
+    #expect(!encoding.statusAccessibilityLabel.contains(privateParentPath))
+    #expect(!publishing.statusAccessibilityLabel.contains(privateParentPath))
+}
+
 @Test func accessibilityModifiersAreStaticallyWiredIntoViews() throws {
     let filePane = try source(named: "Views/FilePaneView.swift")
     #expect(filePane.contains("AccessibilityIdentifiers.leftPane"))

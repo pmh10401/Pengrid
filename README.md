@@ -94,6 +94,13 @@ processor or source count; the archive command itself is a single local native
 operation. A cloud-backed source may be downloaded first when macOS File
 Provider needs to materialize it.
 
+The status row shows exact top-level item counts while those selected sources
+are prepared. The native `ditto` or `tar` encoding phase is intentionally shown
+as indeterminate because neither command exposes a reliable cross-format byte
+total. **Cancel** remains available throughout the operation, and **Finishing
+archive** appears only after Pengrid verifies the staged output and begins its
+exclusive publication to the destination.
+
 Archive destinations are never overwritten. Pengrid chooses an available name
 before starting and exclusive publication rejects a late collision, leaving the
 existing item unchanged. Password-protected archives and 7z and RAR archives
