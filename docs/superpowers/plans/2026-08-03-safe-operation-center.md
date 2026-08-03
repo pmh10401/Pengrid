@@ -127,8 +127,8 @@
 - [x] Run the release build and `./script/build_and_run.sh --verify`.
 - [x] Have Luna Max perform only the mechanical accessibility wiring checklist;
   actual VoiceOver speech remains a documented manual release gate.
-- [x] Have Sol XHigh independently review safety, concurrency, cancellation, identity checks, privacy, and regression risk; resolve every actionable finding.
-- [x] Rerun full verification after review fixes, record exact evidence, and run `git diff --check`.
+- [ ] Have Sol XHigh independently re-review the resolved safety, cancellation, identity-authority, and progress-throttling findings.
+- [ ] Rerun full verification after review fixes, record exact evidence, and run `git diff --check`.
 
 Verification commands:
 

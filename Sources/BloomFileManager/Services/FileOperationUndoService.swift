@@ -86,7 +86,10 @@ actor FileOperationUndoService {
                 var entries: [FileOperationUndoMoveEntry] = []
                 for item in completed {
                     try Task.checkCancellation()
-                    guard let identity = try await fileSystem.identity(of: item.destination) else {
+                    guard let identity = result.undoDestinationIdentity(
+                        for: item.destination
+                    ),
+                    try await fileSystem.identity(of: item.destination) == identity else {
                         return nil
                     }
                     entries.append(FileOperationUndoMoveEntry(
@@ -101,13 +104,20 @@ actor FileOperationUndoService {
                 var entries: [FileOperationUndoCreatedEntry] = []
                 for item in completed {
                     try Task.checkCancellation()
-                    guard let identity = try await fileSystem.identity(of: item.destination) else {
+                    guard let identity = result.undoDestinationIdentity(
+                        for: item.destination
+                    ),
+                    try await fileSystem.identity(of: item.destination) == identity else {
+                        return nil
+                    }
+                    let fingerprint = try await fileSystem.fingerprint(of: item.destination)
+                    guard try await fileSystem.identity(of: item.destination) == identity else {
                         return nil
                     }
                     entries.append(FileOperationUndoCreatedEntry(
                         url: item.destination,
                         identity: identity,
-                        fingerprint: try await fileSystem.fingerprint(of: item.destination)
+                        fingerprint: fingerprint
                     ))
                 }
                 return entries.isEmpty ? nil : .removeCreated(entries)
@@ -157,7 +167,7 @@ actor FileOperationUndoService {
                 try Task.checkCancellation()
                 guard await !fileSystem.exists(entry.originalURL),
                       let current = try await fileSystem.identity(of: entry.currentURL),
-                      current.refersToSameItem(as: entry.currentIdentity)
+                      current == entry.currentIdentity
                 else { throw UndoSafetyError.unavailable }
             }
         } catch is CancellationError {
@@ -217,7 +227,7 @@ actor FileOperationUndoService {
             for entry in entries {
                 try Task.checkCancellation()
                 guard let current = try await fileSystem.identity(of: entry.url),
-                      current.refersToSameItem(as: entry.identity),
+                      current == entry.identity,
                       try await fileSystem.fingerprint(of: entry.url) == entry.fingerprint
                 else { throw UndoSafetyError.unavailable }
             }
@@ -325,7 +335,7 @@ actor FileOperationUndoService {
             do {
                 guard await !fileSystem.exists(entry.currentURL),
                       let identity = try await fileSystem.identity(of: entry.originalURL),
-                      identity.refersToSameItem(as: entry.currentIdentity)
+                      identity == entry.currentIdentity
                 else {
                     recovered = false
                     continue

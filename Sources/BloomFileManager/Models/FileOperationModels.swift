@@ -164,10 +164,12 @@ enum FileOperationItemOutcome: Sendable, Equatable {
 struct FileOperationResult: Sendable, Equatable {
     let outcomes: [FileOperationItemOutcome]
     private let safeRelativePathsBySource: [URL: ComparisonRelativePath]
+    private let undoDestinationIdentities: [URL: FileIdentity]
 
     init(
         outcomes: [FileOperationItemOutcome],
-        safeRelativePathsBySource: [URL: ComparisonRelativePath] = [:]
+        safeRelativePathsBySource: [URL: ComparisonRelativePath] = [:],
+        undoDestinationIdentities: [URL: FileIdentity] = [:]
     ) {
         self.outcomes = outcomes
         var normalized: [URL: ComparisonRelativePath] = [:]
@@ -183,10 +185,34 @@ struct FileOperationResult: Sendable, Equatable {
             }
         }
         self.safeRelativePathsBySource = normalized
+        var normalizedUndoIdentities: [URL: FileIdentity] = [:]
+        for (destination, identity) in undoDestinationIdentities {
+            normalizedUndoIdentities[destination.standardizedFileURL] = identity
+        }
+        self.undoDestinationIdentities = normalizedUndoIdentities
     }
 
     func safeRelativePath(for source: URL) -> ComparisonRelativePath? {
         safeRelativePathsBySource[source.standardizedFileURL]
+    }
+
+    func undoDestinationIdentity(for destination: URL) -> FileIdentity? {
+        undoDestinationIdentities[destination.standardizedFileURL]
+    }
+
+    func addingSafeRelativePaths(
+        _ paths: [URL: ComparisonRelativePath]
+    ) -> FileOperationResult {
+        FileOperationResult(
+            outcomes: outcomes,
+            safeRelativePathsBySource: paths,
+            undoDestinationIdentities: undoDestinationIdentities
+        )
+    }
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.outcomes == rhs.outcomes
+            && lhs.safeRelativePathsBySource == rhs.safeRelativePathsBySource
     }
 
     var hasFailures: Bool {

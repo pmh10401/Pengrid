@@ -30,6 +30,7 @@ actor ArchiveOperationService: ArchiveOperating {
         progress: @escaping ArchiveProgressHandler = { _ in }
     ) async -> FileOperationResult {
         var outcomes: [FileOperationItemOutcome] = []
+        var undoIdentities: [URL: FileIdentity] = [:]
 
         for (index, request) in requests.enumerated() {
             if Task.isCancelled {
@@ -45,11 +46,12 @@ actor ArchiveOperationService: ArchiveOperating {
                 defer { accessLeases.forEach { $0.finish() } }
 
                 try validate(request)
-                try await perform(request, progress: progress)
+                let destinationIdentity = try await perform(request, progress: progress)
                 outcomes.append(.succeeded(
                     source: source,
                     destination: request.finalDestination
                 ))
+                undoIdentities[request.finalDestination] = destinationIdentity
             } catch {
                 let cancellation = Self.cancellationState(for: error)
                 if cancellation.wasCancelled {
@@ -76,19 +78,23 @@ actor ArchiveOperationService: ArchiveOperating {
             }
         }
 
-        return FileOperationResult(outcomes: outcomes)
+        return FileOperationResult(
+            outcomes: outcomes,
+            undoDestinationIdentities: undoIdentities
+        )
     }
 
     private func perform(
         _ request: ArchiveRequest,
         progress: @escaping ArchiveProgressHandler
-    ) async throws {
+    ) async throws -> FileIdentity {
         try await requireDestinationParentIdentity(request)
         let reservation = try await fileSystem.reserveStagingDirectory(
             beside: request.finalDestination,
             parentIdentifiedBy: request.destinationParentIdentity
         )
         var primaryError: (any Error)?
+        var publishedIdentity: FileIdentity?
 
         do {
             try Task.checkCancellation()
@@ -128,6 +134,7 @@ actor ArchiveOperationService: ArchiveOperating {
                 to: request.finalDestination,
                 destinationParentIdentifiedBy: request.destinationParentIdentity
             )
+            publishedIdentity = stagedIdentity
         } catch {
             primaryError = error
         }
@@ -145,6 +152,10 @@ actor ArchiveOperationService: ArchiveOperating {
                 cleanup: cleanupError
             )
         }
+        guard let publishedIdentity else {
+            throw ArchiveServiceError.missingStagedOutput
+        }
+        return publishedIdentity
     }
 
     private func cleanup(_ reservation: StagingReservation) async -> (any Error)? {

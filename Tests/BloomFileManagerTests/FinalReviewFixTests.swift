@@ -747,6 +747,7 @@ struct FinalReviewControllerTests {
             leftURL: URL(filePath: "/workspace"), rightURL: URL(filePath: "/other"),
             listingService: StubDirectoryListingService(values: [:])
         )
+        workspace.left.selection = [source]
 
         await controller.requestTrashConfirmation(for: [source], workspace: workspace)
         let request = try! #require(workspace.pendingTrashRequest)
@@ -766,6 +767,7 @@ struct FinalReviewControllerTests {
             leftURL: URL(filePath: "/workspace"), rightURL: URL(filePath: "/other"),
             listingService: StubDirectoryListingService(values: [:])
         )
+        workspace.left.selection = [source]
 
         await controller.requestTrashConfirmation(for: [source], workspace: workspace)
         let request = try! #require(workspace.pendingTrashRequest)
@@ -775,6 +777,34 @@ struct FinalReviewControllerTests {
 
         #expect(controller.lastResult?.outcomes.count == 1)
         #expect(controller.lastResult?.hasFailures == true)
+    }
+
+    @Test func trashConfirmationIsDiscardedWhenSelectionChangesDuringCapture() async {
+        let source = URL(filePath: "/workspace/old-selection")
+        let replacementSelection = URL(filePath: "/workspace/new-selection")
+        let fileSystem = RecordingFileSystem(
+            existingURLs: [source, replacementSelection],
+            suspendIdentityOf: source
+        )
+        let controller = FileOperationController(
+            service: FileOperationService(fileSystem: fileSystem)
+        )
+        let workspace = WorkspaceState(
+            leftURL: URL(filePath: "/workspace"),
+            rightURL: URL(filePath: "/other"),
+            listingService: StubDirectoryListingService(values: [:])
+        )
+        workspace.left.selection = [source]
+
+        let request = Task {
+            await controller.requestTrashConfirmation(for: [source], workspace: workspace)
+        }
+        await waitUntilFinalReview { await fileSystem.hasSuspendedIdentity }
+        workspace.left.selection = [replacementSelection]
+        await fileSystem.releaseSuspendedIdentity()
+        await request.value
+
+        #expect(workspace.pendingTrashRequest == nil)
     }
 
     @Test func tableFirstResponderActivationDoesNotDependOnSelectionChange() {
@@ -796,6 +826,17 @@ struct FinalReviewControllerTests {
 
     private func waitUntilIdle(_ controller: FileOperationController) async {
         while controller.isRunning { await Task.yield() }
+    }
+}
+
+@MainActor
+private func waitUntilFinalReview(
+    _ condition: @escaping @MainActor () async -> Bool
+) async {
+    let deadline = ContinuousClock.now.advanced(by: .seconds(1))
+    while ContinuousClock.now < deadline {
+        if await condition() { return }
+        await Task.yield()
     }
 }
 

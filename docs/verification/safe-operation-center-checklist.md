@@ -21,7 +21,9 @@ or VoiceOver checks against a release candidate.
   destination roots and confirm mutations fail closed. Move, rename, Trash
   restore, created-output quarantine, recursive no-follow fingerprint
   verification, exclusive collision refusal, cancellation rollback, ancestor
-  invalidation, replacement conflict, and failed-undo behavior are covered. A
+  invalidation, replacement conflict, and failed-undo behavior are covered.
+  Undo authority now comes from the mutation's own result rather than a later
+  path lookup, and an immediate replacement at the destination is rejected. A
   partially successful multi-item intent is not retryable as a whole.
 
 - [x] **PASS — 2026-08-03 — archive progress:** Tests cover ordered exact
@@ -30,12 +32,21 @@ or VoiceOver checks against a release candidate.
   publication, pre-created identity-owned output with descriptor-bound native
   writes, identity-owned bounded parallel staging and partial-output cleanup,
   preservation of unowned replacements for recovery review, phase-aware
-  labels, and basename-only status copy.
+  labels, basename-only status copy, and a ten-hertz limit for intermediate
+  preparation updates while retaining start and completion boundaries.
 
-- [x] **PASS — 2026-08-03 — full automated suite:** Full Xcode Swift Testing
-  completed **704 tests in 55 suites with zero failures** after the independent
-  review fixes. The release build and `script/build_and_run.sh --verify` also
-  completed successfully against the same final source state.
+- [x] **PASS — 2026-08-03 — final-review regression set:** The current source
+  passed 109 focused tests covering the operation controller, archive service,
+  transfer service, undo service, mutation-owned archive authority, throttled
+  archive publication, and selection changes during Trash identity capture.
+  Cross-volume move cancellation after public destination commit now requires
+  recovery review and halts normal queue advancement.
+
+- [x] **PASS — 2026-08-03 — prior full-suite baseline:** Full Xcode Swift
+  Testing completed **704 tests in 55 suites with zero failures** before the
+  latest final-review hardening. The release build and
+  `script/build_and_run.sh --verify` also completed successfully at that
+  baseline. A current full-suite rerun remains required below.
 
 - [x] **PASS — 2026-08-03 — mechanical accessibility wiring:** Luna Max
   independently confirmed all four queue/details/recovery accessibility
@@ -95,6 +106,12 @@ or VoiceOver checks against a release candidate.
   volume or leave a misleading retry/undo action.
 
 ## Release gate
+
+- [ ] **NOT RUN — current full automated suite and release build:** Rerun all
+  Swift tests and the release build after final-review hardening. The current
+  macOS session has intermittently reported unavailable system services during
+  unrelated live filesystem/listing tests, so record code failures separately
+  from reproducible host-service failures.
 
 - [ ] **NOT RUN:** Record dated `PASS`/`FAIL` evidence for every manual item
   above against the exact release candidate. Until then, this feature remains

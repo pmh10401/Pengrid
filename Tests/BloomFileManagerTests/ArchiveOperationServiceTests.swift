@@ -45,6 +45,8 @@ struct ArchiveOperationServiceTests {
         #expect(result == FileOperationResult(outcomes: [
             .succeeded(source: firstSource, destination: destination)
         ]))
+        let destinationIdentity = try await LiveFileSystemAccess().identity(of: destination)
+        #expect(result.undoDestinationIdentity(for: destination) == destinationIdentity)
         try expectNoStagingDirectories(in: root.url)
     }
 

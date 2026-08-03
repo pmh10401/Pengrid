@@ -210,7 +210,7 @@ actor FileOperationService {
         in directory: URL,
         identifiedBy directoryIdentity: FileIdentity,
         named name: String
-    ) async throws -> URL {
+    ) async throws -> IdentifiedFileRequest {
         let accessLeases = try accessCoordinator.acquireAccess(for: [directory])
         defer { accessLeases.forEach { $0.finish() } }
         let startedAt = Date()
@@ -240,7 +240,10 @@ actor FileOperationService {
                 failed: 0,
                 skipped: 0
             )
-            return destination
+            return IdentifiedFileRequest(
+                url: destination,
+                identity: prepared.createdDirectories[0].identity
+            )
         } catch {
             await logger.record(
                 kind: .createFolder,
@@ -382,6 +385,7 @@ actor FileOperationService {
         defer { accessLeases.forEach { $0.finish() } }
         let startedAt = Date()
         var outcomes: [FileOperationItemOutcome] = []
+        var undoIdentities: [URL: FileIdentity] = [:]
         var succeeded = 0
         var failed = 0
 
@@ -394,6 +398,9 @@ actor FileOperationService {
                     identifiedBy: request.identity
                 )
                 outcomes.append(.succeeded(source: source, destination: resultingURL))
+                if let resultingURL {
+                    undoIdentities[resultingURL] = request.identity
+                }
                 succeeded += 1
             } catch is CancellationError {
                 outcomes.append(contentsOf: requests[index...].map { .cancelled(source: $0.url) })
@@ -418,7 +425,10 @@ actor FileOperationService {
             failed: failed,
             skipped: 0
         )
-        return FileOperationResult(outcomes: outcomes)
+        return FileOperationResult(
+            outcomes: outcomes,
+            undoDestinationIdentities: undoIdentities
+        )
     }
 
     func transfer(
@@ -482,6 +492,7 @@ actor FileOperationService {
     ) async -> FileOperationResult {
         let startedAt = Date()
         var outcomes: [FileOperationItemOutcome] = []
+        var undoIdentities: [URL: FileIdentity] = [:]
         var succeeded = 0
         var failed = 0
         var skipped = 0
@@ -493,7 +504,7 @@ actor FileOperationService {
             }
 
             do {
-                guard let outcome = try await transferItem(
+                guard let completion = try await transferItem(
                     source,
                     to: directory,
                     mode: mode,
@@ -502,10 +513,15 @@ actor FileOperationService {
                     outcomes.append(contentsOf: sources[index...].map { .cancelled(source: $0) })
                     break
                 }
+                let outcome = completion.outcome
                 outcomes.append(outcome)
                 switch outcome {
                 case .succeeded:
                     succeeded += 1
+                    if case let .succeeded(_, destination?) = outcome,
+                       let destinationIdentity = completion.destinationIdentity {
+                        undoIdentities[destination] = destinationIdentity
+                    }
                 case .skipped:
                     skipped += 1
                 case .cancelled:
@@ -545,7 +561,10 @@ actor FileOperationService {
             failed: failed,
             skipped: skipped
         )
-        return FileOperationResult(outcomes: outcomes)
+        return FileOperationResult(
+            outcomes: outcomes,
+            undoDestinationIdentities: undoIdentities
+        )
     }
 
     func transfer(
@@ -567,6 +586,7 @@ actor FileOperationService {
         defer { accessLeases.forEach { $0.finish() } }
         let startedAt = Date()
         var outcomes: [FileOperationItemOutcome] = []
+        var undoIdentities: [URL: FileIdentity] = [:]
         var succeeded = 0
         var failed = 0
         var skipped = 0
@@ -593,7 +613,7 @@ actor FileOperationService {
                     relativeComponents: request.relativeParentComponents
                 )
                 preparedHierarchy = prepared
-                guard let outcome = try await transferItem(
+                guard let completion = try await transferItem(
                     source,
                     identifiedBy: request.sourceIdentity,
                     to: prepared.destinationDirectory,
@@ -616,10 +636,15 @@ actor FileOperationService {
                     }
                     break
                 }
+                let outcome = completion.outcome
                 outcomes.append(outcome)
                 switch outcome {
                 case .succeeded:
                     succeeded += 1
+                    if case let .succeeded(_, destination?) = outcome,
+                       let destinationIdentity = completion.destinationIdentity {
+                        undoIdentities[destination] = destinationIdentity
+                    }
                 case .skipped:
                     skipped += 1
                     if await cleanupOwnedDirectories(
@@ -691,7 +716,10 @@ actor FileOperationService {
             failed: failed,
             skipped: skipped
         )
-        return FileOperationResult(outcomes: outcomes)
+        return FileOperationResult(
+            outcomes: outcomes,
+            undoDestinationIdentities: undoIdentities
+        )
     }
 
     private func transferItem(
@@ -700,7 +728,7 @@ actor FileOperationService {
         to directory: URL,
         mode: TransferMode,
         resolveConflict: ConflictResolver
-    ) async throws -> FileOperationItemOutcome? {
+    ) async throws -> TransferItemCompletion? {
         guard let currentSourceIdentity = try await fileSystem.identity(of: source) else {
             throw FileTransferError.missingIdentity
         }
@@ -724,7 +752,10 @@ actor FileOperationService {
             ) {
             case .replace:
                 guard !sourceIdentity.refersToSameItem(as: destinationIdentity) else {
-                    return .skipped(source: source)
+                    return TransferItemCompletion(
+                        outcome: .skipped(source: source),
+                        destinationIdentity: nil
+                    )
                 }
                 replacedIdentity = destinationIdentity
             case .keepBoth:
@@ -733,7 +764,10 @@ actor FileOperationService {
                     in: directory
                 )
             case .skip:
-                return .skipped(source: source)
+                return TransferItemCompletion(
+                    outcome: .skipped(source: source),
+                    destinationIdentity: nil
+                )
             case .cancel:
                 return nil
             }
@@ -745,7 +779,10 @@ actor FileOperationService {
             if sourceVolume == destinationVolume {
                 try Task.checkCancellation()
                 try await fileSystem.move(source, identifiedBy: sourceIdentity, to: destination)
-                return .succeeded(source: source, destination: destination)
+                return TransferItemCompletion(
+                    outcome: .succeeded(source: source, destination: destination),
+                    destinationIdentity: sourceIdentity
+                )
             }
         }
 
@@ -766,15 +803,25 @@ actor FileOperationService {
         )
 
         if mode == .move {
-            try Task.checkCancellation()
-            if let sourceFingerprint,
-               try await fileSystem.fingerprint(of: source) != sourceFingerprint {
-                throw FileTransferError.sourceChangedDuringTransfer
+            do {
+                try Task.checkCancellation()
+                if let sourceFingerprint,
+                   try await fileSystem.fingerprint(of: source) != sourceFingerprint {
+                    throw FileTransferError.sourceChangedDuringTransfer
+                }
+                try Task.checkCancellation()
+                try await fileSystem.remove(source, identifiedBy: sourceIdentity)
+            } catch {
+                throw TransferFailure(
+                    primary: error,
+                    cleanup: FileTransferError.publicDestinationCommitted
+                )
             }
-            try Task.checkCancellation()
-            try await fileSystem.remove(source, identifiedBy: sourceIdentity)
         }
-        return .succeeded(source: source, destination: destination)
+        return TransferItemCompletion(
+            outcome: .succeeded(source: source, destination: destination),
+            destinationIdentity: prepared.itemIdentity
+        )
     }
 
     private func cleanupOwnedDirectories(
@@ -1001,6 +1048,11 @@ private struct TransferFailure: LocalizedError {
     }
 }
 
+private struct TransferItemCompletion {
+    let outcome: FileOperationItemOutcome
+    let destinationIdentity: FileIdentity?
+}
+
 private enum FileTransferError: Error {
     case missingIdentity
     case identityChanged
@@ -1009,4 +1061,5 @@ private enum FileTransferError: Error {
     case cleanupFailed
     case unverifiedStagingPayload
     case destinationInsideSource
+    case publicDestinationCommitted
 }

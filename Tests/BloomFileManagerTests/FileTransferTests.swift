@@ -379,7 +379,7 @@ struct FileTransferTests {
         )
 
         #expect(result == FileOperationResult(outcomes: [
-            .failed(source: source, message: removalError.localizedDescription)
+            .recoveryNeeded(source: source)
         ]))
         #expect(await fileSystem.existingURLs.contains(source) == false)
         #expect(await fileSystem.existingURLs.contains(destination))

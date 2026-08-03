@@ -28,6 +28,34 @@ enum CloudOperationRequestGate {
     }
 }
 
+struct ArchiveProgressPublicationGate {
+    private var lastPublishedAt: ContinuousClock.Instant?
+    private let minimumInterval: Duration
+
+    init(minimumInterval: Duration = .milliseconds(100)) {
+        self.minimumInterval = minimumInterval
+    }
+
+    mutating func shouldPublish(
+        completedCount: Int,
+        totalCount: Int,
+        at now: ContinuousClock.Instant
+    ) -> Bool {
+        let isBoundary = completedCount <= 0 || completedCount >= totalCount
+        if !isBoundary,
+           let lastPublishedAt,
+           now - lastPublishedAt < minimumInterval {
+            return false
+        }
+        lastPublishedAt = now
+        return true
+    }
+
+    mutating func reset() {
+        lastPublishedAt = nil
+    }
+}
+
 @MainActor @Observable
 final class FileOperationController {
     private let service: FileOperationService
@@ -62,6 +90,7 @@ final class FileOperationController {
     @ObservationIgnored private var undoRecipes: [UUID: FileOperationUndoRecipe] = [:]
     @ObservationIgnored private var undoDirectoryKeys: [UUID: Set<String>] = [:]
     @ObservationIgnored private var activeOperationDidReplace = false
+    @ObservationIgnored private var archiveProgressGate = ArchiveProgressPublicationGate()
     @ObservationIgnored private let historyLimit: Int
 
     init(
@@ -587,10 +616,7 @@ final class FileOperationController {
                 }
             )
             return includeSafeRelativePaths
-                ? FileOperationResult(
-                    outcomes: result.outcomes,
-                    safeRelativePathsBySource: safeRelativePaths
-                )
+                ? result.addingSafeRelativePaths(safeRelativePaths)
                 : result
         }
     }
@@ -774,21 +800,17 @@ final class FileOperationController {
             }
         ) { [service] in
             do {
-                let createdURL = try await service.createFolder(
+                let created = try await service.createFolder(
                     in: directory,
                     identifiedBy: directoryIdentity,
                     named: name
                 )
-                if renamePane != nil,
-                   let createdIdentity = try? await service.identity(of: createdURL) {
-                    renameCapture.store(IdentifiedFileRequest(
-                        url: createdURL,
-                        identity: createdIdentity
-                    ))
+                if renamePane != nil {
+                    renameCapture.store(created)
                 }
                 return FileOperationResult(outcomes: [
-                    .succeeded(source: createdURL, destination: createdURL)
-                ])
+                    .succeeded(source: created.url, destination: created.url)
+                ], undoDestinationIdentities: [created.url: created.identity])
             } catch is CancellationError {
                 return FileOperationResult(outcomes: [
                     .cancelled(source: proposedURL)
@@ -877,7 +899,7 @@ final class FileOperationController {
                 )
                 return FileOperationResult(outcomes: [
                     .succeeded(source: source, destination: destination)
-                ])
+                ], undoDestinationIdentities: [destination: target.identity])
             } catch is CancellationError {
                 return FileOperationResult(outcomes: [
                     .cancelled(source: source)
@@ -891,6 +913,11 @@ final class FileOperationController {
     }
 
     func requestTrashConfirmation(for urls: [URL], workspace: WorkspaceState) async {
+        let paneID = workspace.activePaneID
+        let requestedSelection = Set(urls)
+        guard !requestedSelection.isEmpty,
+              workspace.activePane.selection == requestedSelection
+        else { return }
         var requests: [IdentifiedFileRequest] = []
         for url in urls {
             let identity = (try? await service.identity(of: url)) ?? FileIdentity(
@@ -899,6 +926,9 @@ final class FileOperationController {
             )
             requests.append(IdentifiedFileRequest(url: url, identity: identity))
         }
+        guard workspace.activePaneID == paneID,
+              workspace.activePane.selection == requestedSelection
+        else { return }
         workspace.requestTrashConfirmation(for: requests)
     }
 
@@ -1093,6 +1123,7 @@ final class FileOperationController {
         lastPreparationFailures = []
         applyToAllDecision = nil
         activeOperationDidReplace = false
+        archiveProgressGate.reset()
 
         operationTask = Task { [weak self] in
             guard let self else { return }
@@ -1144,6 +1175,15 @@ final class FileOperationController {
     private func publish(stage newStage: FileOperationStage) async {
         await waitIfPaused()
         guard !Task.isCancelled else { return }
+        if case let .archiving(progress) = newStage,
+           case let .preparingSources(completedCount, totalCount) = progress.phase,
+           !archiveProgressGate.shouldPublish(
+               completedCount: completedCount,
+               totalCount: totalCount,
+               at: ContinuousClock.now
+           ) {
+            return
+        }
         stage = newStage
         guard let activeJob else { return }
         self.activeJob = snapshot(
@@ -1256,6 +1296,7 @@ final class FileOperationController {
         operationTask = nil
         applyToAllDecision = nil
         activeOperationDidReplace = false
+        archiveProgressGate.reset()
     }
 
     private func terminalState(for result: FileOperationResult) -> FileOperationJobState {

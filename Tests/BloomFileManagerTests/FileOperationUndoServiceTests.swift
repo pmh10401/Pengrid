@@ -4,6 +4,35 @@ import Testing
 
 @Suite("Identity checked file operation undo")
 struct FileOperationUndoServiceTests {
+    @Test func recipeNeverAdoptsAReplacementThatAppearsAfterCompletion() async {
+        let source = URL(filePath: "/source/Owned.txt")
+        let destination = URL(filePath: "/destination/Owned.txt")
+        let ownedIdentity = FileIdentity(
+            entryIdentifier: "owned",
+            resolvedIdentifier: "owned"
+        )
+        let replacementIdentity = FileIdentity(
+            entryIdentifier: "replacement",
+            resolvedIdentifier: "replacement"
+        )
+        let fileSystem = RecordingFileSystem(
+            existingURLs: [destination],
+            identities: [destination: replacementIdentity]
+        )
+        let service = FileOperationUndoService(fileSystem: fileSystem)
+        let result = FileOperationResult(
+            outcomes: [.succeeded(source: source, destination: destination)],
+            undoDestinationIdentities: [destination: ownedIdentity]
+        )
+
+        #expect(await service.makeRecipe(
+            kind: .copy,
+            result: result,
+            allowsUndo: true
+        ) == nil)
+        #expect(await fileSystem.events.contains("fingerprint:/destination/Owned.txt") == false)
+    }
+
     @Test func renameUndoMovesOnlyTheCapturedIdentityBackToAnEmptyOriginalPath() async throws {
         let original = URL(filePath: "/workspace/Before.txt")
         let renamed = URL(filePath: "/workspace/After.txt")
@@ -11,9 +40,9 @@ struct FileOperationUndoServiceTests {
         let service = FileOperationUndoService(fileSystem: fileSystem)
         let recipe = try #require(await service.makeRecipe(
             kind: .rename,
-            result: FileOperationResult(outcomes: [
+            result: await authoritativeUndoResult(outcomes: [
                 .succeeded(source: original, destination: renamed)
-            ]),
+            ], fileSystem: fileSystem),
             allowsUndo: true
         ))
 
@@ -38,9 +67,9 @@ struct FileOperationUndoServiceTests {
         let service = FileOperationUndoService(fileSystem: fileSystem)
         let recipe = try #require(await service.makeRecipe(
             kind: .rename,
-            result: FileOperationResult(outcomes: [
+            result: await authoritativeUndoResult(outcomes: [
                 .succeeded(source: original, destination: renamed)
-            ]),
+            ], fileSystem: fileSystem),
             allowsUndo: true
         ))
 
@@ -58,9 +87,9 @@ struct FileOperationUndoServiceTests {
         let service = FileOperationUndoService(fileSystem: fileSystem)
         let recipe = try #require(await service.makeRecipe(
             kind: .move,
-            result: FileOperationResult(outcomes: [
+            result: await authoritativeUndoResult(outcomes: [
                 .succeeded(source: original, destination: moved)
-            ]),
+            ], fileSystem: fileSystem),
             allowsUndo: true
         ))
 
@@ -78,9 +107,9 @@ struct FileOperationUndoServiceTests {
         let service = FileOperationUndoService(fileSystem: fileSystem)
         let recipe = try #require(await service.makeRecipe(
             kind: .trash,
-            result: FileOperationResult(outcomes: [
+            result: await authoritativeUndoResult(outcomes: [
                 .succeeded(source: original, destination: trashed)
-            ]),
+            ], fileSystem: fileSystem),
             allowsUndo: true
         ))
 
@@ -99,9 +128,9 @@ struct FileOperationUndoServiceTests {
         let service = FileOperationUndoService(fileSystem: fileSystem)
         let recipe = try #require(await service.makeRecipe(
             kind: .copy,
-            result: FileOperationResult(outcomes: [
+            result: await authoritativeUndoResult(outcomes: [
                 .succeeded(source: source, destination: copied)
-            ]),
+            ], fileSystem: fileSystem),
             allowsUndo: true
         ))
 
@@ -122,9 +151,9 @@ struct FileOperationUndoServiceTests {
         let service = FileOperationUndoService(fileSystem: fileSystem)
         let recipe = try #require(await service.makeRecipe(
             kind: .copy,
-            result: FileOperationResult(outcomes: [
+            result: await authoritativeUndoResult(outcomes: [
                 .succeeded(source: source, destination: copied)
-            ]),
+            ], fileSystem: fileSystem),
             allowsUndo: true
         ))
         await fileSystem.mutateContents(at: copied)
@@ -150,10 +179,10 @@ struct FileOperationUndoServiceTests {
         let service = FileOperationUndoService(fileSystem: fileSystem)
         let recipe = try #require(await service.makeRecipe(
             kind: .copy,
-            result: FileOperationResult(outcomes: [
+            result: await authoritativeUndoResult(outcomes: [
                 .succeeded(source: firstSource, destination: firstCopy),
                 .succeeded(source: secondSource, destination: secondCopy)
-            ]),
+            ], fileSystem: fileSystem),
             allowsUndo: true
         ))
 
@@ -176,10 +205,10 @@ struct FileOperationUndoServiceTests {
         let service = FileOperationUndoService(fileSystem: fileSystem)
         let recipe = try #require(await service.makeRecipe(
             kind: .copy,
-            result: FileOperationResult(outcomes: [
+            result: await authoritativeUndoResult(outcomes: [
                 .succeeded(source: firstSource, destination: firstCopy),
                 .succeeded(source: secondSource, destination: secondCopy)
-            ]),
+            ], fileSystem: fileSystem),
             allowsUndo: true
         ))
         let gate = UndoProgressCancellationGate()
@@ -219,10 +248,10 @@ struct FileOperationUndoServiceTests {
         let service = FileOperationUndoService(fileSystem: fileSystem)
         let recipe = try #require(await service.makeRecipe(
             kind: .copy,
-            result: FileOperationResult(outcomes: [
+            result: await authoritativeUndoResult(outcomes: [
                 .succeeded(source: firstSource, destination: firstCopy),
                 .succeeded(source: secondSource, destination: secondCopy)
-            ]),
+            ], fileSystem: fileSystem),
             allowsUndo: true
         ))
 
@@ -250,9 +279,9 @@ struct FileOperationUndoServiceTests {
         #expect(await service.makeRecipe(kind: .copy, result: result, allowsUndo: false) == nil)
         #expect(await service.makeRecipe(
             kind: .trash,
-            result: FileOperationResult(outcomes: [
+            result: await authoritativeUndoResult(outcomes: [
                 .succeeded(source: source, destination: nil)
-            ]),
+            ], fileSystem: fileSystem),
             allowsUndo: true
         ) == nil)
     }
@@ -263,12 +292,13 @@ struct FileOperationUndoServiceTests {
         let created = root.url.appending(path: "Created", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: created, withIntermediateDirectories: false)
         try Data("keep the exact tree".utf8).write(to: created.appending(path: "child.txt"))
-        let service = FileOperationUndoService(fileSystem: LiveFileSystemAccess())
+        let fileSystem = LiveFileSystemAccess()
+        let service = FileOperationUndoService(fileSystem: fileSystem)
         let recipe = try #require(await service.makeRecipe(
             kind: .createFolder,
-            result: FileOperationResult(outcomes: [
+            result: await authoritativeUndoResult(outcomes: [
                 .succeeded(source: created, destination: created)
-            ]),
+            ], fileSystem: fileSystem),
             allowsUndo: true
         ))
 
@@ -282,6 +312,23 @@ struct FileOperationUndoServiceTests {
         #expect(FileManager.default.fileExists(atPath: created.path) == false)
         #expect(FileManager.default.fileExists(atPath: trashURL.appending(path: "child.txt").path))
     }
+}
+
+private func authoritativeUndoResult(
+    outcomes: [FileOperationItemOutcome],
+    fileSystem: any FileSystemAccess
+) async -> FileOperationResult {
+    var identities: [URL: FileIdentity] = [:]
+    for outcome in outcomes {
+        guard case let .succeeded(_, destination?) = outcome,
+              let identity = try? await fileSystem.identity(of: destination)
+        else { continue }
+        identities[destination] = identity
+    }
+    return FileOperationResult(
+        outcomes: outcomes,
+        undoDestinationIdentities: identities
+    )
 }
 
 private actor UndoProgressCancellationGate {

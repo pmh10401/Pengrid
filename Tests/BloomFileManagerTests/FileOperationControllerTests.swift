@@ -4,6 +4,33 @@ import Testing
 
 @MainActor
 struct FileOperationControllerTests {
+    @Test func archivePreparationPublicationIsLimitedToTenHertzExceptBoundaries() {
+        var gate = ArchiveProgressPublicationGate()
+        let start = ContinuousClock.now
+
+        let initial = gate.shouldPublish(completedCount: 0, totalCount: 20, at: start)
+        let early = gate.shouldPublish(
+            completedCount: 1,
+            totalCount: 20,
+            at: start.advanced(by: .milliseconds(50))
+        )
+        let interval = gate.shouldPublish(
+            completedCount: 2,
+            totalCount: 20,
+            at: start.advanced(by: .milliseconds(100))
+        )
+        let final = gate.shouldPublish(
+            completedCount: 20,
+            totalCount: 20,
+            at: start.advanced(by: .milliseconds(101))
+        )
+
+        #expect(initial)
+        #expect(!early)
+        #expect(interval)
+        #expect(final)
+    }
+
     @Test func compressionUsesTheRequestedArchiveFormat() async {
         let directory = URL(filePath: "/workspace")
         let otherDirectory = URL(filePath: "/other")
