@@ -8,6 +8,10 @@ import Testing
     #expect(AccessibilityIdentifiers.leftPane == "leftPane")
     #expect(AccessibilityIdentifiers.rightPane == "rightPane")
     #expect(AccessibilityIdentifiers.operationStatus == "operationStatus")
+    #expect(AccessibilityIdentifiers.operationCenter == "operationCenter")
+    #expect(AccessibilityIdentifiers.operationCenterActive == "operationCenter.active")
+    #expect(AccessibilityIdentifiers.operationCenterQueue == "operationCenter.queue")
+    #expect(AccessibilityIdentifiers.operationCenterHistory == "operationCenter.history")
     #expect(AccessibilityIdentifiers.conflictSheet == "conflictSheet")
 }
 
@@ -135,6 +139,18 @@ import Testing
         of: ".accessibilityIdentifier(AccessibilityIdentifiers.operationStatus)"
     ) == 2)
 
+    let operationCenter = try source(named: "Views/FileOperationCenterView.swift")
+    #expect(operationCenter.contains("AccessibilityIdentifiers.operationCenter"))
+    #expect(operationCenter.contains("AccessibilityIdentifiers.operationCenterActive"))
+    #expect(operationCenter.contains("AccessibilityIdentifiers.operationCenterQueue"))
+    #expect(operationCenter.contains("AccessibilityIdentifiers.operationCenterHistory"))
+    #expect(operationCenter.contains("controller.pauseActiveJob()"))
+    #expect(operationCenter.contains("controller.resumeActiveJob()"))
+    #expect(operationCenter.contains("controller.cancelActiveJob()"))
+    #expect(operationCenter.contains("controller.cancelQueuedJob(job.id)"))
+    #expect(operationCenter.contains("controller.retryJob(job.id)"))
+    #expect(operationCenter.contains("controller.undoJob(job.id)"))
+
     let conflictSheet = try source(named: "Views/ConflictResolutionSheet.swift")
     #expect(conflictSheet.contains(
         ".accessibilityIdentifier(AccessibilityIdentifiers.conflictSheet)"
@@ -144,6 +160,7 @@ import Testing
     #expect(workspace.contains("@Environment(\\.accessibilityReduceMotion) private var reduceMotion"))
     #expect(workspace.contains("AccessibilityMotionPresentation.allowsNonessentialAnimation("))
     #expect(workspace.contains("transaction.animation = nil"))
+    #expect(workspace.contains("FileOperationCenterView(controller: operationController)"))
 
     let storageWorkspace = try source(
         named: "Views/StorageInspector/StorageInspectorView.swift"

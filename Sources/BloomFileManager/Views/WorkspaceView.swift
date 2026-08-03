@@ -61,7 +61,11 @@ struct WorkspaceView: View {
                 }
             }
 
-            OperationStatusView(controller: operationController)
+            HStack(spacing: 0) {
+                OperationStatusView(controller: operationController)
+                FileOperationCenterView(controller: operationController)
+            }
+            .frame(maxWidth: .infinity, alignment: .trailing)
 
             HStack {
                 Text(workspace.activePaneID == .left ? "Left panel active" : "Right panel active")

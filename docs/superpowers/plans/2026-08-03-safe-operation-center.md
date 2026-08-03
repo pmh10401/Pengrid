@@ -111,10 +111,10 @@
 - Its popover has Active, Queue, and Recent sections with Pause/Resume, Cancel, Retry, and Undo actions only when valid.
 - Display strings contain operation kind, basename-only title, counts, state, and phase—never absolute paths or raw provider metadata.
 
-- [ ] Add presentation tests for every state/action combination, bounded history ordering, sanitized labels, stable identifiers, keyboard focus order, VoiceOver labels, Reduce Motion, and empty state.
-- [ ] Add the popover and wire commands to controller methods.
-- [ ] Ensure progress remains determinate only where a reliable count exists and buttons have explicit accessibility labels/help.
-- [ ] Run view, accessibility, and controller tests; commit `feat: add file operation center interface`.
+- [x] Add presentation tests for every state/action combination, bounded history ordering, sanitized labels, stable identifiers, keyboard focus order, VoiceOver labels, Reduce Motion, and empty state.
+- [x] Add the popover and wire commands to controller methods.
+- [x] Ensure progress remains determinate only where a reliable count exists and buttons have explicit accessibility labels/help.
+- [x] Run view, accessibility, and controller tests; commit `feat: add file operation center interface`.
 
 ### Task 6: Documentation and full verification gate
 
