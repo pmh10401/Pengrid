@@ -142,6 +142,31 @@ import Testing
         #expect(traversalCount.value == 0)
     }
 
+    @Test func legacyQueryWithoutSearchableTermsIsRejectedBeforeTraversal() async throws {
+        let fixture = try TemporaryDirectory()
+        defer { fixture.remove() }
+        try write("report", to: fixture.url.appending(path: "report.txt"))
+        let legacyQuery = try JSONDecoder().decode(
+            SmartSearchQuery.self,
+            from: JSONEncoder().encode(LegacyServiceQueryPayload(
+                text: "---",
+                roots: [fixture.url],
+                includeHidden: false,
+                includePackages: false,
+                includeDirectories: true,
+                maximumResults: 500
+            ))
+        )
+        let traversalCount = LockedCounter()
+
+        await #expect(throws: SmartSearchValidationError.noSearchableTerms) {
+            try await service(traversalHook: { _ in
+                traversalCount.increment()
+            }).search(legacyQuery)
+        }
+        #expect(traversalCount.value == 0)
+    }
+
     @Test func matchingCandidateCollectionStopsAtTheDocumentedHardBudget() async throws {
         let fixture = try TemporaryDirectory()
         defer { fixture.remove() }

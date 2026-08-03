@@ -255,7 +255,7 @@ struct SmartSearchView: View {
                     .focused($savedNameIsFocused)
                     .accessibilityIdentifier(AccessibilityIdentifiers.smartSearchSavedName)
                 Button("Save Search", action: saveCurrentSearch)
-                    .disabled(store.queryText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || store.roots.isEmpty)
+                    .disabled(!store.canSaveCurrentSearch)
                     .accessibilityIdentifier(AccessibilityIdentifiers.smartSearchSave)
             }
         }
@@ -344,7 +344,9 @@ struct SmartSearchView: View {
 
     private func saveCurrentSearch() {
         let name = savedSearchName.trimmingCharacters(in: .whitespacesAndNewlines)
-        _ = store.saveCurrentSearch(named: name.isEmpty ? store.queryText : name)
+        guard store.saveCurrentSearch(named: name.isEmpty ? store.queryText : name) != nil else {
+            return
+        }
         savedSearchName = ""
     }
 

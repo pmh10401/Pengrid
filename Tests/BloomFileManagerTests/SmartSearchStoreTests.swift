@@ -58,6 +58,41 @@ struct SmartSearchStoreTests {
         #expect(store.errorMessage == "Search is too long. Use fewer terms.")
     }
 
+    @Test func queryWithoutSearchableTermsFailsBeforeCallingService() async {
+        let service = ReplacingSearchService()
+        let store = SmartSearchStore(
+            service: service,
+            persistence: WorkspacePersistence(defaults: isolatedDefaults())
+        )
+        store.present(for: URL(filePath: "/search", directoryHint: .isDirectory))
+        store.queryText = "---"
+
+        store.search()
+        await Task.yield()
+
+        #expect(await service.requestCount() == 0)
+        #expect(store.state == .failed)
+        #expect(store.errorMessage == "Search needs a filename, path, or Korean initials.")
+    }
+
+    @Test func invalidQueriesCannotBeSaved() {
+        let store = SmartSearchStore(
+            service: ReplacingSearchService(),
+            persistence: WorkspacePersistence(defaults: isolatedDefaults())
+        )
+        store.present(for: URL(filePath: "/search", directoryHint: .isDirectory))
+
+        for text in [
+            "---",
+            String(repeating: "a", count: SmartSearchQuery.maximumTextScalarCount + 1)
+        ] {
+            store.queryText = text
+            #expect(!store.canSaveCurrentSearch)
+            #expect(store.saveCurrentSearch(named: "Keep this draft") == nil)
+        }
+        #expect(store.savedSearches.isEmpty)
+    }
+
     @Test func cancellationAndFailureProduceVisibleTerminalStates() async {
         let service = CancellingThenFailingSearchService()
         let store = SmartSearchStore(service: service, persistence: WorkspacePersistence(defaults: isolatedDefaults()))

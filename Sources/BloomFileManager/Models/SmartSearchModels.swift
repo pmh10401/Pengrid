@@ -5,6 +5,7 @@ enum SmartSearchValidationError: Error, Equatable, Sendable {
     case missingRoots
     case invalidRoot
     case queryTooComplex
+    case noSearchableTerms
 }
 
 struct SmartSearchQuery: Codable, Equatable, Sendable {
@@ -100,6 +101,9 @@ struct SmartSearchQuery: Codable, Equatable, Sendable {
         if enforceComplexityLimits, preparedPlan == nil {
             throw SmartSearchValidationError.queryTooComplex
         }
+        if enforceComplexityLimits, preparedPlan?.clauses.isEmpty == true {
+            throw SmartSearchValidationError.noSearchableTerms
+        }
 
         self.text = trimmedText
         self.roots = standardizedRoots
@@ -113,6 +117,9 @@ struct SmartSearchQuery: Codable, Equatable, Sendable {
     func executablePlan() throws -> SmartSearchQueryPlan {
         guard let preparedPlan else {
             throw SmartSearchValidationError.queryTooComplex
+        }
+        guard !preparedPlan.clauses.isEmpty else {
+            throw SmartSearchValidationError.noSearchableTerms
         }
         return preparedPlan
     }
@@ -180,7 +187,7 @@ enum SmartSearchRanker {
     static func ranked(_ candidates: [SmartSearchResult], for query: SmartSearchQuery) -> [SmartSearchResult] {
         // The non-throwing entry point keeps pure model callers source-compatible.
         // Search services use the cancellable overload below.
-        guard query.isWithinComplexityLimits else { return [] }
+        guard (try? query.executablePlan()) != nil else { return [] }
         return try! ranked(candidates, for: query, cancellationCheck: {})
     }
 
@@ -492,9 +499,8 @@ enum SmartSearchRanker {
         guard frequency > 0 else { return 0 }
         let k1 = 1.2
         let b = 0.75
-        let normalizedAverageLength = max(1, averageLength)
         return idf * (frequency * (k1 + 1))
-            / (frequency + k1 * (1 - b + b * max(1, length) / normalizedAverageLength))
+            / (frequency + k1 * (1 - b + b * max(1, length) / averageLength))
     }
 
     private static func filenameBonus(token: String, filename: String) -> Double {

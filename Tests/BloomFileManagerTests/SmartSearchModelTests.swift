@@ -61,6 +61,17 @@ import Testing
         #expect(boundary.isWithinComplexityLimits)
     }
 
+    @Test func validationRejectsQueriesWithoutSearchableTerms() {
+        for text in [".", "---", "😀"] {
+            #expect(throws: SmartSearchValidationError.noSearchableTerms) {
+                try SmartSearchQuery(
+                    text: text,
+                    roots: [URL(filePath: "/search/root")]
+                )
+            }
+        }
+    }
+
     @Test func decodedQueriesRunTheSameValidationAndNormalization() throws {
         #expect(throws: SmartSearchValidationError.emptyText) {
             try JSONDecoder().decode(
@@ -286,6 +297,19 @@ import Testing
         let expectedScore = 8.0 + (4.0 * log(4.0 / 3.0))
 
         #expect(abs(result.score - expectedScore) < 0.000_000_001)
+    }
+
+    @Test func literalBM25KeepsSubunitAverageDocumentLength() throws {
+        let query = try SmartSearchQuery(text: "report", roots: [URL(filePath: "/search/root")])
+        let ranked = SmartSearchRanker.ranked([
+            result(name: "report", path: "report"),
+            result(name: "😀", path: "😀")
+        ], for: query)
+        let match = try #require(ranked.first { $0.item.name == "report" })
+        let oneFieldScore = log(2.0) * 2.2 / 3.1
+        let expectedScore = 8.0 + (oneFieldScore * 4.0)
+
+        #expect(abs(match.score - expectedScore) < 0.000_000_001)
     }
 
     @Test func fiftyThousandCandidateRankingCanCancelAfterMergeSortStarts() async throws {
