@@ -12,6 +12,11 @@ import Testing
     #expect(AccessibilityIdentifiers.operationCenterActive == "operationCenter.active")
     #expect(AccessibilityIdentifiers.operationCenterQueue == "operationCenter.queue")
     #expect(AccessibilityIdentifiers.operationCenterHistory == "operationCenter.history")
+    #expect(AccessibilityIdentifiers.operationCenterRecovery == "operationCenter.recovery")
+    #expect(
+        AccessibilityIdentifiers.operationCenterContinueAfterRecovery
+            == "operationCenter.continueAfterRecovery"
+    )
     #expect(AccessibilityIdentifiers.conflictSheet == "conflictSheet")
 }
 
@@ -150,6 +155,8 @@ import Testing
     #expect(operationCenter.contains("controller.cancelQueuedJob(job.id)"))
     #expect(operationCenter.contains("controller.retryJob(job.id)"))
     #expect(operationCenter.contains("controller.undoJob(job.id)"))
+    #expect(operationCenter.contains("AccessibilityIdentifiers.operationCenterRecovery"))
+    #expect(operationCenter.contains("controller.continueAfterRecovery()"))
 
     let conflictSheet = try source(named: "Views/ConflictResolutionSheet.swift")
     #expect(conflictSheet.contains(

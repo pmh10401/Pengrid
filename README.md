@@ -78,6 +78,34 @@ The filename filter works only on the directory listing already loaded in
 memory. It is not recursive or file-content search, and it does not download
 cloud-only files.
 
+## Safe file operation center
+
+Pengrid sends copy, move, Trash, new-folder, rename, compression, extraction,
+and undo work through one first-in, first-out mutation queue. A queued job
+captures the relevant file and destination identities before it waits; if an
+item is replaced or the destination root changes, the job refuses to mutate
+the replacement. The bottom operation-center control shows the current job,
+waiting jobs, and up to 100 newest completed jobs for the current app session.
+History is not written to disk and its labels use item names rather than
+absolute paths.
+
+Pause is cooperative. It takes effect at a safe checkpoint between file items
+or archive phases; Pengrid does not suspend a native archive command that is
+already running. Cancellation likewise finishes the current operation's
+rollback and temporary-file cleanup before the next queued mutation starts.
+If cleanup reports that manual recovery may be needed, automatic queue
+advancement stops and the operation center requires an explicit **Continue
+Queue** action before any waiting mutation can start.
+
+Retry creates a new attempt from the original identity-captured intent. Pengrid
+offers it only when retrying the whole intent cannot repeat an item that already
+succeeded. Undo is deliberately conservative: move, rename, and Trash restore
+require the same file identity and an unoccupied original location; removing a
+new folder, copy, archive, or extracted tree requires its entire no-follow
+fingerprint to remain unchanged. A replacement conflict, later change, missing
+item, or occupied restore path disables or safely refuses undo instead of
+deleting or overwriting data.
+
 ## Archives
 
 Pengrid can create and extract ZIP and TAR-family archives from **File

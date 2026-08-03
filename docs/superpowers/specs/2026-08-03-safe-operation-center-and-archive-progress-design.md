@@ -152,15 +152,14 @@ routes use identified intents.
 
 ## Retry
 
-Retry is available for jobs with failed or cancelled outcomes. It builds a new
+Retry is available for wholly failed or wholly cancelled jobs. It builds a new
 runtime job from the original immutable identified intent and performs the same
 identity checks as the first run. Conflict “apply to all” decisions are not
-reused. Archive destinations are replanned using the original desired basename
-and current occupied names, preserving the existing keep-both rule.
-
-Successful outcomes from a partial job are not executed again. The retry recipe
-contains only failed, skipped-at-error, and cancelled inputs. A skipped item
-caused by an explicit `Skip` conflict decision is not retried automatically.
+reused. A multi-item intent with any successful, recovery-needed, or explicitly
+skipped outcome is not retryable as a whole, because repeating the immutable
+closure could duplicate a completed mutation. Safe subset retry is deferred
+until retry recipes can retain independently captured authority for each failed
+member.
 
 ## Undo
 

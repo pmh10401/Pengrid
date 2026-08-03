@@ -25,6 +25,8 @@ enum AccessibilityIdentifiers {
     static let operationCenterCancelQueued = "operationCenter.cancelQueued"
     static let operationCenterRetry = "operationCenter.retry"
     static let operationCenterUndo = "operationCenter.undo"
+    static let operationCenterRecovery = "operationCenter.recovery"
+    static let operationCenterContinueAfterRecovery = "operationCenter.continueAfterRecovery"
     static let conflictSheet = "conflictSheet"
     static let comparisonWorkspace = "comparisonWorkspace"
     static let comparisonToolbar = "comparisonToolbar"

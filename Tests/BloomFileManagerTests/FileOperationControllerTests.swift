@@ -1087,6 +1087,124 @@ struct FileOperationControllerTests {
         ])
     }
 
+    @Test func recoveryNeededHaltsQueuedMutationsUntilExplicitContinue() async throws {
+        let directory = URL(filePath: "/workspace")
+        let keepURL = directory.appending(path: "keep.bin")
+        let recoveryURL = directory.appending(path: "recovery.bin")
+        let keepFingerprint = ComparisonFingerprint(
+            identity: FileIdentity(entryIdentifier: "keep", resolvedIdentifier: "keep"),
+            byteSize: 1,
+            modifiedAt: Date(timeIntervalSince1970: 100),
+            rawModifiedAt: ComparisonModificationTimestamp(seconds: 100, nanoseconds: 1)
+        )
+        let recoveryFingerprint = ComparisonFingerprint(
+            identity: FileIdentity(
+                entryIdentifier: "recovery",
+                resolvedIdentifier: "recovery"
+            ),
+            byteSize: 1,
+            modifiedAt: Date(timeIntervalSince1970: 100),
+            rawModifiedAt: ComparisonModificationTimestamp(seconds: 100, nanoseconds: 1)
+        )
+        let reader = SuspendingOperationCenterFingerprintReader([
+            keepURL: keepFingerprint,
+            recoveryURL: recoveryFingerprint
+        ])
+        let fileSystem = RecordingFileSystem(
+            existingURLs: [directory, keepURL, recoveryURL],
+            identities: [
+                keepURL: keepFingerprint.identity,
+                recoveryURL: recoveryFingerprint.identity
+            ],
+            forceTrashQuarantineRecovery: true
+        )
+        let controller = FileOperationController(service: FileOperationService(
+            fileSystem: fileSystem,
+            storageFingerprints: reader
+        ))
+        let workspace = WorkspaceState(
+            leftURL: directory,
+            rightURL: URL(filePath: "/elsewhere"),
+            listingService: StubDirectoryListingService(values: [:])
+        )
+        let keep = StorageEntry(
+            relativePath: try StorageRelativePath(components: ["keep.bin"]),
+            url: keepURL,
+            kind: .regularFile,
+            category: .other,
+            fingerprint: keepFingerprint,
+            typeDescription: "File"
+        )
+        let recovery = StorageEntry(
+            relativePath: try StorageRelativePath(components: ["recovery.bin"]),
+            url: recoveryURL,
+            kind: .regularFile,
+            category: .other,
+            fingerprint: recoveryFingerprint,
+            typeDescription: "File"
+        )
+
+        #expect(controller.trashStorageCleanup(
+            [StorageCleanupMutationGroup(keep: keep, trash: [recovery])],
+            workspace: workspace
+        ))
+        await waitUntil { await reader.hasSuspended }
+        #expect(await controller.createFolder(
+            in: directory,
+            named: "After Recovery",
+            workspace: workspace
+        ))
+        #expect(controller.queuedJobs.count == 1)
+
+        await reader.release()
+        await waitUntilIdle(controller)
+
+        #expect(controller.isQueueBlockedByRecovery)
+        #expect(controller.queuedJobs.count == 1)
+        #expect(await !fileSystem.existingURLs.contains(
+            directory.appending(path: "After Recovery", directoryHint: .isDirectory)
+        ))
+        #expect(controller.continueAfterRecovery())
+        await waitUntilQueueIsIdle(controller)
+        #expect(!controller.isQueueBlockedByRecovery)
+        #expect(await fileSystem.existingURLs.contains(
+            directory.appending(path: "After Recovery", directoryHint: .isDirectory)
+        ))
+    }
+
+    @Test func cancellationWhileNewFolderPreflightWaitsDoesNotMutate() async {
+        let directory = URL(filePath: "/workspace")
+        let destination = directory.appending(
+            path: "Cancelled Folder",
+            directoryHint: .isDirectory
+        )
+        let fileSystem = RecordingFileSystem(
+            existingURLs: [directory],
+            suspendExistsOfLastPathComponent: "Cancelled Folder"
+        )
+        let controller = FileOperationController(
+            service: FileOperationService(fileSystem: fileSystem)
+        )
+        let workspace = WorkspaceState(
+            leftURL: directory,
+            rightURL: URL(filePath: "/elsewhere"),
+            listingService: StubDirectoryListingService(values: [:])
+        )
+
+        #expect(await controller.createFolder(
+            in: directory,
+            named: "Cancelled Folder",
+            workspace: workspace
+        ))
+        await waitUntil { await fileSystem.hasSuspendedExists }
+        controller.cancelActiveJob()
+        await fileSystem.releaseSuspendedExists()
+        await waitUntilQueueIsIdle(controller)
+
+        #expect(await !fileSystem.existingURLs.contains(destination))
+        #expect(controller.operationHistory.first?.state == .cancelled)
+    }
+
     @Test func queuedTransferUsesSourceIdentityCapturedBeforeWaiting() async {
         let firstSource = URL(filePath: "/source/first")
         let queuedSource = URL(filePath: "/source/queued")
@@ -1507,6 +1625,14 @@ struct FileOperationControllerTests {
         }
     }
 
+    private func waitUntil(
+        _ condition: @escaping () async -> Bool
+    ) async {
+        while !(await condition()) {
+            await Task.yield()
+        }
+    }
+
     private func waitForPendingConflict(_ controller: FileOperationController) async {
         while controller.pendingConflict == nil {
             await Task.yield()
@@ -1779,5 +1905,36 @@ private actor SequencedListingService: DirectoryListingService {
         guard requestedDirectory == directory else { return ([], false) }
         requestCount += 1
         return requestCount == 1 ? (firstItems, false) : (refreshedItems, true)
+    }
+}
+
+private actor SuspendingOperationCenterFingerprintReader:
+    StorageEntryFingerprintReading {
+    private let fingerprints: [URL: ComparisonFingerprint]
+    private var continuation: CheckedContinuation<Void, Never>?
+    private(set) var hasSuspended = false
+    private var didSuspend = false
+
+    init(_ fingerprints: [URL: ComparisonFingerprint]) {
+        self.fingerprints = fingerprints
+    }
+
+    func fingerprint(of url: URL) async throws -> ComparisonFingerprint {
+        if !didSuspend {
+            didSuspend = true
+            hasSuspended = true
+            await withCheckedContinuation { continuation in
+                self.continuation = continuation
+            }
+        }
+        guard let fingerprint = fingerprints[url] else {
+            throw CocoaError(.fileReadUnknown)
+        }
+        return fingerprint
+    }
+
+    func release() {
+        continuation?.resume()
+        continuation = nil
     }
 }

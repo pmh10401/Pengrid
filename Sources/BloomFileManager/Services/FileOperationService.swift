@@ -216,10 +216,12 @@ actor FileOperationService {
         let startedAt = Date()
         let destination = directory.appending(path: name, directoryHint: .isDirectory)
         do {
+            try Task.checkCancellation()
             try FilenameValidator.validate(name)
             guard await !fileSystem.exists(destination) else {
                 throw CocoaError(.fileWriteFileExists)
             }
+            try Task.checkCancellation()
             let prepared = try await fileSystem.prepareDirectoryHierarchy(
                 root: directory,
                 identifiedBy: directoryIdentity,
@@ -290,11 +292,13 @@ actor FileOperationService {
         defer { accessLeases.forEach { $0.finish() } }
         let startedAt = Date()
         do {
+            try Task.checkCancellation()
             try FilenameValidator.validate(name)
             let destination = source.deletingLastPathComponent().appending(path: name)
             guard await !fileSystem.exists(destination) else {
                 throw CocoaError(.fileWriteFileExists)
             }
+            try Task.checkCancellation()
             try await fileSystem.move(source, identifiedBy: identity, to: destination)
             await logger.record(
                 kind: .rename,

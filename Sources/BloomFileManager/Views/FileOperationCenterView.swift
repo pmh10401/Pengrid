@@ -4,22 +4,28 @@ struct FileOperationCenterPresentation: Equatable, Sendable {
     let hasActiveJob: Bool
     let queuedCount: Int
     let recentCount: Int
+    let isQueueBlockedByRecovery: Bool
 
     init(
         activeJob: FileOperationJobSnapshot?,
         queuedCount: Int,
-        recentCount: Int
+        recentCount: Int,
+        isQueueBlockedByRecovery: Bool
     ) {
         hasActiveJob = activeJob != nil
         self.queuedCount = max(queuedCount, 0)
         self.recentCount = max(recentCount, 0)
+        self.isQueueBlockedByRecovery = isQueueBlockedByRecovery
     }
 
     var isVisible: Bool {
-        hasActiveJob || queuedCount > 0 || recentCount > 0
+        isQueueBlockedByRecovery || hasActiveJob || queuedCount > 0 || recentCount > 0
     }
 
     var compactLabel: String {
+        if isQueueBlockedByRecovery {
+            return "Recovery attention"
+        }
         if hasActiveJob {
             return queuedCount == 0 ? "1 active" : "1 active, \(queuedCount) queued"
         }
@@ -30,7 +36,9 @@ struct FileOperationCenterPresentation: Equatable, Sendable {
     }
 
     var accessibilityLabel: String {
-        "Operation center, \(hasActiveJob ? 1 : 0) active operation, "
+        "Operation center, "
+            + (isQueueBlockedByRecovery ? "recovery attention required, " : "")
+            + "\(hasActiveJob ? 1 : 0) active operation, "
             + "\(queuedCount) queued operations, \(recentCount) recent operations"
     }
 }
@@ -44,7 +52,8 @@ struct FileOperationCenterView: View {
         FileOperationCenterPresentation(
             activeJob: controller.activeJob,
             queuedCount: controller.queuedJobs.count,
-            recentCount: controller.operationHistory.count
+            recentCount: controller.operationHistory.count,
+            isQueueBlockedByRecovery: controller.isQueueBlockedByRecovery
         )
     }
 
@@ -82,6 +91,10 @@ struct FileOperationCenterView: View {
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
+                    if controller.isQueueBlockedByRecovery {
+                        recoverySection
+                    }
+
                     if let activeJob = controller.activeJob {
                         section("Active", identifier: AccessibilityIdentifiers.operationCenterActive) {
                             activeRow(activeJob)
@@ -115,6 +128,30 @@ struct FileOperationCenterView: View {
         }
         .frame(width: 390, height: 430)
         .accessibilityLabel("File operation center")
+    }
+
+    private var recoverySection: some View {
+        section(
+            "Attention",
+            identifier: AccessibilityIdentifiers.operationCenterRecovery
+        ) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("A file operation needs recovery review. Waiting jobs will not start automatically.")
+                    .font(.caption)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("Continue Queue", systemImage: "play.fill") {
+                    controller.continueAfterRecovery()
+                }
+                .controlSize(.small)
+                .accessibilityLabel("Continue file operation queue after recovery review")
+                .accessibilityIdentifier(
+                    AccessibilityIdentifiers.operationCenterContinueAfterRecovery
+                )
+                .help("Continue waiting operations after reviewing recovery guidance")
+            }
+            .padding(10)
+            .background(.orange.opacity(0.14), in: RoundedRectangle(cornerRadius: 8))
+        }
     }
 
     private func section<Content: View>(

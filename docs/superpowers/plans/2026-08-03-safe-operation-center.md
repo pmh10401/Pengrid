@@ -24,11 +24,11 @@
 - `FileOperationJobSnapshot`: id, kind, safe title, item count, state, optional progress, retry/undo availability
 - `FileOperationControl`: `pause()`, `resume()`, `cancel()`, `checkpoint()`
 
-- [ ] Write tests proving snapshots never accept or derive absolute paths, state labels are stable, preparation fractions clamp, and only terminal failed/cancelled jobs expose retry.
-- [ ] Write actor tests proving a paused checkpoint suspends, resume releases every waiter, cancellation releases waiters by throwing, and repeated pause/resume is idempotent.
-- [ ] Run `swift test` filtered to the two new suites and verify RED.
-- [ ] Implement the minimum models and cancellation-safe continuation handling.
-- [ ] Rerun focused tests, `git diff --check`, and commit `feat: model safe operation jobs`.
+- [x] Write tests proving snapshots never accept or derive absolute paths, state labels are stable, preparation fractions clamp, and only terminal failed/cancelled jobs expose retry.
+- [x] Write actor tests proving a paused checkpoint suspends, resume releases every waiter, cancellation releases waiters by throwing, and repeated pause/resume is idempotent.
+- [x] Run `swift test` filtered to the two new suites and verify RED.
+- [x] Implement the minimum models and cancellation-safe continuation handling.
+- [x] Rerun focused tests, `git diff --check`, and commit `feat: model safe operation jobs`.
 
 ### Task 2: Single-worker queue, history, cancellation, pause, and retry
 
@@ -41,12 +41,12 @@
 - Commands: `pauseActiveJob()`, `resumeActiveJob()`, `cancelActiveJob()`, `cancelQueuedJob(_:)`, `retryJob(_:)`
 - Private `PendingFileOperation` retains the immutable identified intent, touched directories, workspace, completion callback, and operation closure.
 
-- [ ] Add gated-operation tests proving FIFO order, exactly one active closure, queued cancellation without execution, active cancellation cleanup before the next job starts, pause at checkpoint, resume, and history trimming to 100 newest entries.
-- [ ] Add retry tests proving the retry is a new job ID, reuses the original immutable intent, and is rejected for successful jobs.
-- [ ] Run the controller suite and verify the current `guard !isRunning` behavior fails the queue tests.
-- [ ] Replace `beginOperation` rejection with enqueue/start-next scheduling. Create one `FileOperationControl` per execution attempt and update snapshots only on MainActor.
-- [ ] Do not start the next job until `completeOperation` has refreshed affected panes and finished cancellation cleanup.
-- [ ] Run focused controller tests, `git diff --check`, and commit `feat: queue and control file operations`.
+- [x] Add gated-operation tests proving FIFO order, exactly one active closure, queued cancellation without execution, active cancellation cleanup before the next job starts, pause at checkpoint, resume, and history trimming to 100 newest entries.
+- [x] Add retry tests proving the retry is a new job ID, reuses the original immutable intent, and is rejected for successful jobs.
+- [x] Run the controller suite and verify the current `guard !isRunning` behavior fails the queue tests.
+- [x] Replace `beginOperation` rejection with enqueue/start-next scheduling. Create one `FileOperationControl` per execution attempt and update snapshots only on MainActor.
+- [x] Do not start the next job until `completeOperation` has refreshed affected panes and finished cancellation cleanup.
+- [x] Run focused controller tests, `git diff --check`, and commit `feat: queue and control file operations`.
 
 ### Task 3: Capture identified intents before queued execution
 
@@ -63,12 +63,12 @@
 - Archive and confirmed-trash jobs retain their existing identified captures.
 - Queueable commands remain enabled while another mutation runs; inline rename remains disabled while a job is active.
 
-- [ ] Add a test that queues a transfer, replaces its source before execution, and expects `identityChanged` failure with no destination mutation.
-- [ ] Add tests proving the destination-root identity is captured before waiting and a replaced destination root fails closed.
-- [ ] Add command-policy tests proving copy/paste, trash, compression, extraction, and new-folder submission can enqueue while active, while rename and text-editing conflicts remain blocked.
-- [ ] Implement asynchronous identified transfer submission and remove all path-only transfer authority from queued closures.
-- [ ] Thread `FileOperationControl.checkpoint()` through materialization progress, file-item progress, and the archive phase callback. Encoding can pause only before the native process launches; it is never process-suspended.
-- [ ] Run transfer, command-policy, archive, and controller suites; commit `feat: capture queued file intents safely`.
+- [x] Add a test that queues a transfer, replaces its source before execution, and expects `identityChanged` failure with no destination mutation.
+- [x] Add tests proving the destination-root identity is captured before waiting and a replaced destination root fails closed.
+- [x] Add command-policy tests proving copy/paste, trash, compression, extraction, and new-folder submission can enqueue while active, while rename and text-editing conflicts remain blocked.
+- [x] Implement asynchronous identified transfer submission and remove all path-only transfer authority from queued closures.
+- [x] Thread `FileOperationControl.checkpoint()` through materialization progress, file-item progress, and the archive phase callback. Encoding can pause only before the native process launches; it is never process-suspended.
+- [x] Run transfer, command-policy, archive, and controller suites; commit `feat: capture queued file intents safely`.
 
 ### Task 4: Conservative undo recipes and Trash result capture
 

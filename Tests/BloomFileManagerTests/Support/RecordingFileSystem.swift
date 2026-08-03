@@ -126,6 +126,7 @@ actor RecordingFileSystem: FileSystemAccess {
     private let suspendExistsOfLastPathComponent: String?
     private let cancelAfterTrashOf: URL?
     private let caseInsensitivePaths: Bool
+    private let forceTrashQuarantineRecovery: Bool
     private var suspendedIdentityContinuation: CheckedContinuation<Void, Never>?
     private var suspendedExistsContinuation: CheckedContinuation<Void, Never>?
     private(set) var hasSuspendedIdentity = false
@@ -165,7 +166,8 @@ actor RecordingFileSystem: FileSystemAccess {
         suspendIdentityOf: URL? = nil,
         suspendExistsOfLastPathComponent: String? = nil,
         cancelAfterTrashOf: URL? = nil,
-        caseInsensitivePaths: Bool = false
+        caseInsensitivePaths: Bool = false,
+        forceTrashQuarantineRecovery: Bool = false
     ) {
         self.existingURLs = existingURLs
         self.existsResponses = existsResponses
@@ -204,6 +206,7 @@ actor RecordingFileSystem: FileSystemAccess {
         self.suspendExistsOfLastPathComponent = suspendExistsOfLastPathComponent
         self.cancelAfterTrashOf = cancelAfterTrashOf
         self.caseInsensitivePaths = caseInsensitivePaths
+        self.forceTrashQuarantineRecovery = forceTrashQuarantineRecovery
     }
 
     func exists(_ url: URL) async -> Bool {
@@ -636,6 +639,29 @@ actor RecordingFileSystem: FileSystemAccess {
         existingURLs.remove(reservation.directory)
         identities.removeValue(forKey: reservation.directory)
         removedURLs.append(reservation.directory)
+    }
+
+    func moveTrashQuarantineAtomically(
+        _ quarantine: StorageTrashQuarantine
+    ) async throws -> URL {
+        if forceTrashQuarantineRecovery {
+            throw StorageTrashAccessError.recoveryRequired
+        }
+        do {
+            try await trash(
+                quarantine.quarantinedURL,
+                identifiedBy: quarantine.identity
+            )
+            try? await removeStagingDirectory(quarantine.reservation)
+            return quarantine.quarantinedURL
+        } catch {
+            do {
+                try await rollbackTrashQuarantine(quarantine)
+            } catch {
+                throw StorageTrashAccessError.recoveryRequired
+            }
+            throw StorageTrashAccessError.failedButRestored
+        }
     }
 
     private func record(_ operation: Operation) throws {

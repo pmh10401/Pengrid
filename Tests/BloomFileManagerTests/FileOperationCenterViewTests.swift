@@ -17,7 +17,8 @@ struct FileOperationCenterViewTests {
         let presentation = FileOperationCenterPresentation(
             activeJob: active,
             queuedCount: 2,
-            recentCount: 4
+            recentCount: 4,
+            isQueueBlockedByRecovery: false
         )
 
         #expect(presentation.isVisible)
@@ -31,7 +32,8 @@ struct FileOperationCenterViewTests {
         let presentation = FileOperationCenterPresentation(
             activeJob: nil,
             queuedCount: 0,
-            recentCount: 1
+            recentCount: 1,
+            isQueueBlockedByRecovery: false
         )
 
         #expect(presentation.isVisible)
@@ -42,9 +44,24 @@ struct FileOperationCenterViewTests {
         let presentation = FileOperationCenterPresentation(
             activeJob: nil,
             queuedCount: 0,
-            recentCount: 0
+            recentCount: 0,
+            isQueueBlockedByRecovery: false
         )
 
         #expect(!presentation.isVisible)
+    }
+
+    @Test func recoveryBlockTakesPriorityInCompactAndAccessibilityLabels() {
+        let presentation = FileOperationCenterPresentation(
+            activeJob: nil,
+            queuedCount: 2,
+            recentCount: 1,
+            isQueueBlockedByRecovery: true
+        )
+
+        #expect(presentation.compactLabel == "Recovery attention")
+        #expect(presentation.accessibilityLabel
+            == "Operation center, recovery attention required, 0 active operation, "
+                + "2 queued operations, 1 recent operations")
     }
 }

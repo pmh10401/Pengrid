@@ -44,6 +44,7 @@ final class FileOperationController {
     private(set) var queuedJobs: [FileOperationJobSnapshot] = []
     private(set) var operationHistory: [FileOperationJobSnapshot] = []
     private(set) var isPaused = false
+    private(set) var isQueueBlockedByRecovery = false
 
     var progress: FileOperationProgress? {
         guard case let .operating(progress) = stage else { return nil }
@@ -127,6 +128,14 @@ final class FileOperationController {
             Task { await activeControl.cancel() }
         }
         resolvePendingConflict(.cancel, applyToAll: false)
+    }
+
+    @discardableResult
+    func continueAfterRecovery() -> Bool {
+        guard isQueueBlockedByRecovery else { return false }
+        isQueueBlockedByRecovery = false
+        startNextOperationIfNeeded()
+        return true
     }
 
     func pauseActiveJob() async {
@@ -723,14 +732,19 @@ final class FileOperationController {
                     identifiedBy: directoryIdentity,
                     named: name
                 )
-                if renamePane != nil {
+                if renamePane != nil,
+                   let createdIdentity = try? await service.identity(of: createdURL) {
                     renameCapture.store(IdentifiedFileRequest(
                         url: createdURL,
-                        identity: try await service.identity(of: createdURL)
+                        identity: createdIdentity
                     ))
                 }
                 return FileOperationResult(outcomes: [
                     .succeeded(source: createdURL, destination: createdURL)
+                ])
+            } catch is CancellationError {
+                return FileOperationResult(outcomes: [
+                    .cancelled(source: proposedURL)
                 ])
             } catch {
                 return FileOperationResult(outcomes: [
@@ -757,6 +771,10 @@ final class FileOperationController {
                 let destination = try await service.rename(source, to: name)
                 return FileOperationResult(outcomes: [
                     .succeeded(source: source, destination: destination)
+                ])
+            } catch is CancellationError {
+                return FileOperationResult(outcomes: [
+                    .cancelled(source: source)
                 ])
             } catch {
                 return FileOperationResult(outcomes: [
@@ -810,6 +828,10 @@ final class FileOperationController {
                 )
                 return FileOperationResult(outcomes: [
                     .succeeded(source: source, destination: destination)
+                ])
+            } catch is CancellationError {
+                return FileOperationResult(outcomes: [
+                    .cancelled(source: source)
                 ])
             } catch {
                 return FileOperationResult(outcomes: [
@@ -948,7 +970,10 @@ final class FileOperationController {
     }
 
     private func startNextOperationIfNeeded() {
-        guard activeOperation == nil, !pendingOperations.isEmpty else { return }
+        guard activeOperation == nil,
+              !isQueueBlockedByRecovery,
+              !pendingOperations.isEmpty
+        else { return }
         let pending = pendingOperations.removeFirst()
         queuedJobs.removeAll { $0.id == pending.id }
         invalidateUndoRecipes(touching: pending.touchedDirectories)
@@ -971,12 +996,21 @@ final class FileOperationController {
 
         operationTask = Task { [weak self] in
             guard let self else { return }
-            try? await control.checkpoint()
-            let result = await pending.operation()
+            let execution: (result: FileOperationResult, cancelledBeforeStart: Bool)
+            do {
+                try await control.checkpoint()
+                execution = (await pending.operation(), false)
+            } catch {
+                execution = (FileOperationResult(outcomes: []), true)
+            }
             let completionTask = Task { @MainActor [weak self] in
                 guard let self else { return }
-                await self.completeOperation(with: result, pending: pending)
-                pending.onCompletion?(result)
+                await self.completeOperation(
+                    with: execution.result,
+                    pending: pending,
+                    cancelledBeforeStart: execution.cancelledBeforeStart
+                )
+                pending.onCompletion?(execution.result)
                 self.startNextOperationIfNeeded()
             }
             await completionTask.value
@@ -1041,7 +1075,8 @@ final class FileOperationController {
 
     private func completeOperation(
         with result: FileOperationResult,
-        pending: PendingFileOperation
+        pending: PendingFileOperation,
+        cancelledBeforeStart: Bool = false
     ) async {
         lastResult = result
         if let progress {
@@ -1055,15 +1090,17 @@ final class FileOperationController {
             in: pending.workspace,
             touching: pending.touchedDirectories
         )
-        let completedState = terminalState(for: result)
-        let canRetry = !result.outcomes.isEmpty && result.outcomes.allSatisfy {
+        let completedState: FileOperationJobState = cancelledBeforeStart
+            ? .cancelled
+            : terminalState(for: result)
+        let canRetry = cancelledBeforeStart || (!result.outcomes.isEmpty && result.outcomes.allSatisfy {
             switch $0 {
             case .failed, .cancelled:
                 true
             case .succeeded, .recoveryNeeded, .skipped:
                 false
             }
-        }
+        })
         let recipe: FileOperationUndoRecipe?
         if completedState == .succeeded {
             recipe = await undoService.makeRecipe(
@@ -1083,6 +1120,12 @@ final class FileOperationController {
             canUndo: recipe != nil,
             canRetry: canRetry
         ))
+        if result.outcomes.contains(where: {
+            if case .recoveryNeeded = $0 { return true }
+            return false
+        }) {
+            isQueueBlockedByRecovery = true
+        }
         activeJob = nil
         activeOperation = nil
         activeControl = nil
