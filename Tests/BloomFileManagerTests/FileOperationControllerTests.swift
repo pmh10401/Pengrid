@@ -187,7 +187,7 @@ struct FileOperationControllerTests {
         ])
     }
 
-    @Test func extractionKeepsSelectedZIPDisplayNameAcrossInitialAndRealServiceProgress() async throws {
+    @Test func extractionKeepsSelectedZIPDisplayNameAcrossEveryServicePhase() async throws {
         let root = try TemporaryDirectory()
         defer { root.remove() }
         let source = root.url.appending(path: "provider-token")
@@ -239,11 +239,20 @@ struct FileOperationControllerTests {
 
         await archiveService.proceed()
         await waitUntilIdle(controller)
-        #expect(controller.stage == expectedStage)
+        #expect(controller.stage == .archiving(ArchiveOperationProgress(
+            kind: .extract,
+            currentDisplayName: "Backup.zip",
+            phase: .publishing
+        )))
         #expect(await archiveService.recordedProgress() == [
             ArchiveOperationProgress(
                 kind: .extract,
                 currentDisplayName: "Backup.zip"
+            ),
+            ArchiveOperationProgress(
+                kind: .extract,
+                currentDisplayName: "Backup.zip",
+                phase: .publishing
             )
         ])
         #expect(FileManager.default.fileExists(
@@ -1102,7 +1111,7 @@ private actor RecordingArchiveOperator: ArchiveOperating {
 
     func perform(
         _ requests: [ArchiveRequest],
-        progress: ArchiveProgressHandler
+        progress: @escaping ArchiveProgressHandler
     ) async -> FileOperationResult {
         self.requests.append(contentsOf: requests)
         return FileOperationResult(outcomes: requests.map { request in
@@ -1150,7 +1159,7 @@ private actor GatedControllerArchiveOperator: ArchiveOperating {
 
     func perform(
         _ requests: [ArchiveRequest],
-        progress: ArchiveProgressHandler
+        progress: @escaping ArchiveProgressHandler
     ) async -> FileOperationResult {
         hasStarted = true
         let waiters = startWaiters

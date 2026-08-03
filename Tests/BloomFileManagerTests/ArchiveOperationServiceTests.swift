@@ -73,6 +73,94 @@ struct ArchiveOperationServiceTests {
         #expect(await runner.invocations.first?.format == .tarGzip)
     }
 
+    @Test func compressionReportsRunnerPhasesBeforePublishing() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let firstSource = root.url.appending(path: "First.txt")
+        let secondSource = root.url.appending(path: "Second.txt")
+        let destination = root.url.appending(path: "Archive.zip")
+        try Data("first".utf8).write(to: firstSource)
+        try Data("second".utf8).write(to: secondSource)
+        let runnerPhases: [ArchiveOperationPhase] = [
+            .preparingSources(completedCount: 0, totalCount: 2),
+            .preparingSources(completedCount: 1, totalCount: 2),
+            .preparingSources(completedCount: 2, totalCount: 2),
+            .encoding
+        ]
+        let runner = RecordingArchiveCommandRunner(phases: runnerPhases) {
+            _, _, _, stagedDestination in
+            try Data("archive".utf8).write(to: stagedDestination)
+        }
+        let service = ArchiveOperationService(
+            fileSystem: LiveFileSystemAccess(),
+            commandRunner: runner
+        )
+        let request = ArchiveRequest(
+            kind: .compress,
+            verifiedSources: [firstSource, secondSource],
+            finalDestination: destination
+        )
+        let recorder = ArchiveProgressRecorder()
+
+        let result = await service.perform([request]) { update in
+            await recorder.record(update)
+        }
+
+        let expected = runnerPhases.map { phase in
+            ArchiveOperationProgress(
+                kind: .compress,
+                currentDisplayName: "Archive.zip",
+                format: .zip,
+                phase: phase
+            )
+        } + [
+            ArchiveOperationProgress(
+                kind: .compress,
+                currentDisplayName: "Archive.zip",
+                format: .zip,
+                phase: .publishing
+            )
+        ]
+        #expect(await recorder.values == expected)
+        #expect(result.outcomes.count == 1)
+    }
+
+    @Test func commandFailureNeverReportsPublishing() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let source = root.url.appending(path: "Source.txt")
+        let destination = root.url.appending(path: "Archive.zip")
+        try Data("source".utf8).write(to: source)
+        let runner = RecordingArchiveCommandRunner(phases: [.encoding]) {
+            _, _, _, _ in
+            throw ArchiveServiceTestError.commandFailed
+        }
+        let service = ArchiveOperationService(
+            fileSystem: LiveFileSystemAccess(),
+            commandRunner: runner
+        )
+        let request = ArchiveRequest(
+            kind: .compress,
+            verifiedSources: [source],
+            finalDestination: destination
+        )
+        let recorder = ArchiveProgressRecorder()
+
+        let result = await service.perform([request]) { update in
+            await recorder.record(update)
+        }
+
+        #expect(await recorder.values == [
+            ArchiveOperationProgress(
+                kind: .compress,
+                currentDisplayName: "Archive.zip",
+                format: .zip,
+                phase: .encoding
+            )
+        ])
+        #expect(result.outcomes.count == 1)
+    }
+
     @Test func extractionPublishesCompletedDirectoryAfterRunnerSuccess() async throws {
         let root = try TemporaryDirectory()
         defer { root.remove() }
@@ -450,9 +538,14 @@ private actor RecordingArchiveCommandRunner: ArchiveCommandRunning {
 
     private(set) var invocations: [ArchiveCommandInvocation] = []
     var invocationCount: Int { invocations.count }
+    private let phases: [ArchiveOperationPhase]
     private let handler: Handler
 
-    init(handler: @escaping Handler) {
+    init(
+        phases: [ArchiveOperationPhase] = [],
+        handler: @escaping Handler
+    ) {
+        self.phases = phases
         self.handler = handler
     }
 
@@ -469,6 +562,33 @@ private actor RecordingArchiveCommandRunner: ArchiveCommandRunning {
             destination: destination
         ))
         try await handler(kind, format, sources, destination)
+    }
+
+    func run(
+        kind: ArchiveOperationKind,
+        format: ArchiveFormat,
+        sources: [URL],
+        destination: URL,
+        progress: @escaping ArchiveCommandProgressHandler
+    ) async throws {
+        invocations.append(ArchiveCommandInvocation(
+            kind: kind,
+            format: format,
+            sources: sources,
+            destination: destination
+        ))
+        for phase in phases {
+            await progress(phase)
+        }
+        try await handler(kind, format, sources, destination)
+    }
+}
+
+private actor ArchiveProgressRecorder {
+    private(set) var values: [ArchiveOperationProgress] = []
+
+    func record(_ progress: ArchiveOperationProgress) {
+        values.append(progress)
     }
 }
 

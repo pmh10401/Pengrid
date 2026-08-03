@@ -6,7 +6,7 @@ typealias ArchiveProgressHandler =
 protocol ArchiveOperating: Sendable {
     func perform(
         _ requests: [ArchiveRequest],
-        progress: ArchiveProgressHandler
+        progress: @escaping ArchiveProgressHandler
     ) async -> FileOperationResult
 }
 
@@ -27,7 +27,7 @@ actor ArchiveOperationService: ArchiveOperating {
 
     func perform(
         _ requests: [ArchiveRequest],
-        progress: ArchiveProgressHandler = { _ in }
+        progress: @escaping ArchiveProgressHandler = { _ in }
     ) async -> FileOperationResult {
         var outcomes: [FileOperationItemOutcome] = []
 
@@ -45,12 +45,7 @@ actor ArchiveOperationService: ArchiveOperating {
                 defer { accessLeases.forEach { $0.finish() } }
 
                 try validate(request)
-                await progress(ArchiveOperationProgress(
-                    kind: request.kind,
-                    currentDisplayName: request.progressDisplayName,
-                    format: request.format
-                ))
-                try await perform(request)
+                try await perform(request, progress: progress)
                 outcomes.append(.succeeded(
                     source: source,
                     destination: request.finalDestination
@@ -83,7 +78,10 @@ actor ArchiveOperationService: ArchiveOperating {
         return FileOperationResult(outcomes: outcomes)
     }
 
-    private func perform(_ request: ArchiveRequest) async throws {
+    private func perform(
+        _ request: ArchiveRequest,
+        progress: @escaping ArchiveProgressHandler
+    ) async throws {
         let reservation = try await fileSystem.reserveStagingDirectory(
             beside: request.finalDestination
         )
@@ -96,12 +94,25 @@ actor ArchiveOperationService: ArchiveOperating {
                 format: request.format,
                 sources: request.verifiedSources,
                 destination: reservation.item
-            )
+            ) { phase in
+                await progress(ArchiveOperationProgress(
+                    kind: request.kind,
+                    currentDisplayName: request.progressDisplayName,
+                    format: request.format,
+                    phase: phase
+                ))
+            }
             try Task.checkCancellation()
             guard await fileSystem.exists(reservation.item) else {
                 throw ArchiveServiceError.missingStagedOutput
             }
             try Task.checkCancellation()
+            await progress(ArchiveOperationProgress(
+                kind: request.kind,
+                currentDisplayName: request.progressDisplayName,
+                format: request.format,
+                phase: .publishing
+            ))
             try await fileSystem.moveExclusively(
                 reservation.item,
                 to: request.finalDestination
