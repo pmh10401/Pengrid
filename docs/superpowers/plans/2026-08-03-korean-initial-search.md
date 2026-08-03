@@ -14,8 +14,10 @@
 - Treat compatibility jamo and modern choseong jamo as equivalent through an explicit mapping; do not apply global NFKC.
 - Normalize document text to NFC before deriving initials.
 - Initial clauses match consecutive syllable-run initials or consecutive run-head initials; arbitrary subsequences are forbidden.
+- A segment is a maximal sequence of Unicode letters or decimal digits; every other scalar ends the segment, and a segment without supported Hangul ends the current run-head group.
 - Query clauses use AND semantics, including mixed input such as `ㅎㄱ report` and adjacent input such as `2026ㅎㄱ`.
 - Literal-only candidate membership, BM25 scoring, filename bonuses, and deterministic path ordering must remain unchanged.
+- Initial ranking compares weakest-first evidence tuples before combined literal/virtual-field BM25 relevance and the existing path tie-break.
 - Keep search local and metadata-only; do not add network calls, materialization, content reads, persistent indexes, or unbounded caches.
 - Preserve the 50,000 candidate hard bound, 2,000 result hard bound, progress reporting, and cancellation checks.
 - Do not change `SmartSearchQuery`, `SmartSearchRecord`, or saved-search persistence schemas.
@@ -170,31 +172,28 @@ Run the Task 1 suite again. Expected: compilation fails because `match(plan:file
 Add:
 
 ```swift
-enum SmartSearchInitialField: Int, Sendable, Equatable { case relativePath, filename }
-enum SmartSearchInitialProjection: Int, Sendable, Equatable { case runHeads, syllableRun, literal }
-enum SmartSearchInitialRelation: Int, Sendable, Equatable { case contains, prefix, exact }
+enum SmartSearchInitialField: Int, Sendable, Equatable { case relativePath = 1, filename = 2 }
+enum SmartSearchInitialRepresentation: Int, Sendable, Equatable { case runHeads = 1, syllableRun = 2, literal = 3 }
+enum SmartSearchInitialRelation: Int, Sendable, Equatable { case contains = 1, prefix = 2, exact = 3 }
+
+struct SmartSearchInitialEvidenceKey: Sendable, Equatable, Comparable {
+    let field: SmartSearchInitialField
+    let representation: SmartSearchInitialRepresentation
+    let relation: SmartSearchInitialRelation
+
+    static func < (lhs: Self, rhs: Self) -> Bool {
+        if lhs.field != rhs.field { return lhs.field.rawValue < rhs.field.rawValue }
+        if lhs.representation != rhs.representation {
+            return lhs.representation.rawValue < rhs.representation.rawValue
+        }
+        return lhs.relation.rawValue < rhs.relation.rawValue
+    }
+}
 
 struct SmartSearchInitialEvidence: Sendable, Equatable {
-    let field: SmartSearchInitialField
-    let projection: SmartSearchInitialProjection
-    let relation: SmartSearchInitialRelation
-    let start: Int
-    let spanLength: Int
-    var quality: Int {
-        let fieldBase = field == .filename ? 1_000 : 0
-        let matchRank = switch (projection, relation) {
-        case (.literal, .exact): 900
-        case (.literal, .prefix): 850
-        case (.literal, .contains): 820
-        case (.syllableRun, .exact): 800
-        case (.syllableRun, .prefix): 700
-        case (.runHeads, .exact): 600
-        case (.runHeads, .prefix): 500
-        case (.syllableRun, .contains): 400
-        case (.runHeads, .contains): 300
-        }
-        return fieldBase + matchRank
-    }
+    let key: SmartSearchInitialEvidenceKey
+    let weightedTermFrequency: Double
+    let documentLength: Int
 }
 
 struct SmartSearchMatch: Sendable, Equatable {
@@ -206,11 +205,11 @@ struct SmartSearchMatch: Sendable, Equatable {
 
 1. NFC-normalize filename and relative path.
 2. Evaluate literal clauses with the current folded relative-path `contains` rule.
-3. Derive syllable runs and run heads only when `plan.containsInitials` is true.
-4. For every initial clause choose exactly one best evidence by field, projection, relation, shorter span, then earlier start.
+3. Derive explicit-initial runs, syllable runs, and run-head groups only when `plan.containsInitials` is true.
+4. For every initial clause choose exactly one best evidence by lexicographic `(field, representation, relation)` order.
 5. Return `nil` if any clause fails; otherwise return one evidence per initial clause.
 
-Use Hangul arithmetic only for U+AC00...U+D7A3. Segment heads reset on non-alphanumeric separators, including whitespace, `/`, `-`, `_`, and `.`. Check literal compatibility-jamo text before derived initials so a file literally named `ㅎㄱ` receives `.literal/.exact` evidence.
+Use Hangul arithmetic only for U+AC00...U+D7A3. A segment is a maximal sequence of Unicode letters or decimal digits. Non-alphanumeric scalars terminate a segment; a segment with no supported Hangul syllable or explicit initial ends the current run-head group. Thus `구글/드라이브` yields `ㄱㄷ`, `구글/2026/드라이브` yields separate `ㄱ` and `ㄷ` groups, and `구글Drive드라이브` contributes one head `ㄱ`. Check canonicalized explicit-initial runs before derived initials so a file literally named `ㅎㄱ` receives `.literal/.exact` evidence. Record TF `1.0` per explicit/syllable occurrence and `0.5` per run-head occurrence, plus the selected field's supported-initial document length.
 
 - [ ] **Step 8: Run Task 1 tests, mutation-check boundaries, and commit**
 
@@ -378,26 +377,23 @@ Rank prepared candidates with an internal scored tuple:
 ```swift
 private struct SmartSearchRankedCandidate {
     let result: SmartSearchResult
-    let weakestInitialQuality: Int
-    let totalInitialQuality: Int
-    let totalInitialSpan: Int
-    let totalInitialStart: Int
+    let weakestFirstEvidence: [SmartSearchInitialEvidenceKey]
+    let initialScore: Double
     let literalScore: Double
 }
 ```
 
 For queries containing initial clauses, compare in this exact order:
 
-1. `weakestInitialQuality` descending;
-2. `totalInitialQuality` descending;
-3. `totalInitialSpan` ascending;
-4. `totalInitialStart` ascending;
-5. existing `literalScore` descending;
-6. existing localized standardized path ordering;
-7. raw standardized path; and
-8. relative path.
+1. initial evidence keys sorted weakest-first, compared lexicographically with higher `(field, representation, relation)` values first;
+2. `literalScore + initialScore` descending;
+3. existing localized standardized path ordering;
+4. raw standardized path; and
+5. relative path.
 
-For literal-only plans, execute the current BM25 and filename bonus calculations and current tie-break without adding or comparing initial fields. Set `SmartSearchResult.score` to the non-negative literal score plus a bounded evidence bonus for initial queries, while tests use relative ordering rather than private constants.
+Compute initial relevance as a virtual BM25 field using the existing `k1 = 1.2`, `b = 0.75`, and IDF formula. Explicit-initial and syllable-run occurrences contribute TF `1.0`; run-head occurrences contribute TF `0.5`; filename TF is multiplied by `3`. Use the selected field's supported-initial count, clamped to at least `1`, as document length. For each clause and field, document frequency is the count of prepared candidates with matching evidence in that field. Add virtual-field BM25 to the unchanged literal score only after evidence arrays compare equal.
+
+For literal-only plans, execute the current BM25 and filename bonus calculations and current tie-break without preparing or comparing initial fields. Set `SmartSearchResult.score` to the non-negative combined relevance for initial queries, while tests assert ordering rather than private numeric constants.
 
 Keep `ranked(_:for:)` source-compatible by preparing match evidence internally and dropping candidates that do not match the compiled plan. The service overload must consume its already-prepared candidates so it does not normalize each path twice.
 
@@ -411,7 +407,7 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test --no-paralle
 git diff --check
 ```
 
-Verify that cancellation during traversal, feature preparation, scoring, and merge sorting still throws `CancellationError` and that reversing candidates cannot change equal-score output.
+Verify that cancellation during traversal, feature preparation, scoring, and merge sorting still throws `CancellationError` and that reversing candidates cannot change equal-score output. Add an analyzer step hook used only for deterministic work counting: doubling a synthetic input must require no more than `2x + a fixed setup constant` scalar steps, and a 50,000-candidate cancellation case must stay within the existing candidate bound.
 
 Commit:
 
