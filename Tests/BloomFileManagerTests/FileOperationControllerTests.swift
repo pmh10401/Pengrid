@@ -854,7 +854,7 @@ struct FileOperationControllerTests {
         let directory = URL(filePath: "/workspace")
         let original = directory.appending(path: "Original")
         let renamed = directory.appending(path: "Renamed")
-        let fileSystem = RecordingFileSystem(existingURLs: [original])
+        let fileSystem = RecordingFileSystem(existingURLs: [directory, original])
         let controller = FileOperationController(
             service: FileOperationService(fileSystem: fileSystem)
         )
@@ -866,7 +866,7 @@ struct FileOperationControllerTests {
         )
         await workspace.loadInitialDirectories()
 
-        controller.createFolder(in: directory, named: "New Folder", workspace: workspace)
+        await controller.createFolder(in: directory, named: "New Folder", workspace: workspace)
         await waitUntilIdle(controller)
         #expect(controller.lastResult == FileOperationResult(outcomes: [
             .succeeded(
@@ -909,7 +909,7 @@ struct FileOperationControllerTests {
         await workspace.loadInitialDirectories()
         var rowWasVisibleAtCompletion = false
 
-        controller.createFolder(
+        await controller.createFolder(
             in: directory,
             named: "New Folder",
             workspace: workspace,
@@ -1057,12 +1057,12 @@ struct FileOperationControllerTests {
             workspace: workspace
         ))
         await waitForPendingConflict(controller)
-        #expect(controller.createFolder(
+        #expect(await controller.createFolder(
             in: destinationDirectory,
             named: "Second",
             workspace: workspace
         ))
-        #expect(controller.createFolder(
+        #expect(await controller.createFolder(
             in: destinationDirectory,
             named: "Third",
             workspace: workspace
@@ -1181,6 +1181,53 @@ struct FileOperationControllerTests {
         #expect(controller.operationHistory.first?.state == .failed)
     }
 
+    @Test func queuedCreateFolderUsesDirectoryIdentityCapturedBeforeWaiting() async {
+        let firstSource = URL(filePath: "/source/first")
+        let destinationDirectory = URL(filePath: "/destination", directoryHint: .isDirectory)
+        let firstCollision = destinationDirectory.appending(path: "first")
+        let queuedFolder = destinationDirectory.appending(
+            path: "Queued Folder",
+            directoryHint: .isDirectory
+        )
+        let fileSystem = RecordingFileSystem(
+            existingURLs: [firstSource, destinationDirectory, firstCollision]
+        )
+        let controller = FileOperationController(
+            service: FileOperationService(fileSystem: fileSystem)
+        )
+        let workspace = WorkspaceState(
+            leftURL: destinationDirectory,
+            rightURL: URL(filePath: "/elsewhere"),
+            listingService: StubDirectoryListingService(values: [:])
+        )
+        await controller.runTransfer(
+            [firstSource],
+            to: destinationDirectory,
+            mode: .copy,
+            workspace: workspace
+        )
+        await waitForPendingConflict(controller)
+
+        #expect(await controller.createFolder(
+            in: destinationDirectory,
+            named: "Queued Folder",
+            workspace: workspace
+        ))
+        await fileSystem.replaceIdentity(
+            at: destinationDirectory,
+            with: FileIdentity(
+                entryIdentifier: "replacement-root-entry",
+                resolvedIdentifier: "replacement-root-resolved"
+            )
+        )
+        controller.resolvePendingConflict(.skip, applyToAll: false)
+        await waitUntilQueueIsIdle(controller)
+
+        #expect(await fileSystem.existingURLs.contains(queuedFolder) == false)
+        #expect(controller.operationHistory.first?.kind == .createFolder)
+        #expect(controller.operationHistory.first?.state == .failed)
+    }
+
     @Test func queuedJobCanBeCancelledWithoutExecuting() async {
         let source = URL(filePath: "/source/first")
         let destinationDirectory = URL(filePath: "/destination")
@@ -1204,7 +1251,7 @@ struct FileOperationControllerTests {
             workspace: workspace
         ))
         await waitForPendingConflict(controller)
-        #expect(controller.createFolder(
+        #expect(await controller.createFolder(
             in: destinationDirectory,
             named: "Never Created",
             workspace: workspace
@@ -1271,7 +1318,7 @@ struct FileOperationControllerTests {
             listingService: StubDirectoryListingService(values: [:])
         )
 
-        controller.createFolder(in: directory, named: "Existing", workspace: workspace)
+        await controller.createFolder(in: directory, named: "Existing", workspace: workspace)
         await waitUntilQueueIsIdle(controller)
         let firstAttempt = controller.operationHistory[0]
         #expect(firstAttempt.state == .failed)
@@ -1282,10 +1329,135 @@ struct FileOperationControllerTests {
         #expect(controller.operationHistory.count == 2)
         #expect(controller.operationHistory[0].id != controller.operationHistory[1].id)
 
-        controller.createFolder(in: directory, named: "Existing", workspace: workspace)
+        await controller.createFolder(in: directory, named: "Existing", workspace: workspace)
         await waitUntilQueueIsIdle(controller)
         #expect(controller.operationHistory.count == 2)
         #expect(!controller.operationHistory.contains { $0.id == firstAttempt.id })
+    }
+
+    @Test func successfulCopyExposesUndoAndRunsItThroughTheSameQueue() async throws {
+        let source = URL(filePath: "/source/Report.txt")
+        let destinationDirectory = URL(filePath: "/destination", directoryHint: .isDirectory)
+        let copied = destinationDirectory.appending(path: source.lastPathComponent)
+        let fileSystem = RecordingFileSystem(existingURLs: [source, destinationDirectory])
+        let controller = FileOperationController(
+            service: FileOperationService(fileSystem: fileSystem)
+        )
+        let workspace = WorkspaceState(
+            leftURL: destinationDirectory,
+            rightURL: URL(filePath: "/elsewhere"),
+            listingService: StubDirectoryListingService(values: [:])
+        )
+
+        #expect(await controller.runTransfer(
+            [source],
+            to: destinationDirectory,
+            mode: .copy,
+            workspace: workspace
+        ))
+        await waitUntilQueueIsIdle(controller)
+        let copyJob = try #require(controller.operationHistory.first)
+        #expect(copyJob.canUndo)
+        #expect(await fileSystem.existingURLs.contains(copied))
+
+        #expect(controller.undoJob(copyJob.id))
+        #expect(controller.activeJob?.kind == .undo)
+        await waitUntilQueueIsIdle(controller)
+
+        #expect(await fileSystem.existingURLs.contains(copied) == false)
+        #expect(controller.operationHistory.first?.kind == .undo)
+        #expect(controller.operationHistory.first?.state == .succeeded)
+        #expect(controller.operationHistory.first { $0.id == copyJob.id }?.canUndo == false)
+    }
+
+    @Test func replacementConflictNeverExposesUndo() async throws {
+        let source = URL(filePath: "/source/Report.txt")
+        let destinationDirectory = URL(filePath: "/destination", directoryHint: .isDirectory)
+        let existing = destinationDirectory.appending(path: source.lastPathComponent)
+        let fileSystem = RecordingFileSystem(
+            existingURLs: [source, destinationDirectory, existing]
+        )
+        let controller = FileOperationController(
+            service: FileOperationService(fileSystem: fileSystem)
+        )
+        let workspace = WorkspaceState(
+            leftURL: destinationDirectory,
+            rightURL: URL(filePath: "/elsewhere"),
+            listingService: StubDirectoryListingService(values: [:])
+        )
+
+        #expect(await controller.runTransfer(
+            [source],
+            to: destinationDirectory,
+            mode: .copy,
+            workspace: workspace
+        ))
+        await waitForPendingConflict(controller)
+        controller.resolvePendingConflict(.replace, applyToAll: false)
+        await waitUntilQueueIsIdle(controller)
+
+        let job = try #require(controller.operationHistory.first)
+        #expect(job.state == .succeeded)
+        #expect(job.canUndo == false)
+        #expect(controller.undoJob(job.id) == false)
+    }
+
+    @Test func changedCopyMakesQueuedUndoFailClosedAndRemainInHistory() async throws {
+        let source = URL(filePath: "/source/Notes.md")
+        let destinationDirectory = URL(filePath: "/destination", directoryHint: .isDirectory)
+        let copied = destinationDirectory.appending(path: source.lastPathComponent)
+        let fileSystem = RecordingFileSystem(existingURLs: [source, destinationDirectory])
+        let controller = FileOperationController(
+            service: FileOperationService(fileSystem: fileSystem)
+        )
+        let workspace = WorkspaceState(
+            leftURL: destinationDirectory,
+            rightURL: URL(filePath: "/elsewhere"),
+            listingService: StubDirectoryListingService(values: [:])
+        )
+        await controller.runTransfer(
+            [source],
+            to: destinationDirectory,
+            mode: .copy,
+            workspace: workspace
+        )
+        await waitUntilQueueIsIdle(controller)
+        let copyJob = try #require(controller.operationHistory.first)
+        await fileSystem.mutateContents(at: copied)
+
+        #expect(controller.undoJob(copyJob.id))
+        await waitUntilQueueIsIdle(controller)
+
+        #expect(await fileSystem.existingURLs.contains(copied))
+        #expect(controller.operationHistory.first?.kind == .undo)
+        #expect(controller.operationHistory.first?.state == .failed)
+        #expect(controller.operationHistory.first?.canRetry == false)
+        #expect(controller.operationHistory.first { $0.id == copyJob.id }?.canUndo == false)
+    }
+
+    @Test func laterMutationInTheSameDirectoryInvalidatesAnOlderUndoRecipe() async throws {
+        let directory = URL(filePath: "/workspace", directoryHint: .isDirectory)
+        let fileSystem = RecordingFileSystem(existingURLs: [directory])
+        let controller = FileOperationController(
+            service: FileOperationService(fileSystem: fileSystem)
+        )
+        let workspace = WorkspaceState(
+            leftURL: directory,
+            rightURL: URL(filePath: "/elsewhere"),
+            listingService: StubDirectoryListingService(values: [:])
+        )
+
+        await controller.createFolder(in: directory, named: "First", workspace: workspace)
+        await waitUntilQueueIsIdle(controller)
+        let first = try #require(controller.operationHistory.first)
+        #expect(first.canUndo)
+
+        await controller.createFolder(in: directory, named: "Second", workspace: workspace)
+        await waitUntilQueueIsIdle(controller)
+
+        #expect(controller.operationHistory.first?.canUndo == true)
+        #expect(controller.operationHistory.first { $0.id == first.id }?.canUndo == false)
+        #expect(controller.undoJob(first.id) == false)
     }
 
     @Test func operationStatusSummaryCountsEveryOutcomeForAccessibility() {

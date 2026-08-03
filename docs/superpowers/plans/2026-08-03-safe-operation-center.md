@@ -87,14 +87,14 @@
 - `FileOperationUndoRecipe` supports identity-checked move-back, Trash restore, and fingerprint-checked removal of newly created output.
 - Replacement conflict decisions explicitly make the job non-undoable.
 
-- [ ] Test live Trash URL capture with a temporary fixture and restore cleanup.
-- [ ] Test rename/move undo requires the same identity and an absent original path.
-- [ ] Test Trash undo restores only the same trashed identity and refuses an occupied original path.
-- [ ] Test copy/new-folder/archive/extract undo captures a full no-follow fingerprint, quarantines by identity, rechecks the fingerprint, and rolls back if either check differs.
-- [ ] Test replacement conflicts never expose undo and a failed undo remains in history with a safe explanation.
-- [ ] Implement recipes and an undo service using `quarantineForTrash`, `rollbackTrashQuarantine`, and `moveTrashQuarantineAtomically`; never recursively delete an unverified path.
-- [ ] Build a recipe only from successful outcomes after capturing destination identity/fingerprint. Enqueue undo as an ordinary single-worker job.
-- [ ] Run filesystem, mutation, archive, undo, and controller suites; commit `feat: add identity checked operation undo`.
+- [x] Test live Trash URL capture with a temporary fixture and restore cleanup.
+- [x] Test rename/move undo requires the same identity and an absent original path.
+- [x] Test Trash undo restores only the same trashed identity and refuses an occupied original path.
+- [x] Test copy/new-folder/archive/extract undo captures a full no-follow fingerprint, quarantines by identity, rechecks the fingerprint, and rolls back if either check differs.
+- [x] Test replacement conflicts never expose undo and a failed undo remains in history with a safe explanation.
+- [x] Implement recipes and an undo service using `quarantineForTrash`, `rollbackTrashQuarantine`, and `moveTrashQuarantineAtomically`; never recursively delete an unverified path.
+- [x] Build a recipe only from successful outcomes after capturing destination identity/fingerprint. Enqueue undo as an ordinary single-worker job.
+- [x] Run filesystem, mutation, archive, undo, and controller suites; commit `feat: add identity checked operation undo`.
 
 ### Task 5: Accessible operation-center interface
 

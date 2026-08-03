@@ -4,6 +4,31 @@ import Testing
 
 @Suite("FileOperationMutationTests")
 struct FileOperationMutationTests {
+    @Test func identifiedCreateFolderRefusesAReplacedQueuedDirectory() async throws {
+        let directory = URL(filePath: "/workspace", directoryHint: .isDirectory)
+        let fileSystem = RecordingFileSystem(existingURLs: [directory])
+        let service = FileOperationService(fileSystem: fileSystem)
+        let capturedIdentity = try #require(await fileSystem.identity(of: directory))
+        await fileSystem.replaceIdentity(
+            at: directory,
+            with: FileIdentity(
+                entryIdentifier: "replacement-entry",
+                resolvedIdentifier: "replacement-resolved"
+            )
+        )
+
+        await #expect(throws: FileSystemAccessError.identityMismatch(directory)) {
+            try await service.createFolder(
+                in: directory,
+                identifiedBy: capturedIdentity,
+                named: "Queued"
+            )
+        }
+        #expect(await fileSystem.existingURLs.contains(
+            directory.appending(path: "Queued", directoryHint: .isDirectory)
+        ) == false)
+    }
+
     @Test func createFolderUsesExpectedDestination() async throws {
         let root = try TemporaryDirectory()
         defer { root.remove() }

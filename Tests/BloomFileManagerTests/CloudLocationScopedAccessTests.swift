@@ -334,7 +334,7 @@ struct CloudLocationScopedAccessTests {
         #expect(operations.lastResult == FileOperationResult(outcomes: [
             .succeeded(source: source, destination: destination)
         ]))
-        #expect(driver.startedURLs == Array(repeating: directory.url, count: 4))
+        #expect(driver.startedURLs == Array(repeating: directory.url, count: 5))
         #expect(driver.stoppedURLs == driver.startedURLs)
     }
 

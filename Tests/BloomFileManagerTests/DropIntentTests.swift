@@ -10,17 +10,17 @@ import Testing
     #expect(DropIntent.resolve(modifiers: [.command, .option]) == .move)
 }
 
-@Test func commandPolicyDisablesMutationsDuringAnOperation() {
+@Test func commandPolicyQueuesMutationsDuringAnOperationButKeepsRenameExclusive() {
     let policy = WorkspaceCommandPolicy(
         selectionCount: 1,
         isOperationRunning: true,
         pasteboardHasFileURLs: true
     )
 
-    #expect(policy.canCreateFolder == false)
+    #expect(policy.canCreateFolder)
     #expect(policy.canRename == false)
-    #expect(policy.canPaste == false)
-    #expect(policy.canTrash == false)
+    #expect(policy.canPaste)
+    #expect(policy.canTrash)
     #expect(policy.canCopy)
 }
 

@@ -34,6 +34,13 @@ actor FileOperationService {
         )
     }
 
+    nonisolated func makeUndoService() -> FileOperationUndoService {
+        FileOperationUndoService(
+            fileSystem: fileSystem,
+            accessCoordinator: accessCoordinator
+        )
+    }
+
     func trashStorageCleanup(
         _ groups: [StorageCleanupMutationGroup],
         progress: OperationProgressHandler = { _ in }
@@ -199,6 +206,51 @@ actor FileOperationService {
         }
     }
 
+    func createFolder(
+        in directory: URL,
+        identifiedBy directoryIdentity: FileIdentity,
+        named name: String
+    ) async throws -> URL {
+        let accessLeases = try accessCoordinator.acquireAccess(for: [directory])
+        defer { accessLeases.forEach { $0.finish() } }
+        let startedAt = Date()
+        let destination = directory.appending(path: name, directoryHint: .isDirectory)
+        do {
+            try FilenameValidator.validate(name)
+            guard await !fileSystem.exists(destination) else {
+                throw CocoaError(.fileWriteFileExists)
+            }
+            let prepared = try await fileSystem.prepareDirectoryHierarchy(
+                root: directory,
+                identifiedBy: directoryIdentity,
+                relativeComponents: [name]
+            )
+            guard prepared.destinationDirectory.standardizedFileURL == destination.standardizedFileURL,
+                  prepared.createdDirectories.count == 1,
+                  prepared.createdDirectories[0].relativeComponents == [name]
+            else {
+                throw CocoaError(.fileWriteFileExists)
+            }
+            await logger.record(
+                kind: .createFolder,
+                duration: Date().timeIntervalSince(startedAt),
+                succeeded: 1,
+                failed: 0,
+                skipped: 0
+            )
+            return destination
+        } catch {
+            await logger.record(
+                kind: .createFolder,
+                duration: Date().timeIntervalSince(startedAt),
+                succeeded: 0,
+                failed: 1,
+                skipped: 0
+            )
+            throw error
+        }
+    }
+
     func rename(_ source: URL, to name: String) async throws -> URL {
         let accessLeases = try accessCoordinator.acquireAccess(for: [source])
         defer { accessLeases.forEach { $0.finish() } }
@@ -333,8 +385,11 @@ actor FileOperationService {
             let source = request.url
             do {
                 try Task.checkCancellation()
-                try await fileSystem.trash(source, identifiedBy: request.identity)
-                outcomes.append(.succeeded(source: source, destination: nil))
+                let resultingURL = try await fileSystem.trashAndReturnResultingURL(
+                    source,
+                    identifiedBy: request.identity
+                )
+                outcomes.append(.succeeded(source: source, destination: resultingURL))
                 succeeded += 1
             } catch is CancellationError {
                 outcomes.append(contentsOf: requests[index...].map { .cancelled(source: $0.url) })

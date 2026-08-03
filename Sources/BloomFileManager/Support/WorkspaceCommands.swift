@@ -69,10 +69,10 @@ enum WorkspaceCommandActions {
         in pane: FilePaneState,
         workspace: WorkspaceState,
         operationController: FileOperationController
-    ) -> Bool {
+    ) async -> Bool {
         let existing = Set(pane.items.map(\.name))
         let name = KeepBothNamer.availableName(for: "New Folder", existing: existing)
-        return operationController.createFolder(
+        return await operationController.createFolder(
             in: pane.currentDirectory,
             named: name,
             workspace: workspace,
@@ -730,11 +730,13 @@ struct WorkspaceCommands: Commands {
     private func createFolder() {
         guard let workspace, policy.canCreateFolder else { return }
         let pane = workspace.activePane
-        _ = WorkspaceCommandActions.createFolder(
-            in: pane,
-            workspace: workspace,
-            operationController: operationController
-        )
+        Task {
+            _ = await WorkspaceCommandActions.createFolder(
+                in: pane,
+                workspace: workspace,
+                operationController: operationController
+            )
+        }
     }
 
     private func requestRename() {

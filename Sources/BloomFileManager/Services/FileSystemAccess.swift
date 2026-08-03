@@ -84,8 +84,13 @@ protocol FileSystemAccess: Sendable {
     func reserveStagingDirectory(beside destination: URL) async throws -> StagingReservation
     func removeStagingDirectory(_ reservation: StagingReservation) async throws
     func fingerprint(of source: URL) async throws -> SourceFingerprint
+    func fingerprint(of quarantine: StorageTrashQuarantine) async throws -> SourceFingerprint
     func trash(_ url: URL) async throws
     func trash(_ url: URL, identifiedBy identity: FileIdentity) async throws
+    func trashAndReturnResultingURL(
+        _ url: URL,
+        identifiedBy identity: FileIdentity
+    ) async throws -> URL?
     func quarantineForTrash(
         _ url: URL,
         identifiedBy identity: FileIdentity
@@ -111,6 +116,18 @@ protocol FileSystemAccess: Sendable {
 }
 
 extension FileSystemAccess {
+    func fingerprint(of quarantine: StorageTrashQuarantine) async throws -> SourceFingerprint {
+        try await fingerprint(of: quarantine.quarantinedURL)
+    }
+
+    func trashAndReturnResultingURL(
+        _ url: URL,
+        identifiedBy identity: FileIdentity
+    ) async throws -> URL? {
+        try await trash(url, identifiedBy: identity)
+        return nil
+    }
+
     func removeStagedPayload(_ reservation: StagingReservation) async throws {
         guard let payloadIdentity = try await identity(of: reservation.item) else {
             guard await !exists(reservation.item) else {
@@ -498,6 +515,14 @@ actor LiveFileSystemAccess: FileSystemAccess {
         try fileManager.trashItem(at: url, resultingItemURL: &resultingURL)
     }
 
+    func trashAndReturnResultingURL(
+        _ url: URL,
+        identifiedBy identity: FileIdentity
+    ) async throws -> URL? {
+        let quarantine = try await quarantineForTrash(url, identifiedBy: identity)
+        return try await moveTrashQuarantineAtomically(quarantine)
+    }
+
     func quarantineForTrash(
         _ url: URL,
         identifiedBy expectedIdentity: FileIdentity
@@ -624,6 +649,33 @@ actor LiveFileSystemAccess: FileSystemAccess {
             throw StorageTrashAccessError.recoveryRequired
         }
         finishEmptyQuarantine(context)
+    }
+
+    func fingerprint(of quarantine: StorageTrashQuarantine) async throws -> SourceFingerprint {
+        guard let context = storageQuarantines[quarantine.id],
+              context.quarantine.identity == quarantine.identity else {
+            throw StorageTrashAccessError.recoveryRequired
+        }
+        guard Darwin.fchmod(context.stagingDescriptor, 0o700) == 0 else {
+            throw currentPOSIXError()
+        }
+        do {
+            guard try identity(
+                named: "payload",
+                in: context.stagingDescriptor,
+                noFollow: true
+            ) == quarantine.identity else {
+                throw FileSystemAccessError.identityMismatch(quarantine.quarantinedURL)
+            }
+            let result = try fingerprint(of: quarantine.quarantinedURL)
+            guard Darwin.fchmod(context.stagingDescriptor, 0) == 0 else {
+                throw currentPOSIXError()
+            }
+            return result
+        } catch {
+            _ = Darwin.fchmod(context.stagingDescriptor, 0)
+            throw error
+        }
     }
 
     func moveTrashQuarantineAtomically(

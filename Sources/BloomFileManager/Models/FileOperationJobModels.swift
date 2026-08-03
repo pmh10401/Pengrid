@@ -87,7 +87,7 @@ struct FileOperationJobSnapshot: Identifiable, Sendable, Equatable {
     var title: String { kind.title }
 
     var canRetry: Bool {
-        state == .failed || state == .cancelled
+        kind != .undo && (state == .failed || state == .cancelled)
     }
 
     var canUndo: Bool {

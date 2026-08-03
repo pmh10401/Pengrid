@@ -379,11 +379,13 @@ struct FilePaneView: View {
 
     private func createFolder() {
         onActivate()
-        _ = WorkspaceCommandActions.createFolder(
-            in: state,
-            workspace: workspace,
-            operationController: operationController
-        )
+        Task {
+            _ = await WorkspaceCommandActions.createFolder(
+                in: state,
+                workspace: workspace,
+                operationController: operationController
+            )
+        }
     }
 
     private func commitRename(_ source: URL, _ name: String) {

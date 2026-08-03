@@ -33,6 +33,7 @@ final class FileOperationController {
     private let service: FileOperationService
     private let materializer: any CloudMaterializing
     private let archiveService: any ArchiveOperating
+    private let undoService: FileOperationUndoService
 
     private(set) var stage: FileOperationStage?
     private(set) var pendingConflict: FileConflict?
@@ -57,6 +58,8 @@ final class FileOperationController {
     @ObservationIgnored private var activeOperation: PendingFileOperation?
     @ObservationIgnored private var activeControl: FileOperationControl?
     @ObservationIgnored private var retryOperations: [UUID: PendingFileOperation] = [:]
+    @ObservationIgnored private var undoRecipes: [UUID: FileOperationUndoRecipe] = [:]
+    @ObservationIgnored private var activeOperationDidReplace = false
     @ObservationIgnored private let historyLimit: Int
 
     init(
@@ -69,6 +72,7 @@ final class FileOperationController {
         self.materializer = materializer
         self.archiveService = archiveService
             ?? service.makeArchiveOperationService()
+        self.undoService = service.makeUndoService()
         self.historyLimit = max(historyLimit, 1)
     }
 
@@ -101,6 +105,9 @@ final class FileOperationController {
 
     func resolvePendingConflict(_ decision: ConflictDecision, applyToAll: Bool) {
         guard let continuation = conflictContinuation else { return }
+        if decision == .replace {
+            activeOperationDidReplace = true
+        }
         if applyToAll, decision != .cancel {
             applyToAllDecision = decision
         }
@@ -165,6 +172,31 @@ final class FileOperationController {
         else { return false }
         enqueue(original.retryAttempt())
         return true
+    }
+
+    @discardableResult
+    func undoJob(_ id: UUID) -> Bool {
+        guard operationHistory.first(where: { $0.id == id })?.canUndo == true,
+              let recipe = undoRecipes.removeValue(forKey: id),
+              let original = retryOperations[id]
+        else { return false }
+
+        setUndoEligibility(for: id, canUndo: false)
+        return beginOperation(
+            kind: .undo,
+            totalCount: recipe.itemCount,
+            initialName: recipe.displayName,
+            touchedDirectories: recipe.touchedDirectories,
+            workspace: original.workspace
+        ) { [weak self] in
+            guard let self else {
+                return FileOperationResult(outcomes: [])
+            }
+            return await self.undoService.perform(recipe) { [weak self] progress in
+                guard let self else { return }
+                await self.publish(stage: .operating(progress))
+            }
+        }
     }
 
     private func cancelPendingDecision(requestID: UUID) {
@@ -649,9 +681,29 @@ final class FileOperationController {
         workspace: WorkspaceState,
         beginInlineRenameIn renamePane: FilePaneState? = nil,
         onCompletion: (@MainActor (FileOperationResult) -> Void)? = nil
-    ) -> Bool {
+    ) async -> Bool {
         let proposedURL = directory.appending(path: name, directoryHint: .isDirectory)
         let renameCapture = IdentifiedRequestCapture()
+        let directoryIdentity: FileIdentity
+        do {
+            directoryIdentity = try await service.identity(of: directory)
+        } catch {
+            return beginOperation(
+                kind: .createFolder,
+                totalCount: 1,
+                initialName: name,
+                touchedDirectories: [directory],
+                workspace: workspace,
+                onCompletion: onCompletion
+            ) {
+                FileOperationResult(outcomes: [
+                    .failed(
+                        source: proposedURL,
+                        message: "folder-preparation:directory-identity-unavailable"
+                    )
+                ])
+            }
+        }
         return beginOperation(
             kind: .createFolder,
             totalCount: 1,
@@ -666,7 +718,11 @@ final class FileOperationController {
             }
         ) { [service] in
             do {
-                let createdURL = try await service.createFolder(in: directory, named: name)
+                let createdURL = try await service.createFolder(
+                    in: directory,
+                    identifiedBy: directoryIdentity,
+                    named: name
+                )
                 if renamePane != nil {
                     renameCapture.store(IdentifiedFileRequest(
                         url: createdURL,
@@ -895,6 +951,7 @@ final class FileOperationController {
         guard activeOperation == nil, !pendingOperations.isEmpty else { return }
         let pending = pendingOperations.removeFirst()
         queuedJobs.removeAll { $0.id == pending.id }
+        invalidateUndoRecipes(touching: pending.touchedDirectories)
 
         let control = FileOperationControl()
         activeOperation = pending
@@ -910,6 +967,7 @@ final class FileOperationController {
         lastResult = nil
         lastPreparationFailures = []
         applyToAllDecision = nil
+        activeOperationDidReplace = false
 
         operationTask = Task { [weak self] in
             guard let self else { return }
@@ -998,8 +1056,24 @@ final class FileOperationController {
             touching: pending.touchedDirectories
         )
         let completedState = terminalState(for: result)
+        let recipe: FileOperationUndoRecipe?
+        if completedState == .succeeded {
+            recipe = await undoService.makeRecipe(
+                kind: pending.kind,
+                result: result,
+                allowsUndo: !activeOperationDidReplace
+            )
+        } else {
+            recipe = nil
+        }
+        if let recipe {
+            undoRecipes[pending.id] = recipe
+        }
         retryOperations[pending.id] = pending
-        recordHistory(pending.snapshot(state: completedState))
+        recordHistory(pending.snapshot(
+            state: completedState,
+            canUndo: recipe != nil
+        ))
         activeJob = nil
         activeOperation = nil
         activeControl = nil
@@ -1007,6 +1081,7 @@ final class FileOperationController {
         isRunning = false
         operationTask = nil
         applyToAllDecision = nil
+        activeOperationDidReplace = false
     }
 
     private func terminalState(for result: FileOperationResult) -> FileOperationJobState {
@@ -1034,6 +1109,31 @@ final class FileOperationController {
         operationHistory.removeSubrange(historyLimit...)
         for item in removed {
             retryOperations.removeValue(forKey: item.id)
+            undoRecipes.removeValue(forKey: item.id)
+        }
+    }
+
+    private func setUndoEligibility(for id: UUID, canUndo: Bool) {
+        guard let index = operationHistory.firstIndex(where: { $0.id == id }) else { return }
+        let current = operationHistory[index]
+        operationHistory[index] = snapshot(
+            for: current,
+            state: current.state,
+            progress: current.progress,
+            canUndo: canUndo
+        )
+    }
+
+    private func invalidateUndoRecipes(touching directories: Set<URL>) {
+        let directoryKeys = Set(directories.map(directoryKey))
+        guard !directoryKeys.isEmpty else { return }
+        let invalidated = undoRecipes.compactMap { id, recipe -> UUID? in
+            let recipeKeys = Set(recipe.touchedDirectories.map(directoryKey))
+            return recipeKeys.isDisjoint(with: directoryKeys) ? nil : id
+        }
+        for id in invalidated {
+            undoRecipes.removeValue(forKey: id)
+            setUndoEligibility(for: id, canUndo: false)
         }
     }
 
@@ -1116,7 +1216,10 @@ private struct PendingFileOperation {
         ).itemDisplayName
     }
 
-    func snapshot(state: FileOperationJobState) -> FileOperationJobSnapshot {
+    func snapshot(
+        state: FileOperationJobState,
+        canUndo: Bool = false
+    ) -> FileOperationJobSnapshot {
         FileOperationJobSnapshot(
             id: id,
             kind: kind,
@@ -1124,7 +1227,7 @@ private struct PendingFileOperation {
             itemCount: itemCount,
             state: state,
             progress: nil,
-            canUndo: false
+            canUndo: canUndo
         )
     }
 

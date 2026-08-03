@@ -348,6 +348,11 @@ actor RecordingFileSystem: FileSystemAccess {
         identities[url] = identity
     }
 
+    func mutateContents(at url: URL) {
+        guard existingURLs.contains(url) else { return }
+        fingerprintVersions[url, default: 0] += 1
+    }
+
     func names(in directory: URL) async throws -> Set<String> {
         let operation = Operation.names(directory)
         try record(operation)
@@ -604,7 +609,10 @@ actor RecordingFileSystem: FileSystemAccess {
                 return SourceFingerprint.Entry(
                     relativePath: relativePath,
                     device: 1,
-                    inode: UInt64(bitPattern: Int64(member.path.hashValue)),
+                    inode: UInt64(bitPattern: Int64(
+                        identities[member]?.resolvedIdentifier.hashValue
+                            ?? member.path.hashValue
+                    )),
                     mode: member.hasDirectoryPath ? UInt32(S_IFDIR) : UInt32(S_IFREG),
                     size: Int64(fingerprintVersions[source, default: 0]),
                     modificationSeconds: Int64(fingerprintVersions[source, default: 0]),

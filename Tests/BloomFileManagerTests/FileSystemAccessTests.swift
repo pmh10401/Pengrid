@@ -41,4 +41,23 @@ struct FileSystemAccessTests {
         #expect(try await fileSystem.identity(of: destination) == stagedIdentity)
         #expect(FileManager.default.fileExists(atPath: stagedItem.path) == false)
     }
+
+    @Test func identifiedTrashReturnsTheActualURLAndPreservesIdentity() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let source = root.url.appending(path: "trash-result-(UUID().uuidString).txt")
+        try Data("temporary test fixture".utf8).write(to: source)
+        let fileSystem = LiveFileSystemAccess()
+        let identity = try #require(await fileSystem.identity(of: source))
+        let resultingURL = try #require(
+            try await fileSystem.trashAndReturnResultingURL(source, identifiedBy: identity)
+        )
+        defer { try? FileManager.default.removeItem(at: resultingURL) }
+
+        #expect(FileManager.default.fileExists(atPath: source.path) == false)
+        #expect(try await fileSystem.identity(of: resultingURL) == identity)
+
+        try await fileSystem.move(resultingURL, identifiedBy: identity, to: source)
+        #expect(try await fileSystem.identity(of: source) == identity)
+    }
 }

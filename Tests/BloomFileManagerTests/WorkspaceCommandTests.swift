@@ -22,7 +22,7 @@ struct WorkspaceCommandTests {
         )
         await workspace.loadInitialDirectories()
 
-        #expect(WorkspaceCommandActions.createFolder(
+        #expect(await WorkspaceCommandActions.createFolder(
             in: workspace.left,
             workspace: workspace,
             operationController: controller
@@ -73,7 +73,7 @@ struct WorkspaceCommandTests {
         workspace.left.updateFilterQuery("does-not-match")
         #expect(workspace.left.visibleItems.isEmpty)
 
-        #expect(WorkspaceCommandActions.createFolder(
+        #expect(await WorkspaceCommandActions.createFolder(
             in: workspace.left,
             workspace: workspace,
             operationController: controller

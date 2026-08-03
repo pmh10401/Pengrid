@@ -21,7 +21,7 @@ struct FileTableViewLifecycleTests {
             service: FileOperationService(fileSystem: LiveFileSystemAccess())
         )
         await workspace.loadInitialDirectories()
-        #expect(WorkspaceCommandActions.createFolder(
+        #expect(await WorkspaceCommandActions.createFolder(
             in: workspace.left,
             workspace: workspace,
             operationController: controller
