@@ -1,46 +1,39 @@
-# Pengrid Korean Initial Search Implementation Plan
+# Korean Initial Search Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add automatic Korean initial-consonant search to Pengrid Smart Search while preserving the existing literal search, safety, cancellation, and deterministic ranking contracts.
+**Goal:** Add automatic Korean initial-consonant matching and deterministic ranking to Pengrid Smart Search while preserving every literal-only search contract.
 
-**Architecture:** Compile each query once into literal and Korean-initial clauses with a pure `SmartSearchTextAnalyzer`. Candidate filtering and ranking consume the same match evidence, while literal-only queries retain the existing tokenization, BM25 score, and path tie-break fast path. The UI adds only discoverability copy and a VoiceOver hint; persistence and search controls do not change.
+**Architecture:** A pure `SmartSearchTextAnalyzer` compiles a query into literal and Korean-initial clauses and prepares bounded document projections. `LocalSmartSearchService` uses the same plan and prepared features for candidate filtering, while `SmartSearchRanker` compares explicit evidence tuples before BM25-style relevance. Existing Store and persistence models remain unchanged.
 
-**Tech Stack:** Swift 6.1, Foundation Unicode scalars and localized word boundaries, Swift Testing, SwiftUI/AppKit, Swift Package Manager on macOS 15+
+**Tech Stack:** Swift 6.1, Foundation Unicode scalars and normalization, Swift Testing, SwiftUI/AppKit, Swift Package Manager on macOS 15+.
 
 ## Global Constraints
 
-- Recognize only the 19 modern Hangul initials: `ㄱ ㄲ ㄴ ㄷ ㄸ ㄹ ㅁ ㅂ ㅃ ㅅ ㅆ ㅇ ㅈ ㅉ ㅊ ㅋ ㅌ ㅍ ㅎ`.
-- Treat compatibility jamo and modern choseong jamo as equivalent through an explicit mapping; do not apply global NFKC.
-- Normalize document text to NFC before deriving initials.
-- Initial clauses match consecutive syllable-run initials or consecutive run-head initials; arbitrary subsequences are forbidden.
-- A segment is a maximal sequence of Unicode letters or decimal digits; every other scalar ends the segment, and a segment without supported Hangul ends the current run-head group.
-- Query clauses use AND semantics, including mixed input such as `ㅎㄱ report` and adjacent input such as `2026ㅎㄱ`.
-- Literal-only candidate membership, BM25 scoring, filename bonuses, and deterministic path ordering must remain unchanged.
-- Initial ranking compares weakest-first evidence tuples before combined literal/virtual-field BM25 relevance and the existing path tie-break.
-- Keep search local and metadata-only; do not add network calls, materialization, content reads, persistent indexes, or unbounded caches.
-- Preserve the 50,000 candidate hard bound, 2,000 result hard bound, progress reporting, and cancellation checks.
-- Do not change `SmartSearchQuery`, `SmartSearchRecord`, or saved-search persistence schemas.
-- Add no search-mode toggle and no result highlighting in this increment.
+- Support only the 19 modern Hangul initials; map compatibility jamo and modern choseong jamo explicitly to the same compatibility-jamo key.
+- Normalize document text to NFC; do not apply global NFKC.
+- Match initial clauses only as consecutive substrings of explicit-initial runs, syllable runs, or adjacent run-head groups; never use arbitrary subsequences.
+- Compile query clauses once per search and create initial projections only when an initial clause exists.
+- Preserve literal-only candidate sets, BM25 scores, filename multiplier, bonuses, and standardized-path ordering.
+- Preserve explicit local roots, hidden/package/symlink rules, metadata-only cloud behavior, 50,000 candidate bound, 2,000 result bound, progress, and cancellation.
+- Do not change `SmartSearchQuery`, `SmartSearchRecord`, saved-search persistence, or add a search-mode toggle.
+- Keep Unicode analysis linear and dependency-free.
+- Follow strict red-green-refactor: each production behavior begins with a focused test observed failing for the expected reason.
 
 ---
 
-### Task 1: Pure query compiler and Hangul initial matcher
+### Task 1: Query planning and modern-initial canonicalization
 
 **Files:**
 - Create: `Sources/BloomFileManager/Models/SmartSearchTextAnalyzer.swift`
 - Create: `Tests/BloomFileManagerTests/SmartSearchTextAnalyzerTests.swift`
-- Modify: `Sources/BloomFileManager/Models/SmartSearchModels.swift`
-- Test: `Tests/BloomFileManagerTests/SmartSearchModelTests.swift`
 
 **Interfaces:**
-- Produces: `SmartSearchQueryPlan`, `SmartSearchClause`, `SmartSearchInitial`, `SmartSearchInitialEvidence`, `SmartSearchMatch`, and `SmartSearchTextAnalyzer`.
-- Produces: `SmartSearchTextAnalyzer.queryPlan(for:)` and `SmartSearchTextAnalyzer.match(plan:filename:relativePath:)`.
-- Preserves: `SmartSearchRanker.tokens(in:)`, implemented through the analyzer's literal tokenization so existing callers remain source-compatible.
+- Produces: `SmartSearchClause`, `SmartSearchQueryPlan`, and `SmartSearchTextAnalyzer.queryPlan(for:)`.
+- Consumes: Foundation only.
+- Later tasks rely on the exact clause cases `.literal(String)` and `.hangulInitials(String)`.
 
-- [ ] **Step 1: Write failing query-plan and Unicode equivalence tests**
-
-Create `SmartSearchTextAnalyzerTests.swift` with real, table-driven expectations:
+- [ ] **Step 1: Write failing query-plan tests**
 
 ```swift
 import Foundation
@@ -48,31 +41,32 @@ import Testing
 @testable import BloomFileManager
 
 @Suite struct SmartSearchTextAnalyzerTests {
-    @Test func compatibilityAndChoseongQueriesCompileToTheSameInitials() {
-        #expect(
-            SmartSearchTextAnalyzer.queryPlan(for: "ㅎㄱ").clauses
-                == SmartSearchTextAnalyzer.queryPlan(for: "ᄒᄀ").clauses
-        )
+    @Test func canonicalizesCompatibilityAndChoseongInitials() {
+        #expect(SmartSearchTextAnalyzer.queryPlan(for: "ㅎㄱ").clauses == [.hangulInitials("ㅎㄱ")])
+        #expect(SmartSearchTextAnalyzer.queryPlan(for: "ᄒᄀ").clauses == [.hangulInitials("ㅎㄱ")])
+        #expect(SmartSearchTextAnalyzer.queryPlan(for: "ㄲㄸㅃㅆㅉ").clauses == [.hangulInitials("ㄲㄸㅃㅆㅉ")])
     }
 
-    @Test func mixedAndAdjacentScriptsCompileIntoOrderedAndClauses() {
+    @Test func splitsMixedLiteralAndInitialRunsWithAndSemantics() {
         #expect(SmartSearchTextAnalyzer.queryPlan(for: "ㅎㄱ report").clauses == [
-            .hangulInitials([.hieuh, .kiyeok]),
-            .literal("report")
+            .hangulInitials("ㅎㄱ"), .literal("report")
         ])
         #expect(SmartSearchTextAnalyzer.queryPlan(for: "2026ㅎㄱ").clauses == [
-            .literal("2026"),
-            .hangulInitials([.hieuh, .kiyeok])
+            .literal("2026"), .hangulInitials("ㅎㄱ")
+        ])
+        #expect(SmartSearchTextAnalyzer.queryPlan(for: "ㅎ ㄱ").clauses == [
+            .hangulInitials("ㅎ"), .hangulInitials("ㄱ")
         ])
     }
 
-    @Test func unsupportedCompoundFinalRemainsLiteral() {
+    @Test func leavesCompletedHangulAndUnsupportedJamoLiteral() {
+        #expect(SmartSearchTextAnalyzer.queryPlan(for: "한국").clauses == [.literal("한국")])
         #expect(SmartSearchTextAnalyzer.queryPlan(for: "ㄳ").clauses == [.literal("ㄳ")])
     }
 }
 ```
 
-- [ ] **Step 2: Run the focused tests and verify RED**
+- [ ] **Step 2: Run the new suite and verify RED**
 
 Run:
 
@@ -80,425 +74,430 @@ Run:
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test --no-parallel --filter SmartSearchTextAnalyzerTests
 ```
 
-Expected: compilation fails because `SmartSearchTextAnalyzer`, `SmartSearchClause`, and `SmartSearchInitial` do not exist.
+Expected: compilation fails because `SmartSearchTextAnalyzer` and clause types do not exist.
 
-- [ ] **Step 3: Implement the minimal query-plan types and explicit 19-initial mapping**
+- [ ] **Step 3: Implement the minimal query-plan API**
 
-Create focused value types in `SmartSearchTextAnalyzer.swift`:
+Create these value types and mapping tables:
 
 ```swift
-enum SmartSearchInitial: UInt8, CaseIterable, Sendable, Equatable {
-    case kiyeok, ssangKiyeok, nieun, tikeut, ssangTikeut, rieul, mieum
-    case pieup, ssangPieup, siot, ssangSiot, ieung, cieuc, ssangCieuc
-    case chieuch, khieukh, thieuth, phieuph, hieuh
-}
+import Foundation
 
-enum SmartSearchClause: Sendable, Equatable {
+enum SmartSearchClause: Equatable, Hashable, Sendable {
     case literal(String)
-    case hangulInitials([SmartSearchInitial])
+    case hangulInitials(String)
 }
 
-struct SmartSearchQueryPlan: Sendable, Equatable {
+struct SmartSearchQueryPlan: Equatable, Sendable {
     let clauses: [SmartSearchClause]
-    var containsInitials: Bool {
+    var containsHangulInitials: Bool {
         clauses.contains { if case .hangulInitials = $0 { true } else { false } }
     }
 }
 
 enum SmartSearchTextAnalyzer {
-    static func queryPlan(for text: String) -> SmartSearchQueryPlan
-    static func literalTokens(in text: String) -> [String]
-}
-```
+    typealias AnalysisStep = @Sendable () throws -> Void
 
-Map compatibility jamo scalars and U+1100...U+1112 choseong scalars explicitly to the enum. Use the existing NFC, case-insensitive, diacritic-insensitive, localized `.byWords` behavior for literal runs. Split supported-initial and non-initial scalar runs inside each word so `2026ㅎㄱ` produces two clauses. Unsupported jamo must flow through literal tokenization.
+    private static let compatibilityScalars: [Unicode.Scalar] = [
+        "ㄱ", "ㄲ", "ㄴ", "ㄷ", "ㄸ", "ㄹ", "ㅁ", "ㅂ", "ㅃ", "ㅅ",
+        "ㅆ", "ㅇ", "ㅈ", "ㅉ", "ㅊ", "ㅋ", "ㅌ", "ㅍ", "ㅎ"
+    ].compactMap { $0.unicodeScalars.first }
 
-Change `SmartSearchRanker.tokens(in:)` to delegate to `SmartSearchTextAnalyzer.literalTokens(in:)` without changing its public behavior.
+    private static let compatibilityValues: [UInt32: Int] = [
+        0x3131: 0, 0x3132: 1, 0x3134: 2, 0x3137: 3, 0x3138: 4,
+        0x3139: 5, 0x3141: 6, 0x3142: 7, 0x3143: 8, 0x3145: 9,
+        0x3146: 10, 0x3147: 11, 0x3148: 12, 0x3149: 13,
+        0x314A: 14, 0x314B: 15, 0x314C: 16, 0x314D: 17, 0x314E: 18
+    ]
 
-- [ ] **Step 4: Run focused query-plan and existing tokenization tests and verify GREEN**
+    static func queryPlan(for text: String) -> SmartSearchQueryPlan {
+        // Trim, preserve current localized word boundaries, split supported
+        // initial runs from literal runs inside each token, fold literal runs,
+        // and omit empty runs while preserving clause order.
+    }
 
-Run:
-
-```bash
-DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test --no-parallel --filter SmartSearchTextAnalyzerTests
-DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test --no-parallel --filter SmartSearchModelTests.tokenizationIsLocalizedCaseAndDiacriticInsensitive
-```
-
-Expected: both commands pass.
-
-- [ ] **Step 5: Write failing document-projection and matching tests**
-
-Add tests that name the false positives they prevent:
-
-```swift
-@Test func syllableRunsMatchKoreanWordsAcrossCanonicalForms() {
-    let plan = SmartSearchTextAnalyzer.queryPlan(for: "ㅎㄱ")
-    #expect(SmartSearchTextAnalyzer.match(plan: plan, filename: "한국.txt", relativePath: "한국.txt") != nil)
-    #expect(SmartSearchTextAnalyzer.match(plan: plan, filename: "한글.txt", relativePath: "한글.txt") != nil)
-    #expect(SmartSearchTextAnalyzer.match(
-        plan: plan,
-        filename: "한글".decomposedStringWithCanonicalMapping,
-        relativePath: "한글".decomposedStringWithCanonicalMapping
-    ) != nil)
-}
-
-@Test func runHeadsMatchWordsButDoNotAllowArbitrarySubsequences() {
-    let plan = SmartSearchTextAnalyzer.queryPlan(for: "ㄱㄷ")
-    #expect(SmartSearchTextAnalyzer.match(
-        plan: plan, filename: "구글 드라이브", relativePath: "구글 드라이브"
-    ) != nil)
-    #expect(SmartSearchTextAnalyzer.match(
-        plan: plan, filename: "개인 사진 다운로드", relativePath: "개인 사진 다운로드"
-    ) == nil)
-}
-
-@Test func mixedClausesRequireEveryLiteralAndInitialCondition() {
-    let plan = SmartSearchTextAnalyzer.queryPlan(for: "ㅎㄱ report")
-    #expect(SmartSearchTextAnalyzer.match(
-        plan: plan, filename: "한국 report.pdf", relativePath: "한국 report.pdf"
-    ) != nil)
-    #expect(SmartSearchTextAnalyzer.match(
-        plan: plan, filename: "한국 notes.pdf", relativePath: "한국 notes.pdf"
-    ) == nil)
-}
-```
-
-- [ ] **Step 6: Run matching tests and verify RED**
-
-Run the Task 1 suite again. Expected: compilation fails because `match(plan:filename:relativePath:)` and match-evidence types do not exist.
-
-- [ ] **Step 7: Implement linear document projections and best-evidence selection**
-
-Add:
-
-```swift
-enum SmartSearchInitialField: Int, Sendable, Equatable { case relativePath = 1, filename = 2 }
-enum SmartSearchInitialRepresentation: Int, Sendable, Equatable { case runHeads = 1, syllableRun = 2, literal = 3 }
-enum SmartSearchInitialRelation: Int, Sendable, Equatable { case contains = 1, prefix = 2, exact = 3 }
-
-struct SmartSearchInitialEvidenceKey: Sendable, Equatable, Comparable {
-    let field: SmartSearchInitialField
-    let representation: SmartSearchInitialRepresentation
-    let relation: SmartSearchInitialRelation
-
-    static func < (lhs: Self, rhs: Self) -> Bool {
-        if lhs.field != rhs.field { return lhs.field.rawValue < rhs.field.rawValue }
-        if lhs.representation != rhs.representation {
-            return lhs.representation.rawValue < rhs.representation.rawValue
-        }
-        return lhs.relation.rawValue < rhs.relation.rawValue
+    static func canonicalInitial(for scalar: Unicode.Scalar) -> Unicode.Scalar? {
+        if let index = compatibilityValues[scalar.value] { return compatibilityScalars[index] }
+        guard (0x1100...0x1112).contains(scalar.value) else { return nil }
+        return compatibilityScalars[Int(scalar.value - 0x1100)]
     }
 }
+```
 
-struct SmartSearchInitialEvidence: Sendable, Equatable {
-    let key: SmartSearchInitialEvidenceKey
-    let weightedTermFrequency: Double
-    let documentLength: Int
+Implement the query scanner without regular expressions. Literal folding must use the same NFC plus case/diacritic-insensitive Foundation behavior as `SmartSearchRanker.tokens(in:)`.
+
+- [ ] **Step 4: Run RED-to-GREEN verification**
+
+Run the focused suite again. Expected: all Task 1 tests pass and the unsupported `ㄳ` case remains literal.
+
+- [ ] **Step 5: Commit Task 1**
+
+```bash
+git add Sources/BloomFileManager/Models/SmartSearchTextAnalyzer.swift Tests/BloomFileManagerTests/SmartSearchTextAnalyzerTests.swift
+git commit -m "feat: plan Korean initial search queries"
+```
+
+### Task 2: Document projections and shared match evidence
+
+**Files:**
+- Modify: `Sources/BloomFileManager/Models/SmartSearchTextAnalyzer.swift`
+- Modify: `Tests/BloomFileManagerTests/SmartSearchTextAnalyzerTests.swift`
+
+**Interfaces:**
+- Consumes: `SmartSearchQueryPlan` from Task 1.
+- Produces: `SmartSearchDocumentFeatures`, `SmartSearchInitialEvidence`, `documentFeatures(for:includeInitials:analysisStep:)`, `matches(_:path:)`, `bestInitialEvidence(for:filename:path:)`, and `initialEvidence(for:filename:path:)`.
+
+- [ ] **Step 1: Add failing projection and false-positive tests**
+
+Add literal fixtures with hand-derived expected values:
+
+```swift
+@Test func projectsNFCAndNFDHangulIntoTheSameInitialRuns() throws {
+    let nfc = try SmartSearchTextAnalyzer.documentFeatures(for: "한국-드라이브", includeInitials: true)
+    let nfd = try SmartSearchTextAnalyzer.documentFeatures(
+        for: "한국-드라이브".decomposedStringWithCanonicalMapping,
+        includeInitials: true
+    )
+    #expect(nfc.syllableInitialRuns == ["ㅎㄱ", "ㄷㄹㅇㅂ"])
+    #expect(nfd.syllableInitialRuns == nfc.syllableInitialRuns)
+    #expect(nfc.runHeadGroups == ["ㅎㄷ"])
 }
 
-struct SmartSearchMatch: Sendable, Equatable {
-    let initialEvidence: [SmartSearchInitialEvidence]
+@Test func runHeadsUseExplicitSegmentAndNonHangulBreakRules() throws {
+    #expect(try features("구글(드라이브)").runHeadGroups == ["ㄱㄷ"])
+    #expect(try features("구글/드라이브").runHeadGroups == ["ㄱㄷ"])
+    #expect(try features("구글/2026/드라이브").runHeadGroups == ["ㄱ", "ㄷ"])
+    #expect(try features("구글Drive드라이브").runHeadGroups == ["ㄱ"])
+}
+
+@Test func matchesConsecutiveInitialsButRejectsArbitrarySubsequences() throws {
+    let compact = try features("한국.txt")
+    let wordHeads = try features("구글 드라이브")
+    let skipped = try features("개인 사진 다운로드")
+    #expect(SmartSearchTextAnalyzer.matchesInitials("ㅎㄱ", in: compact))
+    #expect(SmartSearchTextAnalyzer.matchesInitials("ㄱㄷ", in: wordHeads))
+    #expect(!SmartSearchTextAnalyzer.matchesInitials("ㄱㄷ", in: skipped))
+}
+
+@Test func explicitInitialFilenameGetsLiteralEvidence() throws {
+    let evidence = try SmartSearchTextAnalyzer.bestInitialEvidence(
+        for: "ㅎㄱ", filename: features("ㅎㄱ.txt"), path: features("folder/ㅎㄱ.txt")
+    )
+    #expect(evidence?.field == .filename)
+    #expect(evidence?.representation == .explicitLiteral)
 }
 ```
 
-`match` must:
+- [ ] **Step 2: Run the focused suite and verify RED**
 
-1. NFC-normalize filename and relative path.
-2. Evaluate literal clauses with the current folded relative-path `contains` rule.
-3. Derive explicit-initial runs, syllable runs, and run-head groups only when `plan.containsInitials` is true.
-4. For every initial clause choose exactly one best evidence by lexicographic `(field, representation, relation)` order.
-5. Return `nil` if any clause fails; otherwise return one evidence per initial clause.
+Expected: missing feature/evidence types and functions.
 
-Use Hangul arithmetic only for U+AC00...U+D7A3. A segment is a maximal sequence of Unicode letters or decimal digits. Non-alphanumeric scalars terminate a segment; a segment with no supported Hangul syllable or explicit initial ends the current run-head group. Thus `구글/드라이브` yields `ㄱㄷ`, `구글/2026/드라이브` yields separate `ㄱ` and `ㄷ` groups, and `구글Drive드라이브` contributes one head `ㄱ`. Check canonicalized explicit-initial runs before derived initials so a file literally named `ㅎㄱ` receives `.literal/.exact` evidence. Record TF `1.0` per explicit/syllable occurrence and `0.5` per run-head occurrence, plus the selected field's supported-initial document length.
+- [ ] **Step 3: Implement projections and evidence**
 
-- [ ] **Step 8: Run Task 1 tests, mutation-check boundaries, and commit**
+Add these exact value-type boundaries:
 
-Run:
+```swift
+struct SmartSearchDocumentFeatures: Equatable, Sendable {
+    let foldedText: String
+    let literalTokens: [String]
+    let explicitInitialRuns: [String]
+    let syllableInitialRuns: [String]
+    let runHeadGroups: [String]
+    let initialCount: Int
+}
+
+enum SmartSearchMatchField: Int, Comparable, Sendable {
+    case path = 1, filename = 2
+    static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
+}
+enum SmartSearchMatchRepresentation: Int, Comparable, Sendable {
+    case runHead = 1, syllable = 2, explicitLiteral = 3
+    static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
+}
+enum SmartSearchMatchRelation: Int, Comparable, Sendable {
+    case contains = 1, prefix = 2, exact = 3
+    static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
+}
+
+struct SmartSearchInitialEvidence: Equatable, Comparable, Sendable {
+    let field: SmartSearchMatchField
+    let representation: SmartSearchMatchRepresentation
+    let relation: SmartSearchMatchRelation
+    let occurrenceCount: Double
+    // Comparable checks field, representation, relation in that order.
+}
+```
+
+Use NFC text and Unicode scalar arithmetic for `U+AC00...U+D7A3`. Use `CharacterSet.alphanumerics` to build maximal segments. A non-Hangul segment flushes the current run-head group. Explicit initial runs receive `.explicitLiteral` evidence before derived runs are considered. The path literal matcher remains `foldedText.contains(literalClause)`.
+
+Use these exact match signatures. `initialEvidence` returns `nil` if any AND clause fails; otherwise its array has one evidence value per initial clause in plan order:
+
+```swift
+static func matches(_ plan: SmartSearchQueryPlan, path: SmartSearchDocumentFeatures) -> Bool
+static func bestInitialEvidence(
+    for initials: String,
+    filename: SmartSearchDocumentFeatures,
+    path: SmartSearchDocumentFeatures
+) -> SmartSearchInitialEvidence?
+static func initialEvidence(
+    for plan: SmartSearchQueryPlan,
+    filename: SmartSearchDocumentFeatures,
+    path: SmartSearchDocumentFeatures
+) -> [SmartSearchInitialEvidence]?
+```
+
+Add this test helper below the suite so every fixture requests initial projections explicitly:
+
+```swift
+private func features(_ text: String) throws -> SmartSearchDocumentFeatures {
+    try SmartSearchTextAnalyzer.documentFeatures(for: text, includeInitials: true)
+}
+```
+
+- [ ] **Step 4: Add and pass linear-work instrumentation test**
+
+Pass `analysisStep` once per analyzed scalar. Use a lock-protected counter and assert that analyzing a doubled string uses no more than `2 * singleCount + 2` steps. Do not assert wall-clock time.
+
+- [ ] **Step 5: Run Task 1 and Task 2 tests and commit**
 
 ```bash
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test --no-parallel --filter SmartSearchTextAnalyzerTests
-DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test --no-parallel --filter SmartSearchModelTests
-git diff --check
+git add Sources/BloomFileManager/Models/SmartSearchTextAnalyzer.swift Tests/BloomFileManagerTests/SmartSearchTextAnalyzerTests.swift
+git commit -m "feat: analyze Korean initial search documents"
 ```
 
-Mentally verify these mutations fail a test: mapping `ㅎ` to the wrong initial, allowing non-consecutive subsequences, skipping NFC normalization, or treating `ㄳ` as a modern initial.
-
-Commit:
-
-```bash
-git add Sources/BloomFileManager/Models/SmartSearchTextAnalyzer.swift Sources/BloomFileManager/Models/SmartSearchModels.swift Tests/BloomFileManagerTests/SmartSearchTextAnalyzerTests.swift Tests/BloomFileManagerTests/SmartSearchModelTests.swift
-git commit -m "feat: add Korean initial search matcher"
-```
-
-### Task 2: Share match evidence between traversal and deterministic ranking
+### Task 3: Use one query plan for recursive candidate filtering
 
 **Files:**
-- Modify: `Sources/BloomFileManager/Models/SmartSearchModels.swift`
 - Modify: `Sources/BloomFileManager/Services/SmartSearchService.swift`
-- Modify: `Tests/BloomFileManagerTests/SmartSearchModelTests.swift`
+- Modify: `Sources/BloomFileManager/Models/SmartSearchModels.swift`
 - Modify: `Tests/BloomFileManagerTests/SmartSearchServiceTests.swift`
 
 **Interfaces:**
-- Consumes: `SmartSearchTextAnalyzer.queryPlan(for:)` and `match(plan:filename:relativePath:)` from Task 1.
-- Produces: internal `PreparedSmartSearchCandidate(result:match:)` and a ranker overload that accepts prepared candidates plus a query plan.
-- Preserves: non-throwing and cancellable `SmartSearchRanker.ranked(_:for:)` entry points for existing callers.
+- Consumes: analyzer plan/features from Tasks 1-2.
+- Produces: internal `PreparedSmartSearchCandidate` and a service candidate path that accepts `SmartSearchQueryPlan`.
 
-- [ ] **Step 1: Write failing service integration tests**
+- [ ] **Step 1: Add failing service tests with real temporary files**
 
-Add real temporary-directory cases to `SmartSearchServiceTests.swift`:
+Create files `한국.txt`, `한글.md`, `구글 드라이브.pdf`, `개인 사진 다운로드.txt`, and `2026-한국-report.txt`. Use the existing `service()`, `query(_:roots:)`, and `write(_:to:)` helpers and assert:
 
 ```swift
-@Test func searchesKoreanInitialsWithBothJamoRepresentations() async throws {
-    let root = try TemporaryDirectory()
-    defer { root.remove() }
-    try Data().write(to: root.url.appending(path: "한국 보고서.pdf"))
-    try Data().write(to: root.url.appending(path: "한글 노트.txt"))
+let koreanNames = try await service().search(query("ㅎㄱ", roots: [fixture.url], includeDirectories: false)).map(\.item.name)
+let driveNames = try await service().search(query("ㄱㄷ", roots: [fixture.url], includeDirectories: false)).map(\.item.name)
+let mixedNames = try await service().search(query("2026ㅎㄱ report", roots: [fixture.url], includeDirectories: false)).map(\.item.name)
 
-    let service = LocalSmartSearchService()
-    let compatibility = try await service.search(try SmartSearchQuery(text: "ㅎㄱ", roots: [root.url]))
-    let choseong = try await service.search(try SmartSearchQuery(text: "ᄒᄀ", roots: [root.url]))
-
-    #expect(compatibility.map(\.item.name) == choseong.map(\.item.name))
-    #expect(Set(compatibility.map(\.item.name)) == ["한국 보고서.pdf", "한글 노트.txt"])
-}
-
-@Test func mixedInitialAndLiteralQueryUsesAndSemantics() async throws {
-    let root = try TemporaryDirectory()
-    defer { root.remove() }
-    for name in ["한국 report.pdf", "한국 notes.pdf", "영문 report.pdf"] {
-        try Data().write(to: root.url.appending(path: name))
-    }
-
-    let results = try await LocalSmartSearchService().search(
-        try SmartSearchQuery(text: "ㅎㄱ report", roots: [root.url])
-    )
-
-    #expect(results.map(\.item.name) == ["한국 report.pdf"])
-}
-
-@Test func runHeadSearchRejectsAnUnrelatedIntermediateInitial() async throws {
-    let root = try TemporaryDirectory()
-    defer { root.remove() }
-    let matching = root.url.appending(path: "구글 드라이브", directoryHint: .isDirectory)
-    let unrelated = root.url.appending(path: "개인 사진 다운로드", directoryHint: .isDirectory)
-    try FileManager.default.createDirectory(at: matching, withIntermediateDirectories: true)
-    try FileManager.default.createDirectory(at: unrelated, withIntermediateDirectories: true)
-    try Data().write(to: matching.appending(path: "계획.txt"))
-    try Data().write(to: unrelated.appending(path: "메모.txt"))
-
-    let results = try await LocalSmartSearchService().search(
-        try SmartSearchQuery(text: "ㄱㄷ", roots: [root.url])
-    )
-
-    #expect(results.contains { $0.relativePath == "구글 드라이브/계획.txt" })
-    #expect(results.contains { $0.relativePath == "개인 사진 다운로드/메모.txt" } == false)
-}
+#expect(koreanNames.contains("한국.txt"))
+#expect(koreanNames.contains("한글.md"))
+#expect(driveNames.contains("구글 드라이브.pdf"))
+#expect(!driveNames.contains("개인 사진 다운로드.txt"))
+#expect(mixedNames == ["2026-한국-report.txt"])
 ```
 
-Also add a path-head case where `ㄱㄷ` finds `구글/드라이브/계획.txt`, and a negative case proving `개인/사진/다운로드` is not returned.
+Also create `ㅎㄱ.txt` and verify it is included, and retain existing hidden/package/symlink test fixtures unchanged.
 
-- [ ] **Step 2: Run focused service tests and verify RED**
+- [ ] **Step 2: Run only the new service tests and verify RED**
 
-Run:
+Expected: result arrays omit Hangul-derived matches because the current service uses literal `contains`.
+
+- [ ] **Step 3: Prepare and filter candidates with the analyzer**
+
+Compile `let queryPlan = SmartSearchTextAnalyzer.queryPlan(for: query.text)` once in `search`. Pass it into every root traversal. For each eligible path:
+
+```swift
+let pathFeatures = try SmartSearchTextAnalyzer.documentFeatures(
+    for: relativePath, includeInitials: queryPlan.containsHangulInitials,
+    analysisStep: { try Task.checkCancellation() }
+)
+guard SmartSearchTextAnalyzer.matches(queryPlan, path: pathFeatures) else { continue }
+let filenameFeatures = try SmartSearchTextAnalyzer.documentFeatures(
+    for: url.lastPathComponent, includeInitials: queryPlan.containsHangulInitials,
+    analysisStep: { try Task.checkCancellation() }
+)
+```
+
+Request cloud availability only after the guard. Store both feature values beside the result in an internal `PreparedSmartSearchCandidate`. Keep path deduplication, candidate count, progress, and cancellation in their current positions.
+
+- [ ] **Step 4: Preserve the public ranker wrapper**
+
+Keep `SmartSearchRanker.ranked([SmartSearchResult], for:)` compiling. It may prepare features internally and delegate to a new prepared-candidate overload; no existing model test call site changes solely for API convenience.
+
+- [ ] **Step 5: Run analyzer, service, cloud-policy, and cancellation tests**
 
 ```bash
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test --no-parallel --filter SmartSearchTextAnalyzerTests
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test --no-parallel --filter SmartSearchServiceTests
 ```
 
-Expected: Korean initial cases return zero results under the old literal-only `matches` implementation.
+Expected: all new Korean candidate tests and existing service safety tests pass.
 
-- [ ] **Step 3: Compile one plan per search and retain match evidence per candidate**
+- [ ] **Step 6: Commit Task 3**
 
-In `SmartSearchService.swift`, add:
-
-```swift
-struct PreparedSmartSearchCandidate: Sendable {
-    let result: SmartSearchResult
-    let match: SmartSearchMatch
-}
+```bash
+git add Sources/BloomFileManager/Models/SmartSearchModels.swift Sources/BloomFileManager/Services/SmartSearchService.swift Tests/BloomFileManagerTests/SmartSearchServiceTests.swift
+git commit -m "feat: match Korean initials in Smart Search"
 ```
 
-Compile `let plan = SmartSearchTextAnalyzer.queryPlan(for: query.text)` before root traversal. Replace the private `matches(url:relativeTo:queryTokens:)` split path with a single analyzer call. Append a prepared candidate only after a non-`nil` match; request cloud availability only for matching entries. Carry prepared candidates through root deduplication and pass them to the ranker. Keep every existing traversal and ranking cancellation check.
+### Task 4: Rank initial evidence without changing literal-only results
 
-- [ ] **Step 4: Run service tests and verify candidate matching GREEN**
+**Files:**
+- Modify: `Sources/BloomFileManager/Models/SmartSearchModels.swift`
+- Modify: `Sources/BloomFileManager/Models/SmartSearchTextAnalyzer.swift`
+- Modify: `Tests/BloomFileManagerTests/SmartSearchModelTests.swift`
 
-Run the focused service suite. Expected: new Korean cases and every existing traversal/safety case pass.
+**Interfaces:**
+- Consumes: `PreparedSmartSearchCandidate` and evidence values.
+- Produces: cancellable prepared-candidate ranking with evidence-vector then relevance then path comparison.
 
-- [ ] **Step 5: Write failing ranking-order and determinism tests**
+- [ ] **Step 1: Add failing ranking-contract tests**
 
-Add tests that assert behavior rather than numeric constants:
+Use hand-built results and assert only observable order:
 
 ```swift
-@Test func literalJamoFilenameOutranksDerivedInitialAndPathMatches() throws {
+@Test func explicitInitialFilenameOutranksDerivedFilenameAndPathOnlyMatches() throws {
     let query = try SmartSearchQuery(text: "ㅎㄱ", roots: [URL(filePath: "/search/root")])
     let ranked = SmartSearchRanker.ranked([
-        result(name: "notes.txt", path: "한국/notes.txt"),
         result(name: "한국.txt", path: "한국.txt"),
-        result(name: "ㅎㄱ", path: "ㅎㄱ")
+        result(name: "ㅎㄱ.txt", path: "ㅎㄱ.txt"),
+        result(name: "notes.txt", path: "한국/notes.txt")
     ], for: query)
-    #expect(ranked.map(\.item.name) == ["ㅎㄱ", "한국.txt", "notes.txt"])
+    #expect(ranked.map(\.item.name) == ["ㅎㄱ.txt", "한국.txt", "notes.txt"])
 }
 
-@Test func initialRankingIsIndependentOfCandidateInputOrder() throws {
+@Test func syllableExactOutranksPrefixContainsAndRunHead() throws {
     let query = try SmartSearchQuery(text: "ㅎㄱ", roots: [URL(filePath: "/search/root")])
-    let candidates = [
-        result(name: "한국2.txt", path: "한국2.txt"),
-        result(name: "한국10.txt", path: "한국10.txt"),
-        result(name: "한글.txt", path: "한글.txt")
-    ]
-
-    let forward = SmartSearchRanker.ranked(candidates, for: query).map(\.item.url)
-    let reversed = SmartSearchRanker.ranked(Array(candidates.reversed()), for: query).map(\.item.url)
-
-    #expect(forward == reversed)
-}
-
-@Test func literalOnlyRankingKeepsTheExistingExactPrefixAndContainsOrder() throws {
-    let query = try SmartSearchQuery(text: "report", roots: [URL(filePath: "/search/root")])
     let ranked = SmartSearchRanker.ranked([
-        result(name: "monthly-report.txt", path: "monthly-report.txt"),
-        result(name: "report-draft.txt", path: "report-draft.txt"),
-        result(name: "report", path: "report")
+        result(name: "한국", path: "한국"),
+        result(name: "한국어", path: "한국어"),
+        result(name: "대한민국한국자료", path: "대한민국한국자료"),
+        result(name: "하늘 구름", path: "하늘 구름")
     ], for: query)
-
-    #expect(ranked.map(\.item.name) == ["report", "report-draft.txt", "monthly-report.txt"])
-    #expect(ranked.allSatisfy { $0.score > 0 })
+    #expect(ranked.map(\.item.name) == ["한국", "한국어", "대한민국한국자료", "하늘 구름"])
 }
 ```
 
-- [ ] **Step 6: Run model tests and verify RED for initial quality ordering**
+Add a literal-only golden regression that records names and scores for the existing `report` and `Café 보고서` fixtures before production changes, then asserts exact equality afterward.
 
-Run the model suite. Expected: the initial candidates are either absent or tied under literal BM25 and do not satisfy the required order.
+- [ ] **Step 2: Verify ranking tests fail for the intended order**
 
-- [ ] **Step 7: Implement lexicographic initial-quality ranking with literal fast-path preservation**
+Expected: Korean candidates have equal/zero relevance and fall back to path order.
 
-Rank prepared candidates with an internal scored tuple:
+- [ ] **Step 3: Implement evidence-vector ordering**
 
-```swift
-private struct SmartSearchRankedCandidate {
-    let result: SmartSearchResult
-    let weakestFirstEvidence: [SmartSearchInitialEvidenceKey]
-    let initialScore: Double
-    let literalScore: Double
-}
-```
+For every initial clause, collect the best filename/path evidence. Sort each candidate's evidence list weakest-first. Compare candidate lists lexicographically, higher evidence first. Only when lists are equal compare combined relevance.
 
-For queries containing initial clauses, compare in this exact order:
+- [ ] **Step 4: Implement the virtual initial BM25 tie-break**
 
-1. initial evidence keys sorted weakest-first, compared lexicographically with higher `(field, representation, relation)` values first;
-2. `literalScore + initialScore` descending;
-3. existing localized standardized path ordering;
-4. raw standardized path; and
-5. relative path.
+Reuse `k1 = 1.2`, `b = 0.75`, and the existing IDF formula. Use occurrence TF `1.0` for explicit/syllable runs and `0.5` for run heads, multiply filename TF by `3`, use supported-initial count as field length, and compute average length/document frequency across prepared candidates. Check cancellation during feature scoring, document-frequency calculation, and merge sort.
 
-Compute initial relevance as a virtual BM25 field using the existing `k1 = 1.2`, `b = 0.75`, and IDF formula. Explicit-initial and syllable-run occurrences contribute TF `1.0`; run-head occurrences contribute TF `0.5`; filename TF is multiplied by `3`. Use the selected field's supported-initial count, clamped to at least `1`, as document length. For each clause and field, document frequency is the count of prepared candidates with matching evidence in that field. Add virtual-field BM25 to the unchanged literal score only after evidence arrays compare equal.
+- [ ] **Step 5: Run RED-to-GREEN and mutation checks**
 
-For literal-only plans, execute the current BM25 and filename bonus calculations and current tie-break without preparing or comparing initial fields. Set `SmartSearchResult.score` to the non-negative combined relevance for initial queries, while tests assert ordering rather than private numeric constants.
-
-Keep `ranked(_:for:)` source-compatible by preparing match evidence internally and dropping candidates that do not match the compiled plan. The service overload must consume its already-prepared candidates so it does not normalize each path twice.
-
-- [ ] **Step 8: Run model, service, cancellation, and permutation tests and commit**
-
-Run:
+Temporarily reverse one evidence comparison and confirm the ranking test fails; restore it. Temporarily make `ㅎㄱ` literal-only and confirm the service/model tests fail; restore it. Then run:
 
 ```bash
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test --no-parallel --filter SmartSearchModelTests
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test --no-parallel --filter SmartSearchServiceTests
-git diff --check
 ```
 
-Verify that cancellation during traversal, feature preparation, scoring, and merge sorting still throws `CancellationError` and that reversing candidates cannot change equal-score output. Add an analyzer step hook used only for deterministic work counting: doubling a synthetic input must require no more than `2x + a fixed setup constant` scalar steps, and a 50,000-candidate cancellation case must stay within the existing candidate bound.
-
-Commit:
+- [ ] **Step 6: Commit Task 4**
 
 ```bash
-git add Sources/BloomFileManager/Models/SmartSearchModels.swift Sources/BloomFileManager/Services/SmartSearchService.swift Tests/BloomFileManagerTests/SmartSearchModelTests.swift Tests/BloomFileManagerTests/SmartSearchServiceTests.swift
-git commit -m "feat: integrate Korean initials into smart search"
+git add Sources/BloomFileManager/Models/SmartSearchModels.swift Sources/BloomFileManager/Models/SmartSearchTextAnalyzer.swift Tests/BloomFileManagerTests/SmartSearchModelTests.swift
+git commit -m "feat: rank Korean initial search matches"
 ```
 
-### Task 3: Native search guidance, accessibility, and release verification
+### Task 5: Explain automatic initial search in the native UI
 
 **Files:**
 - Modify: `Sources/BloomFileManager/Views/SmartSearchView.swift`
 - Modify: `Tests/BloomFileManagerTests/SmartSearchPresentationTests.swift`
-- Modify: `README.md`
-- Modify: `docs/verification/smart-search-checklist.md`
 
 **Interfaces:**
-- Produces: `SmartSearchPresentation.queryPrompt`, `idleSearchDetail`, and `queryAccessibilityHint` so visible and VoiceOver copy have one tested source.
-- Preserves: existing search field identifier, submission policy, result row labels, navigation, and saved-search behavior.
+- Produces: `SmartSearchPresentation.queryPrompt`, `initialSearchGuidance`, and `queryAccessibilityHint`.
+- Consumes: no Store or persistence changes.
 
-- [ ] **Step 1: Write failing presentation-copy tests**
-
-Add:
+- [ ] **Step 1: Add failing presentation tests**
 
 ```swift
-@Test func searchGuidanceExplainsAutomaticKoreanInitialMatching() {
+@Test func queryGuidanceExplainsAutomaticKoreanInitialSearch() {
     #expect(SmartSearchPresentation.queryPrompt == "Search names, paths, or Korean initials")
-    #expect(SmartSearchPresentation.idleSearchDetail == "Try Korean initials such as ㅎㄱ for 한국 or 한글.")
+    #expect(SmartSearchPresentation.initialSearchGuidance == "Try Korean initials such as ㅎㄱ for 한국 or 한글.")
     #expect(SmartSearchPresentation.queryAccessibilityHint == "Korean initial searches are supported, for example ㅎㄱ.")
 }
 ```
 
-Keep the existing state and accessibility tests unchanged so the new copy cannot weaken identifiers or result labels.
+Keep the existing result accessibility-label assertion unchanged.
 
-- [ ] **Step 2: Run presentation tests and verify RED**
+- [ ] **Step 2: Run the new presentation test and verify RED**
 
-Run:
+Expected: the three constants do not exist.
 
-```bash
-DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test --no-parallel --filter SmartSearchPresentationTests
-```
+- [ ] **Step 3: Wire the tested copy into SwiftUI**
 
-Expected: compilation fails because the three presentation constants do not exist.
+Use `SmartSearchPresentation.queryPrompt` as the `TextField` prompt, attach `.accessibilityHint(SmartSearchPresentation.queryAccessibilityHint)`, and use `initialSearchGuidance` as the idle-state detail. Do not add a toggle, badge, or persistent setting.
 
-- [ ] **Step 3: Add minimal visible guidance and VoiceOver hint**
-
-Define the three constants in `SmartSearchPresentation`. Use `queryPrompt` in the `TextField`, use `idleSearchDetail` for the idle state, and add:
-
-```swift
-.accessibilityHint(SmartSearchPresentation.queryAccessibilityHint)
-```
-
-Do not add a toggle. Do not add a second visible caption that duplicates the idle guidance. Preserve `.accessibilityIdentifier(AccessibilityIdentifiers.smartSearchQuery)` and the existing `.onSubmit(submitSearch)` path.
-
-- [ ] **Step 4: Run presentation tests and verify GREEN**
-
-Run the focused presentation suite and confirm all existing identifiers, state titles, root privacy, and result labels still pass.
-
-- [ ] **Step 5: Document the behavior and manual UI gates**
-
-Update `README.md` Smart Search bullets to mention automatic Korean-initial matching with `ㅎㄱ` and mixed terms. Update `docs/verification/smart-search-checklist.md` with explicit checks for:
-
-- compatibility input `ㅎㄱ` and choseong input `ᄒᄀ` returning identical rows;
-- Korean IME composition and Return submission;
-- `ㄱㄷ` finding `구글 드라이브` but not an arbitrary subsequence;
-- VoiceOver announcing the field hint once;
-- light/dark appearance and narrow/wide window readability.
-
-- [ ] **Step 6: Run focused and full automated verification**
-
-Run:
+- [ ] **Step 4: Run presentation and Store tests**
 
 ```bash
-DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test --no-parallel --filter SmartSearch
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test --no-parallel --filter queryGuidanceExplainsAutomaticKoreanInitialSearch
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test --no-parallel --filter SmartSearchStoreTests
+```
+
+- [ ] **Step 5: Commit Task 5**
+
+```bash
+git add Sources/BloomFileManager/Views/SmartSearchView.swift Tests/BloomFileManagerTests/SmartSearchPresentationTests.swift
+git commit -m "feat: surface Korean initial search guidance"
+```
+
+### Task 6: Documentation and complete verification
+
+**Files:**
+- Modify: `README.md`
+- Modify: `docs/verification/smart-search-checklist.md`
+
+**Interfaces:**
+- Consumes: completed behavior from Tasks 1-5.
+- Produces: user-facing feature documentation and repeatable manual checks.
+
+- [ ] **Step 1: Document exact search examples and boundaries**
+
+Add examples `ㅎㄱ → 한국/한글`, `ㄱㄷ → 구글 드라이브`, mixed `2026ㅎㄱ report`, and state that arbitrary subsequences and full-text content search are not supported. Add checklist cases for compatibility/choseong input, Korean IME, Return submission, VoiceOver hint, light/dark appearance, and result navigation.
+
+- [ ] **Step 2: Run focused Smart Search suites separately**
+
+Run analyzer, model, service, Store, and presentation suites individually so an AppKit helper exit cannot hide later suites. Record exact test counts and failures.
+
+- [ ] **Step 3: Run complete automated gates**
+
+```bash
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test --no-parallel
-git diff --check
+git diff --check origin/feature/smart-search...HEAD
 ./script/package_release.sh --verify-contract
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift build -c release --arch arm64
 ```
 
-Expected: all Swift suites pass with zero failures; diff check, release contract, and arm64 release build exit 0.
+If the full suite repeats a pre-existing macOS `kLSDataUnavailableErr` failure, rerun the exact failing test once, preserve the focused Smart Search evidence, and report the environmental failure without claiming a clean full suite.
 
-- [ ] **Step 7: Run Luna Max UI verification and record evidence**
+- [ ] **Step 4: Perform Luna UI verification**
 
-Build and launch the app through the existing script, then exercise the checklist with a temporary root containing `한국 보고서.pdf`, `한글 노트.txt`, `구글 드라이브/계획.txt`, and `개인 사진 다운로드/메모.txt`. Confirm query focus, Return submission, result order, double-click navigation, resizing, light/dark appearance, and VoiceOver hint. Record any environment-blocked physical check explicitly rather than claiming it passed.
+Build and launch the isolated app. In a temporary folder, verify `ㅎㄱ`, `ㄱㄷ`, `2026ㅎㄱ report`, and a non-match `ㄱㄷ` against `개인 사진 다운로드`. Check keyboard Return, cancellation, double-click navigation, VoiceOver query hint, window resizing, and light/dark appearance. Do not use private user folders or cloud materialization for fixtures.
 
-- [ ] **Step 8: Commit documentation and UI changes**
+- [ ] **Step 5: Commit documentation and evidence**
 
 ```bash
-git add Sources/BloomFileManager/Views/SmartSearchView.swift Tests/BloomFileManagerTests/SmartSearchPresentationTests.swift README.md docs/verification/smart-search-checklist.md
-git commit -m "feat: surface Korean initial search guidance"
+git add README.md docs/verification/smart-search-checklist.md
+git commit -m "docs: verify Korean initial Smart Search"
 ```
 
-After Task 3, dispatch Sol Max for a whole-branch design and implementation review. Luna Max applies every load-bearing finding, reruns the focused suites after each fix, and repeats the full verification before completion.
+- [ ] **Step 6: Hand the complete branch to Sol Max for implementation review**
+
+Provide Sol Max the design path, this plan path, base commit `51ab956100bd03632705e07ddcd6ab6f8ee66ef8`, HEAD, complete diff package, focused/full test evidence, build evidence, and Luna UI-verification notes. Resolve every Critical or Important finding, rerun affected focused tests, and ask Sol Max for a scoped re-review.
+
+## Plan self-review
+
+- Every design requirement maps to a task: Unicode/query planning (1), projections and false-positive control (2), recursive matching (3), deterministic ranking and literal regression (4), UI/accessibility (5), and documentation/verification (6).
+- Production interfaces are introduced before consumers and use the same names across tasks.
+- Every production task begins with a failing behavior test and an explicit RED command.
+- Literal-only compatibility, persistence stability, safety policies, bounded work, cancellation, and UI non-goals have explicit regression gates.
+- No task adds indexing, fuzzy search, highlighting, a mode toggle, or a persistence migration.
+- The plan contains no unresolved placeholder, deferred implementation instruction, or ambiguous match rule.
