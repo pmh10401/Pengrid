@@ -145,13 +145,22 @@ private extension FileOperationItemOutcome {
 struct ArchiveOperationStatusPresentation: Equatable, Sendable {
     let title: String
     let currentItemName: String
+    let progressLabel: String
     let statusAccessibilityLabel: String
     let cancelAccessibilityLabel: String
 
     init(progress: ArchiveOperationProgress) {
         title = "\(progress.kind.title) \(progress.format.accessibilityName)"
         currentItemName = progress.currentDisplayName
-        statusAccessibilityLabel = "\(title), "
+        progressLabel = switch progress.phase {
+        case let .preparingSources(completedCount, totalCount):
+            "Preparing files, \(min(max(completedCount, 0), max(totalCount, 0))) of \(max(totalCount, 0))"
+        case .encoding:
+            "Encoding archive"
+        case .publishing:
+            "Finishing archive"
+        }
+        statusAccessibilityLabel = "\(title), \(progressLabel), "
             + "current item \(progress.currentDisplayName)"
         cancelAccessibilityLabel = switch progress.kind {
         case .compress:
@@ -230,8 +239,17 @@ struct OperationStatusView: View {
                 Text(presentation.title)
                     .font(.caption.weight(.semibold))
 
-                ProgressView()
-                    .controlSize(.small)
+                if let fraction = progress.fractionCompleted {
+                    ProgressView(value: fraction, total: 1)
+                        .frame(maxWidth: 180)
+                } else {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+
+                Text(presentation.progressLabel)
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
 
                 Text(presentation.currentItemName)
                     .font(.caption)

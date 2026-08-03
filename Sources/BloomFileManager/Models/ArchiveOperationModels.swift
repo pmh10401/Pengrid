@@ -19,19 +19,38 @@ enum ArchiveOperationKind: Sendable, Equatable {
     }
 }
 
+enum ArchiveOperationPhase: Sendable, Equatable {
+    case preparingSources(completedCount: Int, totalCount: Int)
+    case encoding
+    case publishing
+}
+
 struct ArchiveOperationProgress: Sendable, Equatable {
     let kind: ArchiveOperationKind
     let currentDisplayName: String
     let format: ArchiveFormat
+    let phase: ArchiveOperationPhase
 
     init(
         kind: ArchiveOperationKind,
         currentDisplayName: String,
-        format: ArchiveFormat = .zip
+        format: ArchiveFormat = .zip,
+        phase: ArchiveOperationPhase = .encoding
     ) {
         self.kind = kind
         self.currentDisplayName = currentDisplayName
         self.format = format
+        self.phase = phase
+    }
+
+    var fractionCompleted: Double? {
+        guard case let .preparingSources(completedCount, totalCount) = phase else {
+            return nil
+        }
+        let safeTotal = max(totalCount, 0)
+        guard safeTotal > 0 else { return 0 }
+        let safeCompleted = min(max(completedCount, 0), safeTotal)
+        return Double(safeCompleted) / Double(safeTotal)
     }
 }
 
