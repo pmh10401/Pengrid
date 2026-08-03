@@ -210,7 +210,7 @@ actor FileOperationService {
         in directory: URL,
         identifiedBy directoryIdentity: FileIdentity,
         named name: String
-    ) async throws -> IdentifiedFileRequest {
+    ) async throws -> IdentifiedCreatedFileRequest {
         let accessLeases = try accessCoordinator.acquireAccess(for: [directory])
         defer { accessLeases.forEach { $0.finish() } }
         let startedAt = Date()
@@ -233,6 +233,11 @@ actor FileOperationService {
             else {
                 throw CocoaError(.fileWriteFileExists)
             }
+            let createdIdentity = prepared.createdDirectories[0].identity
+            let fingerprint = await createdOutputFingerprint(
+                at: destination,
+                identifiedBy: createdIdentity
+            )
             await logger.record(
                 kind: .createFolder,
                 duration: Date().timeIntervalSince(startedAt),
@@ -240,9 +245,10 @@ actor FileOperationService {
                 failed: 0,
                 skipped: 0
             )
-            return IdentifiedFileRequest(
+            return IdentifiedCreatedFileRequest(
                 url: destination,
-                identity: prepared.createdDirectories[0].identity
+                identity: createdIdentity,
+                fingerprint: fingerprint
             )
         } catch {
             await logger.record(
@@ -493,6 +499,7 @@ actor FileOperationService {
         let startedAt = Date()
         var outcomes: [FileOperationItemOutcome] = []
         var undoIdentities: [URL: FileIdentity] = [:]
+        var undoFingerprints: [URL: SourceFingerprint] = [:]
         var succeeded = 0
         var failed = 0
         var skipped = 0
@@ -521,6 +528,9 @@ actor FileOperationService {
                     if case let .succeeded(_, destination?) = outcome,
                        let destinationIdentity = completion.destinationIdentity {
                         undoIdentities[destination] = destinationIdentity
+                        if let destinationFingerprint = completion.destinationFingerprint {
+                            undoFingerprints[destination] = destinationFingerprint
+                        }
                     }
                 case .skipped:
                     skipped += 1
@@ -563,7 +573,8 @@ actor FileOperationService {
         )
         return FileOperationResult(
             outcomes: outcomes,
-            undoDestinationIdentities: undoIdentities
+            undoDestinationIdentities: undoIdentities,
+            undoDestinationFingerprints: undoFingerprints
         )
     }
 
@@ -587,6 +598,7 @@ actor FileOperationService {
         let startedAt = Date()
         var outcomes: [FileOperationItemOutcome] = []
         var undoIdentities: [URL: FileIdentity] = [:]
+        var undoFingerprints: [URL: SourceFingerprint] = [:]
         var succeeded = 0
         var failed = 0
         var skipped = 0
@@ -644,6 +656,9 @@ actor FileOperationService {
                     if case let .succeeded(_, destination?) = outcome,
                        let destinationIdentity = completion.destinationIdentity {
                         undoIdentities[destination] = destinationIdentity
+                        if let destinationFingerprint = completion.destinationFingerprint {
+                            undoFingerprints[destination] = destinationFingerprint
+                        }
                     }
                 case .skipped:
                     skipped += 1
@@ -718,7 +733,8 @@ actor FileOperationService {
         )
         return FileOperationResult(
             outcomes: outcomes,
-            undoDestinationIdentities: undoIdentities
+            undoDestinationIdentities: undoIdentities,
+            undoDestinationFingerprints: undoFingerprints
         )
     }
 
@@ -754,7 +770,8 @@ actor FileOperationService {
                 guard !sourceIdentity.refersToSameItem(as: destinationIdentity) else {
                     return TransferItemCompletion(
                         outcome: .skipped(source: source),
-                        destinationIdentity: nil
+                        destinationIdentity: nil,
+                        destinationFingerprint: nil
                     )
                 }
                 replacedIdentity = destinationIdentity
@@ -766,7 +783,8 @@ actor FileOperationService {
             case .skip:
                 return TransferItemCompletion(
                     outcome: .skipped(source: source),
-                    destinationIdentity: nil
+                    destinationIdentity: nil,
+                    destinationFingerprint: nil
                 )
             case .cancel:
                 return nil
@@ -781,7 +799,8 @@ actor FileOperationService {
                 try await fileSystem.move(source, identifiedBy: sourceIdentity, to: destination)
                 return TransferItemCompletion(
                     outcome: .succeeded(source: source, destination: destination),
-                    destinationIdentity: sourceIdentity
+                    destinationIdentity: sourceIdentity,
+                    destinationFingerprint: nil
                 )
             }
         }
@@ -801,6 +820,12 @@ actor FileOperationService {
             to: destination,
             replacing: replacedIdentity
         )
+        let destinationFingerprint = mode == .copy
+            ? await createdOutputFingerprint(
+                at: destination,
+                identifiedBy: prepared.itemIdentity
+            )
+            : nil
 
         if mode == .move {
             do {
@@ -820,7 +845,8 @@ actor FileOperationService {
         }
         return TransferItemCompletion(
             outcome: .succeeded(source: source, destination: destination),
-            destinationIdentity: prepared.itemIdentity
+            destinationIdentity: prepared.itemIdentity,
+            destinationFingerprint: destinationFingerprint
         )
     }
 
@@ -1015,6 +1041,22 @@ actor FileOperationService {
         }
     }
 
+    private func createdOutputFingerprint(
+        at destination: URL,
+        identifiedBy identity: FileIdentity
+    ) async -> SourceFingerprint? {
+        do {
+            guard try await fileSystem.identity(of: destination) == identity else { return nil }
+            let fingerprint = try await fileSystem.fingerprint(of: destination)
+            guard !Task.isCancelled,
+                  try await fileSystem.identity(of: destination) == identity
+            else { return nil }
+            return fingerprint
+        } catch {
+            return nil
+        }
+    }
+
     private func reportProgress(
         completedCount: Int,
         totalCount: Int,
@@ -1051,6 +1093,7 @@ private struct TransferFailure: LocalizedError {
 private struct TransferItemCompletion {
     let outcome: FileOperationItemOutcome
     let destinationIdentity: FileIdentity?
+    let destinationFingerprint: SourceFingerprint?
 }
 
 private enum FileTransferError: Error {

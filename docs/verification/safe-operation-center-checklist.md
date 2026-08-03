@@ -22,9 +22,10 @@ or VoiceOver checks against a release candidate.
   restore, created-output quarantine, recursive no-follow fingerprint
   verification, exclusive collision refusal, cancellation rollback, ancestor
   invalidation, replacement conflict, and failed-undo behavior are covered.
-  Undo authority now comes from the mutation's own result rather than a later
-  path lookup, and an immediate replacement at the destination is rejected. A
-  partially successful multi-item intent is not retryable as a whole.
+  Created-output Undo identity and recursive fingerprint authority now come
+  from the mutation's own result rather than a later controller lookup;
+  immediate replacement and in-place edit races are rejected. A partially
+  successful multi-item intent is not retryable as a whole.
 
 - [x] **PASS — 2026-08-03 — archive progress:** Tests cover ordered exact
   preparation transitions, indeterminate native encoding, source and
@@ -33,11 +34,13 @@ or VoiceOver checks against a release candidate.
   writes, identity-owned bounded parallel staging and partial-output cleanup,
   preservation of unowned replacements for recovery review, phase-aware
   labels, basename-only status copy, and a ten-hertz limit for intermediate
-  preparation updates while retaining start and completion boundaries.
+  preparation updates while retaining and deduplicating start and completion
+  boundaries.
 
 - [x] **PASS — 2026-08-03 — final-review regression set:** The current source
-  passed 109 focused tests covering the operation controller, archive service,
-  transfer service, undo service, mutation-owned archive authority, throttled
+  passed 152 focused tests in seven suites covering the operation controller,
+  archive service and live archive integration, transfer and mutation services,
+  undo service, mutation-owned archive authority and fingerprints, throttled
   archive publication, and selection changes during Trash identity capture.
   Cross-volume move cancellation after public destination commit now requires
   recovery review and halts normal queue advancement.
@@ -52,6 +55,12 @@ or VoiceOver checks against a release candidate.
   independently confirmed all four queue/details/recovery accessibility
   identifier connections with no omissions; the seven focused accessibility
   presentation tests passed. This does not replace the manual VoiceOver gate.
+
+- [x] **PASS — 2026-08-03 — final-review UI mechanics:** Luna Max reran 13
+  focused tests and confirmed phase-aware archive presentation, stable combined
+  accessibility labels and identifiers, ten-hertz intermediate preparation
+  publication, unthrottled phase boundaries, and stale Trash-selection refusal.
+  No GUI-launch claim was made while LaunchServices remained unavailable.
 
 ## App smoke evidence
 
@@ -107,11 +116,22 @@ or VoiceOver checks against a release candidate.
 
 ## Release gate
 
-- [ ] **NOT RUN — current full automated suite and release build:** Rerun all
-  Swift tests and the release build after final-review hardening. The current
-  macOS session has intermittently reported unavailable system services during
-  unrelated live filesystem/listing tests, so record code failures separately
-  from reproducible host-service failures.
+- [ ] **FAIL — current full-suite completion is host-blocked:** Two serial full
+  runs reached the unrelated long-lived-monitor coverage, where FSEvents could
+  not start, then the AppKit panel helper reported invalid XPC connections and
+  the run ended without a complete suite summary. The focused 152-test
+  operation set remains green; the current macOS user session must be restored
+  before this full-suite gate can be closed.
+
+- [x] **PASS — 2026-08-03 — current release compile:** Full Xcode completed the
+  production build successfully after the final-review hardening.
+
+- [ ] **FAIL — bundle launch verification is host-blocked:**
+  `script/build_and_run.sh --verify` rebuilt `dist/Pengrid.app`, but
+  LaunchServices returned `kLSNoExecutableErr`. Direct inspection confirms the
+  declared `BloomFileManager` executable exists, is executable, and is an arm64
+  Mach-O; this matches the wider LaunchServices/XPC service failure in the
+  current user session.
 
 - [ ] **NOT RUN:** Record dated `PASS`/`FAIL` evidence for every manual item
   above against the exact release candidate. Until then, this feature remains

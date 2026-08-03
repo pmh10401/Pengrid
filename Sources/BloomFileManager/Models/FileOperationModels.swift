@@ -28,6 +28,12 @@ struct IdentifiedFileRequest: Sendable, Equatable {
     let identity: FileIdentity
 }
 
+struct IdentifiedCreatedFileRequest: Sendable, Equatable {
+    let url: URL
+    let identity: FileIdentity
+    let fingerprint: SourceFingerprint?
+}
+
 struct IdentifiedTransferRequest: Sendable, Equatable {
     let source: URL
     let sourceIdentity: FileIdentity
@@ -165,11 +171,13 @@ struct FileOperationResult: Sendable, Equatable {
     let outcomes: [FileOperationItemOutcome]
     private let safeRelativePathsBySource: [URL: ComparisonRelativePath]
     private let undoDestinationIdentities: [URL: FileIdentity]
+    private let undoDestinationFingerprints: [URL: SourceFingerprint]
 
     init(
         outcomes: [FileOperationItemOutcome],
         safeRelativePathsBySource: [URL: ComparisonRelativePath] = [:],
-        undoDestinationIdentities: [URL: FileIdentity] = [:]
+        undoDestinationIdentities: [URL: FileIdentity] = [:],
+        undoDestinationFingerprints: [URL: SourceFingerprint] = [:]
     ) {
         self.outcomes = outcomes
         var normalized: [URL: ComparisonRelativePath] = [:]
@@ -190,6 +198,11 @@ struct FileOperationResult: Sendable, Equatable {
             normalizedUndoIdentities[destination.standardizedFileURL] = identity
         }
         self.undoDestinationIdentities = normalizedUndoIdentities
+        var normalizedUndoFingerprints: [URL: SourceFingerprint] = [:]
+        for (destination, fingerprint) in undoDestinationFingerprints {
+            normalizedUndoFingerprints[destination.standardizedFileURL] = fingerprint
+        }
+        self.undoDestinationFingerprints = normalizedUndoFingerprints
     }
 
     func safeRelativePath(for source: URL) -> ComparisonRelativePath? {
@@ -200,13 +213,18 @@ struct FileOperationResult: Sendable, Equatable {
         undoDestinationIdentities[destination.standardizedFileURL]
     }
 
+    func undoDestinationFingerprint(for destination: URL) -> SourceFingerprint? {
+        undoDestinationFingerprints[destination.standardizedFileURL]
+    }
+
     func addingSafeRelativePaths(
         _ paths: [URL: ComparisonRelativePath]
     ) -> FileOperationResult {
         FileOperationResult(
             outcomes: outcomes,
             safeRelativePathsBySource: paths,
-            undoDestinationIdentities: undoDestinationIdentities
+            undoDestinationIdentities: undoDestinationIdentities,
+            undoDestinationFingerprints: undoDestinationFingerprints
         )
     }
 

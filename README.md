@@ -104,8 +104,9 @@ offers it only when retrying the whole intent cannot repeat an item that already
 succeeded. Storage Inspector cleanup and Undo require an otherwise empty queue
 and cannot be retried as a whole. Undo is deliberately conservative: move,
 rename, and Trash restore
-require the same file identity and an unoccupied original location; removing a
-new folder, copy, archive, or extracted tree requires its entire no-follow
+require the destination identity recorded by the mutation itself and an
+unoccupied original location; removing a new folder, copy, archive, or extracted
+tree requires that same mutation-owned identity and its entire no-follow
 fingerprint to remain unchanged. A replacement conflict, later change, missing
 item, or occupied restore path disables or safely refuses undo instead of
 deleting or overwriting data.
@@ -127,11 +128,13 @@ operation. A cloud-backed source may be downloaded first when macOS File
 Provider needs to materialize it.
 
 The status row shows exact top-level item counts while those selected sources
-are prepared. The native `ditto` or `tar` encoding phase is intentionally shown
-as indeterminate because neither command exposes a reliable cross-format byte
-total. **Cancel** remains available throughout the operation, and **Finishing
-archive** appears only after Pengrid verifies the staged output and begins its
-exclusive publication to the destination.
+are prepared. Intermediate visible updates are limited to ten per second while
+the start and completion boundaries are always published. The native `ditto`
+or `tar` encoding phase is intentionally shown as indeterminate because neither
+command exposes a reliable cross-format byte total. **Cancel** remains available
+throughout the operation, and **Finishing archive** appears only after Pengrid
+verifies the staged output and begins its exclusive publication to the
+destination.
 
 Archive destinations are never overwritten. Pengrid chooses an available name
 before starting and exclusive publication rejects a late collision, leaving the

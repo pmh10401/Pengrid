@@ -31,6 +31,7 @@ actor ArchiveOperationService: ArchiveOperating {
     ) async -> FileOperationResult {
         var outcomes: [FileOperationItemOutcome] = []
         var undoIdentities: [URL: FileIdentity] = [:]
+        var undoFingerprints: [URL: SourceFingerprint] = [:]
 
         for (index, request) in requests.enumerated() {
             if Task.isCancelled {
@@ -46,12 +47,15 @@ actor ArchiveOperationService: ArchiveOperating {
                 defer { accessLeases.forEach { $0.finish() } }
 
                 try validate(request)
-                let destinationIdentity = try await perform(request, progress: progress)
+                let output = try await perform(request, progress: progress)
                 outcomes.append(.succeeded(
                     source: source,
                     destination: request.finalDestination
                 ))
-                undoIdentities[request.finalDestination] = destinationIdentity
+                undoIdentities[request.finalDestination] = output.identity
+                if let fingerprint = output.fingerprint {
+                    undoFingerprints[request.finalDestination] = fingerprint
+                }
             } catch {
                 let cancellation = Self.cancellationState(for: error)
                 if cancellation.wasCancelled {
@@ -80,21 +84,22 @@ actor ArchiveOperationService: ArchiveOperating {
 
         return FileOperationResult(
             outcomes: outcomes,
-            undoDestinationIdentities: undoIdentities
+            undoDestinationIdentities: undoIdentities,
+            undoDestinationFingerprints: undoFingerprints
         )
     }
 
     private func perform(
         _ request: ArchiveRequest,
         progress: @escaping ArchiveProgressHandler
-    ) async throws -> FileIdentity {
+    ) async throws -> ArchiveCreatedOutput {
         try await requireDestinationParentIdentity(request)
         let reservation = try await fileSystem.reserveStagingDirectory(
             beside: request.finalDestination,
             parentIdentifiedBy: request.destinationParentIdentity
         )
         var primaryError: (any Error)?
-        var publishedIdentity: FileIdentity?
+        var publishedOutput: ArchiveCreatedOutput?
 
         do {
             try Task.checkCancellation()
@@ -134,7 +139,14 @@ actor ArchiveOperationService: ArchiveOperating {
                 to: request.finalDestination,
                 destinationParentIdentifiedBy: request.destinationParentIdentity
             )
-            publishedIdentity = stagedIdentity
+            let fingerprint = await createdOutputFingerprint(
+                at: request.finalDestination,
+                identifiedBy: stagedIdentity
+            )
+            publishedOutput = ArchiveCreatedOutput(
+                identity: stagedIdentity,
+                fingerprint: fingerprint
+            )
         } catch {
             primaryError = error
         }
@@ -152,10 +164,10 @@ actor ArchiveOperationService: ArchiveOperating {
                 cleanup: cleanupError
             )
         }
-        guard let publishedIdentity else {
+        guard let publishedOutput else {
             throw ArchiveServiceError.missingStagedOutput
         }
-        return publishedIdentity
+        return publishedOutput
     }
 
     private func cleanup(_ reservation: StagingReservation) async -> (any Error)? {
@@ -164,6 +176,22 @@ actor ArchiveOperationService: ArchiveOperating {
             return nil
         } catch {
             return error
+        }
+    }
+
+    private func createdOutputFingerprint(
+        at destination: URL,
+        identifiedBy identity: FileIdentity
+    ) async -> SourceFingerprint? {
+        do {
+            guard try await fileSystem.identity(of: destination) == identity else { return nil }
+            let fingerprint = try await fileSystem.fingerprint(of: destination)
+            guard !Task.isCancelled,
+                  try await fileSystem.identity(of: destination) == identity
+            else { return nil }
+            return fingerprint
+        } catch {
+            return nil
         }
     }
 
@@ -214,6 +242,11 @@ actor ArchiveOperationService: ArchiveOperating {
         return failure.cleanup != nil
             || (failure.primary as? ArchiveOperationError) == .recoveryRequired
     }
+}
+
+private struct ArchiveCreatedOutput: Sendable {
+    let identity: FileIdentity
+    let fingerprint: SourceFingerprint?
 }
 
 private struct ArchiveOperationFailure: LocalizedError {

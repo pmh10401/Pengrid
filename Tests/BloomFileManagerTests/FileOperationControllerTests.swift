@@ -9,6 +9,11 @@ struct FileOperationControllerTests {
         let start = ContinuousClock.now
 
         let initial = gate.shouldPublish(completedCount: 0, totalCount: 20, at: start)
+        let duplicateInitial = gate.shouldPublish(
+            completedCount: 0,
+            totalCount: 20,
+            at: start.advanced(by: .milliseconds(1))
+        )
         let early = gate.shouldPublish(
             completedCount: 1,
             totalCount: 20,
@@ -24,11 +29,18 @@ struct FileOperationControllerTests {
             totalCount: 20,
             at: start.advanced(by: .milliseconds(101))
         )
+        let duplicateFinal = gate.shouldPublish(
+            completedCount: 20,
+            totalCount: 20,
+            at: start.advanced(by: .milliseconds(102))
+        )
 
         #expect(initial)
+        #expect(!duplicateInitial)
         #expect(!early)
         #expect(interval)
         #expect(final)
+        #expect(!duplicateFinal)
     }
 
     @Test func compressionUsesTheRequestedArchiveFormat() async {

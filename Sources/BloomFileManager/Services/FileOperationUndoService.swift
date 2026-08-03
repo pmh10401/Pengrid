@@ -107,11 +107,12 @@ actor FileOperationUndoService {
                     guard let identity = result.undoDestinationIdentity(
                         for: item.destination
                     ),
+                    let fingerprint = result.undoDestinationFingerprint(
+                        for: item.destination
+                    ),
+                    try await fileSystem.identity(of: item.destination) == identity,
+                    try await fileSystem.fingerprint(of: item.destination) == fingerprint,
                     try await fileSystem.identity(of: item.destination) == identity else {
-                        return nil
-                    }
-                    let fingerprint = try await fileSystem.fingerprint(of: item.destination)
-                    guard try await fileSystem.identity(of: item.destination) == identity else {
                         return nil
                     }
                     entries.append(FileOperationUndoCreatedEntry(

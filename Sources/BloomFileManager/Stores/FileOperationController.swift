@@ -30,6 +30,7 @@ enum CloudOperationRequestGate {
 
 struct ArchiveProgressPublicationGate {
     private var lastPublishedAt: ContinuousClock.Instant?
+    private var lastPublishedProgress: (completedCount: Int, totalCount: Int)?
     private let minimumInterval: Duration
 
     init(minimumInterval: Duration = .milliseconds(100)) {
@@ -41,6 +42,11 @@ struct ArchiveProgressPublicationGate {
         totalCount: Int,
         at now: ContinuousClock.Instant
     ) -> Bool {
+        if let lastPublishedProgress,
+           lastPublishedProgress.completedCount == completedCount,
+           lastPublishedProgress.totalCount == totalCount {
+            return false
+        }
         let isBoundary = completedCount <= 0 || completedCount >= totalCount
         if !isBoundary,
            let lastPublishedAt,
@@ -48,11 +54,13 @@ struct ArchiveProgressPublicationGate {
             return false
         }
         lastPublishedAt = now
+        lastPublishedProgress = (completedCount, totalCount)
         return true
     }
 
     mutating func reset() {
         lastPublishedAt = nil
+        lastPublishedProgress = nil
     }
 }
 
@@ -806,11 +814,17 @@ final class FileOperationController {
                     named: name
                 )
                 if renamePane != nil {
-                    renameCapture.store(created)
+                    renameCapture.store(IdentifiedFileRequest(
+                        url: created.url,
+                        identity: created.identity
+                    ))
                 }
                 return FileOperationResult(outcomes: [
                     .succeeded(source: created.url, destination: created.url)
-                ], undoDestinationIdentities: [created.url: created.identity])
+                ], undoDestinationIdentities: [created.url: created.identity],
+                undoDestinationFingerprints: created.fingerprint.map {
+                    [created.url: $0]
+                } ?? [:])
             } catch is CancellationError {
                 return FileOperationResult(outcomes: [
                     .cancelled(source: proposedURL)

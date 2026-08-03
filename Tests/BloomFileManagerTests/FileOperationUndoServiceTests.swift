@@ -33,6 +33,33 @@ struct FileOperationUndoServiceTests {
         #expect(await fileSystem.events.contains("fingerprint:/destination/Owned.txt") == false)
     }
 
+    @Test func recipeNeverAdoptsInPlaceEditsMadeAfterMutationCompletion() async throws {
+        let source = URL(filePath: "/source/Owned.txt")
+        let destination = URL(filePath: "/destination/Owned.txt")
+        let ownedIdentity = FileIdentity(
+            entryIdentifier: "owned",
+            resolvedIdentifier: "owned"
+        )
+        let fileSystem = RecordingFileSystem(
+            existingURLs: [destination],
+            identities: [destination: ownedIdentity]
+        )
+        let mutationFingerprint = try await fileSystem.fingerprint(of: destination)
+        await fileSystem.mutateContents(at: destination)
+        let service = FileOperationUndoService(fileSystem: fileSystem)
+        let result = FileOperationResult(
+            outcomes: [.succeeded(source: source, destination: destination)],
+            undoDestinationIdentities: [destination: ownedIdentity],
+            undoDestinationFingerprints: [destination: mutationFingerprint]
+        )
+
+        #expect(await service.makeRecipe(
+            kind: .copy,
+            result: result,
+            allowsUndo: true
+        ) == nil)
+    }
+
     @Test func renameUndoMovesOnlyTheCapturedIdentityBackToAnEmptyOriginalPath() async throws {
         let original = URL(filePath: "/workspace/Before.txt")
         let renamed = URL(filePath: "/workspace/After.txt")
@@ -319,15 +346,18 @@ private func authoritativeUndoResult(
     fileSystem: any FileSystemAccess
 ) async -> FileOperationResult {
     var identities: [URL: FileIdentity] = [:]
+    var fingerprints: [URL: SourceFingerprint] = [:]
     for outcome in outcomes {
         guard case let .succeeded(_, destination?) = outcome,
               let identity = try? await fileSystem.identity(of: destination)
         else { continue }
         identities[destination] = identity
+        fingerprints[destination] = try? await fileSystem.fingerprint(of: destination)
     }
     return FileOperationResult(
         outcomes: outcomes,
-        undoDestinationIdentities: identities
+        undoDestinationIdentities: identities,
+        undoDestinationFingerprints: fingerprints
     )
 }
 
