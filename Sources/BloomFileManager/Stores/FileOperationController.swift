@@ -1056,6 +1056,14 @@ final class FileOperationController {
             touching: pending.touchedDirectories
         )
         let completedState = terminalState(for: result)
+        let canRetry = !result.outcomes.isEmpty && result.outcomes.allSatisfy {
+            switch $0 {
+            case .failed, .cancelled:
+                true
+            case .succeeded, .recoveryNeeded, .skipped:
+                false
+            }
+        }
         let recipe: FileOperationUndoRecipe?
         if completedState == .succeeded {
             recipe = await undoService.makeRecipe(
@@ -1072,7 +1080,8 @@ final class FileOperationController {
         retryOperations[pending.id] = pending
         recordHistory(pending.snapshot(
             state: completedState,
-            canUndo: recipe != nil
+            canUndo: recipe != nil,
+            canRetry: canRetry
         ))
         activeJob = nil
         activeOperation = nil
@@ -1150,7 +1159,8 @@ final class FileOperationController {
             itemCount: original.itemCount,
             state: state,
             progress: progress,
-            canUndo: canUndo
+            canUndo: canUndo,
+            canRetry: original.isRetryEligible
         )
     }
 
@@ -1218,7 +1228,8 @@ private struct PendingFileOperation {
 
     func snapshot(
         state: FileOperationJobState,
-        canUndo: Bool = false
+        canUndo: Bool = false,
+        canRetry: Bool = true
     ) -> FileOperationJobSnapshot {
         FileOperationJobSnapshot(
             id: id,
@@ -1227,7 +1238,8 @@ private struct PendingFileOperation {
             itemCount: itemCount,
             state: state,
             progress: nil,
-            canUndo: canUndo
+            canUndo: canUndo,
+            canRetry: canRetry
         )
     }
 

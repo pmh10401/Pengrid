@@ -64,6 +64,7 @@ struct FileOperationJobSnapshot: Identifiable, Sendable, Equatable {
     let itemCount: Int
     let state: FileOperationJobState
     let progress: FileOperationJobProgress?
+    private let retryEligible: Bool
     private let undoEligible: Bool
 
     init(
@@ -73,7 +74,8 @@ struct FileOperationJobSnapshot: Identifiable, Sendable, Equatable {
         itemCount: Int,
         state: FileOperationJobState,
         progress: FileOperationJobProgress?,
-        canUndo: Bool
+        canUndo: Bool,
+        canRetry: Bool = true
     ) {
         self.id = id
         self.kind = kind
@@ -81,14 +83,17 @@ struct FileOperationJobSnapshot: Identifiable, Sendable, Equatable {
         self.itemCount = max(itemCount, 0)
         self.state = state
         self.progress = progress
+        retryEligible = canRetry
         undoEligible = canUndo
     }
 
     var title: String { kind.title }
 
     var canRetry: Bool {
-        kind != .undo && (state == .failed || state == .cancelled)
+        retryEligible && kind != .undo && (state == .failed || state == .cancelled)
     }
+
+    var isRetryEligible: Bool { retryEligible }
 
     var canUndo: Bool {
         state == .succeeded && undoEligible

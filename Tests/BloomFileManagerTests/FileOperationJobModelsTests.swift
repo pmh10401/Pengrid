@@ -93,10 +93,21 @@ struct FileOperationJobModelsTests {
             progress: nil,
             canUndo: true
         )
+        let unsafePartialRetry = FileOperationJobSnapshot(
+            id: id,
+            kind: .trash,
+            itemDisplayName: "Several items",
+            itemCount: 3,
+            state: .cancelled,
+            progress: nil,
+            canUndo: false,
+            canRetry: false
+        )
 
         #expect(failed.canRetry)
         #expect(!failed.canUndo)
         #expect(cancelled.canRetry)
+        #expect(!unsafePartialRetry.canRetry)
         #expect(!cancelled.canUndo)
         #expect(!succeeded.canRetry)
         #expect(succeeded.canUndo)

@@ -1032,6 +1032,7 @@ struct FileOperationControllerTests {
             .cancelled(source: second),
             .cancelled(source: third)
         ]))
+        #expect(controller.operationHistory.first?.canRetry == false)
     }
 
     @Test func queuedOperationsRunFIFOWithOnlyOneActiveJob() async {
