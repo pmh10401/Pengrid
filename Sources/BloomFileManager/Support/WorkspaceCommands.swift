@@ -528,10 +528,13 @@ struct WorkspaceCommands: Commands {
 
             Button("Move to Trash Immediately") {
                 guard let workspace, policy.canTrash else { return }
-                _ = operationController.trash(
-                    workspace.selectedURLsForCommands,
-                    workspace: workspace
-                )
+                let selectedURLs = workspace.selectedURLsForCommands
+                Task {
+                    _ = await operationController.trashImmediately(
+                        selectedURLs,
+                        workspace: workspace
+                    )
+                }
             }
             .keyboardShortcut(.delete, modifiers: .command)
             .disabled(!policy.canTrash)

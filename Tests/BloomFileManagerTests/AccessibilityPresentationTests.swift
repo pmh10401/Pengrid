@@ -11,6 +11,15 @@ import Testing
     #expect(AccessibilityIdentifiers.operationCenter == "operationCenter")
     #expect(AccessibilityIdentifiers.operationCenterActive == "operationCenter.active")
     #expect(AccessibilityIdentifiers.operationCenterQueue == "operationCenter.queue")
+    #expect(
+        AccessibilityIdentifiers.operationCenterMoveQueuedUp
+            == "operationCenter.moveQueuedUp"
+    )
+    #expect(
+        AccessibilityIdentifiers.operationCenterMoveQueuedDown
+            == "operationCenter.moveQueuedDown"
+    )
+    #expect(AccessibilityIdentifiers.operationCenterDetails == "operationCenter.details")
     #expect(AccessibilityIdentifiers.operationCenterHistory == "operationCenter.history")
     #expect(AccessibilityIdentifiers.operationCenterRecovery == "operationCenter.recovery")
     #expect(
@@ -148,6 +157,9 @@ import Testing
     #expect(operationCenter.contains("AccessibilityIdentifiers.operationCenter"))
     #expect(operationCenter.contains("AccessibilityIdentifiers.operationCenterActive"))
     #expect(operationCenter.contains("AccessibilityIdentifiers.operationCenterQueue"))
+    #expect(operationCenter.contains("AccessibilityIdentifiers.operationCenterMoveQueuedUp"))
+    #expect(operationCenter.contains("AccessibilityIdentifiers.operationCenterMoveQueuedDown"))
+    #expect(operationCenter.contains("AccessibilityIdentifiers.operationCenterDetails"))
     #expect(operationCenter.contains("AccessibilityIdentifiers.operationCenterHistory"))
     #expect(operationCenter.contains("controller.pauseActiveJob()"))
     #expect(operationCenter.contains("controller.resumeActiveJob()"))
@@ -156,6 +168,9 @@ import Testing
     #expect(operationCenter.contains("controller.retryJob(job.id)"))
     #expect(operationCenter.contains("controller.undoJob(job.id)"))
     #expect(operationCenter.contains("AccessibilityIdentifiers.operationCenterRecovery"))
+    #expect(operationCenter.contains(
+        "AccessibilityIdentifiers.operationCenterContinueAfterRecovery"
+    ))
     #expect(operationCenter.contains("controller.continueAfterRecovery()"))
 
     let conflictSheet = try source(named: "Views/ConflictResolutionSheet.swift")

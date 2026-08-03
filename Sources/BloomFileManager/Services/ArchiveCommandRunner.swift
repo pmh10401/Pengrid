@@ -6,14 +6,14 @@ protocol ArchiveCommandRunning: Sendable {
     func run(
         kind: ArchiveOperationKind,
         format: ArchiveFormat,
-        sources: [URL],
+        sources: [IdentifiedFileRequest],
         destination: URL
     ) async throws
 
     func run(
         kind: ArchiveOperationKind,
         format: ArchiveFormat,
-        sources: [URL],
+        sources: [IdentifiedFileRequest],
         destination: URL,
         progress: @escaping ArchiveCommandProgressHandler
     ) async throws
@@ -23,7 +23,7 @@ extension ArchiveCommandRunning {
     func run(
         kind: ArchiveOperationKind,
         format: ArchiveFormat,
-        sources: [URL],
+        sources: [IdentifiedFileRequest],
         destination: URL,
         progress: @escaping ArchiveCommandProgressHandler
     ) async throws {
@@ -39,11 +39,16 @@ extension ArchiveCommandRunning {
 
 struct LiveArchiveCommandRunner: ArchiveCommandRunning {
     private static let standardErrorLimit = 16_384
+    private let fileSystem: any FileSystemAccess
+
+    init(fileSystem: any FileSystemAccess = LiveFileSystemAccess()) {
+        self.fileSystem = fileSystem
+    }
 
     func run(
         kind: ArchiveOperationKind,
         format: ArchiveFormat,
-        sources: [URL],
+        sources: [IdentifiedFileRequest],
         destination: URL
     ) async throws {
         try await run(
@@ -58,67 +63,76 @@ struct LiveArchiveCommandRunner: ArchiveCommandRunning {
     func run(
         kind: ArchiveOperationKind,
         format: ArchiveFormat,
-        sources: [URL],
+        sources: [IdentifiedFileRequest],
         destination: URL,
         progress: @escaping ArchiveCommandProgressHandler
     ) async throws {
-        let preparedCommand = try await Self.prepareCommand(
+        let preparedCommand = try await prepareCommand(
             kind: kind,
             format: format,
             sources: sources,
             destination: destination,
             progress: progress
         )
-        defer { preparedCommand.cleanup() }
-        guard !Task.isCancelled else {
-            throw ArchiveOperationError.cancelled
-        }
-
-        await progress(.encoding)
-        try Task.checkCancellation()
-
-        let process = Process()
-        process.executableURL = format == .zip
-            ? URL(filePath: "/usr/bin/ditto")
-            : URL(filePath: "/usr/bin/tar")
-        process.arguments = preparedCommand.arguments
-
-        let standardErrorPipe = Pipe()
-        process.standardError = standardErrorPipe
-
-        let terminationLatch = ProcessTerminationLatch()
-        process.terminationHandler = { process in
-            terminationLatch.record(process.terminationStatus)
-        }
-
         do {
-            try process.run()
+            guard !Task.isCancelled else {
+                throw ArchiveOperationError.cancelled
+            }
+
+            await progress(.encoding)
+            try Task.checkCancellation()
+
+            let process = Process()
+            process.executableURL = format == .zip
+                ? URL(filePath: "/usr/bin/ditto")
+                : URL(filePath: "/usr/bin/tar")
+            process.arguments = preparedCommand.arguments
+
+            let standardErrorPipe = Pipe()
+            process.standardError = standardErrorPipe
+
+            let terminationLatch = ProcessTerminationLatch()
+            process.terminationHandler = { process in
+                terminationLatch.record(process.terminationStatus)
+            }
+
+            do {
+                try process.run()
+            } catch {
+                throw ArchiveOperationError.commandLaunch(error.localizedDescription)
+            }
+
+            let runningProcess = RunningArchiveProcess(process)
+            let standardErrorTask = Task.detached(priority: .utility) {
+                captureStandardError(
+                    from: standardErrorPipe.fileHandleForReading,
+                    limit: Self.standardErrorLimit
+                )
+            }
+            let status = await withTaskCancellationHandler {
+                await terminationLatch.wait()
+            } onCancel: {
+                runningProcess.cancel()
+            }
+            let standardError = await standardErrorTask.value
+
+            if Task.isCancelled || runningProcess.wasCancellationRequested {
+                throw ArchiveOperationError.cancelled
+            }
+            guard status == 0 else {
+                throw ArchiveOperationError.nonZeroTermination(
+                    status: status,
+                    standardError: standardError
+                )
+            }
         } catch {
-            throw ArchiveOperationError.commandLaunch(error.localizedDescription)
+            guard await preparedCommand.cleanup(using: fileSystem) == nil else {
+                throw ArchiveOperationError.recoveryRequired
+            }
+            throw error
         }
-
-        let runningProcess = RunningArchiveProcess(process)
-        let standardErrorTask = Task.detached(priority: .utility) {
-            captureStandardError(
-                from: standardErrorPipe.fileHandleForReading,
-                limit: Self.standardErrorLimit
-            )
-        }
-        let status = await withTaskCancellationHandler {
-            await terminationLatch.wait()
-        } onCancel: {
-            runningProcess.cancel()
-        }
-        let standardError = await standardErrorTask.value
-
-        if Task.isCancelled || runningProcess.wasCancellationRequested {
-            throw ArchiveOperationError.cancelled
-        }
-        guard status == 0 else {
-            throw ArchiveOperationError.nonZeroTermination(
-                status: status,
-                standardError: standardError
-            )
+        guard await preparedCommand.cleanup(using: fileSystem) == nil else {
+            throw ArchiveOperationError.recoveryRequired
         }
     }
 
@@ -168,25 +182,22 @@ struct LiveArchiveCommandRunner: ArchiveCommandRunning {
         }
     }
 
-    private static func prepareCommand(
+    private func prepareCommand(
         kind: ArchiveOperationKind,
         format: ArchiveFormat,
-        sources: [URL],
+        sources: [IdentifiedFileRequest],
         destination: URL,
         progress: @escaping ArchiveCommandProgressHandler
     ) async throws -> PreparedArchiveCommand {
         guard kind == .compress else {
-            let arguments = try arguments(
+            let arguments = try Self.arguments(
                 kind: kind,
                 format: format,
-                sources: sources,
+                sources: sources.map(\.url),
                 destination: destination
             )
             if format != .zip {
-                try FileManager.default.createDirectory(
-                    at: destination,
-                    withIntermediateDirectories: false
-                )
+                try await fileSystem.createDirectory(destination)
             }
             return PreparedArchiveCommand(
                 arguments: arguments
@@ -198,41 +209,52 @@ struct LiveArchiveCommandRunner: ArchiveCommandRunning {
 
         var selectedNames: Set<String> = []
         for source in sources {
-            let name = source.lastPathComponent
+            let name = source.url.lastPathComponent
             guard !name.isEmpty, selectedNames.insert(name).inserted else {
                 throw ArchiveOperationError.invalidRequest
             }
         }
 
-        let aggregateRoot = destination
-            .deletingLastPathComponent()
-            .appending(
-                path: ".archive-source-\(UUID().uuidString)",
-                directoryHint: .isDirectory
-            )
+        let aggregateParent = destination.deletingLastPathComponent()
+        guard let aggregateParentIdentity = try await fileSystem.identity(
+            of: aggregateParent
+        ) else {
+            throw FileSystemAccessError.identityMismatch(aggregateParent)
+        }
+        let reservation = try await fileSystem.reserveStagingDirectory(
+            beside: destination,
+            parentIdentifiedBy: aggregateParentIdentity
+        )
+        let aggregateRoot = reservation.directory
+        let copied = PreparedArchiveCopyState()
         do {
-            try FileManager.default.createDirectory(
-                at: aggregateRoot,
-                withIntermediateDirectories: false
-            )
             try await prepareAggregateSource(
                 sources: sources,
                 aggregateRoot: aggregateRoot,
+                copied: copied,
                 progress: progress
             )
             try Task.checkCancellation()
         } catch {
-            try? FileManager.default.removeItem(at: aggregateRoot)
+            let prepared = PreparedArchiveCommand(
+                arguments: [],
+                reservation: reservation,
+                copiedEntries: await copied.entries
+            )
+            guard await prepared.cleanup(using: fileSystem) == nil else {
+                throw ArchiveOperationError.recoveryRequired
+            }
             throw error
         }
 
         return PreparedArchiveCommand(
-            arguments: preparedCompressionArguments(
+            arguments: Self.preparedCompressionArguments(
                 format: format,
                 aggregateRoot: aggregateRoot,
                 destination: destination,
             ),
-            aggregateRoot: aggregateRoot
+            reservation: reservation,
+            copiedEntries: await copied.entries
         )
     }
 
@@ -256,9 +278,10 @@ struct LiveArchiveCommandRunner: ArchiveCommandRunning {
         min(4, max(1, activeProcessorCount), sourceCount)
     }
 
-    private static func prepareAggregateSource(
-        sources: [URL],
+    private func prepareAggregateSource(
+        sources: [IdentifiedFileRequest],
         aggregateRoot: URL,
+        copied: PreparedArchiveCopyState,
         progress: @escaping ArchiveCommandProgressHandler
     ) async throws {
         let queue = ArchiveCopyWorkQueue(count: sources.count)
@@ -266,7 +289,7 @@ struct LiveArchiveCommandRunner: ArchiveCommandRunning {
             total: sources.count,
             handler: progress
         )
-        let workerCount = aggregatePreparationWorkerCount(
+        let workerCount = Self.aggregatePreparationWorkerCount(
             sourceCount: sources.count,
             activeProcessorCount: ProcessInfo.processInfo.activeProcessorCount
         )
@@ -276,13 +299,27 @@ struct LiveArchiveCommandRunner: ArchiveCommandRunning {
         try await withThrowingTaskGroup(of: Void.self) { group in
             for _ in 0..<workerCount {
                 group.addTask {
-                    while let index = await queue.nextIndex() {
+                    while true {
+                        await reporter.checkpoint()
+                        guard let index = await queue.nextIndex() else { return }
                         try Task.checkCancellation()
                         let source = sources[index]
-                        try FileManager.default.copyItem(
-                            at: source,
-                            to: aggregateRoot.appending(path: source.lastPathComponent)
+                        guard try await fileSystem.identity(of: source.url) == source.identity else {
+                            throw FileSystemAccessError.identityMismatch(source.url)
+                        }
+                        let before = try await fileSystem.fingerprint(of: source.url)
+                        let destination = aggregateRoot.appending(
+                            path: source.url.lastPathComponent
                         )
+                        let copiedIdentity = try await fileSystem.copyAndCaptureIdentity(
+                            source.url,
+                            to: destination
+                        )
+                        await copied.append(url: destination, identity: copiedIdentity)
+                        guard try await fileSystem.identity(of: source.url) == source.identity,
+                              try await fileSystem.fingerprint(of: source.url) == before else {
+                            throw FileSystemAccessError.identityMismatch(source.url)
+                        }
                         await reporter.completeOne()
                     }
                 }
@@ -349,6 +386,13 @@ private actor ArchivePreparationProgressReporter {
         ))
     }
 
+    func checkpoint() async {
+        await handler(.preparingSources(
+            completedCount: completed,
+            totalCount: total
+        ))
+    }
+
     private func enqueue(_ phase: ArchiveOperationPhase) async {
         pending.append(phase)
         guard !isDelivering else { return }
@@ -378,16 +422,48 @@ private actor ArchiveCopyWorkQueue {
 
 private struct PreparedArchiveCommand {
     let arguments: [String]
-    let aggregateRoot: URL?
+    let reservation: StagingReservation?
+    let copiedEntries: [PreparedArchiveCopyEntry]
 
-    init(arguments: [String], aggregateRoot: URL? = nil) {
+    init(
+        arguments: [String],
+        reservation: StagingReservation? = nil,
+        copiedEntries: [PreparedArchiveCopyEntry] = []
+    ) {
         self.arguments = arguments
-        self.aggregateRoot = aggregateRoot
+        self.reservation = reservation
+        self.copiedEntries = copiedEntries
     }
 
-    func cleanup() {
-        guard let aggregateRoot else { return }
-        try? FileManager.default.removeItem(at: aggregateRoot)
+    func cleanup(using fileSystem: any FileSystemAccess) async -> (any Error)? {
+        guard let reservation else { return nil }
+        var firstError: (any Error)?
+        for entry in copiedEntries.reversed() {
+            do {
+                try await fileSystem.remove(entry.url, identifiedBy: entry.identity)
+            } catch {
+                firstError = firstError ?? error
+            }
+        }
+        do {
+            try await fileSystem.removeStagingDirectory(reservation)
+        } catch {
+            firstError = firstError ?? error
+        }
+        return firstError
+    }
+}
+
+private struct PreparedArchiveCopyEntry: Sendable {
+    let url: URL
+    let identity: FileIdentity
+}
+
+private actor PreparedArchiveCopyState {
+    private(set) var entries: [PreparedArchiveCopyEntry] = []
+
+    func append(url: URL, identity: FileIdentity) {
+        entries.append(PreparedArchiveCopyEntry(url: url, identity: identity))
     }
 }
 

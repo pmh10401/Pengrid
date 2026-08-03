@@ -74,6 +74,17 @@ protocol FileSystemAccess: Sendable {
     func replace(_ destination: URL, with stagedItem: URL) async throws
     func identity(of url: URL) async throws -> FileIdentity?
     func move(_ source: URL, identifiedBy identity: FileIdentity, to destination: URL) async throws
+    func moveExclusively(
+        _ source: URL,
+        identifiedBy identity: FileIdentity,
+        to destination: URL
+    ) async throws
+    func moveExclusively(
+        _ source: URL,
+        identifiedBy sourceIdentity: FileIdentity,
+        to destination: URL,
+        destinationParentIdentifiedBy destinationParentIdentity: FileIdentity
+    ) async throws
     func remove(_ url: URL, identifiedBy identity: FileIdentity) async throws
     func replace(
         _ destination: URL,
@@ -82,6 +93,10 @@ protocol FileSystemAccess: Sendable {
         identifiedBy stagedIdentity: FileIdentity
     ) async throws
     func reserveStagingDirectory(beside destination: URL) async throws -> StagingReservation
+    func reserveStagingDirectory(
+        beside destination: URL,
+        parentIdentifiedBy parentIdentity: FileIdentity
+    ) async throws -> StagingReservation
     func removeStagingDirectory(_ reservation: StagingReservation) async throws
     func fingerprint(of source: URL) async throws -> SourceFingerprint
     func fingerprint(of quarantine: StorageTrashQuarantine) async throws -> SourceFingerprint
@@ -116,6 +131,55 @@ protocol FileSystemAccess: Sendable {
 }
 
 extension FileSystemAccess {
+    func reserveStagingDirectory(
+        beside destination: URL,
+        parentIdentifiedBy parentIdentity: FileIdentity
+    ) async throws -> StagingReservation {
+        let parent = destination.deletingLastPathComponent()
+        while true {
+            try Task.checkCancellation()
+            let name = ".bloom-staging-\(UUID().uuidString)"
+            let prepared = try await prepareDirectoryHierarchy(
+                root: parent,
+                identifiedBy: parentIdentity,
+                relativeComponents: [name]
+            )
+            guard prepared.createdDirectories.count == 1,
+                  let owned = prepared.createdDirectories.first else {
+                continue
+            }
+            return StagingReservation(
+                directory: prepared.destinationDirectory,
+                directoryIdentity: owned.identity,
+                item: prepared.destinationDirectory.appending(path: "payload")
+            )
+        }
+    }
+
+    func moveExclusively(
+        _ source: URL,
+        identifiedBy identity: FileIdentity,
+        to destination: URL
+    ) async throws {
+        guard try await self.identity(of: source) == identity else {
+            throw FileSystemAccessError.identityMismatch(source)
+        }
+        try await moveExclusively(source, to: destination)
+    }
+
+    func moveExclusively(
+        _ source: URL,
+        identifiedBy sourceIdentity: FileIdentity,
+        to destination: URL,
+        destinationParentIdentifiedBy destinationParentIdentity: FileIdentity
+    ) async throws {
+        let parent = destination.deletingLastPathComponent()
+        guard try await identity(of: parent) == destinationParentIdentity else {
+            throw FileSystemAccessError.identityMismatch(parent)
+        }
+        try await moveExclusively(source, identifiedBy: sourceIdentity, to: destination)
+    }
+
     func fingerprint(of quarantine: StorageTrashQuarantine) async throws -> SourceFingerprint {
         try await fingerprint(of: quarantine.quarantinedURL)
     }
@@ -430,6 +494,69 @@ actor LiveFileSystemAccess: FileSystemAccess {
             try changeMode(of: destination, to: originalMode)
         }
         try applyAndClosePendingCopy(for: identity)
+    }
+
+    func moveExclusively(
+        _ source: URL,
+        identifiedBy expectedIdentity: FileIdentity,
+        to destination: URL
+    ) throws {
+        try moveExclusively(
+            source,
+            identifiedBy: expectedIdentity,
+            to: destination,
+            destinationParentIdentifiedBy: nil
+        )
+    }
+
+    func moveExclusively(
+        _ source: URL,
+        identifiedBy expectedIdentity: FileIdentity,
+        to destination: URL,
+        destinationParentIdentifiedBy expectedParentIdentity: FileIdentity
+    ) throws {
+        try moveExclusively(
+            source,
+            identifiedBy: expectedIdentity,
+            to: destination,
+            destinationParentIdentifiedBy: Optional(expectedParentIdentity)
+        )
+    }
+
+    private func moveExclusively(
+        _ source: URL,
+        identifiedBy expectedIdentity: FileIdentity,
+        to destination: URL,
+        destinationParentIdentifiedBy expectedParentIdentity: FileIdentity?
+    ) throws {
+        try Task.checkCancellation()
+        let (sourceParentDescriptor, sourceName) = try openParentDirectory(of: source)
+        defer { Darwin.close(sourceParentDescriptor) }
+        let destinationParentURL = destination.deletingLastPathComponent()
+        let (destinationParentDescriptor, destinationName) = try openParentDirectory(
+            of: destination
+        )
+        defer { Darwin.close(destinationParentDescriptor) }
+        guard try identity(
+            named: sourceName,
+            in: sourceParentDescriptor,
+            noFollow: true
+        ) == expectedIdentity else {
+            throw FileSystemAccessError.identityMismatch(source)
+        }
+        if let expectedParentIdentity {
+            let openedParentIdentity = try identity(ofDescriptor: destinationParentDescriptor)
+            guard openedParentIdentity == expectedParentIdentity else {
+                throw FileSystemAccessError.identityMismatch(destinationParentURL)
+            }
+        }
+        try Task.checkCancellation()
+        try renameExclusive(
+            from: sourceParentDescriptor,
+            name: sourceName,
+            to: destinationParentDescriptor,
+            name: destinationName
+        )
     }
 
     func remove(_ url: URL, identifiedBy identity: FileIdentity) throws {

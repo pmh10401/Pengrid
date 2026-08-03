@@ -317,7 +317,7 @@ struct ArchiveOperationServiceTests {
         try expectNoStagingDirectories(in: root.url)
     }
 
-    @Test func cancellationCleanupFailureFailsCurrentAndCancelsRemaining() async throws {
+    @Test func cancellationCleanupFailureRequiresRecoveryAndCancelsRemaining() async throws {
         let root = try TemporaryDirectory()
         defer { root.remove() }
         let firstSource = root.url.appending(path: "First.zip")
@@ -361,13 +361,11 @@ struct ArchiveOperationServiceTests {
 
         #expect(invocationCount == 1)
         #expect(result.outcomes.count == 2)
-        guard case let .failed(failedSource, message) = result.outcomes.first else {
-            Issue.record("Expected cancellation cleanup failure for current request")
+        guard case let .recoveryNeeded(failedSource) = result.outcomes.first else {
+            Issue.record("Expected cancellation cleanup to require recovery")
             return
         }
         #expect(failedSource == firstSource)
-        #expect(message.contains(ArchiveOperationError.cancelled.localizedDescription))
-        #expect(message.contains("cleanup failed"))
         #expect(result.outcomes.last == .cancelled(source: secondSource))
 
         let children = try FileManager.default.contentsOfDirectory(
@@ -552,35 +550,37 @@ private actor RecordingArchiveCommandRunner: ArchiveCommandRunning {
     func run(
         kind: ArchiveOperationKind,
         format: ArchiveFormat,
-        sources: [URL],
+        sources: [IdentifiedFileRequest],
         destination: URL
     ) async throws {
+        let sourceURLs = sources.map(\.url)
         invocations.append(ArchiveCommandInvocation(
             kind: kind,
             format: format,
-            sources: sources,
+            sources: sourceURLs,
             destination: destination
         ))
-        try await handler(kind, format, sources, destination)
+        try await handler(kind, format, sourceURLs, destination)
     }
 
     func run(
         kind: ArchiveOperationKind,
         format: ArchiveFormat,
-        sources: [URL],
+        sources: [IdentifiedFileRequest],
         destination: URL,
         progress: @escaping ArchiveCommandProgressHandler
     ) async throws {
+        let sourceURLs = sources.map(\.url)
         invocations.append(ArchiveCommandInvocation(
             kind: kind,
             format: format,
-            sources: sources,
+            sources: sourceURLs,
             destination: destination
         ))
         for phase in phases {
             await progress(phase)
         }
-        try await handler(kind, format, sources, destination)
+        try await handler(kind, format, sourceURLs, destination)
     }
 }
 

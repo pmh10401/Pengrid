@@ -141,10 +141,10 @@ final class FileOperationController {
     func pauseActiveJob() async {
         guard let activeControl, let activeJob else { return }
         await activeControl.pause()
-        isPaused = true
+        isPaused = false
         self.activeJob = snapshot(
             for: activeJob,
-            state: .paused,
+            state: .pauseRequested,
             progress: activeJob.progress,
             canUndo: false
         )
@@ -170,7 +170,33 @@ final class FileOperationController {
         let pending = pendingOperations.remove(at: index)
         queuedJobs.removeAll { $0.id == id }
         retryOperations[id] = pending
-        recordHistory(pending.snapshot(state: .cancelled))
+        let cancellationResult = pending.cancellationResult
+        recordHistory(pending.snapshot(
+            state: .cancelled,
+            canRetry: pending.allowsRetry
+        ))
+        pending.onCompletion?(cancellationResult)
+        return true
+    }
+
+    @discardableResult
+    func moveQueuedJob(_ id: UUID, by offset: Int) -> Bool {
+        guard offset == -1 || offset == 1,
+              let currentIndex = pendingOperations.firstIndex(where: { $0.id == id })
+        else { return false }
+        let destinationIndex = currentIndex + offset
+        guard pendingOperations.indices.contains(destinationIndex) else { return false }
+        pendingOperations.swapAt(currentIndex, destinationIndex)
+        guard let snapshotIndex = queuedJobs.firstIndex(where: { $0.id == id }) else {
+            pendingOperations.swapAt(currentIndex, destinationIndex)
+            return false
+        }
+        let snapshotDestination = snapshotIndex + offset
+        guard queuedJobs.indices.contains(snapshotDestination) else {
+            pendingOperations.swapAt(currentIndex, destinationIndex)
+            return false
+        }
+        queuedJobs.swapAt(snapshotIndex, snapshotDestination)
         return true
     }
 
@@ -179,13 +205,14 @@ final class FileOperationController {
         guard operationHistory.first(where: { $0.id == id })?.canRetry == true,
               let original = retryOperations[id]
         else { return false }
-        enqueue(original.retryAttempt())
-        return true
+        return enqueue(original.retryAttempt())
     }
 
     @discardableResult
     func undoJob(_ id: UUID) -> Bool {
-        guard operationHistory.first(where: { $0.id == id })?.canUndo == true,
+        guard activeOperation == nil,
+              pendingOperations.isEmpty,
+              operationHistory.first(where: { $0.id == id })?.canUndo == true,
               let recipe = undoRecipes.removeValue(forKey: id),
               let original = retryOperations[id]
         else { return false }
@@ -196,7 +223,10 @@ final class FileOperationController {
             totalCount: recipe.itemCount,
             initialName: recipe.displayName,
             touchedDirectories: recipe.touchedDirectories,
-            workspace: original.workspace
+            workspace: original.workspace,
+            cancellationSources: Array(recipe.touchedDirectories),
+            allowsRetry: false,
+            requiresExclusiveQueue: true
         ) { [weak self] in
             guard let self else {
                 return FileOperationResult(outcomes: [])
@@ -226,7 +256,7 @@ final class FileOperationController {
                 format: format
               )
         else { return false }
-        let identityCapture = await captureArchiveIdentities(for: plan.selectedSources)
+        let identityCapture = await captureArchiveIdentities(for: plan)
         return runArchive(plan, identityCapture: identityCapture, in: workspace)
     }
 
@@ -239,7 +269,7 @@ final class FileOperationController {
                 occupiedNames: capture.occupiedNames
               )
         else { return false }
-        let identityCapture = await captureArchiveIdentities(for: plan.selectedSources)
+        let identityCapture = await captureArchiveIdentities(for: plan)
         return runArchive(plan, identityCapture: identityCapture, in: workspace)
     }
 
@@ -260,8 +290,9 @@ final class FileOperationController {
     }
 
     private func captureArchiveIdentities(
-        for sources: [URL]
+        for plan: ArchiveDestinationPlan
     ) async -> ArchiveIdentityCapture {
+        let sources = plan.selectedSources
         do {
             var requests: [IdentifiedFileRequest] = []
             for source in sources {
@@ -271,7 +302,14 @@ final class FileOperationController {
                     identity: try await service.identity(of: source)
                 ))
             }
-            return .ready(requests)
+            guard let destinationParent = plan.destinations.first?
+                .deletingLastPathComponent() else {
+                throw ArchiveOperationError.invalidRequest
+            }
+            return .ready(
+                requests,
+                destinationParentIdentity: try await service.identity(of: destinationParent)
+            )
         } catch is CancellationError {
             return .rejected(FileOperationResult(outcomes: sources.map {
                 .cancelled(source: $0)
@@ -315,9 +353,11 @@ final class FileOperationController {
             }
 
             let captured: [IdentifiedFileRequest]
+            let destinationParentIdentity: FileIdentity
             switch identityCapture {
-            case let .ready(requests):
+            case let .ready(requests, parentIdentity):
                 captured = requests
+                destinationParentIdentity = parentIdentity
             case let .rejected(result):
                 return result
             }
@@ -383,7 +423,8 @@ final class FileOperationController {
             }
 
             guard let archiveRequests = plan.requests(
-                for: prepared.map(\.url)
+                for: prepared,
+                destinationParentIdentity: destinationParentIdentity
             ),
             let firstRequest = archiveRequests.first
             else {
@@ -510,6 +551,7 @@ final class FileOperationController {
             )),
             touchedDirectories: touchedDirectories,
             workspace: workspace,
+            cancellationSources: sources,
             onCompletion: onCompletion
         ) { [weak self, service, materializer] in
             guard let self else {
@@ -703,6 +745,7 @@ final class FileOperationController {
                 initialName: name,
                 touchedDirectories: [directory],
                 workspace: workspace,
+                cancellationSources: [proposedURL],
                 onCompletion: onCompletion
             ) {
                 FileOperationResult(outcomes: [
@@ -719,6 +762,7 @@ final class FileOperationController {
             initialName: name,
             touchedDirectories: [directory],
             workspace: workspace,
+            cancellationSources: [proposedURL],
             onCompletion: { result in
                 if let renamePane, let target = renameCapture.take() {
                     _ = renamePane.selectForInlineRename(target)
@@ -854,6 +898,39 @@ final class FileOperationController {
     }
 
     @discardableResult
+    func trashImmediately(
+        _ sources: [URL],
+        workspace: WorkspaceState
+    ) async -> Bool {
+        guard !sources.isEmpty else { return false }
+        do {
+            var requests: [IdentifiedFileRequest] = []
+            for source in sources {
+                try Task.checkCancellation()
+                requests.append(IdentifiedFileRequest(
+                    url: source,
+                    identity: try await service.identity(of: source)
+                ))
+            }
+            return trash(requests, workspace: workspace)
+        } catch is CancellationError {
+            return false
+        } catch {
+            let result = FileOperationResult(outcomes: sources.map {
+                .failed(source: $0, message: error.localizedDescription)
+            })
+            return beginOperation(
+                kind: .trash,
+                totalCount: sources.count,
+                initialName: sources.first?.lastPathComponent ?? "",
+                touchedDirectories: Set(sources.map { $0.deletingLastPathComponent() }),
+                workspace: workspace,
+                cancellationSources: sources
+            ) { result }
+        }
+    }
+
+    @discardableResult
     func trash(_ sources: [URL], workspace: WorkspaceState) -> Bool {
         let touchedDirectories = Set(sources.map { $0.deletingLastPathComponent() })
         return beginOperation(
@@ -900,6 +977,7 @@ final class FileOperationController {
                 : sources.first?.lastPathComponent ?? "",
             touchedDirectories: touchedDirectories,
             workspace: workspace,
+            cancellationSources: sources,
             onCompletion: onCompletion
         ) { [weak self, service] in
             await service.trash(requests) { [weak self] progress in
@@ -927,6 +1005,9 @@ final class FileOperationController {
             initialName: "Item",
             touchedDirectories: touchedDirectories,
             workspace: workspace,
+            cancellationSources: entries.map(\.url),
+            allowsRetry: false,
+            requiresExclusiveQueue: true,
             onCompletion: onCompletion
         ) { [weak self, service] in
             await service.trashStorageCleanup(groups) { [weak self] progress in
@@ -947,6 +1028,9 @@ final class FileOperationController {
         initialStage: FileOperationStage? = nil,
         touchedDirectories: Set<URL>,
         workspace: WorkspaceState,
+        cancellationSources: [URL] = [],
+        allowsRetry: Bool = true,
+        requiresExclusiveQueue: Bool = false,
         onCompletion: (@MainActor (FileOperationResult) -> Void)? = nil,
         operation: @escaping @MainActor () async -> FileOperationResult
     ) -> Bool {
@@ -957,16 +1041,26 @@ final class FileOperationController {
             initialStage: initialStage,
             touchedDirectories: touchedDirectories,
             workspace: workspace,
+            cancellationSources: cancellationSources,
+            allowsRetry: allowsRetry,
+            requiresExclusiveQueue: requiresExclusiveQueue,
             onCompletion: onCompletion,
             operation: operation
         ))
-        return true
     }
 
-    private func enqueue(_ pending: PendingFileOperation) {
+    @discardableResult
+    private func enqueue(_ pending: PendingFileOperation) -> Bool {
+        if pending.requiresExclusiveQueue {
+            guard activeOperation == nil, pendingOperations.isEmpty else { return false }
+        } else if activeOperation?.requiresExclusiveQueue == true
+            || pendingOperations.contains(where: \.requiresExclusiveQueue) {
+            return false
+        }
         pendingOperations.append(pending)
         queuedJobs.append(pending.snapshot(state: .queued))
         startNextOperationIfNeeded()
+        return true
     }
 
     private func startNextOperationIfNeeded() {
@@ -998,6 +1092,7 @@ final class FileOperationController {
             guard let self else { return }
             let execution: (result: FileOperationResult, cancelledBeforeStart: Bool)
             do {
+                await self.acknowledgePauseIfRequested(using: control)
                 try await control.checkpoint()
                 execution = (await pending.operation(), false)
             } catch {
@@ -1019,7 +1114,25 @@ final class FileOperationController {
 
     private func waitIfPaused() async {
         guard let activeControl else { return }
+        await acknowledgePauseIfRequested(using: activeControl)
         try? await activeControl.checkpoint()
+    }
+
+    private func acknowledgePauseIfRequested(
+        using control: FileOperationControl
+    ) async {
+        guard await control.isPaused,
+              activeControl === control,
+              let activeJob,
+              activeJob.state == .pauseRequested
+        else { return }
+        isPaused = true
+        self.activeJob = snapshot(
+            for: activeJob,
+            state: .paused,
+            progress: activeJob.progress,
+            canUndo: false
+        )
     }
 
     private func publish(stage newStage: FileOperationStage) async {
@@ -1093,14 +1206,14 @@ final class FileOperationController {
         let completedState: FileOperationJobState = cancelledBeforeStart
             ? .cancelled
             : terminalState(for: result)
-        let canRetry = cancelledBeforeStart || (!result.outcomes.isEmpty && result.outcomes.allSatisfy {
+        let canRetry = pending.allowsRetry && (cancelledBeforeStart || (!result.outcomes.isEmpty && result.outcomes.allSatisfy {
             switch $0 {
             case .failed, .cancelled:
                 true
             case .succeeded, .recoveryNeeded, .skipped:
                 false
             }
-        })
+        }))
         let recipe: FileOperationUndoRecipe?
         if completedState == .succeeded {
             recipe = await undoService.makeRecipe(
@@ -1177,11 +1290,13 @@ final class FileOperationController {
     }
 
     private func invalidateUndoRecipes(touching directories: Set<URL>) {
-        let directoryKeys = Set(directories.map(directoryKey))
-        guard !directoryKeys.isEmpty else { return }
+        let currentKeys = Set(directories.flatMap(directoryKeys))
+        guard !currentKeys.isEmpty else { return }
         let invalidated = undoRecipes.compactMap { id, recipe -> UUID? in
-            let recipeKeys = Set(recipe.touchedDirectories.map(directoryKey))
-            return recipeKeys.isDisjoint(with: directoryKeys) ? nil : id
+            let recipeKeys = Set(recipe.touchedDirectories.flatMap(directoryKeys))
+            return recipeKeys.contains(where: { recipeKey in
+                currentKeys.contains(where: { pathsOverlap(recipeKey, $0) })
+            }) ? id : nil
         }
         for id in invalidated {
             undoRecipes.removeValue(forKey: id)
@@ -1225,6 +1340,18 @@ final class FileOperationController {
         }
         return path
     }
+
+    private func directoryKeys(_ directory: URL) -> [String] {
+        let lexical = directoryKey(directory)
+        let resolved = directoryKey(directory.resolvingSymlinksInPath())
+        return lexical == resolved ? [lexical] : [lexical, resolved]
+    }
+
+    private func pathsOverlap(_ lhs: String, _ rhs: String) -> Bool {
+        lhs == rhs
+            || lhs.hasPrefix(rhs == "/" ? "/" : rhs + "/")
+            || rhs.hasPrefix(lhs == "/" ? "/" : lhs + "/")
+    }
 }
 
 @MainActor
@@ -1236,6 +1363,9 @@ private struct PendingFileOperation {
     let initialStage: FileOperationStage?
     let touchedDirectories: Set<URL>
     let workspace: WorkspaceState
+    let cancellationSources: [URL]
+    let allowsRetry: Bool
+    let requiresExclusiveQueue: Bool
     let onCompletion: (@MainActor (FileOperationResult) -> Void)?
     let operation: @MainActor () async -> FileOperationResult
 
@@ -1247,6 +1377,9 @@ private struct PendingFileOperation {
         initialStage: FileOperationStage?,
         touchedDirectories: Set<URL>,
         workspace: WorkspaceState,
+        cancellationSources: [URL],
+        allowsRetry: Bool,
+        requiresExclusiveQueue: Bool,
         onCompletion: (@MainActor (FileOperationResult) -> Void)?,
         operation: @escaping @MainActor () async -> FileOperationResult
     ) {
@@ -1256,6 +1389,9 @@ private struct PendingFileOperation {
         self.initialStage = initialStage
         self.touchedDirectories = touchedDirectories
         self.workspace = workspace
+        self.cancellationSources = cancellationSources
+        self.allowsRetry = allowsRetry
+        self.requiresExclusiveQueue = requiresExclusiveQueue
         self.onCompletion = onCompletion
         self.operation = operation
         self.itemDisplayName = FileOperationJobSnapshot(
@@ -1282,8 +1418,14 @@ private struct PendingFileOperation {
             state: state,
             progress: nil,
             canUndo: canUndo,
-            canRetry: canRetry
+            canRetry: canRetry && allowsRetry
         )
+    }
+
+    var cancellationResult: FileOperationResult {
+        FileOperationResult(outcomes: cancellationSources.map {
+            .cancelled(source: $0)
+        })
     }
 
     func retryAttempt() -> PendingFileOperation {
@@ -1294,6 +1436,9 @@ private struct PendingFileOperation {
             initialStage: initialStage,
             touchedDirectories: touchedDirectories,
             workspace: workspace,
+            cancellationSources: cancellationSources,
+            allowsRetry: allowsRetry,
+            requiresExclusiveQueue: requiresExclusiveQueue,
             onCompletion: onCompletion,
             operation: operation
         )
@@ -1307,7 +1452,10 @@ private struct ArchiveSelectionCapture {
 }
 
 private enum ArchiveIdentityCapture {
-    case ready([IdentifiedFileRequest])
+    case ready(
+        [IdentifiedFileRequest],
+        destinationParentIdentity: FileIdentity
+    )
     case rejected(FileOperationResult)
 }
 

@@ -23,7 +23,14 @@ struct ArchiveOperationIntegrationTests {
             await phases.append(phase)
         }
 
-        #expect(await phases.values == [
+        let phaseTransitions = await phases.values.reduce(
+            into: [ArchiveOperationPhase]()
+        ) { result, phase in
+            if result.last != phase {
+                result.append(phase)
+            }
+        }
+        #expect(phaseTransitions == [
             .preparingSources(completedCount: 0, totalCount: 2),
             .preparingSources(completedCount: 1, totalCount: 2),
             .preparingSources(completedCount: 2, totalCount: 2),

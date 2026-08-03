@@ -47,6 +47,8 @@ struct FileOperationCenterView: View {
     let controller: FileOperationController
 
     @State private var isPresented = false
+    @State private var expandedHistory: Set<UUID> = []
+    @AccessibilityFocusState private var focusedQueuedJobID: UUID?
 
     private var presentation: FileOperationCenterPresentation {
         FileOperationCenterPresentation(
@@ -106,8 +108,9 @@ struct FileOperationCenterView: View {
                             "Queue (\(controller.queuedJobs.count))",
                             identifier: AccessibilityIdentifiers.operationCenterQueue
                         ) {
-                            ForEach(controller.queuedJobs) { job in
-                                queuedRow(job)
+                            ForEach(Array(controller.queuedJobs.enumerated()), id: \.element.id) {
+                                index, job in
+                                queuedRow(job, index: index)
                             }
                         }
                     }
@@ -172,7 +175,7 @@ struct FileOperationCenterView: View {
     private func activeRow(_ job: FileOperationJobSnapshot) -> some View {
         jobCard(job) {
             HStack(spacing: 8) {
-                if job.state == .paused {
+                if job.state == .paused || job.state == .pauseRequested {
                     Button("Resume", systemImage: "play.fill") {
                         Task { await controller.resumeActiveJob() }
                     }
@@ -199,16 +202,45 @@ struct FileOperationCenterView: View {
         }
     }
 
-    private func queuedRow(_ job: FileOperationJobSnapshot) -> some View {
+    private func queuedRow(_ job: FileOperationJobSnapshot, index: Int) -> some View {
         jobCard(job) {
-            Button("Remove", systemImage: "xmark") {
-                controller.cancelQueuedJob(job.id)
+            HStack(spacing: 8) {
+                Button("Up", systemImage: "arrow.up") {
+                    controller.moveQueuedJob(job.id, by: -1)
+                    focusedQueuedJobID = job.id
+                }
+                .disabled(index == 0)
+                .accessibilityLabel("Move \(job.itemDisplayName) earlier in queue")
+                .accessibilityIdentifier(AccessibilityIdentifiers.operationCenterMoveQueuedUp)
+                .help("Move this operation earlier")
+
+                Button("Down", systemImage: "arrow.down") {
+                    controller.moveQueuedJob(job.id, by: 1)
+                    focusedQueuedJobID = job.id
+                }
+                .disabled(index == controller.queuedJobs.count - 1)
+                .accessibilityLabel("Move \(job.itemDisplayName) later in queue")
+                .accessibilityIdentifier(
+                    AccessibilityIdentifiers.operationCenterMoveQueuedDown
+                )
+                .help("Move this operation later")
+
+                Button("Remove", systemImage: "xmark") {
+                    let remaining = controller.queuedJobs.filter { $0.id != job.id }
+                    let nextFocus = remaining.indices.contains(min(index, remaining.count - 1))
+                        ? remaining[min(index, remaining.count - 1)].id
+                        : nil
+                    if controller.cancelQueuedJob(job.id) {
+                        focusedQueuedJobID = nextFocus
+                    }
+                }
+                .accessibilityLabel("Remove \(job.itemDisplayName) from queue")
+                .accessibilityIdentifier(AccessibilityIdentifiers.operationCenterCancelQueued)
+                .help("Remove this operation from the queue")
             }
             .controlSize(.small)
-            .accessibilityLabel("Remove \(job.itemDisplayName) from queue")
-            .accessibilityIdentifier(AccessibilityIdentifiers.operationCenterCancelQueued)
-            .help("Remove this operation from the queue")
         }
+        .accessibilityFocused($focusedQueuedJobID, equals: job.id)
     }
 
     private func historyRow(_ job: FileOperationJobSnapshot) -> some View {
@@ -230,9 +262,42 @@ struct FileOperationCenterView: View {
                     .accessibilityIdentifier(AccessibilityIdentifiers.operationCenterUndo)
                     .help("Undo only if the files are still unchanged")
                 }
+                Button("Details", systemImage: "info.circle") {
+                    if expandedHistory.contains(job.id) {
+                        expandedHistory.remove(job.id)
+                    } else {
+                        expandedHistory.insert(job.id)
+                    }
+                }
+                .accessibilityLabel("Show details for \(job.title)")
+                .accessibilityIdentifier(AccessibilityIdentifiers.operationCenterDetails)
+                .help("Show privacy-safe operation details")
             }
             .controlSize(.small)
+
+            if expandedHistory.contains(job.id) {
+                Text(historyDetail(for: job))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityLabel(historyDetail(for: job))
+            }
         }
+    }
+
+    private func historyDetail(for job: FileOperationJobSnapshot) -> String {
+        let count = job.itemCount == 1 ? "1 item" : "\(job.itemCount) items"
+        if job.state == .succeeded {
+            return job.canUndo
+                ? "\(count). Undo is available while every item remains unchanged."
+                : "\(count). Undo is unavailable because this operation cannot be safely reversed."
+        }
+        if job.state == .failed || job.state == .cancelled {
+            return job.canRetry
+                ? "\(count). A new identity-checked attempt is available."
+                : "\(count). Retry is unavailable because repeating the whole operation could duplicate or conflict with completed changes."
+        }
+        return count
     }
 
     private func jobCard<Actions: View>(

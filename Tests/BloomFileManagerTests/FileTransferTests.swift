@@ -408,12 +408,11 @@ struct FileTransferTests {
             progress: { _ in }
         )
 
-        guard case let .failed(_, message) = result.outcomes.first else {
-            Issue.record("Expected identity-checked cleanup failure")
+        guard case let .recoveryNeeded(recoverySource) = result.outcomes.first else {
+            Issue.record("Expected identity-checked cleanup recovery state")
             return
         }
-        #expect(message.contains(copyError.localizedDescription))
-        #expect(message.contains("cleanup"))
+        #expect(recoverySource == source)
         let stagingPath = await fileSystem.copiedDestinations.first
         #expect(stagingPath != nil)
         if let stagingPath {
@@ -749,7 +748,7 @@ struct FileTransferTests {
         #expect(await fileSystem.existingURLs.contains(destination))
     }
 
-    @Test func stagingCleanupErrorIsIncludedInItemFailure() async {
+    @Test func stagingCleanupErrorRequiresRecoveryReview() async {
         let source = URL(filePath: "/source/a")
         let cleanupError = CocoaError(.fileWriteNoPermission)
         let fileSystem = RecordingFileSystem(
@@ -767,12 +766,11 @@ struct FileTransferTests {
             progress: { _ in }
         )
 
-        guard case let .failed(_, message) = result.outcomes.first else {
-            Issue.record("Expected transfer and cleanup failure")
+        guard case let .recoveryNeeded(recoverySource) = result.outcomes.first else {
+            Issue.record("Expected transfer cleanup recovery state")
             return
         }
-        #expect(message.contains(CancellationError().localizedDescription))
-        #expect(message.contains(cleanupError.localizedDescription))
+        #expect(recoverySource == source)
     }
 
     @Test func nativeSameVolumeMoveDoesNotPerformCopyCapacityPreflight() async {

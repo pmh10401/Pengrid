@@ -38,6 +38,7 @@ actor RecordingFileSystem: FileSystemAccess {
         case availableCapacity(URL)
         case identity(URL)
         case checkedMove(URL, FileIdentity, URL)
+        case checkedExclusiveMove(URL, FileIdentity, URL)
         case checkedRemove(URL, FileIdentity)
         case checkedReplace(URL, FileIdentity, URL, FileIdentity)
         case fingerprint(URL)
@@ -75,6 +76,8 @@ actor RecordingFileSystem: FileSystemAccess {
                 "identity:\(url.path)"
             case let .checkedMove(source, _, destination):
                 "moveChecked:\(source.path)->\(destination.path)"
+            case let .checkedExclusiveMove(source, _, destination):
+                "moveExclusiveChecked:\(source.path)->\(destination.path)"
             case let .checkedRemove(url, _):
                 "removeChecked:\(url.path)"
             case let .checkedReplace(destination, _, stagedItem, _):
@@ -127,6 +130,7 @@ actor RecordingFileSystem: FileSystemAccess {
     private let cancelAfterTrashOf: URL?
     private let caseInsensitivePaths: Bool
     private let forceTrashQuarantineRecovery: Bool
+    private let raceDestinationBeforeExclusiveMove: URL?
     private var suspendedIdentityContinuation: CheckedContinuation<Void, Never>?
     private var suspendedExistsContinuation: CheckedContinuation<Void, Never>?
     private(set) var hasSuspendedIdentity = false
@@ -167,7 +171,8 @@ actor RecordingFileSystem: FileSystemAccess {
         suspendExistsOfLastPathComponent: String? = nil,
         cancelAfterTrashOf: URL? = nil,
         caseInsensitivePaths: Bool = false,
-        forceTrashQuarantineRecovery: Bool = false
+        forceTrashQuarantineRecovery: Bool = false,
+        raceDestinationBeforeExclusiveMove: URL? = nil
     ) {
         self.existingURLs = existingURLs
         self.existsResponses = existsResponses
@@ -207,6 +212,7 @@ actor RecordingFileSystem: FileSystemAccess {
         self.cancelAfterTrashOf = cancelAfterTrashOf
         self.caseInsensitivePaths = caseInsensitivePaths
         self.forceTrashQuarantineRecovery = forceTrashQuarantineRecovery
+        self.raceDestinationBeforeExclusiveMove = raceDestinationBeforeExclusiveMove
     }
 
     func exists(_ url: URL) async -> Bool {
@@ -467,7 +473,9 @@ actor RecordingFileSystem: FileSystemAccess {
                 $0.key.path.compare(url.path, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
             })?.value
         } else {
-            identity = identities[url]
+            identity = identities[url] ?? identities.first(where: {
+                $0.key.standardizedFileURL.path == url.standardizedFileURL.path
+            })?.value
         }
         if cancelAfterIdentityOf == url {
             withUnsafeCurrentTask { $0?.cancel() }
@@ -503,6 +511,46 @@ actor RecordingFileSystem: FileSystemAccess {
                 withUnsafeCurrentTask { $0?.cancel() }
             }
         }
+    }
+
+    func moveExclusively(
+        _ source: URL,
+        identifiedBy identity: FileIdentity,
+        to destination: URL
+    ) async throws {
+        try record(.checkedExclusiveMove(source, identity, destination))
+        guard identities[source] == identity else {
+            throw FileSystemAccessError.identityMismatch(source)
+        }
+        if destination == raceDestinationBeforeExclusiveMove,
+           !existingURLs.contains(destination) {
+            existingURLs.insert(destination)
+            identities[destination] = makeIdentity()
+        }
+        guard !existingURLs.contains(destination) else {
+            throw POSIXError(.EEXIST)
+        }
+        let movedIdentity = identities.removeValue(forKey: source)
+        existingURLs.remove(source)
+        existingURLs.insert(destination)
+        identities[destination] = movedIdentity
+    }
+
+    func moveExclusively(
+        _ source: URL,
+        identifiedBy sourceIdentity: FileIdentity,
+        to destination: URL,
+        destinationParentIdentifiedBy destinationParentIdentity: FileIdentity
+    ) async throws {
+        let parent = destination.deletingLastPathComponent()
+        guard identities[parent] == destinationParentIdentity else {
+            throw FileSystemAccessError.identityMismatch(parent)
+        }
+        try await moveExclusively(
+            source,
+            identifiedBy: sourceIdentity,
+            to: destination
+        )
     }
 
     func remove(_ url: URL, identifiedBy identity: FileIdentity) async throws {

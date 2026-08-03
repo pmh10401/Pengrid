@@ -30,14 +30,13 @@ struct FileOperationControllerTests {
         #expect(await controller.compressSelection(workspace, format: .tarGzip))
         await waitUntilIdle(controller)
 
-        #expect(await archiveService.recordedRequests() == [
-            ArchiveRequest(
-                kind: .compress,
-                verifiedSources: [source],
-                finalDestination: directory.appending(path: "Project Notes.tar.gz"),
-                format: .tarGzip
-            )
-        ])
+        let requests = await archiveService.recordedRequests()
+        #expect(requests.count == 1)
+        #expect(requests.first?.kind == .compress)
+        #expect(requests.first?.verifiedSources.map(\.url) == [source])
+        #expect(requests.first?.finalDestination == directory.appending(path: "Project Notes.tar.gz"))
+        #expect(requests.first?.progressDisplayName == "Project Notes.tar.gz")
+        #expect(requests.first?.format == .tarGzip)
     }
 
     @Test func compressionUsesDisplayNameAndKeepBothDestination() async {
@@ -81,13 +80,11 @@ struct FileOperationControllerTests {
         await waitUntilIdle(controller)
 
         let requests = await archiveService.recordedRequests()
-        #expect(requests == [
-            ArchiveRequest(
-                kind: .compress,
-                verifiedSources: [source],
-                finalDestination: directory.appending(path: "Project Notes 2.zip")
-            )
-        ])
+        #expect(requests.count == 1)
+        #expect(requests.first?.kind == .compress)
+        #expect(requests.first?.verifiedSources.map(\.url) == [source])
+        #expect(requests.first?.finalDestination == directory.appending(path: "Project Notes 2.zip"))
+        #expect(requests.first?.format == .zip)
         #expect(requests.first?.progressDisplayName == "Project Notes 2.zip")
     }
 
@@ -124,13 +121,13 @@ struct FileOperationControllerTests {
         #expect(await controller.compressSelection(workspace))
         await waitUntilIdle(controller)
 
-        #expect(await archiveService.recordedRequests() == [
-            ArchiveRequest(
-                kind: .compress,
-                verifiedSources: [first, second],
-                finalDestination: directory.appending(path: "Archive 3.zip")
-            )
-        ])
+        let requests = await archiveService.recordedRequests()
+        #expect(requests.count == 1)
+        #expect(requests.first?.kind == .compress)
+        #expect(requests.first?.verifiedSources.map(\.url) == [first, second])
+        #expect(requests.first?.finalDestination == directory.appending(path: "Archive 3.zip"))
+        #expect(requests.first?.progressDisplayName == "Archive 3.zip")
+        #expect(requests.first?.format == .zip)
     }
 
     @Test func eachSelectedZIPExtractsIntoItsOwnAvailableStemFolder() async {
@@ -167,24 +164,16 @@ struct FileOperationControllerTests {
         #expect(await controller.extractSelection(workspace))
         await waitUntilIdle(controller)
 
-        #expect(await archiveService.recordedRequests() == [
-            ArchiveRequest(
-                kind: .extract,
-                verifiedSources: [first],
-                finalDestination: directory.appending(
-                    path: "First 3",
-                    directoryHint: .isDirectory
-                )
-            ),
-            ArchiveRequest(
-                kind: .extract,
-                verifiedSources: [second],
-                finalDestination: directory.appending(
-                    path: "Second 2",
-                    directoryHint: .isDirectory
-                )
-            )
+        let requests = await archiveService.recordedRequests()
+        #expect(requests.count == 2)
+        #expect(requests.map(\.kind) == [.extract, .extract])
+        #expect(requests.map { $0.verifiedSources.map(\.url) } == [[first], [second]])
+        #expect(requests.map(\.finalDestination) == [
+            directory.appending(path: "First 3", directoryHint: .isDirectory),
+            directory.appending(path: "Second 2", directoryHint: .isDirectory)
         ])
+        #expect(requests.map(\.progressDisplayName) == ["First.zip", "Second.ZIP"])
+        #expect(requests.map(\.format) == [.zip, .zip])
     }
 
     @Test func extractionKeepsSelectedZIPDisplayNameAcrossEveryServicePhase() async throws {
@@ -237,7 +226,12 @@ struct FileOperationControllerTests {
         await archiveService.waitUntilStarted()
         #expect(controller.stage == expectedStage)
 
+        await controller.pauseActiveJob()
+        #expect(controller.activeJob?.state == .pauseRequested)
         await archiveService.proceed()
+        await waitUntil { controller.isPaused }
+        #expect(controller.activeJob?.state == .paused)
+        await controller.resumeActiveJob()
         await waitUntilIdle(controller)
         #expect(controller.stage == .archiving(ArchiveOperationProgress(
             kind: .extract,
@@ -301,7 +295,7 @@ struct FileOperationControllerTests {
 
         await materializer.resume()
         await waitUntilIdle(controller)
-        #expect(await archiveService.recordedRequests().first?.verifiedSources == [source])
+        #expect(await archiveService.recordedRequests().first?.verifiedSources.map(\.url) == [source])
     }
 
     @Test func cancellationDuringArchivePreparationPreventsArchiveWork() async {
@@ -1149,17 +1143,22 @@ struct FileOperationControllerTests {
             workspace: workspace
         ))
         await waitUntil { await reader.hasSuspended }
-        #expect(await controller.createFolder(
+        #expect(await !controller.createFolder(
             in: directory,
             named: "After Recovery",
             workspace: workspace
         ))
-        #expect(controller.queuedJobs.count == 1)
+        #expect(controller.queuedJobs.isEmpty)
 
         await reader.release()
         await waitUntilIdle(controller)
 
         #expect(controller.isQueueBlockedByRecovery)
+        #expect(await controller.createFolder(
+            in: directory,
+            named: "After Recovery",
+            workspace: workspace
+        ))
         #expect(controller.queuedJobs.count == 1)
         #expect(await !fileSystem.existingURLs.contains(
             directory.appending(path: "After Recovery", directoryHint: .isDirectory)
@@ -1347,6 +1346,100 @@ struct FileOperationControllerTests {
         #expect(controller.operationHistory.first?.state == .failed)
     }
 
+    @Test func queuedImmediateTrashUsesIdentityCapturedBeforeWaiting() async {
+        let firstSource = URL(filePath: "/source/first")
+        let queuedSource = URL(filePath: "/source/queued")
+        let destinationDirectory = URL(filePath: "/destination")
+        let collision = destinationDirectory.appending(path: "first")
+        let fileSystem = RecordingFileSystem(
+            existingURLs: [firstSource, queuedSource, destinationDirectory, collision]
+        )
+        let controller = FileOperationController(
+            service: FileOperationService(fileSystem: fileSystem)
+        )
+        let workspace = WorkspaceState(
+            leftURL: destinationDirectory,
+            rightURL: URL(filePath: "/elsewhere"),
+            listingService: StubDirectoryListingService(values: [:])
+        )
+        #expect(await controller.runTransfer(
+            [firstSource],
+            to: destinationDirectory,
+            mode: .copy,
+            workspace: workspace
+        ))
+        await waitForPendingConflict(controller)
+
+        #expect(await controller.trashImmediately([queuedSource], workspace: workspace))
+        await fileSystem.replaceIdentity(
+            at: queuedSource,
+            with: FileIdentity(
+                entryIdentifier: "replacement-entry",
+                resolvedIdentifier: "replacement-resolved"
+            )
+        )
+        controller.resolvePendingConflict(.skip, applyToAll: false)
+        await waitUntilQueueIsIdle(controller)
+
+        #expect(await fileSystem.existingURLs.contains(queuedSource))
+        #expect(controller.operationHistory.first?.kind == .trash)
+        #expect(controller.operationHistory.first?.state == .failed)
+    }
+
+    @Test func queuedArchiveUsesDestinationIdentityCapturedBeforeWaiting() async {
+        let directory = URL(filePath: "/workspace", directoryHint: .isDirectory)
+        let otherDirectory = URL(filePath: "/other", directoryHint: .isDirectory)
+        let firstSource = URL(filePath: "/source/first")
+        let collision = directory.appending(path: "first")
+        let archiveSource = directory.appending(path: "Report.txt")
+        let fileSystem = RecordingFileSystem(
+            existingURLs: [directory, otherDirectory, firstSource, collision, archiveSource]
+        )
+        let archiveService = ArchiveOperationService(
+            fileSystem: fileSystem,
+            commandRunner: CompletingControllerArchiveCommandRunner()
+        )
+        let controller = FileOperationController(
+            service: FileOperationService(fileSystem: fileSystem),
+            materializer: InMemoryCloudMaterializer(),
+            archiveService: archiveService
+        )
+        let workspace = WorkspaceState(
+            leftURL: directory,
+            rightURL: otherDirectory,
+            listingService: StubDirectoryListingService(values: [
+                directory: [fileItem(at: archiveSource)],
+                otherDirectory: []
+            ])
+        )
+        await workspace.loadInitialDirectories()
+        workspace.left.selection = [archiveSource]
+        #expect(await controller.runTransfer(
+            [firstSource],
+            to: directory,
+            mode: .copy,
+            workspace: workspace
+        ))
+        await waitForPendingConflict(controller)
+
+        #expect(await controller.compressSelection(workspace))
+        await fileSystem.replaceIdentity(
+            at: directory,
+            with: FileIdentity(
+                entryIdentifier: "replacement-directory-entry",
+                resolvedIdentifier: "replacement-directory-resolved"
+            )
+        )
+        controller.resolvePendingConflict(.skip, applyToAll: false)
+        await waitUntilQueueIsIdle(controller)
+
+        #expect(await !fileSystem.existingURLs.contains(
+            directory.appending(path: "Report.txt.zip")
+        ))
+        #expect(controller.operationHistory.first?.kind == .compress(.zip))
+        #expect(controller.operationHistory.first?.state == .failed)
+    }
+
     @Test func queuedJobCanBeCancelledWithoutExecuting() async {
         let source = URL(filePath: "/source/first")
         let destinationDirectory = URL(filePath: "/destination")
@@ -1387,6 +1480,100 @@ struct FileOperationControllerTests {
         #expect(controller.operationHistory.first { $0.id == queuedID }?.state == .cancelled)
     }
 
+    @Test func cancellingQueuedJobDeliversItsImmutableCancellationResultOnce() async {
+        let firstSource = URL(filePath: "/source/first")
+        let queuedSource = URL(filePath: "/source/queued")
+        let destinationDirectory = URL(filePath: "/destination")
+        let collision = destinationDirectory.appending(path: "first")
+        let queuedIdentity = FileIdentity(
+            entryIdentifier: "queued-entry",
+            resolvedIdentifier: "queued-resolved"
+        )
+        let fileSystem = RecordingFileSystem(
+            existingURLs: [firstSource, queuedSource, destinationDirectory, collision],
+            identities: [queuedSource: queuedIdentity]
+        )
+        let controller = FileOperationController(
+            service: FileOperationService(fileSystem: fileSystem)
+        )
+        let workspace = WorkspaceState(
+            leftURL: destinationDirectory,
+            rightURL: URL(filePath: "/elsewhere"),
+            listingService: StubDirectoryListingService(values: [:])
+        )
+        #expect(await controller.runTransfer(
+            [firstSource],
+            to: destinationDirectory,
+            mode: .copy,
+            workspace: workspace
+        ))
+        await waitForPendingConflict(controller)
+        var completions: [FileOperationResult] = []
+        let accepted = controller.trash(
+            [IdentifiedFileRequest(url: queuedSource, identity: queuedIdentity)],
+            workspace: workspace,
+            onCompletion: { completions.append($0) }
+        )
+        #expect(accepted)
+        let queuedID = try? #require(controller.queuedJobs.first?.id)
+
+        #expect(queuedID.map(controller.cancelQueuedJob) == true)
+        #expect(completions == [FileOperationResult(outcomes: [
+            .cancelled(source: queuedSource)
+        ])])
+        #expect(queuedID.map(controller.cancelQueuedJob) == false)
+        #expect(completions.count == 1)
+        controller.resolvePendingConflict(.skip, applyToAll: false)
+        await waitUntilQueueIsIdle(controller)
+    }
+
+    @Test func queuedJobsCanBeMovedBeforeTheyExecute() async {
+        let firstSource = URL(filePath: "/source/first")
+        let destinationDirectory = URL(filePath: "/destination", directoryHint: .isDirectory)
+        let collision = destinationDirectory.appending(path: "first")
+        let fileSystem = RecordingFileSystem(
+            existingURLs: [firstSource, destinationDirectory, collision]
+        )
+        let controller = FileOperationController(
+            service: FileOperationService(fileSystem: fileSystem)
+        )
+        let workspace = WorkspaceState(
+            leftURL: destinationDirectory,
+            rightURL: URL(filePath: "/elsewhere"),
+            listingService: StubDirectoryListingService(values: [:])
+        )
+        #expect(await controller.runTransfer(
+            [firstSource],
+            to: destinationDirectory,
+            mode: .copy,
+            workspace: workspace
+        ))
+        await waitForPendingConflict(controller)
+        #expect(await controller.createFolder(
+            in: destinationDirectory,
+            named: "First Queued",
+            workspace: workspace
+        ))
+        #expect(await controller.createFolder(
+            in: destinationDirectory,
+            named: "Second Queued",
+            workspace: workspace
+        ))
+        let secondID = try? #require(controller.queuedJobs.last?.id)
+
+        #expect(secondID.map { controller.moveQueuedJob($0, by: -1) } == true)
+        #expect(controller.queuedJobs.map(\.itemDisplayName) == [
+            "Second Queued", "First Queued"
+        ])
+        controller.resolvePendingConflict(.skip, applyToAll: false)
+        await waitUntilQueueIsIdle(controller)
+
+        #expect(controller.operationHistory.prefix(2).map(\.itemDisplayName) == [
+            "First Queued", "Second Queued"
+        ])
+        #expect(controller.operationHistory.prefix(2).allSatisfy { $0.state == .succeeded })
+    }
+
     @Test func activeJobPauseResumeAndCancelUpdateOperationCenterState() async {
         let source = URL(filePath: "/source/first")
         let destinationDirectory = URL(filePath: "/destination")
@@ -1410,8 +1597,8 @@ struct FileOperationControllerTests {
         await waitForPendingConflict(controller)
 
         await controller.pauseActiveJob()
-        #expect(controller.isPaused)
-        #expect(controller.activeJob?.state == .paused)
+        #expect(!controller.isPaused)
+        #expect(controller.activeJob?.state == .pauseRequested)
         await controller.resumeActiveJob()
         #expect(!controller.isPaused)
         #expect(controller.activeJob?.state == .running)
@@ -1579,6 +1766,39 @@ struct FileOperationControllerTests {
         #expect(controller.undoJob(first.id) == false)
     }
 
+    @Test func ancestorMutationInvalidatesANestedUndoRecipe() async throws {
+        let root = URL(filePath: "/workspace", directoryHint: .isDirectory)
+        let nested = root.appending(path: "Nested", directoryHint: .isDirectory)
+        let fileSystem = RecordingFileSystem(existingURLs: [root, nested])
+        let controller = FileOperationController(
+            service: FileOperationService(fileSystem: fileSystem)
+        )
+        let workspace = WorkspaceState(
+            leftURL: root,
+            rightURL: URL(filePath: "/elsewhere"),
+            listingService: StubDirectoryListingService(values: [:])
+        )
+
+        #expect(await controller.createFolder(
+            in: nested,
+            named: "Nested Output",
+            workspace: workspace
+        ))
+        await waitUntilQueueIsIdle(controller)
+        let nestedJob = try #require(controller.operationHistory.first)
+        #expect(nestedJob.canUndo)
+
+        #expect(await controller.createFolder(
+            in: root,
+            named: "Root Output",
+            workspace: workspace
+        ))
+        await waitUntilQueueIsIdle(controller)
+
+        #expect(controller.operationHistory.first { $0.id == nestedJob.id }?.canUndo == false)
+        #expect(controller.undoJob(nestedJob.id) == false)
+    }
+
     @Test func operationStatusSummaryCountsEveryOutcomeForAccessibility() {
         let result = FileOperationResult(outcomes: [
             .succeeded(source: URL(filePath: "/a"), destination: URL(filePath: "/dest/a")),
@@ -1676,7 +1896,7 @@ private actor RecordingArchiveOperator: ArchiveOperating {
         self.requests.append(contentsOf: requests)
         return FileOperationResult(outcomes: requests.map { request in
             .succeeded(
-                source: request.verifiedSources.first ?? request.finalDestination,
+                source: request.verifiedSources.first?.url ?? request.finalDestination,
                 destination: request.finalDestination
             )
         })
@@ -1691,7 +1911,7 @@ private struct CompletingControllerArchiveCommandRunner: ArchiveCommandRunning {
     func run(
         kind: ArchiveOperationKind,
         format: ArchiveFormat,
-        sources: [URL],
+        sources: [IdentifiedFileRequest],
         destination: URL
     ) async throws {
         switch kind {

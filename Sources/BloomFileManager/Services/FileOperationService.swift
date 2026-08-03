@@ -25,12 +25,12 @@ actor FileOperationService {
     }
 
     nonisolated func makeArchiveOperationService(
-        commandRunner: any ArchiveCommandRunning = LiveArchiveCommandRunner()
+        commandRunner: (any ArchiveCommandRunning)? = nil
     ) -> ArchiveOperationService {
         ArchiveOperationService(
             fileSystem: fileSystem,
             accessCoordinator: accessCoordinator,
-            commandRunner: commandRunner
+            commandRunner: commandRunner ?? LiveArchiveCommandRunner(fileSystem: fileSystem)
         )
     }
 
@@ -522,7 +522,11 @@ actor FileOperationService {
                     outcomes.append(contentsOf: sources[index...].map { .cancelled(source: $0) })
                     break
                 }
-                outcomes.append(.failed(source: source, message: error.localizedDescription))
+                if cleanupFailed {
+                    outcomes.append(.recoveryNeeded(source: source))
+                } else {
+                    outcomes.append(.failed(source: source, message: error.localizedDescription))
+                }
                 failed += 1
             }
 
@@ -596,17 +600,11 @@ actor FileOperationService {
                     mode: mode,
                     resolveConflict: resolveConflict
                 ) else {
-                    if let cleanupError = await cleanupOwnedDirectories(
+                    if await cleanupOwnedDirectories(
                         prepared.createdDirectories,
                         for: request
-                    ) {
-                        outcomes.append(.failed(
-                            source: source,
-                            message: TransferFailure(
-                                primary: CancellationError(),
-                                cleanup: cleanupError
-                            ).localizedDescription
-                        ))
+                    ) != nil {
+                        outcomes.append(.recoveryNeeded(source: source))
                         failed += 1
                         outcomes.append(contentsOf: requests[(index + 1)...].map {
                             .cancelled(source: $0.source)
@@ -624,14 +622,11 @@ actor FileOperationService {
                     succeeded += 1
                 case .skipped:
                     skipped += 1
-                    if let cleanupError = await cleanupOwnedDirectories(
+                    if await cleanupOwnedDirectories(
                         prepared.createdDirectories,
                         for: request
-                    ) {
-                        outcomes[outcomes.count - 1] = .failed(
-                            source: source,
-                            message: cleanupError.localizedDescription
-                        )
+                    ) != nil {
+                        outcomes[outcomes.count - 1] = .recoveryNeeded(source: source)
                         skipped -= 1
                         failed += 1
                     }
@@ -645,14 +640,8 @@ actor FileOperationService {
                     preparedHierarchy?.createdDirectories ?? [],
                     for: request
                 )
-                if let cleanupError {
-                    outcomes.append(.failed(
-                        source: source,
-                        message: TransferFailure(
-                            primary: CancellationError(),
-                            cleanup: cleanupError
-                        ).localizedDescription
-                    ))
+                if cleanupError != nil {
+                    outcomes.append(.recoveryNeeded(source: source))
                     failed += 1
                     outcomes.append(contentsOf: requests[(index + 1)...].map {
                         .cancelled(source: $0.source)
@@ -675,13 +664,14 @@ actor FileOperationService {
                     })
                     break
                 } else {
-                    outcomes.append(.failed(
-                        source: source,
-                        message: TransferFailure(
-                            primary: error,
-                            cleanup: cleanupError
-                        ).localizedDescription
-                    ))
+                    if transferCleanupFailed || cleanupError != nil {
+                        outcomes.append(.recoveryNeeded(source: source))
+                    } else {
+                        outcomes.append(.failed(
+                            source: source,
+                            message: error.localizedDescription
+                        ))
+                    }
                     failed += 1
                 }
             }

@@ -18,11 +18,11 @@ actor ArchiveOperationService: ArchiveOperating {
     init(
         fileSystem: any FileSystemAccess,
         accessCoordinator: CloudLocationScopedAccessCoordinator = .init(),
-        commandRunner: any ArchiveCommandRunning = LiveArchiveCommandRunner()
+        commandRunner: (any ArchiveCommandRunning)? = nil
     ) {
         self.fileSystem = fileSystem
         self.accessCoordinator = accessCoordinator
-        self.commandRunner = commandRunner
+        self.commandRunner = commandRunner ?? LiveArchiveCommandRunner(fileSystem: fileSystem)
     }
 
     func perform(
@@ -40,7 +40,7 @@ actor ArchiveOperationService: ArchiveOperating {
             let source = representativeSource(for: request)
             do {
                 let accessLeases = try accessCoordinator.acquireAccess(
-                    for: request.verifiedSources + [request.finalDestination]
+                    for: request.verifiedSources.map(\.url) + [request.finalDestination]
                 )
                 defer { accessLeases.forEach { $0.finish() } }
 
@@ -54,10 +54,7 @@ actor ArchiveOperationService: ArchiveOperating {
                 let cancellation = Self.cancellationState(for: error)
                 if cancellation.wasCancelled {
                     if cancellation.cleanupFailed {
-                        outcomes.append(.failed(
-                            source: source,
-                            message: error.localizedDescription
-                        ))
+                        outcomes.append(.recoveryNeeded(source: source))
                         outcomes.append(contentsOf: cancelledOutcomes(
                             for: requests[(index + 1)...]
                         ))
@@ -68,10 +65,14 @@ actor ArchiveOperationService: ArchiveOperating {
                     }
                     break
                 }
-                outcomes.append(.failed(
-                    source: source,
-                    message: error.localizedDescription
-                ))
+                if Self.requiresRecovery(error) {
+                    outcomes.append(.recoveryNeeded(source: source))
+                } else {
+                    outcomes.append(.failed(
+                        source: source,
+                        message: error.localizedDescription
+                    ))
+                }
             }
         }
 
@@ -82,13 +83,16 @@ actor ArchiveOperationService: ArchiveOperating {
         _ request: ArchiveRequest,
         progress: @escaping ArchiveProgressHandler
     ) async throws {
+        try await requireDestinationParentIdentity(request)
         let reservation = try await fileSystem.reserveStagingDirectory(
-            beside: request.finalDestination
+            beside: request.finalDestination,
+            parentIdentifiedBy: request.destinationParentIdentity
         )
         var primaryError: (any Error)?
 
         do {
             try Task.checkCancellation()
+            try await requireDestinationParentIdentity(request)
             try await commandRunner.run(
                 kind: request.kind,
                 format: request.format,
@@ -103,6 +107,7 @@ actor ArchiveOperationService: ArchiveOperating {
                 ))
             }
             try Task.checkCancellation()
+            try await requireDestinationParentIdentity(request)
             guard await fileSystem.exists(reservation.item) else {
                 throw ArchiveServiceError.missingStagedOutput
             }
@@ -113,9 +118,14 @@ actor ArchiveOperationService: ArchiveOperating {
                 format: request.format,
                 phase: .publishing
             ))
+            guard let stagedIdentity = try await fileSystem.identity(of: reservation.item) else {
+                throw ArchiveServiceError.missingStagedOutput
+            }
             try await fileSystem.moveExclusively(
                 reservation.item,
-                to: request.finalDestination
+                identifiedBy: stagedIdentity,
+                to: request.finalDestination,
+                destinationParentIdentifiedBy: request.destinationParentIdentity
             )
         } catch {
             primaryError = error
@@ -167,8 +177,17 @@ actor ArchiveOperationService: ArchiveOperating {
         }
     }
 
+    private func requireDestinationParentIdentity(
+        _ request: ArchiveRequest
+    ) async throws {
+        let parent = request.finalDestination.deletingLastPathComponent()
+        guard try await fileSystem.identity(of: parent) == request.destinationParentIdentity else {
+            throw FileSystemAccessError.identityMismatch(parent)
+        }
+    }
+
     private func representativeSource(for request: ArchiveRequest) -> URL {
-        request.verifiedSources.first ?? request.finalDestination
+        request.verifiedSources.first?.url ?? request.finalDestination
     }
 
     private func cancelledOutcomes(
@@ -186,6 +205,13 @@ actor ArchiveOperationService: ArchiveOperating {
             || (primary as? ArchiveOperationError) == .cancelled
             || Task.isCancelled
         return (wasCancelled, operationFailure?.cleanup != nil)
+    }
+
+    private static func requiresRecovery(_ error: any Error) -> Bool {
+        if (error as? ArchiveOperationError) == .recoveryRequired { return true }
+        guard let failure = error as? ArchiveOperationFailure else { return false }
+        return failure.cleanup != nil
+            || (failure.primary as? ArchiveOperationError) == .recoveryRequired
     }
 }
 

@@ -56,7 +56,10 @@ struct ArchiveDestinationPlan: Sendable, Equatable {
     let destinations: [URL]
     let formats: [ArchiveFormat]
 
-    func requests(for verifiedSources: [URL]) -> [ArchiveRequest]? {
+    func requests(
+        for verifiedSources: [IdentifiedFileRequest],
+        destinationParentIdentity: FileIdentity
+    ) -> [ArchiveRequest]? {
         guard verifiedSources.count == selectedSources.count,
               sourceDisplayNames.count == selectedSources.count
         else { return nil }
@@ -68,6 +71,7 @@ struct ArchiveDestinationPlan: Sendable, Equatable {
                     kind: .compress,
                     verifiedSources: verifiedSources,
                     finalDestination: destinations[0],
+                    destinationParentIdentity: destinationParentIdentity,
                     progressDisplayName: destinations[0].lastPathComponent,
                     format: formats[0]
                 )
@@ -81,6 +85,7 @@ struct ArchiveDestinationPlan: Sendable, Equatable {
                     kind: .extract,
                     verifiedSources: [verifiedSources[index]],
                     finalDestination: destinations[index],
+                    destinationParentIdentity: destinationParentIdentity,
                     progressDisplayName: sourceDisplayNames[index],
                     format: formats[index]
                 )

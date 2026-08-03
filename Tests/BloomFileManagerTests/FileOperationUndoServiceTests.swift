@@ -24,8 +24,31 @@ struct FileOperationUndoServiceTests {
         ]))
         #expect(await fileSystem.existingURLs == [original])
         #expect(await fileSystem.events.contains(where: {
-            $0 == "moveChecked:/workspace/After.txt->/workspace/Before.txt"
+            $0 == "moveExclusiveChecked:/workspace/After.txt->/workspace/Before.txt"
         }))
+    }
+
+    @Test func restoreRaceNeverOverwritesANewOriginalPath() async throws {
+        let original = URL(filePath: "/workspace/Before.txt")
+        let renamed = URL(filePath: "/workspace/After.txt")
+        let fileSystem = RecordingFileSystem(
+            existingURLs: [renamed],
+            raceDestinationBeforeExclusiveMove: original
+        )
+        let service = FileOperationUndoService(fileSystem: fileSystem)
+        let recipe = try #require(await service.makeRecipe(
+            kind: .rename,
+            result: FileOperationResult(outcomes: [
+                .succeeded(source: original, destination: renamed)
+            ]),
+            allowsUndo: true
+        ))
+
+        let result = await service.perform(recipe)
+
+        #expect(result.hasFailures)
+        #expect(await fileSystem.existingURLs.contains(original))
+        #expect(await fileSystem.existingURLs.contains(renamed))
     }
 
     @Test func moveUndoPreflightRefusesAnOccupiedOriginalWithoutMovingAnything() async throws {
@@ -113,6 +136,69 @@ struct FileOperationUndoServiceTests {
         let events = await fileSystem.events
         #expect(events.filter { $0 == "fingerprint:/destination/Notes.md" }.count >= 2)
         #expect(events.contains(where: { $0.hasPrefix("trash:") }) == false)
+    }
+
+    @Test func failedTrashCommitRestoresEveryLaterQuarantinedOutput() async throws {
+        let firstSource = URL(filePath: "/source/First.txt")
+        let secondSource = URL(filePath: "/source/Second.txt")
+        let firstCopy = URL(filePath: "/destination/First.txt")
+        let secondCopy = URL(filePath: "/destination/Second.txt")
+        let fileSystem = RecordingFileSystem(
+            existingURLs: [firstCopy, secondCopy],
+            forceTrashQuarantineRecovery: true
+        )
+        let service = FileOperationUndoService(fileSystem: fileSystem)
+        let recipe = try #require(await service.makeRecipe(
+            kind: .copy,
+            result: FileOperationResult(outcomes: [
+                .succeeded(source: firstSource, destination: firstCopy),
+                .succeeded(source: secondSource, destination: secondCopy)
+            ]),
+            allowsUndo: true
+        ))
+
+        let result = await service.perform(recipe)
+
+        #expect(result.outcomes == [
+            .recoveryNeeded(source: firstCopy),
+            .cancelled(source: secondCopy)
+        ])
+        #expect(await !fileSystem.existingURLs.contains(firstCopy))
+        #expect(await fileSystem.existingURLs.contains(secondCopy))
+    }
+
+    @Test func cancellationBeforeNextTrashCommitRestoresThatQuarantinedOutput() async throws {
+        let firstSource = URL(filePath: "/source/First.txt")
+        let secondSource = URL(filePath: "/source/Second.txt")
+        let firstCopy = URL(filePath: "/destination/First.txt")
+        let secondCopy = URL(filePath: "/destination/Second.txt")
+        let fileSystem = RecordingFileSystem(existingURLs: [firstCopy, secondCopy])
+        let service = FileOperationUndoService(fileSystem: fileSystem)
+        let recipe = try #require(await service.makeRecipe(
+            kind: .copy,
+            result: FileOperationResult(outcomes: [
+                .succeeded(source: firstSource, destination: firstCopy),
+                .succeeded(source: secondSource, destination: secondCopy)
+            ]),
+            allowsUndo: true
+        ))
+
+        let result = await service.perform(recipe) { progress in
+            if progress.completedCount == 1 {
+                withUnsafeCurrentTask { $0?.cancel() }
+            }
+        }
+
+        #expect(result.outcomes.count == 2)
+        guard case let .succeeded(source, destination) = result.outcomes.first else {
+            Issue.record("Expected the first output to reach Trash")
+            return
+        }
+        #expect(source == firstCopy)
+        #expect(destination != nil)
+        #expect(result.outcomes.last == .cancelled(source: secondCopy))
+        #expect(await fileSystem.existingURLs.contains(firstCopy) == false)
+        #expect(await fileSystem.existingURLs.contains(secondCopy))
     }
 
     @Test func replacementJobsAndMissingTrashDestinationsDoNotProduceUndoRecipes() async {

@@ -56,21 +56,24 @@ struct ArchiveOperationProgress: Sendable, Equatable {
 
 struct ArchiveRequest: Sendable, Equatable {
     let kind: ArchiveOperationKind
-    let verifiedSources: [URL]
+    let verifiedSources: [IdentifiedFileRequest]
     let finalDestination: URL
+    let destinationParentIdentity: FileIdentity
     let progressDisplayName: String
     let format: ArchiveFormat
 
     init(
         kind: ArchiveOperationKind,
-        verifiedSources: [URL],
+        verifiedSources: [IdentifiedFileRequest],
         finalDestination: URL,
+        destinationParentIdentity: FileIdentity,
         progressDisplayName: String? = nil,
         format: ArchiveFormat = .zip
     ) {
         self.kind = kind
         self.verifiedSources = verifiedSources
         self.finalDestination = finalDestination
+        self.destinationParentIdentity = destinationParentIdentity
         self.format = format
         if let progressDisplayName {
             self.progressDisplayName = progressDisplayName
@@ -79,7 +82,7 @@ struct ArchiveRequest: Sendable, Equatable {
             case .compress:
                 finalDestination.lastPathComponent
             case .extract:
-                verifiedSources.first?.lastPathComponent
+                verifiedSources.first?.url.lastPathComponent
                     ?? finalDestination.lastPathComponent
             }
         }
@@ -91,6 +94,7 @@ enum ArchiveOperationError: LocalizedError, Sendable, Equatable {
     case nonZeroTermination(status: Int32, standardError: String)
     case invalidRequest
     case cancelled
+    case recoveryRequired
 
     var errorDescription: String? {
         switch self {
@@ -106,6 +110,8 @@ enum ArchiveOperationError: LocalizedError, Sendable, Equatable {
             "The archive request is invalid."
         case .cancelled:
             "The archive operation was cancelled."
+        case .recoveryRequired:
+            "Archive cleanup could not finish safely and requires recovery review."
         }
     }
 }

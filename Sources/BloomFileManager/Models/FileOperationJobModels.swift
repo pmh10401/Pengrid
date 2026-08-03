@@ -27,6 +27,7 @@ enum FileOperationJobKind: Sendable, Equatable {
 enum FileOperationJobState: Sendable, Equatable {
     case queued
     case running
+    case pauseRequested
     case paused
     case succeeded
     case failed
@@ -36,6 +37,7 @@ enum FileOperationJobState: Sendable, Equatable {
         switch self {
         case .queued: "Queued"
         case .running: "Running"
+        case .pauseRequested: "Pause requested"
         case .paused: "Paused"
         case .succeeded: "Completed"
         case .failed: "Failed"

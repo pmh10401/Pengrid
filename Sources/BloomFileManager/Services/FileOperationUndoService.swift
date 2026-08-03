@@ -173,7 +173,7 @@ actor FileOperationUndoService {
         for entry in entries.reversed() {
             do {
                 try Task.checkCancellation()
-                try await fileSystem.move(
+                try await fileSystem.moveExclusively(
                     entry.currentURL,
                     identifiedBy: entry.currentIdentity,
                     to: entry.originalURL
@@ -261,6 +261,7 @@ actor FileOperationUndoService {
         var outcomes: [FileOperationItemOutcome] = []
         for (index, quarantine) in quarantines.enumerated() {
             do {
+                try Task.checkCancellation()
                 let destination = try await fileSystem.moveTrashQuarantineAtomically(quarantine)
                 outcomes.append(.succeeded(
                     source: entries[index].url,
@@ -271,10 +272,32 @@ actor FileOperationUndoService {
                     totalCount: entries.count,
                     currentName: entries[index].url.lastPathComponent
                 ))
+            } catch is CancellationError {
+                let pendingQuarantines = Array(quarantines.dropFirst(index))
+                let pendingEntries = Array(entries.dropFirst(index))
+                let pendingRecovered = await rollback(pendingQuarantines)
+                outcomes.append(contentsOf: pendingEntries.map {
+                    pendingRecovered
+                        ? .cancelled(source: $0.url)
+                        : .recoveryNeeded(source: $0.url)
+                })
+                break
             } catch {
-                outcomes.append(.recoveryNeeded(source: entries[index].url))
-                outcomes.append(contentsOf: entries.dropFirst(index + 1).map {
-                    .recoveryNeeded(source: $0.url)
+                let pendingQuarantines = Array(quarantines.dropFirst(index + 1))
+                let pendingEntries = Array(entries.dropFirst(index + 1))
+                let pendingRecovered = await rollback(pendingQuarantines)
+                if error as? StorageTrashAccessError == .failedButRestored {
+                    outcomes.append(.failed(
+                        source: entries[index].url,
+                        message: error.localizedDescription
+                    ))
+                } else {
+                    outcomes.append(.recoveryNeeded(source: entries[index].url))
+                }
+                outcomes.append(contentsOf: pendingEntries.map {
+                    pendingRecovered
+                        ? .cancelled(source: $0.url)
+                        : .recoveryNeeded(source: $0.url)
                 })
                 break
             }
@@ -301,7 +324,7 @@ actor FileOperationUndoService {
                       let identity = try await fileSystem.identity(of: entry.originalURL),
                       identity.refersToSameItem(as: entry.currentIdentity)
                 else { return false }
-                try await fileSystem.move(
+                try await fileSystem.moveExclusively(
                     entry.originalURL,
                     identifiedBy: entry.currentIdentity,
                     to: entry.currentURL
