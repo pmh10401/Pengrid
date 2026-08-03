@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 typealias ArchiveCommandProgressHandler = @Sendable (ArchiveOperationPhase) async -> Void
@@ -7,7 +8,8 @@ protocol ArchiveCommandRunning: Sendable {
         kind: ArchiveOperationKind,
         format: ArchiveFormat,
         sources: [IdentifiedFileRequest],
-        destination: URL
+        destination: URL,
+        destinationParentIdentity: FileIdentity
     ) async throws -> FileIdentity
 
     func run(
@@ -15,6 +17,7 @@ protocol ArchiveCommandRunning: Sendable {
         format: ArchiveFormat,
         sources: [IdentifiedFileRequest],
         destination: URL,
+        destinationParentIdentity: FileIdentity,
         progress: @escaping ArchiveCommandProgressHandler
     ) async throws -> FileIdentity
 }
@@ -25,6 +28,7 @@ extension ArchiveCommandRunning {
         format: ArchiveFormat,
         sources: [IdentifiedFileRequest],
         destination: URL,
+        destinationParentIdentity: FileIdentity,
         progress: @escaping ArchiveCommandProgressHandler
     ) async throws -> FileIdentity {
         await progress(.encoding)
@@ -32,7 +36,8 @@ extension ArchiveCommandRunning {
             kind: kind,
             format: format,
             sources: sources,
-            destination: destination
+            destination: destination,
+            destinationParentIdentity: destinationParentIdentity
         )
     }
 }
@@ -49,13 +54,15 @@ struct LiveArchiveCommandRunner: ArchiveCommandRunning {
         kind: ArchiveOperationKind,
         format: ArchiveFormat,
         sources: [IdentifiedFileRequest],
-        destination: URL
+        destination: URL,
+        destinationParentIdentity: FileIdentity
     ) async throws -> FileIdentity {
         try await run(
             kind: kind,
             format: format,
             sources: sources,
             destination: destination,
+            destinationParentIdentity: destinationParentIdentity,
             progress: { _ in }
         )
     }
@@ -65,6 +72,7 @@ struct LiveArchiveCommandRunner: ArchiveCommandRunning {
         format: ArchiveFormat,
         sources: [IdentifiedFileRequest],
         destination: URL,
+        destinationParentIdentity: FileIdentity,
         progress: @escaping ArchiveCommandProgressHandler
     ) async throws -> FileIdentity {
         let preparedCommand = try await prepareCommand(
@@ -72,8 +80,27 @@ struct LiveArchiveCommandRunner: ArchiveCommandRunning {
             format: format,
             sources: sources,
             destination: destination,
+            destinationParentIdentity: destinationParentIdentity,
             progress: progress
         )
+        let output: OpenedEmptyFileSystemItem
+        do {
+            output = try await fileSystem.createEmptyItemAndCaptureIdentity(
+                destination,
+                kind: kind == .compress ? .regularFile : .directory,
+                parentIdentifiedBy: destinationParentIdentity
+            )
+        } catch {
+            guard await preparedCommand.cleanup(using: fileSystem) == nil else {
+                throw ArchiveOperationError.recoveryRequired
+            }
+            throw error
+        }
+        defer {
+            if output.descriptor >= 0 {
+                Darwin.close(output.descriptor)
+            }
+        }
         do {
             guard !Task.isCancelled else {
                 throw ArchiveOperationError.cancelled
@@ -82,62 +109,192 @@ struct LiveArchiveCommandRunner: ArchiveCommandRunning {
             await progress(.encoding)
             try Task.checkCancellation()
 
-            let process = Process()
-            process.executableURL = format == .zip
-                ? URL(filePath: "/usr/bin/ditto")
-                : URL(filePath: "/usr/bin/tar")
-            process.arguments = preparedCommand.arguments
-
-            let standardErrorPipe = Pipe()
-            process.standardError = standardErrorPipe
-
-            let terminationLatch = ProcessTerminationLatch()
-            process.terminationHandler = { process in
-                terminationLatch.record(process.terminationStatus)
-            }
-
-            do {
-                try process.run()
-            } catch {
-                throw ArchiveOperationError.commandLaunch(error.localizedDescription)
-            }
-
-            let runningProcess = RunningArchiveProcess(process)
-            let standardErrorTask = Task.detached(priority: .utility) {
-                captureStandardError(
-                    from: standardErrorPipe.fileHandleForReading,
-                    limit: Self.standardErrorLimit
-                )
-            }
-            let status = await withTaskCancellationHandler {
-                await terminationLatch.wait()
-            } onCancel: {
-                runningProcess.cancel()
-            }
-            let standardError = await standardErrorTask.value
-
-            if Task.isCancelled || runningProcess.wasCancellationRequested {
-                throw ArchiveOperationError.cancelled
-            }
-            guard status == 0 else {
-                throw ArchiveOperationError.nonZeroTermination(
-                    status: status,
-                    standardError: standardError
-                )
-            }
+            try await runNativeProcess(
+                kind: kind,
+                format: format,
+                arguments: preparedCommand.arguments,
+                outputDescriptor: output.descriptor
+            )
         } catch {
-            guard await preparedCommand.cleanup(using: fileSystem) == nil else {
+            let outputCleanupError = await cleanupOutput(
+                destination,
+                identity: output.identity
+            )
+            let preparationCleanupError = await preparedCommand.cleanup(using: fileSystem)
+            guard outputCleanupError == nil, preparationCleanupError == nil else {
                 throw ArchiveOperationError.recoveryRequired
             }
             throw error
         }
-        guard let outputIdentity = try await fileSystem.identity(of: destination) else {
+        guard try await fileSystem.identity(of: destination) == output.identity else {
+            _ = await preparedCommand.cleanup(using: fileSystem)
             throw ArchiveOperationError.recoveryRequired
         }
         guard await preparedCommand.cleanup(using: fileSystem) == nil else {
             throw ArchiveOperationError.recoveryRequired
         }
-        return outputIdentity
+        return output.identity
+    }
+
+    private func runNativeProcess(
+        kind: ArchiveOperationKind,
+        format: ArchiveFormat,
+        arguments: [String],
+        outputDescriptor: Int32
+    ) async throws {
+        let executable = format == .zip
+            ? URL(filePath: "/usr/bin/ditto")
+            : URL(filePath: "/usr/bin/tar")
+        let boundArguments = Self.argumentsBoundToOpenedOutput(
+            arguments,
+            kind: kind,
+            format: format
+        )
+
+        if kind == .compress {
+            try await runCompressionProcess(
+                executable: executable,
+                arguments: boundArguments,
+                outputDescriptor: outputDescriptor
+            )
+        } else {
+            try await runExtractionProcess(
+                executable: executable,
+                arguments: boundArguments,
+                outputDescriptor: outputDescriptor
+            )
+        }
+    }
+
+    private func runCompressionProcess(
+        executable: URL,
+        arguments: [String],
+        outputDescriptor: Int32
+    ) async throws {
+        let process = Process()
+        process.executableURL = executable
+        process.arguments = arguments
+        process.standardOutput = FileHandle(
+            fileDescriptor: outputDescriptor,
+            closeOnDealloc: false
+        )
+
+        let standardErrorPipe = Pipe()
+        process.standardError = standardErrorPipe
+        let terminationLatch = ProcessTerminationLatch()
+        process.terminationHandler = { process in
+            terminationLatch.record(process.terminationStatus)
+        }
+
+        do {
+            try process.run()
+        } catch {
+            throw ArchiveOperationError.commandLaunch(error.localizedDescription)
+        }
+
+        let runningProcess = RunningArchiveProcess(process)
+        let standardErrorTask = Task.detached(priority: .utility) {
+            captureStandardError(
+                from: standardErrorPipe.fileHandleForReading,
+                limit: Self.standardErrorLimit
+            )
+        }
+        let status = await withTaskCancellationHandler {
+            await terminationLatch.wait()
+        } onCancel: {
+            runningProcess.cancel()
+        }
+        let standardError = await standardErrorTask.value
+        try Self.validateProcessResult(
+            status: status,
+            standardError: standardError,
+            cancellationRequested: runningProcess.wasCancellationRequested
+        )
+    }
+
+    private func runExtractionProcess(
+        executable: URL,
+        arguments: [String],
+        outputDescriptor: Int32
+    ) async throws {
+        let process: SpawnedArchiveProcess
+        do {
+            process = try SpawnedArchiveProcess(
+                executable: executable,
+                arguments: arguments,
+                currentDirectoryDescriptor: outputDescriptor
+            )
+        } catch {
+            throw ArchiveOperationError.commandLaunch(error.localizedDescription)
+        }
+        let standardErrorTask = Task.detached(priority: .utility) {
+            captureStandardError(
+                from: process.standardErrorHandle,
+                limit: Self.standardErrorLimit
+            )
+        }
+        let status = await withTaskCancellationHandler {
+            await process.wait()
+        } onCancel: {
+            process.cancel()
+        }
+        let standardError = await standardErrorTask.value
+        try Self.validateProcessResult(
+            status: status,
+            standardError: standardError,
+            cancellationRequested: process.wasCancellationRequested
+        )
+    }
+
+    private static func validateProcessResult(
+        status: Int32,
+        standardError: String,
+        cancellationRequested: Bool
+    ) throws {
+        if Task.isCancelled || cancellationRequested {
+            throw ArchiveOperationError.cancelled
+        }
+        guard status == 0 else {
+            throw ArchiveOperationError.nonZeroTermination(
+                status: status,
+                standardError: standardError
+            )
+        }
+    }
+
+    static func argumentsBoundToOpenedOutput(
+        _ arguments: [String],
+        kind: ArchiveOperationKind,
+        format: ArchiveFormat
+    ) -> [String] {
+        var result = arguments
+        switch (kind, format) {
+        case (.compress, .zip), (.extract, .zip):
+            if !result.isEmpty {
+                result[result.count - 1] = kind == .compress ? "/dev/fd/1" : "."
+            }
+        case (.compress, _):
+            if let flag = result.firstIndex(of: "-f"), result.indices.contains(flag + 1) {
+                result[flag + 1] = "-"
+            }
+        case (.extract, _):
+            if let flag = result.firstIndex(of: "-C"), result.indices.contains(flag + 1) {
+                result[flag + 1] = "."
+            }
+        }
+        return result
+    }
+
+    private func cleanupOutput(
+        _ destination: URL,
+        identity: FileIdentity
+    ) async -> (any Error)? {
+        do {
+            try await fileSystem.remove(destination, identifiedBy: identity)
+            return nil
+        } catch {
+            return error
+        }
     }
 
     static func arguments(
@@ -191,13 +348,15 @@ struct LiveArchiveCommandRunner: ArchiveCommandRunning {
         format: ArchiveFormat,
         sources: [IdentifiedFileRequest],
         destination: URL,
+        destinationParentIdentity: FileIdentity,
         progress: @escaping ArchiveCommandProgressHandler
     ) async throws -> PreparedArchiveCommand {
         guard kind == .compress else {
             return try await prepareExtractionCommand(
                 format: format,
                 sources: sources,
-                destination: destination
+                destination: destination,
+                destinationParentIdentity: destinationParentIdentity
             )
         }
         guard !sources.isEmpty else {
@@ -212,15 +371,9 @@ struct LiveArchiveCommandRunner: ArchiveCommandRunning {
             }
         }
 
-        let aggregateParent = destination.deletingLastPathComponent()
-        guard let aggregateParentIdentity = try await fileSystem.identity(
-            of: aggregateParent
-        ) else {
-            throw FileSystemAccessError.identityMismatch(aggregateParent)
-        }
         let reservation = try await fileSystem.reserveStagingDirectory(
             beside: destination,
-            parentIdentifiedBy: aggregateParentIdentity
+            parentIdentifiedBy: destinationParentIdentity
         )
         let aggregateRoot = reservation.directory
         let copied = PreparedArchiveCopyState()
@@ -258,18 +411,15 @@ struct LiveArchiveCommandRunner: ArchiveCommandRunning {
     private func prepareExtractionCommand(
         format: ArchiveFormat,
         sources: [IdentifiedFileRequest],
-        destination: URL
+        destination: URL,
+        destinationParentIdentity: FileIdentity
     ) async throws -> PreparedArchiveCommand {
         guard sources.count == 1, let source = sources.first else {
             throw ArchiveOperationError.invalidRequest
         }
-        let stagingParent = destination.deletingLastPathComponent()
-        guard let stagingParentIdentity = try await fileSystem.identity(of: stagingParent) else {
-            throw FileSystemAccessError.identityMismatch(stagingParent)
-        }
         let reservation = try await fileSystem.reserveStagingDirectory(
             beside: destination,
-            parentIdentifiedBy: stagingParentIdentity
+            parentIdentifiedBy: destinationParentIdentity
         )
         var copiedEntries: [PreparedArchiveCopyEntry] = []
         do {
@@ -288,9 +438,6 @@ struct LiveArchiveCommandRunner: ArchiveCommandRunning {
                 sources: [reservation.item],
                 destination: destination
             )
-            if format != .zip {
-                try await fileSystem.createDirectory(destination)
-            }
             return PreparedArchiveCommand(
                 arguments: arguments,
                 reservation: reservation,
@@ -516,6 +663,123 @@ private actor PreparedArchiveCopyState {
 
     func append(url: URL, identity: FileIdentity) {
         entries.append(PreparedArchiveCopyEntry(url: url, identity: identity))
+    }
+}
+
+private final class SpawnedArchiveProcess: @unchecked Sendable {
+    let standardErrorHandle: FileHandle
+
+    private let processIdentifier: pid_t
+    private let lock = NSLock()
+    private var cancellationRequested = false
+
+    init(
+        executable: URL,
+        arguments: [String],
+        currentDirectoryDescriptor: Int32
+    ) throws {
+        let pipe = Pipe()
+        var actions: posix_spawn_file_actions_t? = nil
+        var status = posix_spawn_file_actions_init(&actions)
+        guard status == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: status) ?? .EIO)
+        }
+        defer { posix_spawn_file_actions_destroy(&actions) }
+
+        if #available(macOS 26.0, *) {
+            status = posix_spawn_file_actions_addfchdir(
+                &actions,
+                currentDirectoryDescriptor
+            )
+        } else {
+            status = posix_spawn_file_actions_addfchdir_np(
+                &actions,
+                currentDirectoryDescriptor
+            )
+        }
+        guard status == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: status) ?? .EIO)
+        }
+        status = posix_spawn_file_actions_adddup2(
+            &actions,
+            pipe.fileHandleForWriting.fileDescriptor,
+            STDERR_FILENO
+        )
+        guard status == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: status) ?? .EIO)
+        }
+        status = posix_spawn_file_actions_addclose(
+            &actions,
+            pipe.fileHandleForReading.fileDescriptor
+        )
+        guard status == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: status) ?? .EIO)
+        }
+        if pipe.fileHandleForWriting.fileDescriptor != STDERR_FILENO {
+            status = posix_spawn_file_actions_addclose(
+                &actions,
+                pipe.fileHandleForWriting.fileDescriptor
+            )
+            guard status == 0 else {
+                throw POSIXError(POSIXErrorCode(rawValue: status) ?? .EIO)
+            }
+        }
+
+        var processIdentifier: pid_t = 0
+        var argumentPointers: [UnsafeMutablePointer<CChar>?] =
+            ([executable.path] + arguments).map { strdup($0) }
+        argumentPointers.append(nil)
+        defer {
+            for pointer in argumentPointers where pointer != nil {
+                free(pointer)
+            }
+        }
+        status = executable.withUnsafeFileSystemRepresentation { path in
+            guard let path else { return EINVAL }
+            return argumentPointers.withUnsafeMutableBufferPointer { buffer in
+                posix_spawn(
+                    &processIdentifier,
+                    path,
+                    &actions,
+                    nil,
+                    buffer.baseAddress,
+                    environ
+                )
+            }
+        }
+        guard status == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: status) ?? .EIO)
+        }
+
+        self.processIdentifier = processIdentifier
+        self.standardErrorHandle = pipe.fileHandleForReading
+        try? pipe.fileHandleForWriting.close()
+    }
+
+    var wasCancellationRequested: Bool {
+        lock.withLock { cancellationRequested }
+    }
+
+    func wait() async -> Int32 {
+        let processIdentifier = processIdentifier
+        return await Task.detached(priority: .utility) {
+            var waitStatus: Int32 = 0
+            while Darwin.waitpid(processIdentifier, &waitStatus, 0) < 0 {
+                guard errno == EINTR else { return Int32(-1) }
+            }
+            let signal = waitStatus & 0x7f
+            if signal == 0 {
+                return (waitStatus >> 8) & 0xff
+            }
+            return 128 + signal
+        }.value
+    }
+
+    func cancel() {
+        lock.withLock {
+            cancellationRequested = true
+            _ = Darwin.kill(processIdentifier, SIGTERM)
+        }
     }
 }
 

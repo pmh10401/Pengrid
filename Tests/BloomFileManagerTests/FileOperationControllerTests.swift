@@ -1993,7 +1993,8 @@ private struct CompletingControllerArchiveCommandRunner: ArchiveCommandRunning {
         kind: ArchiveOperationKind,
         format: ArchiveFormat,
         sources: [IdentifiedFileRequest],
-        destination: URL
+        destination: URL,
+        destinationParentIdentity: FileIdentity
     ) async throws -> FileIdentity {
         switch kind {
         case .compress:

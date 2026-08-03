@@ -768,6 +768,13 @@ private actor CleanupRecordingFileSystem: FileSystemAccess {
 
     func exists(_ url: URL) async -> Bool { identities[url] != nil }
     func createDirectory(_ url: URL) async throws { throw CleanupFixtureError.unsupported }
+    func createEmptyItemAndCaptureIdentity(
+        _ url: URL,
+        kind: EmptyFileSystemItemKind,
+        parentIdentifiedBy parentIdentity: FileIdentity
+    ) async throws -> OpenedEmptyFileSystemItem {
+        throw CleanupFixtureError.unsupported
+    }
     func copyAndCaptureIdentity(_ source: URL, to destination: URL) async throws -> FileIdentity {
         throw CleanupFixtureError.unsupported
     }

@@ -252,6 +252,23 @@ actor RecordingFileSystem: FileSystemAccess {
         identities[url] = makeIdentity()
     }
 
+    func createEmptyItemAndCaptureIdentity(
+        _ url: URL,
+        kind: EmptyFileSystemItemKind,
+        parentIdentifiedBy parentIdentity: FileIdentity
+    ) async throws -> OpenedEmptyFileSystemItem {
+        let parent = url.deletingLastPathComponent()
+        guard identities[parent] == parentIdentity else {
+            throw FileSystemAccessError.identityMismatch(parent)
+        }
+        guard !existingURLs.contains(url) else { throw POSIXError(.EEXIST) }
+        let identity = makeIdentity()
+        existingURLs.insert(url)
+        identities[url] = identity
+        events.append("createEmptyItem:\(url.path)")
+        return OpenedEmptyFileSystemItem(identity: identity, descriptor: -1)
+    }
+
     func copyAndCaptureIdentity(_ source: URL, to destination: URL) async throws -> FileIdentity {
         let operation = Operation.copy(source, destination)
         try record(operation)

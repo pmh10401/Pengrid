@@ -10,6 +10,16 @@ struct FileIdentity: Hashable, Sendable {
     }
 }
 
+enum EmptyFileSystemItemKind: Sendable, Equatable {
+    case regularFile
+    case directory
+}
+
+struct OpenedEmptyFileSystemItem: Sendable {
+    let identity: FileIdentity
+    let descriptor: Int32
+}
+
 struct StagingReservation: Sendable {
     let directory: URL
     let directoryIdentity: FileIdentity
@@ -67,6 +77,11 @@ struct SourceFingerprint: Equatable, Sendable {
 protocol FileSystemAccess: Sendable {
     func exists(_ url: URL) async -> Bool
     func createDirectory(_ url: URL) async throws
+    func createEmptyItemAndCaptureIdentity(
+        _ url: URL,
+        kind: EmptyFileSystemItemKind,
+        parentIdentifiedBy parentIdentity: FileIdentity
+    ) async throws -> OpenedEmptyFileSystemItem
     func copyAndCaptureIdentity(_ source: URL, to destination: URL) async throws -> FileIdentity
     func copyAndCaptureIdentity(
         _ source: URL,
@@ -328,6 +343,7 @@ actor LiveFileSystemAccess: FileSystemAccess {
     private let onBeforeCopySourceEntryOpen: @Sendable (URL) -> Void
     private let onCopyEntryCreated: @Sendable (URL) -> Void
     private let onCopyMetadataApplied: @Sendable () throws -> Void
+    private let onAfterEmptyItemCreated: @Sendable (URL, FileIdentity) throws -> Void
     private let storageTrashDirectory: (URL) throws -> URL
     private let storageTrashName: @Sendable () -> String
     private let onAfterStorageQuarantineRename: @Sendable () throws -> Void
@@ -348,6 +364,8 @@ actor LiveFileSystemAccess: FileSystemAccess {
         onBeforeCopySourceEntryOpen: @escaping @Sendable (URL) -> Void = { _ in },
         onCopyEntryCreated: @escaping @Sendable (URL) -> Void = { _ in },
         onCopyMetadataApplied: @escaping @Sendable () throws -> Void = {},
+        onAfterEmptyItemCreated:
+            @escaping @Sendable (URL, FileIdentity) throws -> Void = { _, _ in },
         storageTrashDirectory:
             ((URL) throws -> URL)? = nil,
         storageTrashName:
@@ -370,6 +388,7 @@ actor LiveFileSystemAccess: FileSystemAccess {
         self.onBeforeCopySourceEntryOpen = onBeforeCopySourceEntryOpen
         self.onCopyEntryCreated = onCopyEntryCreated
         self.onCopyMetadataApplied = onCopyMetadataApplied
+        self.onAfterEmptyItemCreated = onAfterEmptyItemCreated
         self.storageTrashDirectory = storageTrashDirectory ?? { source in
             try fileManager.url(
                 for: .trashDirectory,
@@ -391,6 +410,69 @@ actor LiveFileSystemAccess: FileSystemAccess {
 
     func createDirectory(_ url: URL) throws {
         try fileManager.createDirectory(at: url, withIntermediateDirectories: false)
+    }
+
+    func createEmptyItemAndCaptureIdentity(
+        _ url: URL,
+        kind: EmptyFileSystemItemKind,
+        parentIdentifiedBy expectedParentIdentity: FileIdentity
+    ) throws -> OpenedEmptyFileSystemItem {
+        try Task.checkCancellation()
+        let parent = url.deletingLastPathComponent()
+        let (parentDescriptor, name) = try openParentDirectory(of: url)
+        defer { Darwin.close(parentDescriptor) }
+        guard try identity(ofDescriptor: parentDescriptor) == expectedParentIdentity else {
+            throw FileSystemAccessError.identityMismatch(parent)
+        }
+
+        let descriptor: Int32
+        switch kind {
+        case .regularFile:
+            descriptor = name.withCString {
+                Darwin.openat(
+                    parentDescriptor,
+                    $0,
+                    O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,
+                    mode_t(S_IRUSR | S_IWUSR)
+                )
+            }
+        case .directory:
+            let status = name.withCString {
+                Darwin.mkdirat(parentDescriptor, $0, mode_t(S_IRWXU))
+            }
+            guard status == 0 else { throw currentPOSIXError() }
+            descriptor = name.withCString {
+                Darwin.openat(
+                    parentDescriptor,
+                    $0,
+                    O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+                )
+            }
+        }
+        guard descriptor >= 0 else {
+            throw currentPOSIXError()
+        }
+        let createdIdentity: FileIdentity
+        do {
+            createdIdentity = try identity(ofDescriptor: descriptor)
+            try onAfterEmptyItemCreated(url, createdIdentity)
+        } catch {
+            let currentIdentity = try? identity(
+                named: name,
+                in: parentDescriptor,
+                noFollow: true
+            )
+            if currentIdentity == (try? identity(ofDescriptor: descriptor)) {
+                let flags = kind == .directory ? AT_REMOVEDIR : 0
+                _ = name.withCString { Darwin.unlinkat(parentDescriptor, $0, flags) }
+            }
+            Darwin.close(descriptor)
+            throw error
+        }
+        return OpenedEmptyFileSystemItem(
+            identity: createdIdentity,
+            descriptor: descriptor
+        )
     }
 
     func copyAndCaptureIdentity(_ source: URL, to destination: URL) throws -> FileIdentity {

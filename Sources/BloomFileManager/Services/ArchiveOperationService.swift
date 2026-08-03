@@ -97,7 +97,8 @@ actor ArchiveOperationService: ArchiveOperating {
                 kind: request.kind,
                 format: request.format,
                 sources: request.verifiedSources,
-                destination: reservation.item
+                destination: reservation.item,
+                destinationParentIdentity: reservation.directoryIdentity
             ) { phase in
                 await progress(ArchiveOperationProgress(
                     kind: request.kind,

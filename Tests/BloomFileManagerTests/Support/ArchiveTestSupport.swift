@@ -73,7 +73,10 @@ extension LiveArchiveCommandRunner {
             kind: kind,
             format: format,
             sources: identifiedArchiveTestSources(sources),
-            destination: destination
+            destination: destination,
+            destinationParentIdentity: archiveTestIdentity(
+                for: destination.deletingLastPathComponent()
+            )
         )
     }
 
@@ -90,6 +93,9 @@ extension LiveArchiveCommandRunner {
             format: format,
             sources: identifiedArchiveTestSources(sources),
             destination: destination,
+            destinationParentIdentity: archiveTestIdentity(
+                for: destination.deletingLastPathComponent()
+            ),
             progress: progress
         )
     }

@@ -4,6 +4,73 @@ import Testing
 
 @Suite("ArchiveOperationIntegrationTests")
 struct ArchiveOperationIntegrationTests {
+    @Test func compressionRefusesReplacementAfterOwnedOutputCreation() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let source = root.url.appending(path: "Source.txt")
+        let destination = root.url.appending(path: "Archive.zip")
+        try Data("source".utf8).write(to: source)
+
+        let replacement = Data("external replacement".utf8)
+        let fileSystem = LiveFileSystemAccess(onAfterEmptyItemCreated: { created, _ in
+            guard created == destination else { return }
+            try FileManager.default.removeItem(at: created)
+            try replacement.write(to: created, options: .withoutOverwriting)
+        })
+        let parentIdentity = try #require(await fileSystem.identity(of: root.url))
+        let runner = LiveArchiveCommandRunner(fileSystem: fileSystem)
+
+        await #expect(throws: ArchiveOperationError.recoveryRequired) {
+            try await runner.run(
+                kind: .compress,
+                format: .zip,
+                sources: identifiedArchiveTestSources([source]),
+                destination: destination,
+                destinationParentIdentity: parentIdentity
+            )
+        }
+        #expect(try Data(contentsOf: destination) == replacement)
+    }
+
+    @Test func extractionRefusesAndDoesNotWriteIntoReplacementOutputDirectory() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let source = root.url.appending(path: "Source.txt")
+        let archive = root.url.appending(path: "Archive.zip")
+        let destination = root.url.appending(path: "Extracted", directoryHint: .isDirectory)
+        let sentinel = destination.appending(path: "external.txt")
+        try Data("source".utf8).write(to: source)
+        try await LiveArchiveCommandRunner().run(
+            kind: .compress,
+            format: .zip,
+            sources: [source],
+            destination: archive
+        )
+
+        let fileSystem = LiveFileSystemAccess(onAfterEmptyItemCreated: { created, _ in
+            guard created == destination else { return }
+            try FileManager.default.removeItem(at: created)
+            try FileManager.default.createDirectory(at: created, withIntermediateDirectories: false)
+            try Data("external replacement".utf8).write(to: sentinel)
+        })
+        let parentIdentity = try #require(await fileSystem.identity(of: root.url))
+        let runner = LiveArchiveCommandRunner(fileSystem: fileSystem)
+
+        await #expect(throws: ArchiveOperationError.recoveryRequired) {
+            try await runner.run(
+                kind: .extract,
+                format: .zip,
+                sources: identifiedArchiveTestSources([archive]),
+                destination: destination,
+                destinationParentIdentity: parentIdentity
+            )
+        }
+        #expect(try Data(contentsOf: sentinel) == Data("external replacement".utf8))
+        #expect(FileManager.default.fileExists(
+            atPath: destination.appending(path: source.lastPathComponent).path
+        ) == false)
+    }
+
     @Test func compressionReportsMonotonicPreparationBeforeEncoding() async throws {
         let root = try TemporaryDirectory()
         defer { root.remove() }
@@ -355,19 +422,16 @@ struct ArchiveOperationIntegrationTests {
 
         let result = await service.perform([request]) { _ in }
 
-        guard case .recoveryNeeded = result.outcomes.first else {
-            Issue.record("Expected hostile TAR extraction recovery state")
+        guard case .failed = result.outcomes.first else {
+            Issue.record("Expected hostile TAR extraction failure")
             return
         }
         #expect(FileManager.default.fileExists(atPath: destination.path) == false)
         #expect(FileManager.default.fileExists(atPath: outsideTarget.path) == false)
-        #expect(try FileManager.default.contentsOfDirectory(
-            at: root.url,
-            includingPropertiesForKeys: nil
-        ).contains { $0.lastPathComponent.hasPrefix(".bloom-staging-") })
+        try expectNoStagingDirectories(in: root.url)
     }
 
-    @Test func malformedArchivePreservesUnownedPartialOutputForRecovery() async throws {
+    @Test func malformedArchiveRemovesIdentityOwnedPartialOutput() async throws {
         let root = try TemporaryDirectory()
         defer { root.remove() }
         let malformedArchive = root.url.appending(path: "Broken.zip")
@@ -385,16 +449,13 @@ struct ArchiveOperationIntegrationTests {
 
         let result = await service.perform([request]) { _ in }
 
-        guard case let .recoveryNeeded(source) = result.outcomes.first else {
-            Issue.record("Expected malformed archive extraction recovery state")
+        guard case let .failed(source, _) = result.outcomes.first else {
+            Issue.record("Expected malformed archive extraction failure")
             return
         }
         #expect(source == malformedArchive)
         #expect(FileManager.default.fileExists(atPath: destination.path) == false)
-        #expect(try FileManager.default.contentsOfDirectory(
-            at: root.url,
-            includingPropertiesForKeys: nil
-        ).contains { $0.lastPathComponent.hasPrefix(".bloom-staging-") })
+        try expectNoStagingDirectories(in: root.url)
     }
 }
 

@@ -27,13 +27,13 @@ or VoiceOver checks against a release candidate.
 - [x] **PASS — 2026-08-03 — archive progress:** Tests cover ordered exact
   preparation transitions, indeterminate native encoding, source and
   destination-parent identity checks, descriptor-anchored exclusive
-  publication bound to the runner-captured output identity, identity-owned
-  bounded parallel staging, cancellation cleanup, preservation of unowned
-  partial output for recovery review, phase-aware labels, and basename-only
-  status copy.
+  publication, pre-created identity-owned output with descriptor-bound native
+  writes, identity-owned bounded parallel staging and partial-output cleanup,
+  preservation of unowned replacements for recovery review, phase-aware
+  labels, and basename-only status copy.
 
 - [x] **PASS — 2026-08-03 — full automated suite:** Full Xcode Swift Testing
-  completed **701 tests in 55 suites with zero failures** after the independent
+  completed **704 tests in 55 suites with zero failures** after the independent
   review fixes. The release build and `script/build_and_run.sh --verify` also
   completed successfully against the same final source state.
 

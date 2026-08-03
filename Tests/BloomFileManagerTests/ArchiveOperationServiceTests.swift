@@ -610,7 +610,8 @@ private actor RecordingArchiveCommandRunner: ArchiveCommandRunning {
         kind: ArchiveOperationKind,
         format: ArchiveFormat,
         sources: [IdentifiedFileRequest],
-        destination: URL
+        destination: URL,
+        destinationParentIdentity: FileIdentity
     ) async throws -> FileIdentity {
         let sourceURLs = sources.map(\.url)
         invocations.append(ArchiveCommandInvocation(
@@ -628,6 +629,7 @@ private actor RecordingArchiveCommandRunner: ArchiveCommandRunning {
         format: ArchiveFormat,
         sources: [IdentifiedFileRequest],
         destination: URL,
+        destinationParentIdentity: FileIdentity,
         progress: @escaping ArchiveCommandProgressHandler
     ) async throws -> FileIdentity {
         let sourceURLs = sources.map(\.url)
@@ -659,7 +661,8 @@ private actor ReplacingArchiveOutputRunner: ArchiveCommandRunning {
         kind: ArchiveOperationKind,
         format: ArchiveFormat,
         sources: [IdentifiedFileRequest],
-        destination: URL
+        destination: URL,
+        destinationParentIdentity: FileIdentity
     ) async throws -> FileIdentity {
         try await fileSystem.createDirectory(destination)
         guard let captured = try await fileSystem.identity(of: destination) else {

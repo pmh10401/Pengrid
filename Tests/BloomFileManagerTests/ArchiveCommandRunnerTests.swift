@@ -163,4 +163,43 @@ import Testing
             destination.path
         ])
     }
+
+    @Test(arguments: [
+        (
+            ArchiveOperationKind.compress,
+            ArchiveFormat.zip,
+            ["-c", "source", "/tmp/output.zip"],
+            ["-c", "source", "/dev/fd/1"]
+        ),
+        (
+            ArchiveOperationKind.compress,
+            ArchiveFormat.tar,
+            ["-c", "-f", "/tmp/output.tar", "-C", "source", "."],
+            ["-c", "-f", "-", "-C", "source", "."]
+        ),
+        (
+            ArchiveOperationKind.extract,
+            ArchiveFormat.zip,
+            ["-x", "archive.zip", "/tmp/output"],
+            ["-x", "archive.zip", "."]
+        ),
+        (
+            ArchiveOperationKind.extract,
+            ArchiveFormat.tar,
+            ["-x", "-f", "archive.tar", "-C", "/tmp/output"],
+            ["-x", "-f", "archive.tar", "-C", "."]
+        )
+    ])
+    func nativeArgumentsBindOutputToOpenedDescriptor(
+        kind: ArchiveOperationKind,
+        format: ArchiveFormat,
+        input: [String],
+        expected: [String]
+    ) {
+        #expect(LiveArchiveCommandRunner.argumentsBoundToOpenedOutput(
+            input,
+            kind: kind,
+            format: format
+        ) == expected)
+    }
 }
