@@ -124,16 +124,7 @@ struct SmartSearchRecord: Identifiable, Codable, Equatable, Sendable {
 
 enum SmartSearchRanker {
     static func tokens(in text: String) -> [String] {
-        let normalized = text
-            .precomposedStringWithCanonicalMapping
-            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
-        var tokens: [String] = []
-        normalized.enumerateSubstrings(
-            in: normalized.startIndex..., options: [.byWords, .substringNotRequired, .localized]
-        ) { _, range, _, _ in
-            tokens.append(String(normalized[range]))
-        }
-        return tokens
+        SmartSearchTextAnalyzer.literalTokens(in: text)
     }
 
     static func ranked(_ candidates: [SmartSearchResult], for query: SmartSearchQuery) -> [SmartSearchResult] {
