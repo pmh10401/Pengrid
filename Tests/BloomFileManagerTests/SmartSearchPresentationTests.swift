@@ -68,6 +68,15 @@ struct SmartSearchPresentationTests {
         #expect(SmartSearchPresentation.state(for: .results, resultCount: 2, errorMessage: nil).title == "2 results")
     }
 
+    @Test func searchGuidanceExplainsAutomaticKoreanInitialMatching() {
+        #expect(SmartSearchPresentation.queryPrompt == "Search names, paths, or Korean initials")
+        #expect(SmartSearchPresentation.idleSearchDetail == "Try Korean initials such as ㅎㄱ for 한국 or 한글.")
+        #expect(
+            SmartSearchPresentation.queryAccessibilityHint
+                == "Korean initial searches are supported, for example ㅎㄱ."
+        )
+    }
+
     @Test func smartSearchProgressHasAStableAccessibilityIdentifier() {
         #expect(AccessibilityIdentifiers.smartSearchProgress == "smartSearch.progress")
     }

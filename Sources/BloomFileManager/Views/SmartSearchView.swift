@@ -8,6 +8,9 @@ struct SmartSearchStatePresentation: Equatable {
 
 enum SmartSearchPresentation {
     static let deleteSavedSearchLabel = "Delete saved search"
+    static let queryPrompt = "Search names, paths, or Korean initials"
+    static let idleSearchDetail = "Try Korean initials such as ㅎㄱ for 한국 or 한글."
+    static let queryAccessibilityHint = "Korean initial searches are supported, for example ㅎㄱ."
 
     static func canSubmitSearch(
         queryText: String,
@@ -68,7 +71,7 @@ enum SmartSearchPresentation {
         case .idle:
             SmartSearchStatePresentation(
                 title: "Ready to search",
-                detail: "Enter a filename or folder name."
+                detail: idleSearchDetail
             )
         case .searching:
             SmartSearchStatePresentation(title: "Searching files", detail: "")
@@ -151,12 +154,13 @@ struct SmartSearchView: View {
                     .accessibilityIdentifier(AccessibilityIdentifiers.smartSearchClose)
             }
 
-            TextField("Search filenames and folders", text: $bindableStore.queryText)
+            TextField(SmartSearchPresentation.queryPrompt, text: $bindableStore.queryText)
                 .textFieldStyle(.roundedBorder)
                 .focused($queryIsFocused)
                 .onSubmit(submitSearch)
                 .accessibilityIdentifier(AccessibilityIdentifiers.smartSearchQuery)
                 .accessibilityLabel("Search filenames and folders")
+                .accessibilityHint(SmartSearchPresentation.queryAccessibilityHint)
 
             VStack(alignment: .leading, spacing: 8) {
                 Text(rootSummary)
