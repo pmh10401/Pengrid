@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import BloomFileManager
 
-@Test func compressionRequiresACompleteSelectionAndNoActiveMutationOrTextEdit() {
+@Test func compressionRequiresACompleteSelectionAndNoTextEdit() {
     let item = commandPolicyItem(named: "Report.pdf")
 
     #expect(WorkspaceCommandPolicy(
@@ -28,7 +28,7 @@ import Testing
         isOperationRunning: true,
         pasteboardHasFileURLs: false,
         selectedItems: [item]
-    ).canCompress == false)
+    ).canCompress)
     #expect(WorkspaceCommandPolicy(
         selectionCount: 1,
         isOperationRunning: false,
@@ -73,7 +73,7 @@ import Testing
         isOperationRunning: true,
         pasteboardHasFileURLs: false,
         selectedItems: [firstZIP, secondZIP]
-    ).canExtract == false)
+    ).canExtract)
     #expect(WorkspaceCommandPolicy(
         selectionCount: 2,
         isOperationRunning: false,
@@ -81,6 +81,22 @@ import Testing
         selectedItems: [firstZIP, secondZIP],
         isTextEditing: true
     ).canExtract == false)
+}
+
+@Test func queueableMutationsRemainAvailableWhileRenameStaysExclusive() {
+    let item = commandPolicyItem(named: "Report.pdf")
+    let policy = WorkspaceCommandPolicy(
+        selectionCount: 1,
+        isOperationRunning: true,
+        pasteboardHasFileURLs: true,
+        selectedItems: [item]
+    )
+
+    #expect(policy.canCreateFolder)
+    #expect(policy.canPaste)
+    #expect(policy.canTrash)
+    #expect(policy.canCompress)
+    #expect(!policy.canRename)
 }
 
 @Test func extractionAcceptsEverySupportedRegularArchiveSuffix() {

@@ -566,7 +566,7 @@ struct FileOperationControllerTests {
             listingService: StubDirectoryListingService(values: [:])
         )
 
-        controller.runTransfer(
+        await controller.runTransfer(
             [source],
             to: destinationDirectory,
             mode: .copy,
@@ -659,7 +659,7 @@ struct FileOperationControllerTests {
         )
         await workspace.loadInitialDirectories()
 
-        controller.runTransfer(
+        await controller.runTransfer(
             [source],
             to: destinationDirectory,
             mode: .copy,
@@ -704,7 +704,7 @@ struct FileOperationControllerTests {
             listingService: StubDirectoryListingService(values: [:])
         )
 
-        controller.runTransfer(
+        await controller.runTransfer(
             [source],
             to: destinationDirectory,
             mode: .copy,
@@ -748,7 +748,7 @@ struct FileOperationControllerTests {
             rightURL: URL(filePath: "/elsewhere"),
             listingService: StubDirectoryListingService(values: [:])
         )
-        controller.runTransfer(
+        await controller.runTransfer(
             [firstSource],
             to: destinationDirectory,
             mode: .copy,
@@ -756,7 +756,7 @@ struct FileOperationControllerTests {
         )
         await waitForPendingConflict(controller)
 
-        let didStartSecond = controller.runTransfer(
+        let didStartSecond = await controller.runTransfer(
             [secondSource],
             to: destinationDirectory,
             mode: .copy,
@@ -786,7 +786,7 @@ struct FileOperationControllerTests {
             rightURL: URL(filePath: "/elsewhere"),
             listingService: StubDirectoryListingService(values: [:])
         )
-        controller.runTransfer(
+        await controller.runTransfer(
             [source],
             to: destinationDirectory,
             mode: .copy,
@@ -796,7 +796,7 @@ struct FileOperationControllerTests {
         controller.resolvePendingConflict(.skip, applyToAll: true)
         await waitUntilIdle(controller)
 
-        controller.runTransfer(
+        await controller.runTransfer(
             [source],
             to: destinationDirectory,
             mode: .copy,
@@ -836,7 +836,7 @@ struct FileOperationControllerTests {
         )
         await workspace.loadInitialDirectories()
 
-        controller.runTransfer(
+        await controller.runTransfer(
             [source],
             to: destinationDirectory,
             mode: .copy,
@@ -1050,7 +1050,7 @@ struct FileOperationControllerTests {
             listingService: StubDirectoryListingService(values: [:])
         )
 
-        #expect(controller.runTransfer(
+        #expect(await controller.runTransfer(
             [source],
             to: destinationDirectory,
             mode: .copy,
@@ -1086,6 +1086,101 @@ struct FileOperationControllerTests {
         ])
     }
 
+    @Test func queuedTransferUsesSourceIdentityCapturedBeforeWaiting() async {
+        let firstSource = URL(filePath: "/source/first")
+        let queuedSource = URL(filePath: "/source/queued")
+        let destinationDirectory = URL(filePath: "/destination")
+        let firstCollision = destinationDirectory.appending(path: "first")
+        let queuedDestination = destinationDirectory.appending(path: "queued")
+        let fileSystem = RecordingFileSystem(
+            existingURLs: [
+                firstSource, queuedSource, destinationDirectory, firstCollision
+            ]
+        )
+        let controller = FileOperationController(
+            service: FileOperationService(fileSystem: fileSystem)
+        )
+        let workspace = WorkspaceState(
+            leftURL: destinationDirectory,
+            rightURL: URL(filePath: "/elsewhere"),
+            listingService: StubDirectoryListingService(values: [:])
+        )
+        await controller.runTransfer(
+            [firstSource],
+            to: destinationDirectory,
+            mode: .copy,
+            workspace: workspace
+        )
+        await waitForPendingConflict(controller)
+
+        #expect(await controller.runTransfer(
+            [queuedSource],
+            to: destinationDirectory,
+            mode: .copy,
+            workspace: workspace
+        ))
+        await fileSystem.replaceIdentity(
+            at: queuedSource,
+            with: FileIdentity(
+                entryIdentifier: "replacement-entry",
+                resolvedIdentifier: "replacement-resolved"
+            )
+        )
+        controller.resolvePendingConflict(.skip, applyToAll: false)
+        await waitUntilQueueIsIdle(controller)
+
+        #expect(await !fileSystem.existingURLs.contains(queuedDestination))
+        #expect(controller.operationHistory.first?.kind == .copy)
+        #expect(controller.operationHistory.first?.state == .failed)
+    }
+
+    @Test func queuedTransferUsesDestinationIdentityCapturedBeforeWaiting() async {
+        let firstSource = URL(filePath: "/source/first")
+        let queuedSource = URL(filePath: "/source/queued")
+        let destinationDirectory = URL(filePath: "/destination")
+        let firstCollision = destinationDirectory.appending(path: "first")
+        let queuedDestination = destinationDirectory.appending(path: "queued")
+        let fileSystem = RecordingFileSystem(
+            existingURLs: [
+                firstSource, queuedSource, destinationDirectory, firstCollision
+            ]
+        )
+        let controller = FileOperationController(
+            service: FileOperationService(fileSystem: fileSystem)
+        )
+        let workspace = WorkspaceState(
+            leftURL: destinationDirectory,
+            rightURL: URL(filePath: "/elsewhere"),
+            listingService: StubDirectoryListingService(values: [:])
+        )
+        await controller.runTransfer(
+            [firstSource],
+            to: destinationDirectory,
+            mode: .copy,
+            workspace: workspace
+        )
+        await waitForPendingConflict(controller)
+
+        #expect(await controller.runTransfer(
+            [queuedSource],
+            to: destinationDirectory,
+            mode: .copy,
+            workspace: workspace
+        ))
+        await fileSystem.replaceIdentity(
+            at: destinationDirectory,
+            with: FileIdentity(
+                entryIdentifier: "replacement-root-entry",
+                resolvedIdentifier: "replacement-root-resolved"
+            )
+        )
+        controller.resolvePendingConflict(.skip, applyToAll: false)
+        await waitUntilQueueIsIdle(controller)
+
+        #expect(await !fileSystem.existingURLs.contains(queuedDestination))
+        #expect(controller.operationHistory.first?.state == .failed)
+    }
+
     @Test func queuedJobCanBeCancelledWithoutExecuting() async {
         let source = URL(filePath: "/source/first")
         let destinationDirectory = URL(filePath: "/destination")
@@ -1102,7 +1197,7 @@ struct FileOperationControllerTests {
             listingService: StubDirectoryListingService(values: [:])
         )
 
-        #expect(controller.runTransfer(
+        #expect(await controller.runTransfer(
             [source],
             to: destinationDirectory,
             mode: .copy,
@@ -1140,7 +1235,7 @@ struct FileOperationControllerTests {
             rightURL: URL(filePath: "/elsewhere"),
             listingService: StubDirectoryListingService(values: [:])
         )
-        controller.runTransfer(
+        await controller.runTransfer(
             [source],
             to: destinationDirectory,
             mode: .copy,

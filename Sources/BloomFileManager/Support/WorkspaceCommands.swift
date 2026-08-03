@@ -24,11 +24,11 @@ struct WorkspaceCommandPolicy: Equatable {
     var selectedItems: [FileItem] = []
     var isTextEditing = false
 
-    var canCreateFolder: Bool { !isOperationRunning && !isTextEditing }
+    var canCreateFolder: Bool { !isTextEditing }
     var canRename: Bool { !isOperationRunning && !isTextEditing && selectionCount == 1 }
     var canCopy: Bool { !isTextEditing && selectionCount > 0 }
-    var canPaste: Bool { !isOperationRunning && !isTextEditing && pasteboardHasFileURLs }
-    var canTrash: Bool { !isOperationRunning && !isTextEditing && selectionCount > 0 }
+    var canPaste: Bool { !isTextEditing && pasteboardHasFileURLs }
+    var canTrash: Bool { !isTextEditing && selectionCount > 0 }
     var canOpen: Bool { !isTextEditing && selectionCount > 0 }
     var canQuickLook: Bool { !isTextEditing && selectionCount > 0 }
     var canNavigate: Bool { !isTextEditing }
@@ -40,8 +40,7 @@ struct WorkspaceCommandPolicy: Equatable {
     }
 
     private var canRunArchiveOperation: Bool {
-        !isOperationRunning
-            && !isTextEditing
+        !isTextEditing
             && selectionCount > 0
             && selectedItems.count == selectionCount
     }
@@ -71,7 +70,6 @@ enum WorkspaceCommandActions {
         workspace: WorkspaceState,
         operationController: FileOperationController
     ) -> Bool {
-        guard !operationController.isRunning else { return false }
         let existing = Set(pane.items.map(\.name))
         let name = KeepBothNamer.availableName(for: "New Folder", existing: existing)
         return operationController.createFolder(
@@ -765,12 +763,14 @@ struct WorkspaceCommands: Commands {
             guard let workspace else { return }
             let sources = FileURLPasteboard.read(from: .general)
             guard !sources.isEmpty else { return }
-            _ = operationController.runTransfer(
-                sources,
-                to: workspace.activePane.currentDirectory,
-                mode: .copy,
-                workspace: workspace
-            )
+            Task {
+                _ = await operationController.runTransfer(
+                    sources,
+                    to: workspace.activePane.currentDirectory,
+                    mode: .copy,
+                    workspace: workspace
+                )
+            }
         case .unavailable:
             return
         }

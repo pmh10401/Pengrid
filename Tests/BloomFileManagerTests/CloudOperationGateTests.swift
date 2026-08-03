@@ -485,7 +485,7 @@ import Testing
             materializer: materializer
         )
 
-        #expect(controller.runTransfer(
+        #expect(await controller.runTransfer(
             [source],
             to: destination,
             mode: .copy,

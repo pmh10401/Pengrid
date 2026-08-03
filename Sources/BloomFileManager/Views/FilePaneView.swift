@@ -407,12 +407,14 @@ struct FilePaneView: View {
         onActivate()
         let urls = FileURLPasteboard.read(from: .general)
         guard !urls.isEmpty else { return }
-        _ = operationController.runTransfer(
-            urls,
-            to: state.currentDirectory,
-            mode: .copy,
-            workspace: workspace
-        )
+        Task {
+            _ = await operationController.runTransfer(
+                urls,
+                to: state.currentDirectory,
+                mode: .copy,
+                workspace: workspace
+            )
+        }
     }
 
     private func compressSelection(format: ArchiveFormat = .zip) {
@@ -431,12 +433,14 @@ struct FilePaneView: View {
 
     private func performDrop(_ urls: [URL], _ destination: URL, _ intent: DropIntent) {
         onActivate()
-        _ = operationController.runTransfer(
-            urls,
-            to: destination,
-            mode: intent.transferMode,
-            workspace: workspace
-        )
+        Task {
+            _ = await operationController.runTransfer(
+                urls,
+                to: destination,
+                mode: intent.transferMode,
+                workspace: workspace
+            )
+        }
     }
 
     private func addFavorite(_ url: URL) {

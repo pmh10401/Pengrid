@@ -489,12 +489,12 @@ extension FileTableView {
         }
 
         func tableView(_ tableView: NSTableView, pasteboardWriterForRow row: Int) -> NSPasteboardWriting? {
-            guard !parent.isOperationRunning, items.indices.contains(row) else { return nil }
+            guard items.indices.contains(row) else { return nil }
             return items[row].url as NSURL
         }
 
         var dragSourceOperationMask: NSDragOperation {
-            parent.isOperationRunning ? [] : [.copy, .move]
+            [.copy, .move]
         }
 
         func tableView(
@@ -511,8 +511,7 @@ extension FileTableView {
             proposedRow row: Int,
             proposedDropOperation dropOperation: NSTableView.DropOperation
         ) -> NSDragOperation {
-            guard !parent.isOperationRunning,
-                  !FileURLPasteboard.read(from: info.draggingPasteboard).isEmpty,
+            guard !FileURLPasteboard.read(from: info.draggingPasteboard).isEmpty,
                   dropDestination(for: row) != nil
             else { return [] }
 
@@ -530,8 +529,7 @@ extension FileTableView {
             row: Int,
             dropOperation: NSTableView.DropOperation
         ) -> Bool {
-            guard !parent.isOperationRunning,
-                  let destination = dropDestination(for: row)
+            guard let destination = dropDestination(for: row)
             else { return false }
             let urls = FileURLPasteboard.read(from: info.draggingPasteboard)
             guard !urls.isEmpty else { return false }

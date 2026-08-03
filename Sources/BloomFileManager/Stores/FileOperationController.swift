@@ -285,12 +285,11 @@ final class FileOperationController {
                 captured,
                 purpose: .archive
             ) { [weak self] progress in
-                await MainActor.run {
-                    self?.stage = .preparing(Self.sanitizedPreparationProgress(
-                        progress,
-                        requests: captured
-                    ))
-                }
+                guard let self else { return }
+                await self.publish(stage: .preparing(Self.sanitizedPreparationProgress(
+                    progress,
+                    requests: captured
+                )))
             }
             self.lastPreparationFailures = materialization.failures
 
@@ -349,15 +348,14 @@ final class FileOperationController {
             else {
                 return self.archiveIdentityChangedResult(for: sources)
             }
-            self.stage = .archiving(ArchiveOperationProgress(
+            await self.publish(stage: .archiving(ArchiveOperationProgress(
                 kind: firstRequest.kind,
                 currentDisplayName: firstRequest.progressDisplayName,
                 format: firstRequest.format
-            ))
+            )))
             return await archiveService.perform(archiveRequests) { [weak self] progress in
-                await MainActor.run {
-                    self?.stage = .archiving(progress)
-                }
+                guard let self else { return }
+                await self.publish(stage: .archiving(progress))
             }
         }
     }
@@ -385,78 +383,64 @@ final class FileOperationController {
         to directory: URL,
         mode: TransferMode,
         workspace: WorkspaceState
-    ) -> Bool {
+    ) async -> Bool {
+        guard !sources.isEmpty else { return false }
         let touchedDirectories = Set(
             sources.map { $0.deletingLastPathComponent() } + [directory]
         )
-        return beginOperation(
-            kind: mode == .copy ? .copy : .move,
-            totalCount: sources.count,
-            initialName: sources.first?.lastPathComponent ?? "",
-            initialStage: .preparing(CloudMaterializationProgress(
-                completedCount: 0,
-                totalCount: sources.count,
-                currentName: Self.sanitizedBasename(sources.first)
-            )),
-            touchedDirectories: touchedDirectories,
-            workspace: workspace
-        ) { [weak self, service, materializer] in
-            guard let self else {
-                return FileOperationResult(outcomes: sources.map { .cancelled(source: $0) })
-            }
-            let destinationIdentity: FileIdentity
-            do {
-                destinationIdentity = try await service.identity(of: directory)
-            } catch is CancellationError {
-                return FileOperationResult(outcomes: sources.map { .cancelled(source: $0) })
-            } catch {
-                return FileOperationResult(outcomes: sources.map {
-                    .failed(
-                        source: $0,
-                        message: "transfer-preparation:destination-identity-unavailable"
-                    )
-                })
-            }
-            let requests: [IdentifiedTransferRequest]
-            do {
-                var captured: [IdentifiedTransferRequest] = []
-                for source in sources {
-                    try Task.checkCancellation()
-                    captured.append(IdentifiedTransferRequest(
-                        source: source,
-                        sourceIdentity: try await service.identity(of: source),
-                        destinationRoot: directory,
-                        destinationRootIdentity: destinationIdentity,
-                        relativeParentComponents: []
-                    ))
-                }
-                requests = captured
-            } catch is CancellationError {
-                return FileOperationResult(outcomes: sources.map { .cancelled(source: $0) })
-            } catch {
-                return FileOperationResult(outcomes: sources.map {
-                    .failed(source: $0, message: error.localizedDescription)
-                })
-            }
-
-            switch await self.prepareTransferRequests(requests, materializer: materializer) {
-            case let .rejected(result):
-                return result
-            case let .ready(prepared):
-                return await service.transfer(
-                    prepared,
-                    mode: mode,
-                    resolveConflict: { [weak self] conflict in
-                        guard let self else { return .cancel }
-                        return await self.requestDecision(for: conflict)
-                    },
-                    progress: { [weak self] progress in
-                        await MainActor.run {
-                            self?.stage = .operating(progress)
-                        }
-                    }
+        let destinationIdentity: FileIdentity
+        do {
+            try Task.checkCancellation()
+            destinationIdentity = try await service.identity(of: directory)
+        } catch is CancellationError {
+            return false
+        } catch {
+            let result = FileOperationResult(outcomes: sources.map {
+                .failed(
+                    source: $0,
+                    message: "transfer-preparation:destination-identity-unavailable"
                 )
+            })
+            return beginOperation(
+                kind: mode == .copy ? .copy : .move,
+                totalCount: sources.count,
+                initialName: sources.first?.lastPathComponent ?? "",
+                touchedDirectories: touchedDirectories,
+                workspace: workspace
+            ) { result }
+        }
+
+        do {
+            var requests: [IdentifiedTransferRequest] = []
+            for source in sources {
+                try Task.checkCancellation()
+                requests.append(IdentifiedTransferRequest(
+                    source: source,
+                    sourceIdentity: try await service.identity(of: source),
+                    destinationRoot: directory,
+                    destinationRootIdentity: destinationIdentity,
+                    relativeParentComponents: []
+                ))
             }
+            return runIdentifiedTransfer(
+                requests,
+                mode: mode,
+                workspace: workspace,
+                includeSafeRelativePaths: false
+            )
+        } catch is CancellationError {
+            return false
+        } catch {
+            let result = FileOperationResult(outcomes: sources.map {
+                .failed(source: $0, message: error.localizedDescription)
+            })
+            return beginOperation(
+                kind: mode == .copy ? .copy : .move,
+                totalCount: sources.count,
+                initialName: sources.first?.lastPathComponent ?? "",
+                touchedDirectories: touchedDirectories,
+                workspace: workspace
+            ) { result }
         }
     }
 
@@ -465,7 +449,8 @@ final class FileOperationController {
         _ requests: [IdentifiedTransferRequest],
         mode: TransferMode,
         workspace: WorkspaceState,
-        onCompletion: (@MainActor (FileOperationResult) -> Void)? = nil
+        onCompletion: (@MainActor (FileOperationResult) -> Void)? = nil,
+        includeSafeRelativePaths: Bool = true
     ) -> Bool {
         let sources = requests.map(\.source)
         let safeRelativePaths = safeRelativePaths(for: requests)
@@ -492,10 +477,12 @@ final class FileOperationController {
             let preparedRequests: [IdentifiedTransferRequest]
             switch await self.prepareTransferRequests(requests, materializer: materializer) {
             case let .rejected(result):
-                return FileOperationResult(
-                    outcomes: result.outcomes,
-                    safeRelativePathsBySource: safeRelativePaths
-                )
+                return includeSafeRelativePaths
+                    ? FileOperationResult(
+                        outcomes: result.outcomes,
+                        safeRelativePathsBySource: safeRelativePaths
+                    )
+                    : result
             case let .ready(prepared):
                 preparedRequests = prepared
             }
@@ -504,18 +491,21 @@ final class FileOperationController {
                 mode: mode,
                 resolveConflict: { [weak self] conflict in
                     guard let self else { return .cancel }
-                    return await self.requestDecision(for: conflict)
+                    let decision = await self.requestDecision(for: conflict)
+                    await self.waitIfPaused()
+                    return decision
                 },
                 progress: { [weak self] progress in
-                    await MainActor.run {
-                        self?.stage = .operating(progress)
-                    }
+                    guard let self else { return }
+                    await self.publish(stage: .operating(progress))
                 }
             )
-            return FileOperationResult(
-                outcomes: result.outcomes,
-                safeRelativePathsBySource: safeRelativePaths
-            )
+            return includeSafeRelativePaths
+                ? FileOperationResult(
+                    outcomes: result.outcomes,
+                    safeRelativePathsBySource: safeRelativePaths
+                )
+                : result
         }
     }
 
@@ -535,12 +525,11 @@ final class FileOperationController {
             sourceRequests,
             purpose: .transfer
         ) { [weak self] progress in
-            await MainActor.run {
-                self?.stage = .preparing(Self.sanitizedPreparationProgress(
-                    progress,
-                    requests: sourceRequests
-                ))
-            }
+            guard let self else { return }
+            await self.publish(stage: .preparing(Self.sanitizedPreparationProgress(
+                progress,
+                requests: sourceRequests
+            )))
         }
         lastPreparationFailures = result.failures
 
@@ -809,7 +798,8 @@ final class FileOperationController {
                 }
             }
             let result = await service.trash(requests) { [weak self] progress in
-                await MainActor.run { self?.stage = .operating(progress) }
+                guard let self else { return }
+                await self.publish(stage: .operating(progress))
             }
             return FileOperationResult(outcomes: captureFailures + result.outcomes)
         }
@@ -835,13 +825,12 @@ final class FileOperationController {
             onCompletion: onCompletion
         ) { [weak self, service] in
             await service.trash(requests) { [weak self] progress in
-                await MainActor.run {
-                    self?.stage = .operating(FileOperationProgress(
-                        completedCount: progress.completedCount,
-                        totalCount: progress.totalCount,
-                        currentName: privacySafeProgress ? "Item" : progress.currentName
-                    ))
-                }
+                guard let self else { return }
+                await self.publish(stage: .operating(FileOperationProgress(
+                    completedCount: progress.completedCount,
+                    totalCount: progress.totalCount,
+                    currentName: privacySafeProgress ? "Item" : progress.currentName
+                )))
             }
         }
     }
@@ -863,13 +852,12 @@ final class FileOperationController {
             onCompletion: onCompletion
         ) { [weak self, service] in
             await service.trashStorageCleanup(groups) { [weak self] progress in
-                await MainActor.run {
-                    self?.stage = .operating(FileOperationProgress(
-                        completedCount: progress.completedCount,
-                        totalCount: progress.totalCount,
-                        currentName: "Item"
-                    ))
-                }
+                guard let self else { return }
+                await self.publish(stage: .operating(FileOperationProgress(
+                    completedCount: progress.completedCount,
+                    totalCount: progress.totalCount,
+                    currentName: "Item"
+                )))
             }
         }
     }
@@ -908,8 +896,9 @@ final class FileOperationController {
         let pending = pendingOperations.removeFirst()
         queuedJobs.removeAll { $0.id == pending.id }
 
+        let control = FileOperationControl()
         activeOperation = pending
-        activeControl = FileOperationControl()
+        activeControl = control
         activeJob = pending.snapshot(state: .running)
         isPaused = false
         isRunning = true
@@ -924,6 +913,7 @@ final class FileOperationController {
 
         operationTask = Task { [weak self] in
             guard let self else { return }
+            try? await control.checkpoint()
             let result = await pending.operation()
             let completionTask = Task { @MainActor [weak self] in
                 guard let self else { return }
@@ -932,6 +922,62 @@ final class FileOperationController {
                 self.startNextOperationIfNeeded()
             }
             await completionTask.value
+        }
+    }
+
+    private func waitIfPaused() async {
+        guard let activeControl else { return }
+        try? await activeControl.checkpoint()
+    }
+
+    private func publish(stage newStage: FileOperationStage) async {
+        await waitIfPaused()
+        guard !Task.isCancelled else { return }
+        stage = newStage
+        guard let activeJob else { return }
+        self.activeJob = snapshot(
+            for: activeJob,
+            state: activeJob.state,
+            progress: jobProgress(for: newStage),
+            canUndo: false
+        )
+    }
+
+    private func jobProgress(for stage: FileOperationStage) -> FileOperationJobProgress? {
+        switch stage {
+        case let .preparing(progress):
+            FileOperationJobProgress(
+                completedCount: progress.completedCount,
+                totalCount: progress.totalCount,
+                detail: "Preparing download"
+            )
+        case let .operating(progress):
+            FileOperationJobProgress(
+                completedCount: progress.completedCount,
+                totalCount: progress.totalCount,
+                detail: "Processing files"
+            )
+        case let .archiving(progress):
+            switch progress.phase {
+            case let .preparingSources(completedCount, totalCount):
+                FileOperationJobProgress(
+                    completedCount: completedCount,
+                    totalCount: totalCount,
+                    detail: "Preparing files"
+                )
+            case .encoding:
+                FileOperationJobProgress(
+                    completedCount: 0,
+                    totalCount: 0,
+                    detail: "Encoding archive"
+                )
+            case .publishing:
+                FileOperationJobProgress(
+                    completedCount: 0,
+                    totalCount: 0,
+                    detail: "Finishing archive"
+                )
+            }
         }
     }
 

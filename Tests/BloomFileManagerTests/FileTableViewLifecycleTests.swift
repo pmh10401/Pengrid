@@ -331,7 +331,7 @@ struct FileTableViewLifecycleTests {
         }
     }
 
-    @Test func runningOperationDisablesDragSourceWritingAndOperationMask() {
+    @Test func runningOperationStillAllowsDragSubmissionToTheQueue() {
         let item = makeTableItem(named: "item", in: URL(filePath: "/tmp/table-test"))
         let selection = SelectionRecorder(value: [item.url])
         let view = FileTableView(
@@ -345,8 +345,8 @@ struct FileTableViewLifecycleTests {
         let coordinator = view.makeCoordinator()
         let tableView = NSTableView()
 
-        #expect(coordinator.tableView(tableView, pasteboardWriterForRow: 0) == nil)
-        #expect(coordinator.dragSourceOperationMask.isEmpty)
+        #expect(coordinator.tableView(tableView, pasteboardWriterForRow: 0) != nil)
+        #expect(coordinator.dragSourceOperationMask == [.copy, .move])
     }
 
     @Test func acceptedBlankPaneDropRoutesURLsDestinationAndCommandMoveIntent() {
