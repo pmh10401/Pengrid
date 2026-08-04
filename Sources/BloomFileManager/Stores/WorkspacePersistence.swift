@@ -18,6 +18,7 @@ struct RestoredWorkspace: Equatable, Sendable {
 
 final class WorkspacePersistence {
     static let storageKey = "workspace.snapshot.v1"
+    static let savedSearchesStorageKey = "smartSearches.v1"
 
     private let defaults: UserDefaults
 
@@ -46,6 +47,20 @@ final class WorkspacePersistence {
         )
         guard let data = try? encoder.encode(snapshot) else { return }
         defaults.set(data, forKey: Self.storageKey)
+    }
+
+    func loadSavedSearches() -> [SmartSearchRecord] {
+        guard let data = defaults.data(forKey: Self.savedSearchesStorageKey) else { return [] }
+        return (try? JSONDecoder().decode([SmartSearchRecord].self, from: data)) ?? []
+    }
+
+    func saveSavedSearches(_ searches: [SmartSearchRecord]) {
+        guard let data = try? JSONEncoder().encode(searches) else { return }
+        defaults.set(data, forKey: Self.savedSearchesStorageKey)
+    }
+
+    var smartSearchPersistence: any SmartSearchPersisting {
+        WorkspaceSmartSearchPersistence(defaults: defaults)
     }
 
     func restore(
@@ -95,5 +110,21 @@ final class WorkspacePersistence {
               fileManager.isReadableFile(atPath: url.path)
         else { return false }
         return true
+    }
+}
+
+private final class WorkspaceSmartSearchPersistence: SmartSearchPersisting, @unchecked Sendable {
+    private let defaults: UserDefaults
+
+    init(defaults: UserDefaults) {
+        self.defaults = defaults
+    }
+
+    func load() -> Data? {
+        defaults.data(forKey: WorkspacePersistence.savedSearchesStorageKey)
+    }
+
+    func save(_ data: Data) {
+        defaults.set(data, forKey: WorkspacePersistence.savedSearchesStorageKey)
     }
 }

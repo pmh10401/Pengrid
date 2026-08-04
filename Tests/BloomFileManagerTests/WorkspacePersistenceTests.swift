@@ -4,6 +4,59 @@ import Testing
 
 @MainActor
 struct WorkspacePersistenceTests {
+    @Test func savedSearchesUseASeparateKeyWithoutChangingWorkspaceSnapshot() throws {
+        let fixture = DefaultsFixture()
+        defer { fixture.remove() }
+        let persistence = WorkspacePersistence(defaults: fixture.defaults)
+        let snapshot = WorkspaceSnapshot(
+            leftPath: "/left",
+            rightPath: "/right",
+            leftSort: FileSort(),
+            rightSort: FileSort(),
+            splitRatio: 0.5
+        )
+        let record = SmartSearchRecord(
+            displayName: "Reports",
+            query: try SmartSearchQuery(text: "report", roots: [URL(filePath: "/search")])
+        )
+        persistence.save(snapshot)
+
+        persistence.saveSavedSearches([record])
+
+        #expect(persistence.load() == snapshot)
+        #expect(persistence.loadSavedSearches() == [record])
+        #expect(WorkspacePersistence.savedSearchesStorageKey != WorkspacePersistence.storageKey)
+    }
+
+    @Test func malformedSavedSearchBytesRestoreAsEmptyWithoutRewritingThem() {
+        let fixture = DefaultsFixture()
+        defer { fixture.remove() }
+        let persistence = WorkspacePersistence(defaults: fixture.defaults)
+        let malformed = Data("{".utf8)
+        fixture.defaults.set(malformed, forKey: WorkspacePersistence.savedSearchesStorageKey)
+
+        #expect(persistence.loadSavedSearches().isEmpty)
+        #expect(fixture.defaults.data(forKey: WorkspacePersistence.savedSearchesStorageKey) == malformed)
+    }
+
+    @Test func legacySavedSearchesDecodeWithoutChangingTheirStoredBytes() throws {
+        let fixture = DefaultsFixture()
+        defer { fixture.remove() }
+        let persistence = WorkspacePersistence(defaults: fixture.defaults)
+        let id = UUID()
+        let createdAt = Date(timeIntervalSinceReferenceDate: 123)
+        let legacy = Data("""
+        [{"id":"\(id.uuidString)","displayName":"Files","query":{"text":"report","roots":["file:///search"],"includeHidden":false,"includePackages":false,"includeDirectories":false,"maximumResults":500},"createdAt":\(createdAt.timeIntervalSinceReferenceDate)}]
+        """.utf8)
+        fixture.defaults.set(legacy, forKey: WorkspacePersistence.savedSearchesStorageKey)
+
+        let restored = persistence.loadSavedSearches()
+
+        #expect(restored.map(\.displayName) == ["Files"])
+        #expect(restored.first?.query.metadata.kind == .files)
+        #expect(fixture.defaults.data(forKey: WorkspacePersistence.savedSearchesStorageKey) == legacy)
+    }
+
     @Test func restoreUsesOnlyTheInjectedCheapDirectoryProbe() {
         let fixture = DefaultsFixture()
         defer { fixture.remove() }
