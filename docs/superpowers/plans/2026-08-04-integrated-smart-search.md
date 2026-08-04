@@ -233,9 +233,42 @@ git commit -m "feat: add smart search metadata filters"
     )
 
     let results = try await service.search(query)
+    let expectedIdentity = try await fileSystem.identity(of: textURL)
 
     #expect(results.map(\.item.name) == ["alpha.txt"])
-    #expect(results.first?.identity == (try await fileSystem.identity(of: textURL)))
+    #expect(results.first?.identity == expectedIdentity)
+}
+
+@Test func itemReplacedDuringMetadataReadIsNotRetained() async throws {
+    let root = try TemporaryDirectory()
+    defer { root.remove() }
+    let url = root.url.appending(path: "replace-me.txt")
+    try Data([1]).write(to: url)
+    let replacement = ReplacementOnce()
+    let service = LocalSmartSearchService(
+        fileSystem: LiveFileSystemAccess(),
+        typeDescriptionReader: { candidate in
+            try replacement.replace(candidate)
+            return "File"
+        }
+    )
+    let results = try await service.search(
+        try SmartSearchQuery(text: "replace-me", roots: [root.url])
+    )
+    #expect(results.isEmpty)
+}
+
+private final class ReplacementOnce: @unchecked Sendable {
+    private let lock = NSLock()
+    private var didReplace = false
+    func replace(_ url: URL) throws {
+        lock.lock()
+        guard !didReplace else { lock.unlock(); return }
+        didReplace = true
+        lock.unlock()
+        try FileManager.default.removeItem(at: url)
+        try Data([2]).write(to: url)
+    }
 }
 
 @Test func smartSearchServiceHasNoMaterializationOrContentReadDependency() throws {
@@ -276,18 +309,21 @@ final class LocalSmartSearchService: SmartSearching, @unchecked Sendable {
         fileManager: FileManager = .default,
         fileSystem: any FileSystemAccess = LiveFileSystemAccess(),
         availabilityReader: any CloudItemAvailabilityReading = LiveCloudItemAvailabilityService(),
-        scopedAccessCoordinator: CloudLocationScopedAccessCoordinator = .init()
+        scopedAccessCoordinator: CloudLocationScopedAccessCoordinator = .init(),
+        typeDescriptionReader: @escaping @Sendable (URL) throws -> String? = {
+            try $0.resourceValues(forKeys: [.localizedTypeDescriptionKey]).localizedTypeDescription
+        }
     )
 }
 ```
 
-Port recursive traversal, root deduplication, symlink/package boundaries, progress, cancellation, candidate cap, and result cap from `afea689`. Before retaining a textual match, apply `query.metadata.matches`. Capture `guard let identity = try await fileSystem.identity(of: standardizedURL)` and store it in the result. Skip inaccessible descendants, but fail invalid roots. Never call content readers, coordinated reads, or materialization.
+Port recursive traversal, root deduplication, symlink/package boundaries, progress, cancellation, candidate cap, and result cap from `afea689`. For each candidate, capture `identityBefore` before reading filter/display metadata and `identityAfter` after metadata plus availability reads; retain the item only when both are nonnil and `identityBefore == identityAfter`, then store `identityBefore` in the result. Apply `query.metadata.matches` before candidate retention. Skip inaccessible or replaced descendants, but fail invalid roots. Never call content readers, coordinated reads, or materialization.
 
 - [ ] **Step 4: Run service and performance tests and verify GREEN**
 
 Run: `xcrun swift test --filter SmartSearchServiceTests`
 
-Expected: filtering, duplicate-root pruning, symlink/package/hidden boundaries, exact identities, cancellation, progress, result/candidate caps, and unavailable metadata cases pass.
+Expected: filtering, duplicate-root pruning, symlink/package/hidden boundaries, pre/post exact-identity refusal, cancellation, progress, result/candidate caps, and unavailable metadata cases pass.
 
 - [ ] **Step 5: Commit the service slice**
 
