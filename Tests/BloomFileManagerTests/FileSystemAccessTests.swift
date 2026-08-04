@@ -19,6 +19,37 @@ private final class ProgressRecorder: @unchecked Sendable {
     }
 }
 
+private enum FolderPreviewFixtureError: Error, Sendable {
+    case expected
+}
+
+private final class FolderPreviewPackageMetadataRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recordedURLs: [URL] = []
+    private let packageNames: Set<String>
+
+    init(packageNames: Set<String>) {
+        self.packageNames = packageNames
+    }
+
+    func isPackage(_ url: URL) throws -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        recordedURLs.append(url)
+        return packageNames.contains(url.resolvingSymlinksInPath().lastPathComponent)
+    }
+
+    func urls() -> [URL] {
+        lock.lock()
+        defer { lock.unlock() }
+        return recordedURLs
+    }
+}
+
+private func openFileDescriptorCount() throws -> Int {
+    try FileManager.default.contentsOfDirectory(atPath: "/dev/fd").count
+}
+
 @Suite("FileSystemAccessTests")
 struct FileSystemAccessTests {
     @Test func folderSnapshotRejectsSymlinkAndReplacement() async throws {
@@ -116,6 +147,229 @@ struct FileSystemAccessTests {
         )
 
         #expect(request == nil)
+    }
+
+    @Test func folderCaptureUsesAuthoritativePackageMetadataForRegisteredPackageNames() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let packageNames: Set<String> = [
+            "Document.pages", "Workbook.numbers", "Deck.key", "Library.photoslibrary", "Project.xcworkspace"
+        ]
+        for name in packageNames {
+            try FileManager.default.createDirectory(
+                at: root.url.appending(path: name, directoryHint: .isDirectory),
+                withIntermediateDirectories: false
+            )
+        }
+        let ordinary = root.url.appending(path: "ordinary", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: ordinary, withIntermediateDirectories: false)
+        let recorder = FolderPreviewPackageMetadataRecorder(packageNames: packageNames)
+        let fileSystem = LiveFileSystemAccess(folderPreviewPackageMetadata: recorder.isPackage)
+
+        for name in packageNames {
+            let request = try await fileSystem.captureFolderPreviewRequest(
+                paneID: .left,
+                url: root.url.appending(path: name, directoryHint: .isDirectory)
+            )
+            #expect(request == nil)
+        }
+        let ordinaryRequest = try await fileSystem.captureFolderPreviewRequest(
+            paneID: .left,
+            url: ordinary
+        )
+        #expect(ordinaryRequest != nil)
+    }
+
+    @Test func folderSnapshotUsesAnchoredAuthoritativePackageMetadataForChildren() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let folder = root.url.appending(path: "folder", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+        let packageNames: Set<String> = [
+            "Document.pages", "Workbook.numbers", "Deck.key", "Library.photoslibrary", "Project.xcworkspace"
+        ]
+        for name in packageNames {
+            try FileManager.default.createDirectory(
+                at: folder.appending(path: name, directoryHint: .isDirectory),
+                withIntermediateDirectories: false
+            )
+        }
+        let recorder = FolderPreviewPackageMetadataRecorder(packageNames: [])
+        let fileSystem = LiveFileSystemAccess(folderPreviewPackageMetadata: { url in
+            _ = try recorder.isPackage(url)
+            return url.path.hasPrefix("/dev/fd/")
+        })
+        let request = try #require(await fileSystem.captureFolderPreviewRequest(paneID: .left, url: folder))
+
+        let snapshot = try await fileSystem.snapshotFolder(
+            request,
+            visibility: .baseline,
+            progress: { _ in }
+        )
+
+        #expect(Set(snapshot.entries.filter(\.isPackage).map(\.name)) == packageNames)
+        #expect(recorder.urls().filter { $0.lastPathComponent != "folder" }.allSatisfy {
+            $0.path.hasPrefix("/dev/fd/")
+        })
+    }
+
+    @Test func folderSnapshotFailsClosedWhenPackageMetadataFails() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let folder = root.url.appending(path: "folder", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+        try FileManager.default.createDirectory(
+            at: folder.appending(path: "child", directoryHint: .isDirectory),
+            withIntermediateDirectories: false
+        )
+        let fileSystem = LiveFileSystemAccess(folderPreviewPackageMetadata: { _ in
+            throw FolderPreviewFixtureError.expected
+        })
+        let request = try #require(await LiveFileSystemAccess().captureFolderPreviewRequest(
+            paneID: .left,
+            url: folder
+        ))
+
+        await #expect(throws: FolderPreviewFixtureError.self) {
+            try await fileSystem.snapshotFolder(request, visibility: .baseline, progress: { _ in })
+        }
+    }
+
+    @Test func folderSnapshotRejectsEntryIdentityMismatchEvenWhenResolvedIdentityMatches() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let folder = root.url.appending(path: "folder", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+        let fileSystem = LiveFileSystemAccess()
+        let request = try #require(await fileSystem.captureFolderPreviewRequest(paneID: .left, url: folder))
+        let replacementIdentity = FileIdentity(
+            entryIdentifier: "replacement-entry",
+            resolvedIdentifier: request.identity.resolvedIdentifier
+        )
+        let replacementRequest = FolderPreviewRequest(
+            paneID: request.paneID,
+            url: request.url,
+            identity: replacementIdentity,
+            kind: request.kind
+        )
+
+        await #expect(throws: FileSystemAccessError.identityMismatch(folder)) {
+            try await fileSystem.snapshotFolder(
+                replacementRequest,
+                visibility: .baseline,
+                progress: { _ in }
+            )
+        }
+    }
+
+    @Test func folderSnapshotRejectsPostHookReplacementBeforeEnumerating() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let folder = root.url.appending(path: "folder", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+        try Data([1]).write(to: folder.appending(path: "original"))
+        let fileSystem = LiveFileSystemAccess(onAfterFolderPreviewOpen: { request in
+            let old = root.url.appending(path: "old", directoryHint: .isDirectory)
+            try FileManager.default.moveItem(at: request.url, to: old)
+            try FileManager.default.createDirectory(at: request.url, withIntermediateDirectories: false)
+            try Data([2]).write(to: request.url.appending(path: "replacement"))
+        })
+        let request = try #require(await fileSystem.captureFolderPreviewRequest(paneID: .left, url: folder))
+
+        await #expect(throws: FileSystemAccessError.identityMismatch(folder)) {
+            try await fileSystem.snapshotFolder(request, visibility: .baseline, progress: { _ in })
+        }
+    }
+
+    @Test func folderSnapshotAcceptsPostHookRestorationOfTheSameEntry() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let folder = root.url.appending(path: "folder", directoryHint: .isDirectory)
+        let old = root.url.appending(path: "old", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+        try Data([1]).write(to: folder.appending(path: "original"))
+        let fileSystem = LiveFileSystemAccess(onAfterFolderPreviewOpen: { request in
+            try FileManager.default.moveItem(at: request.url, to: old)
+            try FileManager.default.moveItem(at: old, to: request.url)
+        })
+        let request = try #require(await fileSystem.captureFolderPreviewRequest(paneID: .left, url: folder))
+
+        let snapshot = try await fileSystem.snapshotFolder(
+            request,
+            visibility: .baseline,
+            progress: { _ in }
+        )
+
+        #expect(snapshot.entries.map(\.name) == ["original"])
+    }
+
+    @Test func folderSnapshotClosesEveryDescriptorAcrossFailurePaths() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let folder = root.url.appending(path: "folder", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+        try FileManager.default.createDirectory(
+            at: folder.appending(path: "child", directoryHint: .isDirectory),
+            withIntermediateDirectories: false
+        )
+        let baseline = try openFileDescriptorCount()
+
+        let normal = LiveFileSystemAccess()
+        let normalRequest = try #require(await normal.captureFolderPreviewRequest(paneID: .left, url: folder))
+        for _ in 0..<8 {
+            _ = try await normal.snapshotFolder(normalRequest, visibility: .baseline, progress: { _ in })
+        }
+        let cancellation = LiveFileSystemAccess(onAfterFolderPreviewOpen: { _ in
+            withUnsafeCurrentTask { $0?.cancel() }
+        })
+        let cancellationRequest = try #require(await cancellation.captureFolderPreviewRequest(paneID: .left, url: folder))
+        await #expect(throws: CancellationError.self) {
+            try await cancellation.snapshotFolder(cancellationRequest, visibility: .baseline, progress: { _ in })
+        }
+        let hookFailure = LiveFileSystemAccess(onAfterFolderPreviewOpen: { _ in
+            throw FolderPreviewFixtureError.expected
+        })
+        let hookRequest = try #require(await hookFailure.captureFolderPreviewRequest(paneID: .left, url: folder))
+        await #expect(throws: FolderPreviewFixtureError.self) {
+            try await hookFailure.snapshotFolder(hookRequest, visibility: .baseline, progress: { _ in })
+        }
+        let metadataFailure = LiveFileSystemAccess(folderPreviewPackageMetadata: { _ in
+            throw FolderPreviewFixtureError.expected
+        })
+        let metadataRequest = try #require(await normal.captureFolderPreviewRequest(paneID: .left, url: folder))
+        await #expect(throws: FolderPreviewFixtureError.self) {
+            try await metadataFailure.snapshotFolder(
+                metadataRequest,
+                visibility: .baseline,
+                progress: { _ in }
+            )
+        }
+        let streamFailure = LiveFileSystemAccess(folderPreviewDirectoryStream: { _ in
+            errno = EMFILE
+            return nil
+        })
+        let streamRequest = try #require(await streamFailure.captureFolderPreviewRequest(paneID: .left, url: folder))
+        await #expect(throws: POSIXError(.EMFILE)) {
+            try await streamFailure.snapshotFolder(streamRequest, visibility: .baseline, progress: { _ in })
+        }
+
+        #expect(try openFileDescriptorCount() <= baseline + 1)
+    }
+
+    @Test func folderSnapshotDuplicatesDirectoryDescriptorWithCloseOnExec() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let folder = root.url.appending(path: "folder", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+        let fileSystem = LiveFileSystemAccess(onAfterFolderPreviewDuplicate: { descriptor in
+            let flags = Darwin.fcntl(descriptor, F_GETFD)
+            guard flags >= 0, flags & FD_CLOEXEC != 0 else {
+                throw FolderPreviewFixtureError.expected
+            }
+        })
+        let request = try #require(await fileSystem.captureFolderPreviewRequest(paneID: .left, url: folder))
+
+        _ = try await fileSystem.snapshotFolder(request, visibility: .baseline, progress: { _ in })
     }
 
     @Test func exclusiveMovePreservesExistingDestination() async throws {

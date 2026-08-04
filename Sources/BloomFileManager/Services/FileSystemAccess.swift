@@ -374,6 +374,9 @@ actor LiveFileSystemAccess: FileSystemAccess {
         @Sendable (StorageTrashQuarantine) throws -> Void
     private let onBeforeStorageRollbackMove: @Sendable (URL) throws -> Void
     private let onAfterFolderPreviewOpen: @Sendable (FolderPreviewRequest) throws -> Void
+    private let folderPreviewPackageMetadata: @Sendable (URL) throws -> Bool
+    private let onAfterFolderPreviewDuplicate: @Sendable (Int32) throws -> Void
+    private let folderPreviewDirectoryStream: @Sendable (Int32) -> UnsafeMutablePointer<DIR>?
     private var pendingCopies: [String: PendingOwnedCopy] = [:]
     private var storageQuarantines: [UUID: StorageQuarantineContext] = [:]
 
@@ -402,7 +405,15 @@ actor LiveFileSystemAccess: FileSystemAccess {
         onBeforeStorageRollbackMove:
             @escaping @Sendable (URL) throws -> Void = { _ in },
         onAfterFolderPreviewOpen:
-            @escaping @Sendable (FolderPreviewRequest) throws -> Void = { _ in }
+            @escaping @Sendable (FolderPreviewRequest) throws -> Void = { _ in },
+        folderPreviewPackageMetadata:
+            @escaping @Sendable (URL) throws -> Bool = {
+                try $0.resourceValues(forKeys: [.isPackageKey]).isPackage == true
+            },
+        onAfterFolderPreviewDuplicate:
+            @escaping @Sendable (Int32) throws -> Void = { _ in },
+        folderPreviewDirectoryStream:
+            @escaping @Sendable (Int32) -> UnsafeMutablePointer<DIR>? = { Darwin.fdopendir($0) }
     ) {
         self.fileManager = fileManager
         self.copyChunkSize = max(copyChunkSize, 4_096)
@@ -427,6 +438,9 @@ actor LiveFileSystemAccess: FileSystemAccess {
         self.onAfterStorageTrashRename = onAfterStorageTrashRename
         self.onBeforeStorageRollbackMove = onBeforeStorageRollbackMove
         self.onAfterFolderPreviewOpen = onAfterFolderPreviewOpen
+        self.folderPreviewPackageMetadata = folderPreviewPackageMetadata
+        self.onAfterFolderPreviewDuplicate = onAfterFolderPreviewDuplicate
+        self.folderPreviewDirectoryStream = folderPreviewDirectoryStream
     }
 
     func exists(_ url: URL) -> Bool {
@@ -657,10 +671,18 @@ actor LiveFileSystemAccess: FileSystemAccess {
         defer { Darwin.close(descriptor) }
 
         let openedIdentity = try identity(ofDescriptor: descriptor)
-        guard try identity(of: standardizedURL) == openedIdentity else {
-            throw FileSystemAccessError.identityMismatch(standardizedURL)
-        }
-        guard !isPackageDirectory(named: standardizedURL.lastPathComponent) else {
+        try requireFolderPreviewIdentity(
+            of: descriptor,
+            at: standardizedURL,
+            expected: openedIdentity
+        )
+        let isPackage = try folderPreviewPackageMetadata(standardizedURL)
+        try requireFolderPreviewIdentity(
+            of: descriptor,
+            at: standardizedURL,
+            expected: openedIdentity
+        )
+        guard !isPackage else {
             return nil
         }
         return FolderPreviewRequest(
@@ -683,18 +705,23 @@ actor LiveFileSystemAccess: FileSystemAccess {
         let descriptor = try openFolderPreviewDescriptor(request.url)
         defer { Darwin.close(descriptor) }
 
-        guard try identity(ofDescriptor: descriptor) == request.identity,
-              try identity(of: request.url) == request.identity else {
-            throw FileSystemAccessError.identityMismatch(request.url)
-        }
+        try requireFolderPreviewIdentity(of: descriptor, at: request.url, expected: request.identity)
         try onAfterFolderPreviewOpen(request)
         try Task.checkCancellation()
+        try requireFolderPreviewIdentity(of: descriptor, at: request.url, expected: request.identity)
 
-        let duplicate = Darwin.dup(descriptor)
+        let duplicate = Darwin.fcntl(descriptor, F_DUPFD_CLOEXEC, 0)
         guard duplicate >= 0 else { throw currentPOSIXError() }
-        guard let directory = Darwin.fdopendir(duplicate) else {
+        do {
+            try onAfterFolderPreviewDuplicate(duplicate)
+        } catch {
             Darwin.close(duplicate)
-            throw currentPOSIXError()
+            throw error
+        }
+        guard let directory = folderPreviewDirectoryStream(duplicate) else {
+            let error = currentPOSIXError()
+            Darwin.close(duplicate)
+            throw error
         }
         defer { Darwin.closedir(directory) }
 
@@ -708,10 +735,28 @@ actor LiveFileSystemAccess: FileSystemAccess {
                 continue
             }
             let metadata = try folderPreviewMetadata(named: name, in: descriptor)
+            let isPackage: Bool
+            if metadata.isDirectory {
+                let childDescriptor = try openFolderPreviewChildDescriptor(
+                    named: name,
+                    in: descriptor
+                )
+                defer { Darwin.close(childDescriptor) }
+                guard try identity(ofDescriptor: childDescriptor) == metadata.identity else {
+                    throw FileSystemAccessError.identityMismatch(request.url.appending(path: name))
+                }
+                let metadataURL = folderPreviewChildMetadataURL(descriptor: childDescriptor)
+                isPackage = try folderPreviewPackageMetadata(metadataURL)
+                guard try folderPreviewMetadata(named: name, in: descriptor) == metadata else {
+                    throw FileSystemAccessError.identityMismatch(request.url.appending(path: name))
+                }
+            } else {
+                isPackage = false
+            }
             entries.append(FolderPreviewEntry(
                 name: name,
                 isDirectory: metadata.isDirectory,
-                isPackage: metadata.isDirectory && isPackageDirectory(named: name),
+                isPackage: isPackage,
                 byteSize: metadata.isDirectory ? nil : metadata.byteSize,
                 modifiedAt: metadata.modifiedAt
             ))
@@ -720,10 +765,7 @@ actor LiveFileSystemAccess: FileSystemAccess {
         }
         guard errno == 0 else { throw currentPOSIXError() }
         try Task.checkCancellation()
-        guard try identity(ofDescriptor: descriptor) == request.identity,
-              try identity(of: request.url) == request.identity else {
-            throw FileSystemAccessError.identityMismatch(request.url)
-        }
+        try requireFolderPreviewIdentity(of: descriptor, at: request.url, expected: request.identity)
 
         entries.sort { lhs, rhs in
             if lhs.isDirectory != rhs.isDirectory {
@@ -1771,7 +1813,8 @@ actor LiveFileSystemAccess: FileSystemAccess {
         }
     }
 
-    private struct FolderPreviewMetadata {
+    private struct FolderPreviewMetadata: Equatable {
+        let identity: FileIdentity
         let isDirectory: Bool
         let byteSize: Int64?
         let modifiedAt: Date?
@@ -1792,6 +1835,36 @@ actor LiveFileSystemAccess: FileSystemAccess {
         }
     }
 
+    private func requireFolderPreviewIdentity(
+        of descriptor: Int32,
+        at url: URL,
+        expected: FileIdentity
+    ) throws {
+        guard try identity(ofDescriptor: descriptor) == expected,
+              try identity(of: url) == expected else {
+            throw FileSystemAccessError.identityMismatch(url)
+        }
+    }
+
+    private func openFolderPreviewChildDescriptor(
+        named name: String,
+        in directoryDescriptor: Int32
+    ) throws -> Int32 {
+        let descriptor = name.withCString {
+            Darwin.openat(
+                directoryDescriptor,
+                $0,
+                O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK
+            )
+        }
+        guard descriptor >= 0 else { throw currentPOSIXError() }
+        return descriptor
+    }
+
+    private func folderPreviewChildMetadataURL(descriptor: Int32) -> URL {
+        URL(filePath: "/dev/fd/\(descriptor)", directoryHint: .isDirectory)
+    }
+
     private func folderPreviewMetadata(
         named name: String,
         in directoryDescriptor: Int32
@@ -1805,20 +1878,11 @@ actor LiveFileSystemAccess: FileSystemAccess {
         let modifiedAt = Date(timeIntervalSince1970: TimeInterval(information.st_mtimespec.tv_sec))
             .addingTimeInterval(TimeInterval(information.st_mtimespec.tv_nsec) / 1_000_000_000)
         return FolderPreviewMetadata(
+            identity: identity(from: information),
             isDirectory: isDirectory,
             byteSize: isDirectory ? nil : Int64(information.st_size),
             modifiedAt: modifiedAt
         )
-    }
-
-    private func isPackageDirectory(named name: String) -> Bool {
-        switch URL(filePath: name).pathExtension.lowercased() {
-        case "app", "bundle", "framework", "kext", "mdimporter", "plugin", "prefpane",
-             "qlgenerator", "rtfd", "workflow", "xcodeproj":
-            true
-        default:
-            false
-        }
     }
 
     private func directoryEntryNames(in descriptor: Int32) throws -> [String] {
