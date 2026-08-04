@@ -40,6 +40,56 @@ struct SmartSearchProgressRelay: Sendable {
     }
 }
 
+private final class SmartSearchWorkLifetime: @unchecked Sendable {
+    private struct Work {
+        let relay: SmartSearchProgressRelay
+        let progressConsumerTask: Task<Void, Never>
+        let searchTask: Task<Void, Never>
+    }
+
+    private let lock = NSLock()
+    private var work: Work?
+
+    func replace(
+        relay: SmartSearchProgressRelay,
+        progressConsumerTask: Task<Void, Never>,
+        searchTask: Task<Void, Never>
+    ) {
+        let previous = replace(with: Work(
+            relay: relay,
+            progressConsumerTask: progressConsumerTask,
+            searchTask: searchTask
+        ))
+        cancel(previous)
+    }
+
+    func clear() {
+        _ = replace(with: nil)
+    }
+
+    func cancel() {
+        cancel(replace(with: nil))
+    }
+
+    deinit {
+        cancel()
+    }
+
+    private func replace(with newWork: Work?) -> Work? {
+        lock.lock()
+        defer { lock.unlock() }
+        let previous = work
+        work = newWork
+        return previous
+    }
+
+    private func cancel(_ work: Work?) {
+        work?.relay.finish()
+        work?.progressConsumerTask.cancel()
+        work?.searchTask.cancel()
+    }
+}
+
 extension SmartSearchMetadataFilter {
     static let unrestricted = try! Self(
         kind: .all,
@@ -97,7 +147,9 @@ final class SmartSearchStore {
     private let persistence: any SmartSearchPersisting
     private var searchTask: Task<Void, Never>?
     private var progressConsumerTask: Task<Void, Never>?
+    private let workLifetime = SmartSearchWorkLifetime()
     private var generation = 0
+    private var hasPresented = false
 
     init(service: any SmartSearching, persistence: any SmartSearchPersisting) {
         self.service = service
@@ -114,15 +166,25 @@ final class SmartSearchStore {
     }
 
     func present(initialRoot: URL) {
+        if hasPresented, !isPresented {
+            isPresented = true
+            return
+        }
         cancelActiveSearch()
         roots = [initialRoot.standardizedFileURL]
         isPresented = true
+        hasPresented = true
         results = []
         resetTransientState(to: .idle)
     }
 
     func dismiss() {
-        cancel()
+        let hadActiveSearch = searchTask != nil
+        cancelActiveSearch()
+        if hadActiveSearch {
+            phase = .cancelled
+            progressMessage = nil
+        }
         isPresented = false
     }
 
@@ -163,7 +225,7 @@ final class SmartSearchStore {
         }
         progressConsumerTask = progressConsumer
         let service = service
-        searchTask = Task { [weak self] in
+        let task = Task { [weak self] in
             do {
                 let found = try await service.search(query, progress: relay.yield)
                 relay.finish()
@@ -176,6 +238,7 @@ final class SmartSearchStore {
                 self.phase = .results
                 self.progressMessage = nil
                 self.progressConsumerTask = nil
+                self.workLifetime.clear()
                 self.searchTask = nil
             } catch is CancellationError {
                 relay.finish()
@@ -185,6 +248,7 @@ final class SmartSearchStore {
                 self.phase = .cancelled
                 self.progressMessage = nil
                 self.progressConsumerTask = nil
+                self.workLifetime.clear()
                 self.searchTask = nil
             } catch {
                 relay.finish()
@@ -198,9 +262,16 @@ final class SmartSearchStore {
                 self.progressMessage = nil
                 self.errorMessage = "Search failed."
                 self.progressConsumerTask = nil
+                self.workLifetime.clear()
                 self.searchTask = nil
             }
         }
+        searchTask = task
+        workLifetime.replace(
+            relay: relay,
+            progressConsumerTask: progressConsumer,
+            searchTask: task
+        )
     }
 
     func cancel() {
@@ -300,6 +371,7 @@ final class SmartSearchStore {
 
     private func cancelActiveSearch() {
         generation += 1
+        workLifetime.cancel()
         progressConsumerTask?.cancel()
         progressConsumerTask = nil
         searchTask?.cancel()
@@ -339,7 +411,19 @@ final class SmartSearchStore {
                     return (lhs.item.byteSize ?? -1) > (rhs.item.byteSize ?? -1)
                 }
             }
-            return lhs.relativePath.localizedStandardCompare(rhs.relativePath) == .orderedAscending
+            let relativePathComparison = lhs.relativePath.localizedStandardCompare(rhs.relativePath)
+            if relativePathComparison != .orderedSame {
+                return relativePathComparison == .orderedAscending
+            }
+            let lhsPath = lhs.item.url.standardizedFileURL.path
+            let rhsPath = rhs.item.url.standardizedFileURL.path
+            if lhsPath != rhsPath {
+                return lhsPath < rhsPath
+            }
+            if lhs.identity.entryIdentifier != rhs.identity.entryIdentifier {
+                return lhs.identity.entryIdentifier < rhs.identity.entryIdentifier
+            }
+            return lhs.identity.resolvedIdentifier < rhs.identity.resolvedIdentifier
         }
     }
 }
