@@ -132,6 +132,8 @@ actor RecordingFileSystem: FileSystemAccess {
     private let forceTrashQuarantineRecovery: Bool
     private let failTrashQuarantineCommitOnAttempt: Int?
     private let raceDestinationBeforeExclusiveMove: URL?
+    private let folderPreviewRequests: [URL: FolderPreviewRequest]
+    private let folderPreviewSnapshots: [FolderPreviewRequest: FolderPreviewSnapshot]
     private var trashQuarantineCommitAttempt = 0
     private var suspendedIdentityContinuation: CheckedContinuation<Void, Never>?
     private var suspendedExistsContinuation: CheckedContinuation<Void, Never>?
@@ -175,7 +177,9 @@ actor RecordingFileSystem: FileSystemAccess {
         caseInsensitivePaths: Bool = false,
         forceTrashQuarantineRecovery: Bool = false,
         failTrashQuarantineCommitOnAttempt: Int? = nil,
-        raceDestinationBeforeExclusiveMove: URL? = nil
+        raceDestinationBeforeExclusiveMove: URL? = nil,
+        folderPreviewRequests: [URL: FolderPreviewRequest] = [:],
+        folderPreviewSnapshots: [FolderPreviewRequest: FolderPreviewSnapshot] = [:]
     ) {
         self.existingURLs = existingURLs
         self.existsResponses = existsResponses
@@ -217,6 +221,8 @@ actor RecordingFileSystem: FileSystemAccess {
         self.forceTrashQuarantineRecovery = forceTrashQuarantineRecovery
         self.failTrashQuarantineCommitOnAttempt = failTrashQuarantineCommitOnAttempt
         self.raceDestinationBeforeExclusiveMove = raceDestinationBeforeExclusiveMove
+        self.folderPreviewRequests = folderPreviewRequests
+        self.folderPreviewSnapshots = folderPreviewSnapshots
     }
 
     func exists(_ url: URL) async -> Bool {
@@ -407,6 +413,25 @@ actor RecordingFileSystem: FileSystemAccess {
         let operation = Operation.availableCapacity(url)
         try record(operation)
         return availableCapacities[url]
+    }
+
+    func captureFolderPreviewRequest(
+        paneID: PaneID,
+        url: URL
+    ) async throws -> FolderPreviewRequest? {
+        folderPreviewRequests[url]
+    }
+
+    func snapshotFolder(
+        _ request: FolderPreviewRequest,
+        visibility: DirectoryVisibilityPolicy,
+        progress: @escaping @Sendable (Int) -> Void
+    ) async throws -> FolderPreviewSnapshot {
+        guard let snapshot = folderPreviewSnapshots[request] else {
+            throw FileSystemAccessError.identityMismatch(request.url)
+        }
+        progress(snapshot.entries.count)
+        return snapshot
     }
 
     func prepareDirectoryHierarchy(

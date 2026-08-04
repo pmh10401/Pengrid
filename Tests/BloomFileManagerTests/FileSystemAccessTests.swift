@@ -2,8 +2,122 @@ import Foundation
 import Testing
 @testable import BloomFileManager
 
+private final class ProgressRecorder: @unchecked Sendable {
+    private var values: [Int] = []
+    private let lock = NSLock()
+
+    func append(_ value: Int) {
+        lock.lock()
+        defer { lock.unlock() }
+        values.append(value)
+    }
+
+    func latest() -> Int? {
+        lock.lock()
+        defer { lock.unlock() }
+        return values.last
+    }
+}
+
 @Suite("FileSystemAccessTests")
 struct FileSystemAccessTests {
+    @Test func folderSnapshotRejectsSymlinkAndReplacement() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let original = root.url.appending(path: "folder", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: original, withIntermediateDirectories: false)
+
+        let target = root.url.appending(path: "target", directoryHint: .isDirectory)
+        let link = root.url.appending(path: "link")
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: false)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+        #expect(try await LiveFileSystemAccess().captureFolderPreviewRequest(
+            paneID: .left,
+            url: link
+        ) == nil)
+
+        let fileSystem = LiveFileSystemAccess(onAfterFolderPreviewOpen: { request in
+            try FileManager.default.moveItem(at: request.url, to: root.url.appending(path: "old"))
+            try FileManager.default.createDirectory(at: request.url, withIntermediateDirectories: false)
+        })
+        let request = try #require(await fileSystem.captureFolderPreviewRequest(
+            paneID: .left,
+            url: original
+        ))
+
+        await #expect(throws: FileSystemAccessError.self) {
+            try await fileSystem.snapshotFolder(request, visibility: .baseline, progress: { _ in })
+        }
+    }
+
+    @Test func folderSnapshotUsesNoFollowChildMetadataAndLocalizedFolderOrder() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let folder = root.url.appending(path: "folder", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+        try Data([1, 2]).write(to: folder.appending(path: "z-file"))
+        try FileManager.default.createDirectory(
+            at: folder.appending(path: "a-folder", directoryHint: .isDirectory),
+            withIntermediateDirectories: false
+        )
+        try FileManager.default.createSymbolicLink(
+            at: folder.appending(path: "linked-child"),
+            withDestinationURL: folder.appending(path: "a-folder", directoryHint: .isDirectory)
+        )
+
+        let fileSystem = LiveFileSystemAccess()
+        let request = try #require(await fileSystem.captureFolderPreviewRequest(
+            paneID: .left,
+            url: folder
+        ))
+        let progress = ProgressRecorder()
+        let snapshot = try await fileSystem.snapshotFolder(
+            request,
+            visibility: .baseline,
+            progress: progress.append
+        )
+
+        #expect(snapshot.entries.map(\.name) == ["a-folder", "linked-child", "z-file"])
+        #expect(snapshot.entries.first?.isDirectory == true)
+        #expect(snapshot.entries.first(where: { $0.name == "linked-child" })?.isDirectory == false)
+        #expect(snapshot.entries.first(where: { $0.name == "linked-child" })?.byteSize != nil)
+        let latestProgress = progress.latest()
+        #expect(latestProgress == snapshot.entries.count)
+    }
+
+    @Test func folderSnapshotHonorsCancellationAfterOpeningItsDescriptor() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let folder = root.url.appending(path: "folder", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+        try Data([1]).write(to: folder.appending(path: "child"))
+        let fileSystem = LiveFileSystemAccess(onAfterFolderPreviewOpen: { _ in
+            withUnsafeCurrentTask { $0?.cancel() }
+        })
+        let request = try #require(await fileSystem.captureFolderPreviewRequest(
+            paneID: .left,
+            url: folder
+        ))
+
+        await #expect(throws: CancellationError.self) {
+            try await fileSystem.snapshotFolder(request, visibility: .baseline, progress: { _ in })
+        }
+    }
+
+    @Test func folderCaptureRejectsPackageDirectories() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let package = root.url.appending(path: "Preview.app", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: package, withIntermediateDirectories: false)
+
+        let request = try await LiveFileSystemAccess().captureFolderPreviewRequest(
+            paneID: .left,
+            url: package
+        )
+
+        #expect(request == nil)
+    }
+
     @Test func exclusiveMovePreservesExistingDestination() async throws {
         let root = try TemporaryDirectory()
         defer { root.remove() }

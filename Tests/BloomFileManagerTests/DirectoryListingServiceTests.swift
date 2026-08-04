@@ -20,3 +20,17 @@ import Testing
     #expect(batches.flatMap { $0 }.count == 301)
     #expect(batches.flatMap { $0 }.first(where: { $0.name == "Folder" })?.isDirectory == true)
 }
+
+@Test func baselineVisibilityIncludesHiddenEntries() async throws {
+    let root = try TemporaryDirectory()
+    defer { root.remove() }
+    try Data([1]).write(to: root.url.appending(path: ".hidden"))
+    try Data([1]).write(to: root.url.appending(path: "visible"))
+
+    let service = LiveDirectoryListingService(visibility: .baseline)
+    let names = try await service.batches(in: root.url).reduce(into: [String]()) {
+        $0 += $1.map(\.name)
+    }
+
+    #expect(Set(names) == [".hidden", "visible"])
+}

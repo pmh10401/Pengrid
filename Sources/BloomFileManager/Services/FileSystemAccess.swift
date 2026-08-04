@@ -138,6 +138,12 @@ protocol FileSystemAccess: Sendable {
     func volumeIdentifier(for url: URL) async throws -> String
     func byteSize(of url: URL) async throws -> Int64?
     func availableCapacity(at url: URL) async throws -> Int64?
+    func captureFolderPreviewRequest(paneID: PaneID, url: URL) async throws -> FolderPreviewRequest?
+    func snapshotFolder(
+        _ request: FolderPreviewRequest,
+        visibility: DirectoryVisibilityPolicy,
+        progress: @escaping @Sendable (Int) -> Void
+    ) async throws -> FolderPreviewSnapshot
     func prepareDirectoryHierarchy(
         root: URL,
         identifiedBy rootIdentity: FileIdentity,
@@ -151,6 +157,21 @@ protocol FileSystemAccess: Sendable {
 }
 
 extension FileSystemAccess {
+    func captureFolderPreviewRequest(
+        paneID: PaneID,
+        url: URL
+    ) async throws -> FolderPreviewRequest? {
+        nil
+    }
+
+    func snapshotFolder(
+        _ request: FolderPreviewRequest,
+        visibility: DirectoryVisibilityPolicy,
+        progress: @escaping @Sendable (Int) -> Void
+    ) async throws -> FolderPreviewSnapshot {
+        throw FileSystemAccessError.identityMismatch(request.url)
+    }
+
     func copyAndCaptureIdentity(
         _ source: URL,
         identifiedBy sourceIdentity: FileIdentity,
@@ -352,6 +373,7 @@ actor LiveFileSystemAccess: FileSystemAccess {
     private let onAfterStorageTrashRename:
         @Sendable (StorageTrashQuarantine) throws -> Void
     private let onBeforeStorageRollbackMove: @Sendable (URL) throws -> Void
+    private let onAfterFolderPreviewOpen: @Sendable (FolderPreviewRequest) throws -> Void
     private var pendingCopies: [String: PendingOwnedCopy] = [:]
     private var storageQuarantines: [UUID: StorageQuarantineContext] = [:]
 
@@ -378,7 +400,9 @@ actor LiveFileSystemAccess: FileSystemAccess {
         onAfterStorageTrashRename:
             @escaping @Sendable (StorageTrashQuarantine) throws -> Void = { _ in },
         onBeforeStorageRollbackMove:
-            @escaping @Sendable (URL) throws -> Void = { _ in }
+            @escaping @Sendable (URL) throws -> Void = { _ in },
+        onAfterFolderPreviewOpen:
+            @escaping @Sendable (FolderPreviewRequest) throws -> Void = { _ in }
     ) {
         self.fileManager = fileManager
         self.copyChunkSize = max(copyChunkSize, 4_096)
@@ -402,6 +426,7 @@ actor LiveFileSystemAccess: FileSystemAccess {
         self.onBeforeStorageTrashMove = onBeforeStorageTrashMove
         self.onAfterStorageTrashRename = onAfterStorageTrashRename
         self.onBeforeStorageRollbackMove = onBeforeStorageRollbackMove
+        self.onAfterFolderPreviewOpen = onAfterFolderPreviewOpen
     }
 
     func exists(_ url: URL) -> Bool {
@@ -615,6 +640,100 @@ actor LiveFileSystemAccess: FileSystemAccess {
             entryIdentifier: entryIdentifier,
             resolvedIdentifier: resolvedIdentifier
         )
+    }
+
+    func captureFolderPreviewRequest(
+        paneID: PaneID,
+        url: URL
+    ) async throws -> FolderPreviewRequest? {
+        try Task.checkCancellation()
+        let standardizedURL = url.standardizedFileURL
+        let descriptor: Int32
+        do {
+            descriptor = try openFolderPreviewDescriptor(standardizedURL)
+        } catch let error as POSIXError where error.code == .ENOTDIR || error.code == .ELOOP {
+            return nil
+        }
+        defer { Darwin.close(descriptor) }
+
+        let openedIdentity = try identity(ofDescriptor: descriptor)
+        guard try identity(of: standardizedURL) == openedIdentity else {
+            throw FileSystemAccessError.identityMismatch(standardizedURL)
+        }
+        guard !isPackageDirectory(named: standardizedURL.lastPathComponent) else {
+            return nil
+        }
+        return FolderPreviewRequest(
+            paneID: paneID,
+            url: standardizedURL,
+            identity: openedIdentity,
+            kind: .ordinaryDirectory
+        )
+    }
+
+    func snapshotFolder(
+        _ request: FolderPreviewRequest,
+        visibility: DirectoryVisibilityPolicy,
+        progress: @escaping @Sendable (Int) -> Void
+    ) async throws -> FolderPreviewSnapshot {
+        guard request.kind == .ordinaryDirectory else {
+            throw FileSystemAccessError.identityMismatch(request.url)
+        }
+        try Task.checkCancellation()
+        let descriptor = try openFolderPreviewDescriptor(request.url)
+        defer { Darwin.close(descriptor) }
+
+        guard try identity(ofDescriptor: descriptor) == request.identity,
+              try identity(of: request.url) == request.identity else {
+            throw FileSystemAccessError.identityMismatch(request.url)
+        }
+        try onAfterFolderPreviewOpen(request)
+        try Task.checkCancellation()
+
+        let duplicate = Darwin.dup(descriptor)
+        guard duplicate >= 0 else { throw currentPOSIXError() }
+        guard let directory = Darwin.fdopendir(duplicate) else {
+            Darwin.close(duplicate)
+            throw currentPOSIXError()
+        }
+        defer { Darwin.closedir(directory) }
+
+        var entries: [FolderPreviewEntry] = []
+        errno = 0
+        while let directoryEntry = Darwin.readdir(directory) {
+            try Task.checkCancellation()
+            let name = directoryEntryName(directoryEntry)
+            guard name != ".", name != "..", visibility.includes(name: name) else {
+                errno = 0
+                continue
+            }
+            let metadata = try folderPreviewMetadata(named: name, in: descriptor)
+            entries.append(FolderPreviewEntry(
+                name: name,
+                isDirectory: metadata.isDirectory,
+                isPackage: metadata.isDirectory && isPackageDirectory(named: name),
+                byteSize: metadata.isDirectory ? nil : metadata.byteSize,
+                modifiedAt: metadata.modifiedAt
+            ))
+            progress(entries.count)
+            errno = 0
+        }
+        guard errno == 0 else { throw currentPOSIXError() }
+        try Task.checkCancellation()
+        guard try identity(ofDescriptor: descriptor) == request.identity,
+              try identity(of: request.url) == request.identity else {
+            throw FileSystemAccessError.identityMismatch(request.url)
+        }
+
+        entries.sort { lhs, rhs in
+            if lhs.isDirectory != rhs.isDirectory {
+                return lhs.isDirectory && !rhs.isDirectory
+            }
+            let comparison = lhs.name.localizedStandardCompare(rhs.name)
+            if comparison != .orderedSame { return comparison == .orderedAscending }
+            return lhs.name < rhs.name
+        }
+        return FolderPreviewSnapshot(request: request, entries: entries)
     }
 
     func move(_ source: URL, identifiedBy identity: FileIdentity, to destination: URL) throws {
@@ -1652,6 +1771,56 @@ actor LiveFileSystemAccess: FileSystemAccess {
         }
     }
 
+    private struct FolderPreviewMetadata {
+        let isDirectory: Bool
+        let byteSize: Int64?
+        let modifiedAt: Date?
+    }
+
+    private func openFolderPreviewDescriptor(_ url: URL) throws -> Int32 {
+        try openDescriptor(
+            url,
+            flags: O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK
+        )
+    }
+
+    private func directoryEntryName(_ entry: UnsafeMutablePointer<dirent>) -> String {
+        withUnsafePointer(to: &entry.pointee.d_name) {
+            $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXNAMLEN) + 1) {
+                String(cString: $0)
+            }
+        }
+    }
+
+    private func folderPreviewMetadata(
+        named name: String,
+        in directoryDescriptor: Int32
+    ) throws -> FolderPreviewMetadata {
+        var information = stat()
+        let status = name.withCString {
+            Darwin.fstatat(directoryDescriptor, $0, &information, AT_SYMLINK_NOFOLLOW)
+        }
+        guard status == 0 else { throw currentPOSIXError() }
+        let isDirectory = information.st_mode & S_IFMT == S_IFDIR
+        let modifiedAt = Date(timeIntervalSince1970: TimeInterval(information.st_mtimespec.tv_sec))
+            .addingTimeInterval(TimeInterval(information.st_mtimespec.tv_nsec) / 1_000_000_000)
+        return FolderPreviewMetadata(
+            isDirectory: isDirectory,
+            byteSize: isDirectory ? nil : Int64(information.st_size),
+            modifiedAt: modifiedAt
+        )
+    }
+
+    private func isPackageDirectory(named name: String) -> Bool {
+        switch URL(filePath: name).pathExtension.lowercased() {
+        case "app", "bundle", "framework", "kext", "mdimporter", "plugin", "prefpane",
+             "qlgenerator", "rtfd", "workflow", "xcodeproj":
+            true
+        default:
+            false
+        }
+    }
+
     private func directoryEntryNames(in descriptor: Int32) throws -> [String] {
         let duplicate = Darwin.dup(descriptor)
         guard duplicate >= 0 else { throw currentPOSIXError() }
@@ -1663,11 +1832,7 @@ actor LiveFileSystemAccess: FileSystemAccess {
         var names: [String] = []
         errno = 0
         while let entry = Darwin.readdir(directory) {
-            let name = withUnsafePointer(to: &entry.pointee.d_name) {
-                $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXNAMLEN) + 1) {
-                    String(cString: $0)
-                }
-            }
+            let name = directoryEntryName(entry)
             if name != ".", name != ".." { names.append(name) }
             errno = 0
         }

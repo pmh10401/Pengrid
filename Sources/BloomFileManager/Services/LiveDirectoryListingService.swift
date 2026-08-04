@@ -2,15 +2,18 @@ import Foundation
 
 struct LiveDirectoryListingService: DirectoryListingService {
     let batchSize: Int
+    private let visibility: DirectoryVisibilityPolicy
     private let availabilityReader: any CloudItemAvailabilityReading
     private let accessCoordinator: CloudLocationScopedAccessCoordinator
 
     init(
         batchSize: Int = 256,
+        visibility: DirectoryVisibilityPolicy = .baseline,
         availabilityReader: any CloudItemAvailabilityReading = LiveCloudItemAvailabilityService(),
         accessCoordinator: CloudLocationScopedAccessCoordinator = .init()
     ) {
         self.batchSize = batchSize
+        self.visibility = visibility
         self.availabilityReader = availabilityReader
         self.accessCoordinator = accessCoordinator
     }
@@ -30,7 +33,7 @@ struct LiveDirectoryListingService: DirectoryListingService {
                     let urls = try FileManager.default.contentsOfDirectory(
                         at: directory,
                         includingPropertiesForKeys: Array(keys),
-                        options: []
+                        options: visibility.fileManagerOptions
                     )
                     var batch: [FileItem] = []
                     for url in urls {
