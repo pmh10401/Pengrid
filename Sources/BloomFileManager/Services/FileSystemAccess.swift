@@ -676,7 +676,9 @@ actor LiveFileSystemAccess: FileSystemAccess {
             at: standardizedURL,
             expected: openedIdentity
         )
-        let isPackage = try folderPreviewPackageMetadata(standardizedURL)
+        let isPackage = try folderPreviewPackageMetadata(
+            folderPreviewChildMetadataURL(descriptor: descriptor)
+        )
         try requireFolderPreviewIdentity(
             of: descriptor,
             at: standardizedURL,

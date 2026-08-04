@@ -36,7 +36,7 @@ private final class FolderPreviewPackageMetadataRecorder: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         recordedURLs.append(url)
-        return packageNames.contains(url.resolvingSymlinksInPath().lastPathComponent)
+        return packageNames.contains(resolvedName(for: url))
     }
 
     func urls() -> [URL] {
@@ -44,13 +44,26 @@ private final class FolderPreviewPackageMetadataRecorder: @unchecked Sendable {
         defer { lock.unlock() }
         return recordedURLs
     }
+
+    private func resolvedName(for url: URL) -> String {
+        guard url.path.hasPrefix("/dev/fd/"),
+              let descriptor = Int32(url.lastPathComponent) else {
+            return url.lastPathComponent
+        }
+        var path = [CChar](repeating: 0, count: Int(PATH_MAX))
+        guard Darwin.fcntl(descriptor, F_GETPATH, &path) == 0 else {
+            return url.lastPathComponent
+        }
+        let bytes = path.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
+        return URL(filePath: String(decoding: bytes, as: UTF8.self)).lastPathComponent
+    }
 }
 
 private func openFileDescriptorCount() throws -> Int {
     try FileManager.default.contentsOfDirectory(atPath: "/dev/fd").count
 }
 
-@Suite("FileSystemAccessTests")
+@Suite("FileSystemAccessTests", .serialized)
 struct FileSystemAccessTests {
     @Test func folderSnapshotRejectsSymlinkAndReplacement() async throws {
         let root = try TemporaryDirectory()
@@ -178,6 +191,42 @@ struct FileSystemAccessTests {
             url: ordinary
         )
         #expect(ordinaryRequest != nil)
+        #expect(recorder.urls().allSatisfy { $0.path.hasPrefix("/dev/fd/") })
+    }
+
+    @Test func defaultFoundationPackageMetadataRecognizesCommonPackagesAtRootAndChild() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let packageNames: Set<String> = [
+            "Document.pages", "Workbook.numbers", "Deck.key", "Library.photoslibrary", "Project.xcworkspace"
+        ]
+        let fileSystem = LiveFileSystemAccess()
+        for name in packageNames {
+            let package = root.url.appending(path: name, directoryHint: .isDirectory)
+            try FileManager.default.createDirectory(at: package, withIntermediateDirectories: false)
+            #expect(try await fileSystem.captureFolderPreviewRequest(paneID: .left, url: package) == nil)
+        }
+        let ordinary = root.url.appending(path: "ordinary", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: ordinary, withIntermediateDirectories: false)
+        #expect(try await fileSystem.captureFolderPreviewRequest(paneID: .left, url: ordinary) != nil)
+
+        let parent = root.url.appending(path: "parent", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: false)
+        for name in packageNames {
+            try FileManager.default.createDirectory(
+                at: parent.appending(path: name, directoryHint: .isDirectory),
+                withIntermediateDirectories: false
+            )
+        }
+        try FileManager.default.createDirectory(
+            at: parent.appending(path: "ordinary-child", directoryHint: .isDirectory),
+            withIntermediateDirectories: false
+        )
+        let request = try #require(await fileSystem.captureFolderPreviewRequest(paneID: .left, url: parent))
+        let snapshot = try await fileSystem.snapshotFolder(request, visibility: .baseline, progress: { _ in })
+
+        #expect(Set(snapshot.entries.filter(\.isPackage).map(\.name)) == packageNames)
+        #expect(snapshot.entries.first(where: { $0.name == "ordinary-child" })?.isPackage == false)
     }
 
     @Test func folderSnapshotUsesAnchoredAuthoritativePackageMetadataForChildren() async throws {
@@ -194,11 +243,8 @@ struct FileSystemAccessTests {
                 withIntermediateDirectories: false
             )
         }
-        let recorder = FolderPreviewPackageMetadataRecorder(packageNames: [])
-        let fileSystem = LiveFileSystemAccess(folderPreviewPackageMetadata: { url in
-            _ = try recorder.isPackage(url)
-            return url.path.hasPrefix("/dev/fd/")
-        })
+        let recorder = FolderPreviewPackageMetadataRecorder(packageNames: packageNames)
+        let fileSystem = LiveFileSystemAccess(folderPreviewPackageMetadata: recorder.isPackage)
         let request = try #require(await fileSystem.captureFolderPreviewRequest(paneID: .left, url: folder))
 
         let snapshot = try await fileSystem.snapshotFolder(
@@ -290,6 +336,9 @@ struct FileSystemAccessTests {
         try Data([1]).write(to: folder.appending(path: "original"))
         let fileSystem = LiveFileSystemAccess(onAfterFolderPreviewOpen: { request in
             try FileManager.default.moveItem(at: request.url, to: old)
+            try FileManager.default.createDirectory(at: request.url, withIntermediateDirectories: false)
+            try Data([2]).write(to: request.url.appending(path: "temporary"))
+            try FileManager.default.removeItem(at: request.url)
             try FileManager.default.moveItem(at: old, to: request.url)
         })
         let request = try #require(await fileSystem.captureFolderPreviewRequest(paneID: .left, url: folder))
@@ -353,7 +402,7 @@ struct FileSystemAccessTests {
             try await streamFailure.snapshotFolder(streamRequest, visibility: .baseline, progress: { _ in })
         }
 
-        #expect(try openFileDescriptorCount() <= baseline + 1)
+        #expect(try openFileDescriptorCount() == baseline)
     }
 
     @Test func folderSnapshotDuplicatesDirectoryDescriptorWithCloseOnExec() async throws {
