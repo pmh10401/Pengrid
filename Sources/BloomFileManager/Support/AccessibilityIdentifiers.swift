@@ -48,6 +48,18 @@ enum AccessibilityIdentifiers {
     static let smartSearchExtensions = "smartSearch.filter.extensions"
     static let smartSearchMinimumSize = "smartSearch.filter.minimumSize"
     static let smartSearchMaximumSize = "smartSearch.filter.maximumSize"
+    static let smartSearchHidden = "smartSearch.filter.hidden"
+    static let smartSearchPackages = "smartSearch.filter.packages"
+    static let smartSearchModifiedAfterEnabled = "smartSearch.filter.modifiedAfter.enabled"
+    static let smartSearchModifiedAfterDate = "smartSearch.filter.modifiedAfter.date"
+    static let smartSearchModifiedBeforeEnabled = "smartSearch.filter.modifiedBefore.enabled"
+    static let smartSearchModifiedBeforeDate = "smartSearch.filter.modifiedBefore.date"
+    static let smartSearchApplyFilters = "smartSearch.filter.apply"
+    static let smartSearchSavedSearchName = "smartSearch.saved.name"
+
+    static func smartSearchRemoveRoot(_ index: Int) -> String {
+        "smartSearch.root.remove.\(index)"
+    }
     static let smartSearchQuickLook = "smartSearch.quickLook"
     static let smartSearchReveal = "smartSearch.reveal"
     static let smartSearchOpenContainingFolder = "smartSearch.openContainingFolder"

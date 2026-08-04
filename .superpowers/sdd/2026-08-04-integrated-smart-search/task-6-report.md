@@ -61,3 +61,13 @@ disabled when no store is supplied.
 - `SmartSearchActionRouterTests` — 12 passed
 - `SmartSearchStoreTests` — 17 passed
 - `CloudLocationScopedAccessTests` — 17 passed
+
+## Review fix round 2
+
+- Replaced six misleading result-header buttons with display-only headers and one persistent
+  Sort menu bound directly to `SmartSearchStore.sort` (Relevance, Name, Modified, Size).
+- Added deterministic, privacy-safe accessibility IDs for all filter controls, saved name, and
+  root-removal controls (root index only).
+- Added and used behavior helpers for action invocation capture, queue handoff, saved filter
+  drafts, and injected/coalesced VoiceOver announcements (100-entry progress buckets).
+- Direct helper coverage passed alongside the prior scoped suites.

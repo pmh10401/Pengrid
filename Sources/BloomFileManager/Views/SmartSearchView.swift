@@ -25,6 +25,94 @@ private enum SmartSearchFocus: Hashable {
     case query, savedSearchName
 }
 
+@MainActor
+struct SmartSearchInvocationCapture {
+    let results: [SmartSearchResult]
+    let sourcePane: FilePaneState
+    let targetPane: FilePaneState
+    let destinationURL: URL
+
+    init(workspace: WorkspaceState, results: [SmartSearchResult]) {
+        self.results = results
+        sourcePane = workspace.activePane
+        targetPane = workspace.activePaneID == .left ? workspace.right : workspace.left
+        destinationURL = targetPane.currentDirectory
+    }
+}
+
+struct SmartSearchMutationHandoff {
+    private(set) var errorMessage: String?
+
+    @discardableResult
+    mutating func complete(accepted: Bool, dismiss: () -> Void) -> Bool {
+        guard accepted else {
+            errorMessage = "Could not queue operation. Search remains open."
+            return false
+        }
+        errorMessage = nil
+        dismiss()
+        return true
+    }
+}
+
+struct SmartSearchFilterDraft: Equatable {
+    let kind: SmartSearchItemKind
+    let extensionText: String
+    let minimumBytes: Int64?
+    let maximumBytes: Int64?
+    let modifiedAfter: Date?
+    let modifiedBefore: Date?
+    let includeHidden: Bool
+    let includePackages: Bool
+
+    init(metadata: SmartSearchMetadataFilter, includeHidden: Bool, includePackages: Bool) {
+        kind = metadata.kind
+        extensionText = metadata.extensions.sorted().joined(separator: ", ")
+        minimumBytes = metadata.minimumBytes
+        maximumBytes = metadata.maximumBytes
+        modifiedAfter = metadata.modifiedAfter
+        modifiedBefore = metadata.modifiedBefore
+        self.includeHidden = includeHidden
+        self.includePackages = includePackages
+    }
+
+    static func legacy(includeDirectories: Bool) -> Self {
+        Self(metadata: .legacy(includeDirectories: includeDirectories), includeHidden: false, includePackages: false)
+    }
+}
+
+@MainActor
+final class SmartSearchAnnouncementCoordinator {
+    private let poster: any SmartSearchAnnouncementPosting
+    private let progressStride: Int
+    private var lastProgressBucket: Int?
+
+    init(poster: any SmartSearchAnnouncementPosting, progressStride: Int = 100) {
+        self.poster = poster
+        self.progressStride = max(1, progressStride)
+    }
+
+    func progress(_ message: String, count: Int) {
+        let bucket = max(0, count) / progressStride
+        guard lastProgressBucket == nil || bucket > lastProgressBucket! else { return }
+        lastProgressBucket = bucket
+        poster.post(message)
+    }
+
+    func phase(_ phase: SmartSearchPresentationState, resultCount: Int, error: String?) {
+        lastProgressBucket = nil
+        switch phase {
+        case .searching: poster.post("Searching files")
+        case .results: poster.post("Found \(resultCount) search results")
+        case .failed: poster.post(error ?? "Search failed")
+        case .cancelled: poster.post("Search cancelled")
+        case .idle: break
+        }
+    }
+
+    func error(_ message: String) { poster.post(message) }
+}
+
 private enum SmartSearchResultColumn: String, CaseIterable, Identifiable {
     case name = "Name"
     case location = "Location"
@@ -48,7 +136,6 @@ struct SmartSearchView: View {
     @Environment(\.dismiss) private var dismiss
     @FocusState private var focusedField: SmartSearchFocus?
     @State private var selectedResultIDs = Set<URL>()
-    @State private var selectedColumn: SmartSearchResultColumn = .name
     @State private var itemKind: SmartSearchItemKind = .all
     @State private var hasModifiedAfter = false
     @State private var modifiedAfter = Date()
@@ -64,7 +151,7 @@ struct SmartSearchView: View {
     @State private var filterError: String?
     @State private var actionError: String?
     @State private var pendingTrashResults: [SmartSearchResult] = []
-    private let announcer: any SmartSearchAnnouncementPosting
+    private let announcements: SmartSearchAnnouncementCoordinator
 
     init(
         store: SmartSearchStore,
@@ -81,7 +168,7 @@ struct SmartSearchView: View {
         self.operationController = operationController
         self.quickLookController = quickLookController
         self.materializer = materializer
-        self.announcer = announcer
+        announcements = SmartSearchAnnouncementCoordinator(poster: announcer)
     }
 
     var body: some View {
@@ -105,24 +192,13 @@ struct SmartSearchView: View {
             pendingTrashResults = []
         }
         .onChange(of: store.phase) { _, phase in
-            switch phase {
-            case .searching:
-                announcer.post("Searching files")
-            case .results:
-                announcer.post("Found \(store.results.count) search results")
-            case .failed:
-                announcer.post(store.errorMessage ?? "Search failed")
-            case .cancelled:
-                announcer.post("Search cancelled")
-            case .idle:
-                break
-            }
+            announcements.phase(phase, resultCount: store.results.count, error: store.errorMessage)
         }
         .onChange(of: actionError) { _, message in
-            if let message { announcer.post(message) }
+            if let message { announcements.error(message) }
         }
         .onChange(of: store.progressMessage) { _, message in
-            if let message { announcer.post(message) }
+            if let message { announcements.progress(message, count: store.examinedEntryCount) }
         }
         .onKeyPress(.space) {
             quickLookSelectedResult()
@@ -180,7 +256,7 @@ struct SmartSearchView: View {
                 Text("No folders selected")
                     .foregroundStyle(.secondary)
             } else {
-                ForEach(store.roots, id: \.self) { root in
+                ForEach(Array(store.roots.enumerated()), id: \.offset) { index, root in
                     HStack(spacing: 3) {
                         Text(safeLocation(root))
                             .lineLimit(1)
@@ -191,6 +267,7 @@ struct SmartSearchView: View {
                                 .accessibilityHidden(true)
                         }
                         .buttonStyle(.borderless)
+                        .accessibilityIdentifier(AccessibilityIdentifiers.smartSearchRemoveRoot(index))
                         .accessibilityLabel("Remove search folder \(safeLocation(root))")
                     }
                     .padding(.horizontal, 6)
@@ -248,9 +325,11 @@ struct SmartSearchView: View {
             Toggle("Include hidden items", isOn: Binding(
                 get: { store.includeHidden }, set: { store.includeHidden = $0 }
             ))
+            .accessibilityIdentifier(AccessibilityIdentifiers.smartSearchHidden)
             Toggle("Search inside packages", isOn: Binding(
                 get: { store.includePackages }, set: { store.includePackages = $0 }
             ))
+            .accessibilityIdentifier(AccessibilityIdentifiers.smartSearchPackages)
             TextField("Extensions, separated by commas", text: $extensionText)
                 .accessibilityIdentifier(AccessibilityIdentifiers.smartSearchExtensions)
             HStack {
@@ -260,12 +339,16 @@ struct SmartSearchView: View {
                     .accessibilityIdentifier(AccessibilityIdentifiers.smartSearchMaximumSize)
             }
             Toggle("Modified after", isOn: $hasModifiedAfter)
+                .accessibilityIdentifier(AccessibilityIdentifiers.smartSearchModifiedAfterEnabled)
             if hasModifiedAfter {
                 DatePicker("Earliest modification date", selection: $modifiedAfter, displayedComponents: .date)
+                    .accessibilityIdentifier(AccessibilityIdentifiers.smartSearchModifiedAfterDate)
             }
             Toggle("Modified before", isOn: $hasModifiedBefore)
+                .accessibilityIdentifier(AccessibilityIdentifiers.smartSearchModifiedBeforeEnabled)
             if hasModifiedBefore {
                 DatePicker("Latest modification date", selection: $modifiedBefore, displayedComponents: .date)
+                    .accessibilityIdentifier(AccessibilityIdentifiers.smartSearchModifiedBeforeDate)
             }
             if let filterMessage = filterError ?? filterValidationMessage {
                 Text(filterMessage).foregroundStyle(.red).font(.caption)
@@ -273,6 +356,7 @@ struct SmartSearchView: View {
             }
             Button("Apply Filters") { applyFilterDrafts() }
                 .disabled(!filterDraftIsValid)
+                .accessibilityIdentifier(AccessibilityIdentifiers.smartSearchApplyFilters)
         }
         .padding()
         .frame(width: 340)
@@ -289,17 +373,24 @@ struct SmartSearchView: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 0) {
                 ForEach(SmartSearchResultColumn.allCases) { column in
-                    Button(column.rawValue) { selectSort(column) }
-                        .buttonStyle(.plain)
-                        .fontWeight(selectedColumn == column ? .semibold : .regular)
+                    Text(column.rawValue)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .accessibilityLabel("Sort results by \(column.rawValue)")
-                        .accessibilityIdentifier(AccessibilityIdentifiers.smartSearchSort + ".\(column.rawValue.lowercased())")
                 }
             }
             .padding(.horizontal, 8)
             .font(.caption)
             .foregroundStyle(.secondary)
+
+            Picker("Sort", selection: Binding(
+                get: { store.sort }, set: { store.sort = $0 }
+            )) {
+                Text("Relevance").tag(SmartSearchSort.score)
+                Text("Name").tag(SmartSearchSort.name)
+                Text("Modified").tag(SmartSearchSort.modifiedAt)
+                Text("Size").tag(SmartSearchSort.size)
+            }
+            .pickerStyle(.menu)
+            .accessibilityIdentifier(AccessibilityIdentifiers.smartSearchSort)
 
             List(selection: $selectedResultIDs) {
                 ForEach(sortedResults) { result in
@@ -329,6 +420,7 @@ struct SmartSearchView: View {
             TextField("Saved search name", text: $savedSearchName)
                 .focused($focusedField, equals: .savedSearchName)
                 .textFieldStyle(.roundedBorder)
+                .accessibilityIdentifier(AccessibilityIdentifiers.smartSearchSavedSearchName)
             Button("Save Search") {
                 if store.saveCurrentSearch(named: savedSearchName) != nil {
                     savedSearchName = ""
@@ -475,14 +567,19 @@ struct SmartSearchView: View {
     }
 
     private func loadFilterDrafts() {
-        itemKind = store.metadata.kind
-        hasModifiedAfter = store.metadata.modifiedAfter != nil
-        modifiedAfter = store.metadata.modifiedAfter ?? Date()
-        hasModifiedBefore = store.metadata.modifiedBefore != nil
-        modifiedBefore = store.metadata.modifiedBefore ?? Date()
-        extensionText = store.metadata.extensions.sorted().joined(separator: ", ")
-        minimumBytesText = store.metadata.minimumBytes.map(String.init) ?? ""
-        maximumBytesText = store.metadata.maximumBytes.map(String.init) ?? ""
+        let draft = SmartSearchFilterDraft(
+            metadata: store.metadata,
+            includeHidden: store.includeHidden,
+            includePackages: store.includePackages
+        )
+        itemKind = draft.kind
+        hasModifiedAfter = draft.modifiedAfter != nil
+        modifiedAfter = draft.modifiedAfter ?? Date()
+        hasModifiedBefore = draft.modifiedBefore != nil
+        modifiedBefore = draft.modifiedBefore ?? Date()
+        extensionText = draft.extensionText
+        minimumBytesText = draft.minimumBytes.map(String.init) ?? ""
+        maximumBytesText = draft.maximumBytes.map(String.init) ?? ""
     }
 
     private func applyFilterDrafts() {
@@ -542,9 +639,9 @@ struct SmartSearchView: View {
 
     private func revealSelectedResult() {
         guard let result = selectedResults.only else { return }
-        let sourcePane = workspace.activePane
+        let capture = SmartSearchInvocationCapture(workspace: workspace, results: [result])
         Task {
-            guard await router.reveal(result, in: sourcePane) else {
+            guard await router.reveal(capture.results[0], in: capture.sourcePane) else {
                 actionError = "Item changed. Search again."
                 return
             }
@@ -553,9 +650,9 @@ struct SmartSearchView: View {
 
     private func openContainingFolder() {
         guard let result = selectedResults.only else { return }
-        let destinationPane = workspace.activePaneID == .left ? workspace.right : workspace.left
+        let capture = SmartSearchInvocationCapture(workspace: workspace, results: [result])
         Task {
-            guard await router.openContainingFolder(for: result, in: destinationPane) else {
+            guard await router.openContainingFolder(for: capture.results[0], in: capture.targetPane) else {
                 actionError = "Item changed. Search again."
                 return
             }
@@ -563,28 +660,28 @@ struct SmartSearchView: View {
     }
 
     private func transferSelectedResults(mode: TransferMode) {
-        let results = selectedResults
-        guard !results.isEmpty else { return }
-        let destinationPane = workspace.activePaneID == .left ? workspace.right : workspace.left
-        let destination = destinationPane.currentDirectory
+        let capture = SmartSearchInvocationCapture(workspace: workspace, results: selectedResults)
+        guard !capture.results.isEmpty else { return }
         Task {
             let requests: [IdentifiedTransferRequest]
             do {
-                requests = try await router.transferRequests(for: results, destination: destination)
+                requests = try await router.transferRequests(for: capture.results, destination: capture.destinationURL)
             } catch {
                 actionError = "Item changed. Search again."
                 return
             }
-            if operationController.runIdentifiedTransfer(
+            var handoff = SmartSearchMutationHandoff()
+            let accepted = operationController.runIdentifiedTransfer(
                 requests,
                 mode: mode,
                 workspace: workspace,
                 includeSafeRelativePaths: false
-            ) {
+            )
+            if !handoff.complete(accepted: accepted, dismiss: {
                 store.dismiss()
                 dismiss()
-            } else {
-                actionError = "Could not queue operation. Search remains open."
+            }) {
+                actionError = handoff.errorMessage
             }
         }
     }
@@ -602,24 +699,17 @@ struct SmartSearchView: View {
                 }
                 requests.append(request)
             }
-            if operationController.trash(requests, workspace: workspace, privacySafeProgress: true) {
+            var handoff = SmartSearchMutationHandoff()
+            let accepted = operationController.trash(requests, workspace: workspace, privacySafeProgress: true)
+            if !handoff.complete(accepted: accepted, dismiss: {
                 store.dismiss()
                 dismiss()
-            } else {
-                actionError = "Could not queue operation. Search remains open."
+            }) {
+                actionError = handoff.errorMessage
             }
         }
     }
 
-    private func selectSort(_ column: SmartSearchResultColumn) {
-        selectedColumn = column
-        switch column {
-        case .name: store.sort = .name
-        case .size: store.sort = .size
-        case .modified: store.sort = .modifiedAt
-        case .location, .type, .availability: break
-        }
-    }
 
     private func safeLocation(_ url: URL) -> String {
         url.lastPathComponent.isEmpty ? "Folder" : url.lastPathComponent
