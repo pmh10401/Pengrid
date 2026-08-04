@@ -10,6 +10,7 @@
 
 ## Global Constraints
 
+- On this workstation, prefix every `xcrun swift` command with `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`; the selected CommandLineTools path cannot import Swift Testing.
 - Work only from `codex/safe-operation-center`; never merge `codex/korean-search-final` wholesale.
 - Do not replace `FileOperationController`, `FileOperationService`, `FileOperationUndoService`, `FileSystemAccess`, archive code, or operation-center files with branch versions.
 - Command-F remains a pure in-memory projection over the active pane's loaded items.

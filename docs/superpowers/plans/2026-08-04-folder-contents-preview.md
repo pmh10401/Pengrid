@@ -10,6 +10,7 @@
 
 ## Global Constraints
 
+- On this workstation, prefix every `xcrun swift` command with `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`; the selected CommandLineTools path cannot import Swift Testing.
 - A single ordinary folder uses the folder panel; files, packages, symbolic links, and multi-selection retain existing system Quick Look behavior.
 - Space and selection-change updates go only through `WorkspacePreviewCoordinator`; `WorkspaceView` must not call concrete preview controllers directly.
 - Folder requests capture pane ID, standardized URL, exact `FileIdentity`, and no-follow directory kind.
