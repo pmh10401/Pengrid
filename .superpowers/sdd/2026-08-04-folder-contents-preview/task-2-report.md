@@ -36,3 +36,28 @@ All invoked with `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`:
 
 The test suite emitted only pre-existing AppKit `@preconcurrency` warnings in
 unrelated test fixtures.
+
+## Fix round 1 — review evidence hardening
+
+- Replaced every unbounded `Task.yield()` polling loop in the model test file
+  with a one-second bounded wait helper. A timeout records the awaited state in
+  the test failure instead of leaving the test process stalled.
+- Separated the late-success case from stale error/progress coverage: a
+  cancelled first listing can now return a complete old snapshot after its
+  replacement has started, and the test proves it leaves the new generation
+  loading with no rows until the second snapshot completes.
+- Strengthened model deinitialization coverage with a deliberately
+  noncooperative continuation. The test first verifies an initial relay update,
+  releases the model, observes cancellation delivered to the held listing task,
+  sends a post-cancellation progress value into the now-finished relay path,
+  permits the held task to exit, and verifies the model remains released. This
+  exercises the single `FolderPreviewWorkLifetime.cancel()` path that finishes
+  the relay and cancels the progress consumer alongside the listing task.
+
+Fix-round verification (same Xcode developer directory):
+
+- `FolderPreviewListingTests` — 2 passed.
+- `FolderPreviewModelTests` — 8 passed.
+- `FileSystemAccessTests` — 17 passed.
+- `DirectoryListingServiceTests` — 2 passed.
+- `git diff --check` — passed.
