@@ -1,10 +1,11 @@
+import Darwin
 import Foundation
 import Testing
 @testable import BloomFileManager
 
 @Suite struct SmartSearchServiceTests {
     @Test func serviceCapturesExactIdentityAndAppliesMetadataBeforeRetention() async throws {
-        let root = try TemporaryDirectory()
+        let root = try ServiceTemporaryDirectory()
         defer { root.remove() }
         let textURL = root.url.appending(path: "alpha.txt")
         try Data(repeating: 1, count: 12).write(to: textURL)
@@ -13,7 +14,7 @@ import Testing
         let service = LocalSmartSearchService(fileSystem: fileSystem)
         let query = try SmartSearchQuery(
             text: "alpha",
-            roots: [root.url],
+            roots: [physicalURL(root.url)],
             metadata: try .init(kind: .files, extensionText: "txt", minimumBytes: 10, maximumBytes: 20)
         )
 
@@ -25,7 +26,7 @@ import Testing
     }
 
     @Test func itemReplacedDuringMetadataReadIsNotRetained() async throws {
-        let root = try TemporaryDirectory()
+        let root = try ServiceTemporaryDirectory()
         defer { root.remove() }
         let url = root.url.appending(path: "replace-me.txt")
         try Data([1]).write(to: url)
@@ -39,7 +40,7 @@ import Testing
         )
 
         let results = try await service.search(
-            try SmartSearchQuery(text: "replace-me", roots: [root.url])
+            try SmartSearchQuery(text: "replace-me", roots: [physicalURL(root.url)])
         )
 
         #expect(results.isEmpty)
@@ -51,25 +52,33 @@ import Testing
         #expect(!implementation.contains("CloudMaterializing"))
         #expect(!implementation.contains("materialize("))
         #expect(!implementation.contains("NSFileCoordinator"))
+        #expect(!implementation.contains("Data(contentsOf:"))
+        #expect(!implementation.contains("String(contentsOf:"))
+        #expect(!implementation.contains("FileHandle"))
+        #expect(!implementation.contains("contents(atPath:"))
+        #expect(!implementation.contains("contentsOfDirectory("))
     }
 
     @Test func prunesDuplicateAndDescendantRootsBeforeRecursiveEnumeration() async throws {
-        let root = try TemporaryDirectory()
+        let root = try ServiceTemporaryDirectory()
         defer { root.remove() }
         let child = root.url.appending(path: "child", directoryHint: .isDirectory)
         try write("report", to: child.appending(path: "report.txt"))
 
         let results = try await LocalSmartSearchService().search(
-            try SmartSearchQuery(text: "report", roots: [child, root.url, root.url])
+            try SmartSearchQuery(
+                text: "report",
+                roots: [physicalURL(child), physicalURL(root.url), physicalURL(root.url)]
+            )
         )
 
         #expect(results.map(\.relativePath) == ["child/report.txt"])
     }
 
     @Test func doesNotTraverseSymlinksAndRespectsHiddenAndPackageBoundaries() async throws {
-        let root = try TemporaryDirectory()
+        let root = try ServiceTemporaryDirectory()
         defer { root.remove() }
-        let target = try TemporaryDirectory()
+        let target = try ServiceTemporaryDirectory()
         defer { target.remove() }
         try write("hidden", to: root.url.appending(path: ".hidden/report-hidden.txt"))
         try write("package", to: root.url.appending(path: "Report.app/report-package.txt"))
@@ -81,10 +90,10 @@ import Testing
         try write("regular", to: root.url.appending(path: "report-regular.txt"))
 
         let defaults = try await LocalSmartSearchService().search(
-            try SmartSearchQuery(text: "report", roots: [root.url])
+            try SmartSearchQuery(text: "report", roots: [physicalURL(root.url)])
         )
         let optedIn = try await LocalSmartSearchService().search(
-            try SmartSearchQuery(text: "report", roots: [root.url], includeHidden: true, includePackages: true)
+            try SmartSearchQuery(text: "report", roots: [physicalURL(root.url)], includeHidden: true, includePackages: true)
         )
 
         #expect(defaults.map(\.item.name) == ["report-regular.txt"])
@@ -92,7 +101,7 @@ import Testing
     }
 
     @Test func metadataNonmatchesDoNotReadAvailabilityAndProgressCountsExaminedEntries() async throws {
-        let root = try TemporaryDirectory()
+        let root = try ServiceTemporaryDirectory()
         defer { root.remove() }
         try write("report", to: root.url.appending(path: "report-match.txt"))
         try write("report", to: root.url.appending(path: "report-skip.pdf"))
@@ -103,19 +112,19 @@ import Testing
         let results = try await service.search(
             try SmartSearchQuery(
                 text: "report",
-                roots: [root.url],
+                roots: [physicalURL(root.url)],
                 metadata: try .init(kind: .files, extensionText: "txt")
             ),
             progress: { progress.append($0) }
         )
 
         #expect(results.map(\.item.name) == ["report-match.txt"])
-        #expect(await availability.requestedURLs() == [root.url.appending(path: "report-match.txt").standardizedFileURL])
+        #expect(await availability.requestedURLs() == [physicalURL(root.url).appending(path: "report-match.txt").standardizedFileURL])
         #expect(progress.values == [1, 2])
     }
 
     @Test func invalidRootsFailInsteadOfBeingSilentlySkipped() async throws {
-        let root = try TemporaryDirectory()
+        let root = try ServiceTemporaryDirectory()
         defer { root.remove() }
         let missing = root.url.appending(path: "missing")
 
@@ -127,7 +136,7 @@ import Testing
     }
 
     @Test func candidateAndResultCapsBoundMetadataWork() async throws {
-        let root = try TemporaryDirectory()
+        let root = try ServiceTemporaryDirectory()
         defer { root.remove() }
         for index in 0...2_000 {
             try write("report", to: root.url.appending(path: "report-\(index).txt"))
@@ -137,7 +146,7 @@ import Testing
         let results = try await LocalSmartSearchService(availabilityReader: availability).search(
             try SmartSearchQuery(
                 text: "report",
-                roots: [root.url],
+                roots: [physicalURL(root.url)],
                 includeDirectories: false,
                 maximumResults: 1
             )
@@ -148,13 +157,13 @@ import Testing
     }
 
     @Test func cancellationAfterAnAvailabilityWaitStopsTheSearch() async throws {
-        let root = try TemporaryDirectory()
+        let root = try ServiceTemporaryDirectory()
         defer { root.remove() }
         try write("report", to: root.url.appending(path: "report.txt"))
         let availability = DelayingAvailabilityReader()
         let service = LocalSmartSearchService(availabilityReader: availability)
         let task = Task {
-            try await service.search(try SmartSearchQuery(text: "report", roots: [root.url]))
+            try await service.search(try SmartSearchQuery(text: "report", roots: [physicalURL(root.url)]))
         }
         await availability.waitUntilStarted()
 
@@ -166,19 +175,102 @@ import Testing
     }
 
     @Test func scopedAccessLeaseIsReleasedAfterSearch() async throws {
-        let root = try TemporaryDirectory()
+        let root = try ServiceTemporaryDirectory()
         defer { root.remove() }
         try write("report", to: root.url.appending(path: "report.txt"))
         let driver = RecordingScopedAccessDriver()
         let coordinator = CloudLocationScopedAccessCoordinator(driver: driver)
-        coordinator.replaceManualRoots([root.url])
+        coordinator.replaceManualRoots([physicalURL(root.url)])
 
         _ = try await LocalSmartSearchService(scopedAccessCoordinator: coordinator).search(
-            try SmartSearchQuery(text: "report", roots: [root.url])
+            try SmartSearchQuery(text: "report", roots: [physicalURL(root.url)])
         )
 
         #expect(driver.startCount == 1)
         #expect(driver.stopCount == 1)
+    }
+
+    @Test func postIdentityMetadataSnapshotDrivesFilteringAndRetainedItem() async throws {
+        let root = try ServiceTemporaryDirectory()
+        defer { root.remove() }
+        let candidate = root.url.appending(path: "report-item", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: candidate, withIntermediateDirectories: true)
+        let fileSystem = FirstIdentityMutatingFileSystem { url in
+            try FileManager.default.removeItem(at: url)
+            try Data([1]).write(to: url)
+        }
+
+        let results = try await LocalSmartSearchService(fileSystem: fileSystem).search(
+            try SmartSearchQuery(
+                text: "report",
+                roots: [physicalURL(root.url)],
+                metadata: try .init(kind: .files)
+            )
+        )
+
+        #expect(results.map(\.item.name) == ["report-item"])
+        #expect(results.first?.item.isDirectory == false)
+        #expect(results.first?.item.isPackage == false)
+    }
+
+    @Test func symlinkRootsAndSymlinkAncestorsAreRejectedWithoutFollowingThem() async throws {
+        let fixture = try ServiceTemporaryDirectory()
+        defer { fixture.remove() }
+        let base = physicalURL(fixture.url)
+        let target = base.appending(path: "target", directoryHint: .isDirectory)
+        let child = target.appending(path: "child", directoryHint: .isDirectory)
+        try write("report", to: child.appending(path: "report.txt"))
+        let directLink = base.appending(path: "direct-link", directoryHint: .isDirectory)
+        let ancestorLink = base.appending(path: "ancestor-link", directoryHint: .isDirectory)
+        try FileManager.default.createSymbolicLink(at: directLink, withDestinationURL: target)
+        try FileManager.default.createSymbolicLink(at: ancestorLink, withDestinationURL: target)
+
+        await #expect(throws: SmartSearchServiceError.invalidRoot) {
+            try await LocalSmartSearchService().search(
+                try SmartSearchQuery(text: "report", roots: [directLink])
+            )
+        }
+        await #expect(throws: SmartSearchServiceError.invalidRoot) {
+            try await LocalSmartSearchService().search(
+                try SmartSearchQuery(text: "report", roots: [ancestorLink.appending(path: "child")])
+            )
+        }
+    }
+
+    @Test func itemReplacedDuringAvailabilityReadIsNotRetained() async throws {
+        let root = try ServiceTemporaryDirectory()
+        defer { root.remove() }
+        let url = root.url.appending(path: "replace-during-availability.txt")
+        try Data([1]).write(to: url)
+        let replacement = ReplacementOnce()
+        let availability = ReplacingAvailabilityReader(replacement: replacement)
+
+        let results = try await LocalSmartSearchService(availabilityReader: availability).search(
+            try SmartSearchQuery(text: "replace-during-availability", roots: [physicalURL(root.url)])
+        )
+
+        #expect(results.isEmpty)
+        #expect(await availability.didReadAvailability())
+    }
+
+    @Test func activeBoundsRejectItemsWhoseMetadataBecomesUnavailableAfterIdentity() async throws {
+        let root = try ServiceTemporaryDirectory()
+        defer { root.remove() }
+        let candidate = root.url.appending(path: "report-item.txt")
+        try Data([1]).write(to: candidate)
+        let fileSystem = FirstIdentityMutatingFileSystem { url in
+            try FileManager.default.removeItem(at: url)
+        }
+
+        let results = try await LocalSmartSearchService(fileSystem: fileSystem).search(
+            try SmartSearchQuery(
+                text: "report",
+                roots: [physicalURL(root.url)],
+                metadata: try .init(kind: .files, minimumBytes: 1)
+            )
+        )
+
+        #expect(results.isEmpty)
     }
 }
 
@@ -200,11 +292,121 @@ private final class ReplacementOnce: @unchecked Sendable {
     }
 }
 
+private actor ReplacingAvailabilityReader: CloudItemAvailabilityReading {
+    private let replacement: ReplacementOnce
+    private var readAvailability = false
+
+    init(replacement: ReplacementOnce) {
+        self.replacement = replacement
+    }
+
+    func availability(of url: URL) async -> CloudItemAvailability {
+        readAvailability = true
+        try? replacement.replace(url)
+        return .availableLocally
+    }
+
+    func didReadAvailability() -> Bool {
+        readAvailability
+    }
+}
+
+private actor FirstIdentityMutatingFileSystem: FileSystemAccess {
+    private let mutation: @Sendable (URL) throws -> Void
+    private var didMutate = false
+    private let identity = FileIdentity(entryIdentifier: "stable-entry", resolvedIdentifier: "stable-resolved")
+
+    init(mutation: @escaping @Sendable (URL) throws -> Void) {
+        self.mutation = mutation
+    }
+
+    func exists(_: URL) async -> Bool { true }
+    func createDirectory(_: URL) async throws { throw FixtureError.unsupported }
+    func createEmptyItemAndCaptureIdentity(
+        _: URL,
+        kind _: EmptyFileSystemItemKind,
+        parentIdentifiedBy _: FileIdentity
+    ) async throws -> OpenedEmptyFileSystemItem { throw FixtureError.unsupported }
+    func copyAndCaptureIdentity(_: URL, to _: URL) async throws -> FileIdentity { throw FixtureError.unsupported }
+    func move(_: URL, to _: URL) async throws { throw FixtureError.unsupported }
+    func moveExclusively(_: URL, to _: URL) async throws { throw FixtureError.unsupported }
+    func remove(_: URL) async throws { throw FixtureError.unsupported }
+    func replace(_: URL, with _: URL) async throws { throw FixtureError.unsupported }
+
+    func identity(of url: URL) async throws -> FileIdentity? {
+        if !didMutate {
+            didMutate = true
+            try mutation(url)
+        }
+        return identity
+    }
+
+    func move(_: URL, identifiedBy _: FileIdentity, to _: URL) async throws { throw FixtureError.unsupported }
+    func remove(_: URL, identifiedBy _: FileIdentity) async throws { throw FixtureError.unsupported }
+    func replace(
+        _: URL,
+        identifiedBy _: FileIdentity,
+        with _: URL,
+        identifiedBy _: FileIdentity
+    ) async throws { throw FixtureError.unsupported }
+    func reserveStagingDirectory(beside _: URL) async throws -> StagingReservation { throw FixtureError.unsupported }
+    func removeStagingDirectory(_: StagingReservation) async throws { throw FixtureError.unsupported }
+    func fingerprint(of _: URL) async throws -> SourceFingerprint { throw FixtureError.unsupported }
+    func trash(_: URL) async throws { throw FixtureError.unsupported }
+    func trash(_: URL, identifiedBy _: FileIdentity) async throws { throw FixtureError.unsupported }
+    func quarantineForTrash(
+        _: URL,
+        identifiedBy _: FileIdentity
+    ) async throws -> StorageTrashQuarantine { throw FixtureError.unsupported }
+    func rollbackTrashQuarantine(_: StorageTrashQuarantine) async throws { throw FixtureError.unsupported }
+    func moveTrashQuarantineAtomically(_: StorageTrashQuarantine) async throws -> URL { throw FixtureError.unsupported }
+    func names(in _: URL) async throws -> Set<String> { throw FixtureError.unsupported }
+    func volumeIdentifier(for _: URL) async throws -> String { throw FixtureError.unsupported }
+    func byteSize(of _: URL) async throws -> Int64? { throw FixtureError.unsupported }
+    func availableCapacity(at _: URL) async throws -> Int64? { throw FixtureError.unsupported }
+    func prepareDirectoryHierarchy(
+        root _: URL,
+        identifiedBy _: FileIdentity,
+        relativeComponents _: [String]
+    ) async throws -> PreparedDirectoryHierarchy { throw FixtureError.unsupported }
+    func removeEmptyOwnedDirectories(
+        root _: URL,
+        identifiedBy _: FileIdentity,
+        directories _: [PreparedDirectoryHierarchy.OwnedDirectory]
+    ) async throws { throw FixtureError.unsupported }
+
+    private enum FixtureError: Error {
+        case unsupported
+    }
+}
+
 private func source(named relativePath: String) throws -> String {
     let packageRoot = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
     let url = packageRoot.appending(path: "Sources/BloomFileManager").appending(path: relativePath)
     return try String(contentsOf: url, encoding: .utf8)
+}
+
+private func physicalURL(_ url: URL) -> URL {
+    guard let resolvedPath = realpath(url.path, nil) else {
+        return url.standardizedFileURL
+    }
+    defer { free(resolvedPath) }
+    return URL(fileURLWithPath: String(cString: resolvedPath), isDirectory: url.hasDirectoryPath)
+}
+
+private struct ServiceTemporaryDirectory {
+    let url: URL
+
+    init() throws {
+        url = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
+            .appending(path: ".smart-search-test-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: false)
+    }
+
+    func remove() {
+        try? FileManager.default.removeItem(at: url)
+    }
 }
 
 private func write(_ contents: String, to url: URL) throws {

@@ -93,6 +93,7 @@ final class LocalSmartSearchService: SmartSearching, @unchecked Sendable {
         for root in roots {
             let standardized = root.standardizedFileURL
             guard standardized.isFileURL,
+                  (try? hasSymbolicLinkAncestor(at: standardized)) == false,
                   (try? standardized.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else {
                 throw SmartSearchServiceError.invalidRoot
             }
@@ -132,7 +133,8 @@ final class LocalSmartSearchService: SmartSearching, @unchecked Sendable {
         var examined = examinedEntries
 
         while retained.count < maximumCandidates,
-              let url = enumerator.nextObject() as? URL {
+              let enumeratedURL = enumerator.nextObject() as? URL {
+            var url = enumeratedURL
             try Task.checkCancellation()
             examined += 1
             progress(examined)
@@ -147,22 +149,21 @@ final class LocalSmartSearchService: SmartSearching, @unchecked Sendable {
                 }
 
                 let boundary = try url.resourceValues(forKeys: boundaryKeys)
-                let isDirectory = boundary.isDirectory == true
-                let isPackage = boundary.isPackage == true
-                let isHidden = boundary.isHidden == true || url.lastPathComponent.hasPrefix(".")
+                let traversalIsDirectory = boundary.isDirectory == true
+                let traversalIsPackage = boundary.isPackage == true
+                let traversalIsHidden = boundary.isHidden == true || url.lastPathComponent.hasPrefix(".")
 
-                if isHidden && !query.includeHidden {
-                    if isDirectory { enumerator.skipDescendants() }
+                if traversalIsHidden && !query.includeHidden {
+                    if traversalIsDirectory { enumerator.skipDescendants() }
                     continue
                 }
-                if isPackage && !query.includePackages {
-                    if isDirectory { enumerator.skipDescendants() }
+                if traversalIsPackage && !query.includePackages {
+                    if traversalIsDirectory { enumerator.skipDescendants() }
                     continue
                 }
 
                 let relativePath = relativePath(of: url, from: root)
-                guard !(isDirectory && isPackage),
-                      let match = try SmartSearchTextAnalyzer.match(
+                guard let match = try SmartSearchTextAnalyzer.match(
                           plan: plan,
                           filename: url.lastPathComponent,
                           relativePath: relativePath,
@@ -176,9 +177,16 @@ final class LocalSmartSearchService: SmartSearching, @unchecked Sendable {
                     continue
                 }
 
-                let metadata = try url.resourceValues(forKeys: filterKeys)
+                url.removeAllCachedResourceValues()
+                let metadata = try url.resourceValues(forKeys: boundaryKeys.union(filterKeys))
+                let isDirectory = metadata.isDirectory == true
+                let isPackage = metadata.isPackage == true
+                let isHidden = metadata.isHidden == true || url.lastPathComponent.hasPrefix(".")
                 let byteSize = metadata.fileSize.map(Int64.init)
-                guard query.metadata.matches(
+                guard !(isDirectory && isPackage),
+                      (!isHidden || query.includeHidden),
+                      (!isPackage || query.includePackages),
+                      query.metadata.matches(
                     isDirectory: isDirectory,
                     extension: url.pathExtension,
                     byteSize: byteSize,
@@ -239,6 +247,17 @@ final class LocalSmartSearchService: SmartSearching, @unchecked Sendable {
         for component in path.dropFirst(rootPath.count + 1).split(separator: "/") {
             candidatePath += "/" + component
             if try isSymbolicLink(URL(fileURLWithPath: candidatePath)) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func hasSymbolicLinkAncestor(at url: URL) throws -> Bool {
+        var path = ""
+        for component in url.standardizedFileURL.path.split(separator: "/") {
+            path += "/" + component
+            if try isSymbolicLink(URL(fileURLWithPath: path)) {
                 return true
             }
         }
