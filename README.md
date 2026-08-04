@@ -74,9 +74,26 @@ history, and session-only selection and scroll restoration. An open Quick Look
 panel follows selection changes through the same identity and cloud
 materialization safety gates used when it first opens.
 
-The filename filter works only on the directory listing already loaded in
-memory. It is not recursive or file-content search, and it does not download
-cloud-only files.
+**Command-F** filters only the active pane's directory listing already loaded
+in memory. It is not recursive or file-content search, and it does not
+download cloud-only files.
+
+**Command-Shift-F** opens Smart Search, which recursively searches the selected
+roots by filename and relative path. Korean initial-consonant queries work
+alongside ordinary text: for example, `ㅍㄱ` matches `파일관리`, and mixed input
+such as `ㅍㄱ report` requires both clauses. The filter panel can limit results
+to files or folders, extensions, inclusive size bounds, and inclusive
+modification-date bounds. A query and its filters can be saved, renamed,
+reopened, or deleted with **Saved Searches**.
+
+Smart Search reads names, paths, and ordinary provider metadata only. It does
+not read file contents or materialize online-only Google Drive or OneDrive
+items; a provider may therefore omit metadata it has not exposed locally.
+Search results offer Quick Look, Reveal, opening the other pane, copy or move
+to the other pane, and Trash. Before every action Pengrid rechecks the exact
+identity captured during search. If the item changed, the action safely refuses
+it and asks you to search again; submitted copy, move, and Trash work appears
+in the operation center with normal progress and cancellation controls.
 
 ## Safe file operation center
 
