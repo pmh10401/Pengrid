@@ -6,7 +6,9 @@ Status: Approved for implementation planning
 ## Objective
 
 Restore both Pengrid search experiences on top of the safe-operation code line
-and extend recursive Smart Search into a practical file-manager workspace.
+and extend recursive Smart Search into a practical file-manager workspace. Also
+restore a useful Space-bar preview for folders instead of delegating folders to
+the generic system Quick Look representation.
 
 - **Command-F** filters the active pane's already-loaded current-directory
   listing without additional filesystem or network work.
@@ -17,6 +19,8 @@ and extend recursive Smart Search into a practical file-manager workspace.
 - Smart Search adds metadata filters and safe result actions without weakening
   the file-operation queue, Undo authority, archive progress, accessibility, or
   cloud preparation rules completed on `codex/safe-operation-center`.
+- Space keeps system Quick Look for files, packages, and multi-selection. A
+  single ordinary folder opens a read-only, one-level contents preview.
 
 Search itself reads names, relative paths, and ordinary File Provider metadata.
 It never reads file contents and never initiates cloud materialization.
@@ -81,6 +85,35 @@ The search service applies metadata filters before retaining and ranking a
 matching candidate. This bounds memory and sorting work even for broad text
 queries.
 
+### Folder contents preview
+
+The Space command routes a single ordinary directory to a dedicated folder
+preview and retains the existing `QLPreviewPanel` route for files, packages,
+and multi-selection. The folder preview is split into focused units:
+
+- `FolderPreviewModel` owns the captured directory identity, visible child
+  metadata, loading/error state, sort, and cancellation generation.
+- `FolderPreviewListing` performs a nonrecursive, batch-producing directory
+  enumeration through injected filesystem access. It reads only ordinary URL
+  metadata and never invokes `CloudMaterializing`.
+- `FolderPreviewController` owns one preview panel, switches or closes it on a
+  repeated Space/Escape command, and cancels stale listings when selection
+  changes.
+- `FolderPreviewView` renders the folder name and safe location, item count,
+  loading/error state, and a read-only child table.
+
+The listing captures the selected directory's exact `FileIdentity`, validates
+it immediately before enumeration, and validates it again after the final
+batch. A mismatch discards all rows rather than publishing a potentially mixed
+snapshot. Child metadata is display-only authority; this preview exposes no
+child open, navigation, transfer, rename, archive, or Trash action.
+
+The preview enumerates only the directory's immediate children, does not follow
+symbolic links, does not descend into packages, and follows the application's
+current hidden-item setting. Batches make the panel responsive for large local
+or provider-backed folders, and closing or changing selection cancels further
+publication. Default order is folders first and then localized name order.
+
 ## Query and persistence model
 
 `SmartSearchQuery` adds one backward-compatible metadata-filter value containing:
@@ -133,6 +166,12 @@ Search enumeration calls the availability reader for display state but never
 calls `CloudMaterializing`. Online-only results can therefore appear by name and
 path without download. An explicit Quick Look, copy, or move action may enter
 the baseline's existing cloud preparation flow after identity revalidation.
+
+Folder contents preview follows the stricter search rule: it may enumerate a
+provider folder and show already exposed name, type, size, and modification
+metadata, but it never materializes the folder or any online-only child. If the
+provider cannot expose the directory listing without materialization, the panel
+shows an availability error and offers no implicit download or retry action.
 
 ## User interface and commands
 
@@ -187,6 +226,23 @@ policy.
 All controls receive stable accessibility identifiers, explicit labels and
 hints, keyboard focus order, and VoiceOver-safe state descriptions.
 
+### Space folder preview
+
+When exactly one non-package directory is selected, Space opens a dedicated
+preview panel containing:
+
+1. the folder name and a privacy-safe location description;
+2. loading, item-count, or error status;
+3. a read-only table with name, kind, size, and modification date.
+
+The table is nonrecursive and defaults to folders-first localized name order.
+Rows may receive keyboard and VoiceOver focus for inspection, but activating a
+row performs no navigation in this release. Space or Escape closes the panel.
+Changing the workspace selection while it is open reloads a newly selected
+single folder or returns to existing system Quick Look routing for other valid
+selections. Text editing retains command priority, so typing a space never
+opens or closes preview.
+
 ## Error handling and state transitions
 
 - An invalid or missing root fails the search with a root-specific message.
@@ -202,6 +258,12 @@ hints, keyboard focus order, and VoiceOver-safe state descriptions.
   and leaves the stored bytes untouched. It never fabricates or executes a
   fallback query.
 - An action identity mismatch does not mutate, materialize, or preview the path.
+- A folder-preview identity mismatch before or after enumeration discards the
+  listing and shows “Folder changed. Close the preview and try again.”
+- An inaccessible or provider-unavailable folder shows a read-only error state;
+  it never starts materialization as recovery.
+- Closing the folder preview or changing selection cancels stale batches, and a
+  cancelled generation cannot republish rows or errors.
 
 ## Verification
 
@@ -222,6 +284,12 @@ hints, keyboard focus order, and VoiceOver-safe state descriptions.
 - UI/presentation tests: both shortcuts, filter errors and chips, sortable
   columns, result actions, keyboard focus, VoiceOver labels/hints, stable
   identifiers, and absolute-path privacy.
+- Folder-preview tests: Space routing for single ordinary folders versus files,
+  packages, and multi-selection; one-level folders-first listing; hidden-item
+  policy; batching and cancellation; exact identity checks before and after
+  enumeration; zero materialization; provider-unavailable error state; repeated
+  Space/Escape close behavior; selection-change refresh; VoiceOver labels; and
+  read-only row behavior.
 - Regression tests: existing pane filter, Korean-search model/service/performance
   evidence, safe-operation controller/undo/transfer/archive focused suites, and
   app dependency/command policy coverage.
@@ -235,6 +303,10 @@ hints, keyboard focus order, and VoiceOver-safe state descriptions.
   alone does not download online-only content.
 - Replace a result between search and action and confirm Quick Look, copy, move,
   and Trash fail closed.
+- Preview disposable local, Google Drive, and OneDrive folders and confirm the
+  panel lists only immediate children without downloading online-only content;
+  replace the folder during enumeration and confirm the mixed snapshot is not
+  published.
 - Confirm submitted mutations close the search sheet and appear in the operation
   center with valid progress, cancellation, and conservative Undo behavior.
 
