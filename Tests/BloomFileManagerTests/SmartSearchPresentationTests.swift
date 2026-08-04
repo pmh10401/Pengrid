@@ -12,6 +12,17 @@ import Testing
     #expect(implementation.contains("announcementRequested"))
     #expect(implementation.contains("router.transferRequests("))
     #expect(implementation.contains("operationController.runIdentifiedTransfer("))
+    #expect(implementation.contains("let sourcePane = workspace.activePane"))
+    #expect(implementation.contains("let destinationPane ="))
+    #expect(implementation.contains("if operationController.runIdentifiedTransfer("))
+    #expect(implementation.contains("AccessibilityIdentifiers.smartSearchRename"))
+    #expect(implementation.contains("AccessibilityIdentifiers.smartSearchDelete"))
+    #expect(implementation.contains("SmartSearchAnnouncementPosting"))
+    #expect(implementation.contains("onChange(of: store.progressMessage)"))
+    #expect(implementation.contains("Search cancelled"))
+    #expect(implementation.contains("loadFilterDrafts()"))
+    #expect(implementation.contains("sizeDescription(result.item.byteSize)"))
+    #expect(implementation.contains("dateDescription(result.item.modifiedAt)"))
     #expect(!implementation.contains("url.path)"))
 }
 

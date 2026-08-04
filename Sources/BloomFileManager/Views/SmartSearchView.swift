@@ -2,7 +2,12 @@ import AppKit
 import SwiftUI
 
 @MainActor
-private final class LiveSmartSearchAnnouncementPoster {
+protocol SmartSearchAnnouncementPosting: AnyObject {
+    func post(_ message: String)
+}
+
+@MainActor
+final class LiveSmartSearchAnnouncementPoster: SmartSearchAnnouncementPosting {
     func post(_ message: String) {
         let application = NSApplication.shared
         NSAccessibility.post(
@@ -52,13 +57,32 @@ struct SmartSearchView: View {
     @State private var filtersArePresented = false
     @State private var rootPickerIsPresented = false
     @State private var savedSearchName = ""
+    @State private var selectedSavedSearchID: UUID?
     @State private var extensionText = ""
     @State private var minimumBytesText = ""
     @State private var maximumBytesText = ""
     @State private var filterError: String?
     @State private var actionError: String?
     @State private var pendingTrashResults: [SmartSearchResult] = []
-    private let announcer = LiveSmartSearchAnnouncementPoster()
+    private let announcer: any SmartSearchAnnouncementPosting
+
+    init(
+        store: SmartSearchStore,
+        router: SmartSearchActionRouter,
+        workspace: WorkspaceState,
+        operationController: FileOperationController,
+        quickLookController: QuickLookController,
+        materializer: any CloudMaterializing,
+        announcer: any SmartSearchAnnouncementPosting = LiveSmartSearchAnnouncementPoster()
+    ) {
+        self.store = store
+        self.router = router
+        self.workspace = workspace
+        self.operationController = operationController
+        self.quickLookController = quickLookController
+        self.materializer = materializer
+        self.announcer = announcer
+    }
 
     var body: some View {
         VStack(spacing: 12) {
@@ -88,11 +112,16 @@ struct SmartSearchView: View {
                 announcer.post("Found \(store.results.count) search results")
             case .failed:
                 announcer.post(store.errorMessage ?? "Search failed")
-            case .idle, .cancelled:
+            case .cancelled:
+                announcer.post("Search cancelled")
+            case .idle:
                 break
             }
         }
         .onChange(of: actionError) { _, message in
+            if let message { announcer.post(message) }
+        }
+        .onChange(of: store.progressMessage) { _, message in
             if let message { announcer.post(message) }
         }
         .onKeyPress(.space) {
@@ -215,6 +244,7 @@ struct SmartSearchView: View {
                 Text("Files only").tag(SmartSearchItemKind.files)
                 Text("Folders only").tag(SmartSearchItemKind.folders)
             }
+            .accessibilityIdentifier(AccessibilityIdentifiers.smartSearchKind)
             Toggle("Include hidden items", isOn: Binding(
                 get: { store.includeHidden }, set: { store.includeHidden = $0 }
             ))
@@ -222,9 +252,12 @@ struct SmartSearchView: View {
                 get: { store.includePackages }, set: { store.includePackages = $0 }
             ))
             TextField("Extensions, separated by commas", text: $extensionText)
+                .accessibilityIdentifier(AccessibilityIdentifiers.smartSearchExtensions)
             HStack {
                 TextField("Minimum size (bytes)", text: $minimumBytesText)
+                    .accessibilityIdentifier(AccessibilityIdentifiers.smartSearchMinimumSize)
                 TextField("Maximum size (bytes)", text: $maximumBytesText)
+                    .accessibilityIdentifier(AccessibilityIdentifiers.smartSearchMaximumSize)
             }
             Toggle("Modified after", isOn: $hasModifiedAfter)
             if hasModifiedAfter {
@@ -256,11 +289,12 @@ struct SmartSearchView: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 0) {
                 ForEach(SmartSearchResultColumn.allCases) { column in
-                    Button(column.rawValue) { selectedColumn = column }
+                    Button(column.rawValue) { selectSort(column) }
                         .buttonStyle(.plain)
                         .fontWeight(selectedColumn == column ? .semibold : .regular)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .accessibilityLabel("Sort results by \(column.rawValue)")
+                        .accessibilityIdentifier(AccessibilityIdentifiers.smartSearchSort + ".\(column.rawValue.lowercased())")
                 }
             }
             .padding(.horizontal, 8)
@@ -280,7 +314,7 @@ struct SmartSearchView: View {
                     .font(.caption)
                     .tag(result.id)
                     .accessibilityLabel(result.item.name)
-                    .accessibilityValue("\(safeResultLocation(result)), \(result.item.typeDescription), \(availabilityDescription(result.item.availability))")
+                    .accessibilityValue("\(safeResultLocation(result)), \(result.item.typeDescription), \(sizeDescription(result.item.byteSize)), \(dateDescription(result.item.modifiedAt)), \(availabilityDescription(result.item.availability))")
                 }
             }
             .accessibilityIdentifier(AccessibilityIdentifiers.smartSearchResults)
@@ -304,9 +338,29 @@ struct SmartSearchView: View {
             .accessibilityIdentifier(AccessibilityIdentifiers.smartSearchSave)
             .accessibilityHint("Saves the current query and filters")
 
+            Button("Rename Saved") {
+                guard let selectedSavedSearchID else { return }
+                _ = store.renameSavedSearch(id: selectedSavedSearchID, to: savedSearchName)
+            }
+            .disabled(selectedSavedSearchID == nil || savedSearchName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .accessibilityIdentifier(AccessibilityIdentifiers.smartSearchRename)
+
+            Button("Delete Saved", role: .destructive) {
+                guard let selectedSavedSearchID else { return }
+                _ = store.deleteSavedSearch(id: selectedSavedSearchID)
+                self.selectedSavedSearchID = nil
+            }
+            .disabled(selectedSavedSearchID == nil)
+            .accessibilityIdentifier(AccessibilityIdentifiers.smartSearchDelete)
+
             Menu("Saved Searches") {
                 ForEach(store.savedSearches) { record in
-                    Button(record.displayName) { store.openSavedSearch(record) }
+                    Button(record.displayName) {
+                        selectedSavedSearchID = record.id
+                        savedSearchName = record.displayName
+                        store.openSavedSearch(record)
+                        loadFilterDrafts()
+                    }
                 }
             }
             .accessibilityIdentifier(AccessibilityIdentifiers.smartSearchSavedSearches)
@@ -349,22 +403,7 @@ struct SmartSearchView: View {
     }
 
     private var sortedResults: [SmartSearchResult] {
-        store.results.sorted { lhs, rhs in
-            switch selectedColumn {
-            case .name:
-                lhs.item.name.localizedStandardCompare(rhs.item.name) == .orderedAscending
-            case .location:
-                safeResultLocation(lhs).localizedStandardCompare(safeResultLocation(rhs)) == .orderedAscending
-            case .type:
-                lhs.item.typeDescription.localizedStandardCompare(rhs.item.typeDescription) == .orderedAscending
-            case .size:
-                (lhs.item.byteSize ?? -1) > (rhs.item.byteSize ?? -1)
-            case .modified:
-                (lhs.item.modifiedAt ?? .distantPast) > (rhs.item.modifiedAt ?? .distantPast)
-            case .availability:
-                availabilityDescription(lhs.item.availability) < availabilityDescription(rhs.item.availability)
-            }
-        }
+        store.results
     }
 
     private var canSubmit: Bool {
@@ -503,8 +542,9 @@ struct SmartSearchView: View {
 
     private func revealSelectedResult() {
         guard let result = selectedResults.only else { return }
+        let sourcePane = workspace.activePane
         Task {
-            guard await router.reveal(result, in: workspace.activePane) else {
+            guard await router.reveal(result, in: sourcePane) else {
                 actionError = "Item changed. Search again."
                 return
             }
@@ -513,8 +553,9 @@ struct SmartSearchView: View {
 
     private func openContainingFolder() {
         guard let result = selectedResults.only else { return }
+        let destinationPane = workspace.activePaneID == .left ? workspace.right : workspace.left
         Task {
-            guard await router.openContainingFolderInOppositePane(for: result, workspace: workspace) else {
+            guard await router.openContainingFolder(for: result, in: destinationPane) else {
                 actionError = "Item changed. Search again."
                 return
             }
@@ -524,9 +565,9 @@ struct SmartSearchView: View {
     private func transferSelectedResults(mode: TransferMode) {
         let results = selectedResults
         guard !results.isEmpty else { return }
+        let destinationPane = workspace.activePaneID == .left ? workspace.right : workspace.left
+        let destination = destinationPane.currentDirectory
         Task {
-            let destination = (workspace.activePaneID == .left ? workspace.right : workspace.left)
-                .currentDirectory
             let requests: [IdentifiedTransferRequest]
             do {
                 requests = try await router.transferRequests(for: results, destination: destination)
@@ -534,14 +575,17 @@ struct SmartSearchView: View {
                 actionError = "Item changed. Search again."
                 return
             }
-            store.dismiss()
-            dismiss()
-            _ = operationController.runIdentifiedTransfer(
+            if operationController.runIdentifiedTransfer(
                 requests,
                 mode: mode,
                 workspace: workspace,
                 includeSafeRelativePaths: false
-            )
+            ) {
+                store.dismiss()
+                dismiss()
+            } else {
+                actionError = "Could not queue operation. Search remains open."
+            }
         }
     }
 
@@ -558,9 +602,22 @@ struct SmartSearchView: View {
                 }
                 requests.append(request)
             }
-            store.dismiss()
-            dismiss()
-            _ = operationController.trash(requests, workspace: workspace, privacySafeProgress: true)
+            if operationController.trash(requests, workspace: workspace, privacySafeProgress: true) {
+                store.dismiss()
+                dismiss()
+            } else {
+                actionError = "Could not queue operation. Search remains open."
+            }
+        }
+    }
+
+    private func selectSort(_ column: SmartSearchResultColumn) {
+        selectedColumn = column
+        switch column {
+        case .name: store.sort = .name
+        case .size: store.sort = .size
+        case .modified: store.sort = .modifiedAt
+        case .location, .type, .availability: break
         }
     }
 

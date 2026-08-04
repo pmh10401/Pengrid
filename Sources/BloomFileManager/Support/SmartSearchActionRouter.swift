@@ -12,11 +12,16 @@ struct SmartSearchTrashConfirmation: Equatable, Sendable {
 @MainActor
 final class SmartSearchActionRouter {
     private let fileSystem: any FileSystemAccess
+    private let accessCoordinator: CloudLocationScopedAccessCoordinator
 
     private(set) var error: SmartSearchActionError?
 
-    init(fileSystem: any FileSystemAccess = LiveFileSystemAccess()) {
+    init(
+        fileSystem: any FileSystemAccess = LiveFileSystemAccess(),
+        accessCoordinator: CloudLocationScopedAccessCoordinator = .init()
+    ) {
         self.fileSystem = fileSystem
+        self.accessCoordinator = accessCoordinator
     }
 
     func revalidatedRequest(for result: SmartSearchResult) async -> IdentifiedFileRequest? {
@@ -85,6 +90,13 @@ final class SmartSearchActionRouter {
         workspace: WorkspaceState
     ) async -> Bool {
         let targetPane = workspace.activePaneID == .left ? workspace.right : workspace.left
+        return await openContainingFolder(for: result, in: targetPane)
+    }
+
+    func openContainingFolder(
+        for result: SmartSearchResult,
+        in targetPane: FilePaneState
+    ) async -> Bool {
         guard let request = await revalidatedRequest(for: result) else { return false }
         let parent = request.url.deletingLastPathComponent().standardizedFileURL
         await targetPane.navigate(to: parent)
@@ -184,6 +196,14 @@ final class SmartSearchActionRouter {
     }
 
     private func currentIdentity(at url: URL) async -> FileIdentity? {
+        let leases: [CloudLocationScopedAccessLease]
+        do {
+            leases = try accessCoordinator.acquireAccess(for: [url])
+        } catch {
+            self.error = .itemChanged
+            return nil
+        }
+        defer { leases.forEach { $0.finish() } }
         guard !Task.isCancelled,
               let identity = try? await fileSystem.identity(of: url),
               !Task.isCancelled

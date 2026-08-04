@@ -4,6 +4,33 @@ import Testing
 
 @MainActor
 struct SmartSearchActionRouterTests {
+    @Test func manualCloudActionUsesTheRegisteredScopedLeaseAndFailsClosedWhenDenied() async throws {
+        let root = URL(filePath: "/manual-cloud", directoryHint: .isDirectory)
+        let url = root.appending(path: "report.txt")
+        let identity = FileIdentity(entryIdentifier: "report", resolvedIdentifier: "report")
+        let driver = ActionSecurityScopeDriver(permitsAccess: true)
+        let coordinator = CloudLocationScopedAccessCoordinator(driver: driver)
+        coordinator.replaceManualRoots([root])
+        let router = SmartSearchActionRouter(
+            fileSystem: RecordingFileSystem(identities: [url: identity]),
+            accessCoordinator: coordinator
+        )
+
+        #expect(await router.revalidatedRequest(for: actionResult(url: url, identity: identity)) != nil)
+        #expect(driver.startedURLs == [root])
+        #expect(driver.stoppedURLs == [root])
+
+        let denied = CloudLocationScopedAccessCoordinator(
+            driver: ActionSecurityScopeDriver(permitsAccess: false)
+        )
+        denied.replaceManualRoots([root])
+        let deniedRouter = SmartSearchActionRouter(
+            fileSystem: RecordingFileSystem(identities: [url: identity]),
+            accessCoordinator: denied
+        )
+        #expect(await deniedRouter.revalidatedRequest(for: actionResult(url: url, identity: identity)) == nil)
+        #expect(deniedRouter.error == .itemChanged)
+    }
     @Test func replacementCannotBeRevalidatedForAnAction() async {
         let url = URL(filePath: "/search/report.txt")
         let searchIdentity = FileIdentity(
@@ -24,6 +51,28 @@ struct SmartSearchActionRouterTests {
 
         #expect(request == nil)
         #expect(router.error == .itemChanged)
+    }
+
+    @Test func capturedOppositePaneRemainsTheActionTargetAfterPaneSwitch() async {
+        let left = URL(filePath: "/left", directoryHint: .isDirectory)
+        let right = URL(filePath: "/right", directoryHint: .isDirectory)
+        let parent = URL(filePath: "/search", directoryHint: .isDirectory)
+        let url = parent.appending(path: "report.txt")
+        let identity = FileIdentity(entryIdentifier: "report", resolvedIdentifier: "report")
+        let workspace = WorkspaceState(
+            leftURL: left,
+            rightURL: right,
+            listingService: StubDirectoryListingService(values: [parent: [listedItem(at: url)]])
+        )
+        let capturedDestination = workspace.right
+        workspace.activate(.right)
+        let router = SmartSearchActionRouter(fileSystem: RecordingFileSystem(identities: [url: identity]))
+
+        #expect(await router.openContainingFolder(
+            for: actionResult(url: url, identity: identity), in: capturedDestination
+        ))
+        #expect(workspace.right.currentDirectory == parent)
+        #expect(workspace.left.currentDirectory == left)
     }
 
     @Test func transferCarriesSearchAndDestinationIdentities() async throws {
@@ -359,6 +408,16 @@ struct SmartSearchActionRouterTests {
             await Task.yield()
         }
     }
+}
+
+private final class ActionSecurityScopeDriver: SecurityScopedResourceAccessing, @unchecked Sendable {
+    let permitsAccess: Bool
+    private(set) var startedURLs: [URL] = []
+    private(set) var stoppedURLs: [URL] = []
+
+    init(permitsAccess: Bool) { self.permitsAccess = permitsAccess }
+    func startAccessing(_ url: URL) -> Bool { startedURLs.append(url); return permitsAccess }
+    func stopAccessing(_ url: URL) { stoppedURLs.append(url) }
 }
 
 @MainActor

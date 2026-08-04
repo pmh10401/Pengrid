@@ -95,7 +95,8 @@ struct BloomFileManagerApp: App {
             persistence: persistence
         ))
         _smartSearchRouter = State(initialValue: SmartSearchActionRouter(
-            fileSystem: cloudDependencies.fileSystem
+            fileSystem: cloudDependencies.fileSystem,
+            accessCoordinator: cloudDependencies.accessCoordinator
         ))
         let cloudLocations = CloudLocationsStore(
             accessCoordinator: cloudDependencies.accessCoordinator
