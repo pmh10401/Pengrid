@@ -87,31 +87,49 @@ queries.
 
 ### Folder contents preview
 
-The Space command routes a single ordinary directory to a dedicated folder
-preview and retains the existing `QLPreviewPanel` route for files, packages,
-and multi-selection. The folder preview is split into focused units:
+One `WorkspacePreviewCoordinator` owns the mutually exclusive preview modes
+`closed`, `systemQuickLook`, and `folder`. Both the Space command and workspace
+selection observer route through this coordinator. It prevents the existing
+Quick Look selection-update path from materializing an ordinary folder before
+the folder route takes ownership. It also owns generation cancellation, panel
+switching, close behavior, editor-first Space/Escape priority, and restoration
+of table focus.
 
-- `FolderPreviewModel` owns the captured directory identity, visible child
-  metadata, loading/error state, sort, and cancellation generation.
-- `FolderPreviewListing` performs a nonrecursive, batch-producing directory
-  enumeration through injected filesystem access. It reads only ordinary URL
-  metadata and never invokes `CloudMaterializing`.
-- `FolderPreviewController` owns one preview panel, switches or closes it on a
-  repeated Space/Escape command, and cancels stale listings when selection
-  changes.
+The coordinator routes a single ordinary directory to a dedicated folder
+preview and retains the existing `QLPreviewPanel` route for files, packages,
+and multi-selection. A folder request captures pane ID, standardized URL, exact
+`FileIdentity`, and a no-follow item kind. Packages and symbolic links cannot
+enter the folder route. The folder implementation remains split into focused
+units:
+
+- `FolderPreviewModel` owns the captured request, visible child metadata,
+  loading/error state, sort, and cancellation generation.
+- `FolderPreviewListing` performs a nonrecursive, identity-bound directory
+  snapshot through injected filesystem access. It reads only ordinary URL
+  metadata and never invokes `CloudMaterializing` or a coordinated content read.
+- `FolderPreviewController` owns the dedicated panel under the workspace
+  coordinator and cancels stale snapshot work when mode or selection changes.
 - `FolderPreviewView` renders the folder name and safe location, item count,
   loading/error state, and a read-only child table.
 
-The listing captures the selected directory's exact `FileIdentity`, validates
-it immediately before enumeration, and validates it again after the final
-batch. A mismatch discards all rows rather than publishing a potentially mixed
-snapshot. Child metadata is display-only authority; this preview exposes no
-child open, navigation, transfer, rename, archive, or Trash action.
+The live filesystem implementation opens the captured directory with no-follow
+directory flags, verifies the opened descriptor's whole `FileIdentity`, and
+enumerates relative child names and no-follow metadata through that stable
+descriptor. Rows are staged privately; progress may update a loading count, but
+no partial row batch becomes visible. After enumeration, the implementation
+revalidates the descriptor identity, current path identity, request generation,
+and cancellation state before atomically publishing the complete snapshot. This
+stable-handle rule prevents path replacement or ABA replacement from producing
+a mixed snapshot.
 
-The preview enumerates only the directory's immediate children, does not follow
-symbolic links, does not descend into packages, and follows the application's
-current hidden-item setting. Batches make the panel responsive for large local
-or provider-backed folders, and closing or changing selection cancels further
+Child metadata is display-only authority; this preview exposes no child open,
+navigation, transfer, rename, archive, or Trash action. The preview enumerates
+only the directory's immediate children, does not follow symbolic links, and
+does not descend into packages. `DirectoryVisibilityPolicy` is the shared source
+of truth for the pane and preview. The baseline policy explicitly includes
+hidden entries, matching the current pane listing's `contentsOfDirectory(...,
+options: [])`; a future visibility preference must change the shared policy,
+not either consumer independently. Closing or changing selection cancels stale
 publication. Default order is folders first and then localized name order.
 
 ## Query and persistence model
@@ -138,10 +156,13 @@ missing provider value.
 An invalid filter keeps the current results visible, disables Search, and shows
 the error beside the responsible control. It does not silently repair the value.
 
-Saved searches encode the metadata filter. Older records that omit it decode to
-all item kinds with no extension, size, or date restriction. Current complexity
-limits continue to apply only when a saved search is executed; an older record
-that exceeds current limits stays visible for editing.
+Saved searches encode the metadata filter while retaining compatibility with
+the prior `includeDirectories` field. An older record that omits the metadata
+filter decodes to all item kinds when `includeDirectories` is true and files
+only when it is false, with no extension, size, or date restriction. A missing
+legacy `includeDirectories` field retains its historical default. Current
+complexity limits continue to apply only when a saved search is executed; an
+older record that exceeds current limits stays visible for editing.
 
 ## Identity and cloud safety
 
@@ -167,11 +188,13 @@ calls `CloudMaterializing`. Online-only results can therefore appear by name and
 path without download. An explicit Quick Look, copy, or move action may enter
 the baseline's existing cloud preparation flow after identity revalidation.
 
-Folder contents preview follows the stricter search rule: it may enumerate a
-provider folder and show already exposed name, type, size, and modification
-metadata, but it never materializes the folder or any online-only child. If the
-provider cannot expose the directory listing without materialization, the panel
-shows an availability error and offers no implicit download or retry action.
+Folder contents preview follows the stricter search rule: it may ask the file
+provider for ordinary directory and child metadata, but it performs zero
+`CloudMaterializing` calls and zero coordinated content reads. Ordinary provider
+metadata servicing is allowed and is not described as a content download. If
+the provider cannot expose the directory listing under those constraints, the
+panel shows an availability error and offers no implicit download or retry
+action.
 
 ## User interface and commands
 
@@ -240,8 +263,11 @@ Rows may receive keyboard and VoiceOver focus for inspection, but activating a
 row performs no navigation in this release. Space or Escape closes the panel.
 Changing the workspace selection while it is open reloads a newly selected
 single folder or returns to existing system Quick Look routing for other valid
-selections. Text editing retains command priority, so typing a space never
-opens or closes preview.
+selections. All transitions go through `WorkspacePreviewCoordinator`; the
+existing `WorkspaceView` observer must not call either concrete preview
+controller directly. Text editing retains command priority, so typing a space
+or Escape never opens or closes preview. Closing restores focus to the active
+file table.
 
 ## Error handling and state transitions
 
@@ -258,12 +284,14 @@ opens or closes preview.
   and leaves the stored bytes untouched. It never fabricates or executes a
   fallback query.
 - An action identity mismatch does not mutate, materialize, or preview the path.
-- A folder-preview identity mismatch before or after enumeration discards the
-  listing and shows “Folder changed. Close the preview and try again.”
+- A folder request whose pane, URL, exact identity, or no-follow kind no longer
+  matches fails before enumeration. A descriptor or path identity mismatch at
+  final validation discards all privately staged rows and shows “Folder changed.
+  Close the preview and try again.”
 - An inaccessible or provider-unavailable folder shows a read-only error state;
   it never starts materialization as recovery.
-- Closing the folder preview or changing selection cancels stale batches, and a
-  cancelled generation cannot republish rows or errors.
+- Closing the folder preview or changing selection cancels stale snapshot work,
+  and a cancelled generation cannot publish rows or errors.
 
 ## Verification
 
@@ -284,12 +312,16 @@ opens or closes preview.
 - UI/presentation tests: both shortcuts, filter errors and chips, sortable
   columns, result actions, keyboard focus, VoiceOver labels/hints, stable
   identifiers, and absolute-path privacy.
-- Folder-preview tests: Space routing for single ordinary folders versus files,
-  packages, and multi-selection; one-level folders-first listing; hidden-item
-  policy; batching and cancellation; exact identity checks before and after
-  enumeration; zero materialization; provider-unavailable error state; repeated
-  Space/Escape close behavior; selection-change refresh; VoiceOver labels; and
-  read-only row behavior.
+- Folder-preview tests: coordinator mode routing for single ordinary folders
+  versus files, packages, symbolic links, and multi-selection; proof that the
+  selection observer cannot materialize folder content; captured pane/URL/kind
+  validation; stable no-follow descriptor enumeration; private staging and
+  atomic publication; path and descriptor exact-identity validation; ABA
+  replacement refusal; one-level folders-first listing; shared hidden-item
+  policy; cancellation and stale-generation refusal; zero `CloudMaterializing`
+  and coordinated content reads; provider-unavailable error state; repeated
+  Space/Escape close behavior; editor priority and table-focus restoration;
+  selection-change refresh; VoiceOver labels; and read-only row behavior.
 - Regression tests: existing pane filter, Korean-search model/service/performance
   evidence, safe-operation controller/undo/transfer/archive focused suites, and
   app dependency/command policy coverage.
@@ -321,3 +353,12 @@ normative in this design.
 The host broadened the requested reviewer isolation to
 `danger-full-access / disabled`. Before and after review, both relevant worktrees
 had unchanged HEADs, empty status, and empty staged and unstaged diff hashes.
+
+After folder preview was added, a second fresh `sol_advisor_sol_reviewer` on
+GPT-5.6 Sol / High returned `revise`. It required one workspace preview
+coordinator, stable no-follow descriptor enumeration with private staging and
+atomic publication, an enforceable metadata-only cloud rule, an explicit shared
+hidden-item policy, and preservation of legacy `includeDirectories == false` as
+files-only. Those corrections are normative above. This reviewer was likewise
+broadened to `danger-full-access / disabled`; HEAD, status, and staged/unstaged
+diff hashes remained unchanged during its review.
