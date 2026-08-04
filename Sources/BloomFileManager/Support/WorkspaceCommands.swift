@@ -90,6 +90,13 @@ enum WorkspaceFilterCommandActions {
 }
 
 @MainActor
+enum WorkspaceSearchCommandActions {
+    static func showSmartSearch(in workspace: WorkspaceState, store: SmartSearchStore) {
+        store.present(initialRoot: workspace.activePane.currentDirectory)
+    }
+}
+
+@MainActor
 protocol WorkspaceOpening {
     func open(_ url: URL)
 }
@@ -397,6 +404,7 @@ struct WorkspaceCommands: Commands {
 
     let quickLookController: QuickLookController
     let operationController: FileOperationController
+    var smartSearch: SmartSearchStore?
     let storage: StorageAnalysisStore
     let storageCleanupController: StorageCleanupController
     var materializer: any CloudMaterializing = LiveCloudMaterializationService()
@@ -481,6 +489,16 @@ struct WorkspaceCommands: Commands {
             }
             .keyboardShortcut("f", modifiers: .command)
             .disabled(workspace == nil || !policy.canNavigate)
+
+            Button("Smart Search…") {
+                guard let workspace, let smartSearch, policy.canNavigate else { return }
+                WorkspaceSearchCommandActions.showSmartSearch(
+                    in: workspace,
+                    store: smartSearch
+                )
+            }
+            .keyboardShortcut("f", modifiers: [.command, .shift])
+            .disabled(workspace == nil || smartSearch == nil || !policy.canNavigate)
         }
 
         CommandMenu("File Operations") {

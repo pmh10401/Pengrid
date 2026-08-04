@@ -27,6 +27,20 @@ import Testing
             == "operationCenter.continueAfterRecovery"
     )
     #expect(AccessibilityIdentifiers.conflictSheet == "conflictSheet")
+    #expect(AccessibilityIdentifiers.smartSearchSheet == "smartSearch.sheet")
+    #expect(AccessibilityIdentifiers.smartSearchQuery == "smartSearch.query")
+    #expect(AccessibilityIdentifiers.smartSearchResults == "smartSearch.results")
+}
+
+@Test func smartSearchPresentationUsesSafeColumnsAndActionAccessibility() throws {
+    let implementation = try source(named: "Views/SmartSearchView.swift")
+    #expect(implementation.contains("AccessibilityIdentifiers.smartSearchResults"))
+    #expect(implementation.contains("Name"))
+    #expect(implementation.contains("Location"))
+    #expect(implementation.contains("AccessibilityIdentifiers.smartSearchCopy"))
+    #expect(implementation.contains("AccessibilityIdentifiers.smartSearchMove"))
+    #expect(implementation.contains("AccessibilityIdentifiers.smartSearchTrash"))
+    #expect(!implementation.contains("accessibilityValue(result.item.url.path)"))
 }
 
 @Test func storageInspectorIdentifiersRemainStable() {

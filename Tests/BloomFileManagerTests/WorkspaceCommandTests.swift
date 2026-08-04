@@ -2,8 +2,35 @@ import Foundation
 import Testing
 @testable import BloomFileManager
 
+private actor EmptySmartSearchService: SmartSearching {
+    func search(
+        _ query: SmartSearchQuery,
+        progress: @escaping @Sendable (Int) -> Void
+    ) async throws -> [SmartSearchResult] {
+        []
+    }
+}
+
 @MainActor
 struct WorkspaceCommandTests {
+    @Test func smartSearchStartsAtActivePaneRoot() {
+        let workspace = WorkspaceState(
+            leftURL: URL(filePath: "/left"),
+            rightURL: URL(filePath: "/right"),
+            listingService: StubDirectoryListingService(values: [:])
+        )
+        workspace.activate(.right)
+        let store = SmartSearchStore(
+            service: EmptySmartSearchService(),
+            persistence: WorkspacePersistence(defaults: UserDefaults(suiteName: UUID().uuidString)!)
+        )
+
+        WorkspaceSearchCommandActions.showSmartSearch(in: workspace, store: store)
+
+        #expect(store.isPresented)
+        #expect(store.roots == [workspace.activePane.currentDirectory])
+    }
+
     @Test func newFolderCommandCapturesCreatedIdentityInItsOriginalPaneThroughReturn() async throws {
         let root = try TemporaryDirectory()
         defer { root.remove() }

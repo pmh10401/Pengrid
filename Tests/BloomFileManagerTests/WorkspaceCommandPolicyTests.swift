@@ -99,6 +99,14 @@ import Testing
     #expect(!policy.canRename)
 }
 
+@Test func smartSearchShortcutDoesNotReplacePaneFilterShortcut() throws {
+    let commands = try commandSource()
+    #expect(commands.contains("Button(\"Filter Files\")"))
+    #expect(commands.contains(".keyboardShortcut(\"f\", modifiers: .command)"))
+    #expect(commands.contains("Button(\"Smart Search…\")"))
+    #expect(commands.contains(".keyboardShortcut(\"f\", modifiers: [.command, .shift])"))
+}
+
 @Test func extractionAcceptsEverySupportedRegularArchiveSuffix() {
     let suffixes = [
         "zip", "tar", "tar.gz", "tgz", "tar.bz2", "tbz", "tbz2", "tar.xz", "txz"
@@ -130,5 +138,16 @@ private func commandPolicyItem(
         modifiedAt: nil,
         byteSize: nil,
         typeDescription: isDirectory ? "Folder" : "Document"
+    )
+}
+
+private func commandSource() throws -> String {
+    let packageRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    return try String(
+        contentsOf: packageRoot.appending(path: "Sources/BloomFileManager/Support/WorkspaceCommands.swift"),
+        encoding: .utf8
     )
 }

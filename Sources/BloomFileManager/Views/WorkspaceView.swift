@@ -17,6 +17,8 @@ enum WorkspaceQuickLookSelectionRouting {
 struct WorkspaceView: View {
     let workspace: WorkspaceState
     let operationController: FileOperationController
+    let smartSearch: SmartSearchStore
+    let smartSearchRouter: SmartSearchActionRouter
     let favorites: FavoritesStore
     let cloudLocations: CloudLocationsStore
     let comparison: ComparisonCoordinator
@@ -93,6 +95,16 @@ struct WorkspaceView: View {
                     applyToAll: applyToAll
                 )
             }
+        }
+        .sheet(isPresented: smartSearchPresentation) {
+            SmartSearchView(
+                store: smartSearch,
+                router: smartSearchRouter,
+                workspace: workspace,
+                operationController: operationController,
+                quickLookController: quickLookController,
+                materializer: materializer
+            )
         }
         .alert("Move to Trash?", isPresented: trashConfirmationIsPresented) {
             Button("Cancel", role: .cancel) {
@@ -207,6 +219,16 @@ struct WorkspaceView: View {
         } set: { item in
             if item == nil, operationController.pendingConflict != nil {
                 operationController.resolvePendingConflict(.cancel, applyToAll: false)
+            }
+        }
+    }
+
+    private var smartSearchPresentation: Binding<Bool> {
+        Binding {
+            smartSearch.isPresented
+        } set: { isPresented in
+            if !isPresented {
+                smartSearch.dismiss()
             }
         }
     }

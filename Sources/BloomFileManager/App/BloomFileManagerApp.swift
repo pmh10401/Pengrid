@@ -66,6 +66,8 @@ struct BloomFileManagerApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var quickLookController = QuickLookController()
     @State private var operationController: FileOperationController
+    @State private var smartSearch: SmartSearchStore
+    @State private var smartSearchRouter: SmartSearchActionRouter
     @State private var favorites = FavoritesStore()
     @State private var cloudLocations: CloudLocationsStore
     @State private var comparison: ComparisonCoordinator
@@ -79,10 +81,21 @@ struct BloomFileManagerApp: App {
     init() {
         let cloudDependencies = CloudRuntimeDependencies()
         self.cloudDependencies = cloudDependencies
+        let persistence = WorkspacePersistence()
         cloudWorkspaceActions = LiveCloudLocationWorkspaceActions()
         _operationController = State(initialValue: FileOperationController(
             service: cloudDependencies.makeFileOperationService(),
             materializer: cloudDependencies.materializer
+        ))
+        _smartSearch = State(initialValue: SmartSearchStore(
+            service: LocalSmartSearchService(
+                fileSystem: cloudDependencies.fileSystem,
+                scopedAccessCoordinator: cloudDependencies.accessCoordinator
+            ),
+            persistence: persistence
+        ))
+        _smartSearchRouter = State(initialValue: SmartSearchActionRouter(
+            fileSystem: cloudDependencies.fileSystem
         ))
         let cloudLocations = CloudLocationsStore(
             accessCoordinator: cloudDependencies.accessCoordinator
@@ -117,7 +130,6 @@ struct BloomFileManagerApp: App {
             fingerprints: storageDependencies.fingerprints
         ))
 
-        let persistence = WorkspacePersistence()
         let home = FileManager.default.homeDirectoryForCurrentUser
         let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
             ?? home
@@ -137,6 +149,8 @@ struct BloomFileManagerApp: App {
             WorkspaceView(
                 workspace: workspace,
                 operationController: operationController,
+                smartSearch: smartSearch,
+                smartSearchRouter: smartSearchRouter,
                 favorites: favorites,
                 cloudLocations: cloudLocations,
                 comparison: comparison,
@@ -157,6 +171,7 @@ struct BloomFileManagerApp: App {
             WorkspaceCommands(
                 quickLookController: quickLookController,
                 operationController: operationController,
+                smartSearch: smartSearch,
                 storage: storage,
                 storageCleanupController: storageCleanupController,
                 materializer: cloudDependencies.materializer,
