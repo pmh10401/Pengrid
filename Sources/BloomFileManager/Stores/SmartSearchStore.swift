@@ -403,12 +403,26 @@ final class SmartSearchStore {
                 let comparison = lhs.item.name.localizedStandardCompare(rhs.item.name)
                 if comparison != .orderedSame { return comparison == .orderedAscending }
             case .modifiedAt:
-                if lhs.item.modifiedAt != rhs.item.modifiedAt {
-                    return (lhs.item.modifiedAt ?? .distantPast) > (rhs.item.modifiedAt ?? .distantPast)
+                switch (lhs.item.modifiedAt, rhs.item.modifiedAt) {
+                case let (lhsDate?, rhsDate?) where lhsDate != rhsDate:
+                    return lhsDate > rhsDate
+                case (.some, .none):
+                    return true
+                case (.none, .some):
+                    return false
+                default:
+                    break
                 }
             case .size:
-                if lhs.item.byteSize != rhs.item.byteSize {
-                    return (lhs.item.byteSize ?? -1) > (rhs.item.byteSize ?? -1)
+                switch (lhs.item.byteSize, rhs.item.byteSize) {
+                case let (lhsSize?, rhsSize?) where lhsSize != rhsSize:
+                    return lhsSize > rhsSize
+                case (.some, .none):
+                    return true
+                case (.none, .some):
+                    return false
+                default:
+                    break
                 }
             }
             let relativePathComparison = lhs.relativePath.localizedStandardCompare(rhs.relativePath)

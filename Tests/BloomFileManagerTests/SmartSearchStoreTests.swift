@@ -277,6 +277,34 @@ struct SmartSearchStoreTests {
         }
     }
 
+    @Test func metadataSortsDistinguishMissingValuesBeforeUsingIdentityTies() async {
+        let common = (name: "same", relativePath: "same", score: 1.0, path: "/fixture/same", identity: "entry")
+        let dateValues = [
+            searchResult(name: common.name, relativePath: common.relativePath, score: common.score, modifiedAt: nil, byteSize: 1, path: common.path, identity: "missing"),
+            searchResult(name: common.name, relativePath: common.relativePath, score: common.score, modifiedAt: .distantPast, byteSize: 1, path: common.path, identity: common.identity, resolvedIdentity: "z"),
+            searchResult(name: common.name, relativePath: common.relativePath, score: common.score, modifiedAt: .distantPast, byteSize: 1, path: common.path, identity: common.identity, resolvedIdentity: "a")
+        ]
+        let sizeValues = [
+            searchResult(name: common.name, relativePath: common.relativePath, score: common.score, modifiedAt: nil, byteSize: nil, path: common.path, identity: "missing"),
+            searchResult(name: common.name, relativePath: common.relativePath, score: common.score, modifiedAt: nil, byteSize: -1, path: common.path, identity: common.identity, resolvedIdentity: "z"),
+            searchResult(name: common.name, relativePath: common.relativePath, score: common.score, modifiedAt: nil, byteSize: -1, path: common.path, identity: common.identity, resolvedIdentity: "a")
+        ]
+
+        for (sort, values) in [(.modifiedAt, dateValues), (.size, sizeValues)] as [(SmartSearchSort, [SmartSearchResult])] {
+            let store = SmartSearchStore(
+                service: StaticSearchService(values: values),
+                persistence: RecordingSmartSearchPersistence(data: nil)
+            )
+            store.present(initialRoot: URL(fileURLWithPath: "/new"))
+            store.queryText = "match"
+            store.sort = sort
+            store.submit()
+            await waitForStore { store.phase == .results }
+
+            #expect(store.results.map(\.identity.resolvedIdentifier) == ["a", "z", "missing"])
+        }
+    }
+
     @Test func progressRelayRetainsOnlyTheNewestQueuedValue() async {
         let relay = SmartSearchProgressRelay()
         for count in 1...10_000 {
@@ -449,9 +477,10 @@ private func searchResult(
     relativePath: String? = nil,
     score: Double = 1,
     modifiedAt: Date? = nil,
-    byteSize: Int64 = 1,
+    byteSize: Int64? = 1,
     path: String? = nil,
-    identity: String? = nil
+    identity: String? = nil,
+    resolvedIdentity: String? = nil
 ) -> SmartSearchResult {
     let url = URL(filePath: path ?? "/fixture/\(name)")
     let identity = identity ?? name
@@ -459,7 +488,7 @@ private func searchResult(
         item: FileItem(url: url, name: name, isDirectory: false, isPackage: false, modifiedAt: modifiedAt, byteSize: byteSize, typeDescription: "File"),
         relativePath: relativePath ?? name,
         score: score,
-        identity: FileIdentity(entryIdentifier: identity, resolvedIdentifier: identity)
+        identity: FileIdentity(entryIdentifier: identity, resolvedIdentifier: resolvedIdentity ?? identity)
     )
 }
 
