@@ -110,11 +110,19 @@ enum SmartSearchTextAnalyzer {
     }
 
     static func literalTokens(in text: String) -> [String] {
+        try! literalTokens(in: text, analysisStep: {})
+    }
+
+    static func literalTokens(in text: String, analysisStep: AnalysisStep) throws -> [String] {
+        // Check scalars before Foundation performs normalization/tokenization so
+        // a very long candidate can be cancelled before those operations run.
+        for _ in text.unicodeScalars { try analysisStep() }
         let normalized = folded(text)
         var tokens: [String] = []
         normalized.enumerateSubstrings(in: normalized.startIndex..., options: [.byWords, .substringNotRequired, .localized]) { _, range, _, _ in
             tokens.append(String(normalized[range]))
         }
+        try analysisStep()
         return tokens
     }
 

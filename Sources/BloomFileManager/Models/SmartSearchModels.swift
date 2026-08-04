@@ -104,8 +104,9 @@ enum SmartSearchRanker {
 
     static func ranked(_ candidates: [SmartSearchResult], for query: SmartSearchQuery, cancellationCheck: @Sendable () throws -> Void, sortingHook: @Sendable () throws -> Void = {}) throws -> [SmartSearchResult] {
         let plan = try query.executablePlan()
-        var prepared: [PreparedSmartSearchCandidate] = []; prepared.reserveCapacity(candidates.count)
-        for candidate in candidates {
+        let boundedCandidates = candidates.prefix(query.candidateBudget)
+        var prepared: [PreparedSmartSearchCandidate] = []; prepared.reserveCapacity(boundedCandidates.count)
+        for candidate in boundedCandidates {
             try cancellationCheck()
             if !plan.containsInitials { prepared.append(.init(result: candidate, match: .noInitials)) }
             else if let match = try SmartSearchTextAnalyzer.match(plan: plan, filename: candidate.item.name, relativePath: candidate.relativePath, analysisStep: cancellationCheck) { prepared.append(.init(result: candidate, match: match)) }
@@ -117,31 +118,53 @@ enum SmartSearchRanker {
         guard query.isWithinComplexityLimits, plan.clauses.count <= SmartSearchQuery.maximumClauseCount else { throw SmartSearchValidationError.queryTooComplex }
         guard !plan.clauses.isEmpty else { return [] }
         let queryTokens = plan.clauses.compactMap { if case let .literal(token) = $0 { return token }; return nil }
-        let documents = candidates.map { tokens(in: $0.result.relativePath) }
-        let averageLength = Double(max(1, documents.reduce(0) { $0 + $1.count })) / Double(max(1, documents.count))
+        let boundedCandidates = candidates.prefix(query.candidateBudget)
+        var documents: [[String]] = []
+        documents.reserveCapacity(boundedCandidates.count)
+        var tokenCount = 0
+        for candidate in boundedCandidates {
+            try cancellationCheck()
+            let tokens = try SmartSearchTextAnalyzer.literalTokens(
+                in: candidate.result.relativePath,
+                analysisStep: cancellationCheck
+            )
+            documents.append(tokens)
+            tokenCount += tokens.count
+        }
+        let averageLength = Double(max(1, tokenCount)) / Double(max(1, documents.count))
         var frequencies: [String: Double] = [:]
         for token in Set(queryTokens) {
-            try cancellationCheck(); frequencies[token] = Double(documents.filter { $0.contains(token) }.count)
+            var frequency = 0
+            for document in documents {
+                if try contains(token, in: document, cancellationCheck: cancellationCheck) {
+                    frequency += 1
+                }
+            }
+            frequencies[token] = Double(frequency)
         }
-        let count = Double(candidates.count)
+        let count = Double(boundedCandidates.count)
         var values: [(SmartSearchResult, [SmartSearchInitialEvidenceKey], Double)] = []
-        for (candidate, pathTokens) in zip(candidates, documents) {
+        values.reserveCapacity(boundedCandidates.count)
+        for (candidate, pathTokens) in zip(boundedCandidates, documents) {
             try cancellationCheck()
-            let filenameTokens = tokens(in: candidate.result.item.name)
+            let filenameTokens = try SmartSearchTextAnalyzer.literalTokens(
+                in: candidate.result.item.name,
+                analysisStep: cancellationCheck
+            )
             var score = 0.0
             for token in queryTokens {
                 try cancellationCheck()
                 let frequency = frequencies[token] ?? 0
                 let idf = log((count - frequency + 0.5) / (frequency + 0.5) + 1)
-                score += bm25(token, in: pathTokens, average: averageLength, idf: idf)
-                score += 3 * bm25(token, in: filenameTokens, average: averageLength, idf: idf)
-                score += filenameBonus(token, filename: candidate.result.item.name)
+                score += try bm25(token, in: pathTokens, average: averageLength, idf: idf, cancellationCheck: cancellationCheck)
+                score += 3 * (try bm25(token, in: filenameTokens, average: averageLength, idf: idf, cancellationCheck: cancellationCheck))
+                score += try filenameBonus(token, filename: candidate.result.item.name, cancellationCheck: cancellationCheck)
             }
             let evidence = candidate.match.initialEvidence
             for value in evidence { score += initialWeight(value) }
             values.append((.init(item: candidate.result.item, relativePath: candidate.result.relativePath, score: score, identity: candidate.result.identity), evidence.map(\.key).sorted(), score))
         }
-        return try mergeSorted(values, cancellationCheck: cancellationCheck) { left, right in
+        let sorted = try mergeSorted(values, cancellationCheck: cancellationCheck) { left, right in
             try sortingHook(); try cancellationCheck()
             if plan.containsInitials {
                 let evidence = compareEvidence(left.1, right.1)
@@ -153,18 +176,34 @@ enum SmartSearchRanker {
             if comparison == .orderedSame { return lpath == rpath ? left.0.relativePath < right.0.relativePath : lpath < rpath }
             return comparison == .orderedAscending
         }.map(\.0)
+        return Array(sorted.prefix(query.maximumResults))
     }
 
     private static func initialWeight(_ evidence: SmartSearchInitialEvidence) -> Double {
         let field = evidence.key.field == .filename ? 3.0 : 1.0
         return Double(evidence.key.representation.rawValue * 10 + evidence.key.relation.rawValue) * field + evidence.weightedTermFrequency / Double(max(1, evidence.documentLength))
     }
-    private static func bm25(_ token: String, in tokens: [String], average: Double, idf: Double) -> Double {
-        let frequency = Double(tokens.count { $0 == token }); guard frequency > 0 else { return 0 }
-        return idf * (frequency * 2.2) / (frequency + 1.2 * (0.25 + 0.75 * Double(max(1, tokens.count)) / average))
+    private static func contains(_ token: String, in tokens: [String], cancellationCheck: @Sendable () throws -> Void) throws -> Bool {
+        for candidate in tokens {
+            try cancellationCheck()
+            if candidate == token { return true }
+        }
+        return false
     }
-    private static func filenameBonus(_ token: String, filename: String) -> Double {
+    private static func bm25(_ token: String, in tokens: [String], average: Double, idf: Double, cancellationCheck: @Sendable () throws -> Void) throws -> Double {
+        var frequency = 0
+        for candidate in tokens {
+            try cancellationCheck()
+            if candidate == token { frequency += 1 }
+        }
+        guard frequency > 0 else { return 0 }
+        let frequencyValue = Double(frequency)
+        return idf * (frequencyValue * 2.2) / (frequencyValue + 1.2 * (0.25 + 0.75 * Double(max(1, tokens.count)) / average))
+    }
+    private static func filenameBonus(_ token: String, filename: String, cancellationCheck: @Sendable () throws -> Void) throws -> Double {
+        for _ in filename.unicodeScalars { try cancellationCheck() }
         let folded = filename.precomposedStringWithCanonicalMapping.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+        try cancellationCheck()
         if folded == token { return 8 }; if folded.hasPrefix(token) { return 4 }; if folded.contains(token) { return 2 }; return 0
     }
     private static func compareEvidence(_ lhs: [SmartSearchInitialEvidenceKey], _ rhs: [SmartSearchInitialEvidenceKey]) -> Int {

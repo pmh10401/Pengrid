@@ -74,6 +74,25 @@ import Testing
         #expect(largest.candidateBudget <= SmartSearchQuery.maximumCandidateBudget)
     }
 
+    @Test func rankerBoundsCandidatesBeforeScoringAndResultsAfterRanking() throws {
+        let query = try SmartSearchQuery(
+            text: "report",
+            roots: [URL(filePath: "/search/root")],
+            maximumResults: 1
+        )
+        let candidates = (0...query.candidateBudget).map { index in
+            result(
+                name: index == query.candidateBudget ? "report" : "report-\(index).txt",
+                path: "reports/report-\(index).txt"
+            )
+        }
+
+        let ranked = SmartSearchRanker.ranked(candidates, for: query)
+
+        #expect(ranked.count == query.maximumResults)
+        #expect(ranked.first?.item.name != "report")
+    }
+
     @Test func resultCarriesExactFileIdentity() {
         let item = fileItem(name: "report.txt", path: "report.txt")
         let identity = FileIdentity(entryIdentifier: "entry-1", resolvedIdentifier: "resolved-1")
@@ -86,6 +105,21 @@ import Testing
 
         #expect(result.identity == identity)
         #expect(result.id == item.url)
+    }
+
+    @Test func rankerPreservesExactIdentityWhileReconstructingScores() throws {
+        let query = try SmartSearchQuery(text: "report", roots: [URL(filePath: "/search/root")])
+        let identity = FileIdentity(entryIdentifier: "entry-42", resolvedIdentifier: "resolved-42")
+        let candidate = SmartSearchResult(
+            item: fileItem(name: "report.txt", path: "report.txt"),
+            relativePath: "report.txt",
+            score: 0,
+            identity: identity
+        )
+
+        let ranked = SmartSearchRanker.ranked([candidate], for: query)
+
+        #expect(ranked.first?.identity == identity)
     }
 
     @Test func tokenizationIsLocalizedCaseAndDiacriticInsensitive() {
@@ -131,6 +165,20 @@ import Testing
         #expect(SmartSearchRanker.ranked(candidates, for: legacyQuery).isEmpty)
     }
 
+    @Test func rankerCancellationInterruptsLongLiteralTokenization() throws {
+        let query = try SmartSearchQuery(text: "report", roots: [URL(filePath: "/search/root")])
+        let candidate = result(
+            name: "report.txt",
+            path: String(repeating: "report ", count: 1_024)
+        )
+        let probe = RankerCancellationProbe(allowedSteps: 64)
+
+        #expect(throws: RankerProbeError.cancelled) {
+            try SmartSearchRanker.ranked([candidate], for: query, cancellationCheck: probe.step)
+        }
+        #expect(probe.value > 64)
+    }
+
     @Test func savedSearchRecordRoundTripsURLsAndDatesThroughCodable() throws {
         let query = try SmartSearchQuery(
             text: "résumé",
@@ -161,6 +209,32 @@ private final class RankerStepCounter: @unchecked Sendable {
 
     func increment() {
         lock.withLock { count += 1 }
+    }
+}
+
+private enum RankerProbeError: Error {
+    case cancelled
+}
+
+private final class RankerCancellationProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private let allowedSteps: Int
+    private var count = 0
+
+    init(allowedSteps: Int) {
+        self.allowedSteps = allowedSteps
+    }
+
+    var value: Int { lock.withLock { count } }
+
+    func step() throws {
+        let shouldCancel = lock.withLock {
+            count += 1
+            return count > allowedSteps
+        }
+        if shouldCancel {
+            throw RankerProbeError.cancelled
+        }
     }
 }
 
