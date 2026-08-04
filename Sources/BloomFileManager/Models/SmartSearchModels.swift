@@ -187,8 +187,9 @@ struct SmartSearchQuery: Codable, Equatable, Sendable {
     var includePackages: Bool
     var includeDirectories: Bool {
         didSet {
-            guard includeDirectories != oldValue else { return }
-            metadata = metadata.replacing(kind: includeDirectories ? .all : .files)
+            let legacyKind: SmartSearchItemKind = includeDirectories ? .all : .files
+            guard metadata.kind != legacyKind else { return }
+            metadata = metadata.replacing(kind: legacyKind)
         }
     }
     private(set) var metadata: SmartSearchMetadataFilter

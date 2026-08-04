@@ -41,6 +41,24 @@ import Testing
         #expect(dated.matches(isDirectory: false, extension: "txt", byteSize: 1, modifiedAt: moment))
     }
 
+    @Test func metadataFilterRejectsValuesImmediatelyOutsideInclusiveBounds() throws {
+        let firstMoment = Date(timeIntervalSince1970: 1_700_000_000)
+        let lastMoment = firstMoment.addingTimeInterval(10)
+        let filter = try SmartSearchMetadataFilter(
+            kind: .files,
+            extensionText: "txt",
+            minimumBytes: 10,
+            maximumBytes: 20,
+            modifiedAfter: firstMoment,
+            modifiedBefore: lastMoment
+        )
+
+        #expect(!filter.matches(isDirectory: false, extension: "txt", byteSize: 9, modifiedAt: firstMoment))
+        #expect(!filter.matches(isDirectory: false, extension: "txt", byteSize: 21, modifiedAt: lastMoment))
+        #expect(!filter.matches(isDirectory: false, extension: "txt", byteSize: 10, modifiedAt: firstMoment.addingTimeInterval(-0.001)))
+        #expect(!filter.matches(isDirectory: false, extension: "txt", byteSize: 20, modifiedAt: lastMoment.addingTimeInterval(0.001)))
+    }
+
     @Test func metadataFilterCanonicalizesExtensionsAndRejectsInvalidRanges() throws {
         let filter = try SmartSearchMetadataFilter(extensionText: ".PDF, . , e\u{301}XT, ÉXT")
 
@@ -91,6 +109,15 @@ import Testing
         #expect(historical.metadata.kind == .all)
     }
 
+    @Test func decodedMetadataWinsWhenLegacyDirectoryFlagContradictsIt() throws {
+        let data = Data(#"{"text":"documents","roots":["file:///search/root"],"includeHidden":false,"includePackages":false,"includeDirectories":false,"maximumResults":500,"metadata":{"kind":"folders","extensions":[]}}"#.utf8)
+
+        let query = try JSONDecoder().decode(SmartSearchQuery.self, from: data)
+
+        #expect(query.metadata.kind == .folders)
+        #expect(query.includeDirectories)
+    }
+
     @Test func legacyDirectoryToggleRemainsCompatibleWithMetadataCoding() throws {
         var query = try SmartSearchQuery(
             text: "documents",
@@ -105,6 +132,42 @@ import Testing
 
         #expect(query.metadata.kind == .files)
         #expect(decoded.metadata.kind == .files)
+    }
+
+    @Test func legacyDirectoryToggleRestoresAllItemsAndPreservesMetadataBounds() throws {
+        let firstMoment = Date(timeIntervalSince1970: 1_700_000_000)
+        let lastMoment = firstMoment.addingTimeInterval(10)
+        let metadata = try SmartSearchMetadataFilter(
+            kind: .folders,
+            extensionText: "txt",
+            minimumBytes: 10,
+            maximumBytes: 20,
+            modifiedAfter: firstMoment,
+            modifiedBefore: lastMoment
+        )
+        var query = try SmartSearchQuery(
+            text: "documents",
+            roots: [URL(filePath: "/search/root")],
+            metadata: metadata
+        )
+
+        query.includeDirectories = true
+
+        #expect(query.metadata.kind == .all)
+        #expect(query.metadata.extensions == ["txt"])
+        #expect(query.metadata.minimumBytes == 10)
+        #expect(query.metadata.maximumBytes == 20)
+        #expect(query.metadata.modifiedAfter == firstMoment)
+        #expect(query.metadata.modifiedBefore == lastMoment)
+
+        query.includeDirectories = false
+
+        #expect(query.metadata.kind == .files)
+        #expect(query.metadata.extensions == ["txt"])
+        #expect(query.metadata.minimumBytes == 10)
+        #expect(query.metadata.maximumBytes == 20)
+        #expect(query.metadata.modifiedAfter == firstMoment)
+        #expect(query.metadata.modifiedBefore == lastMoment)
     }
 
     @Test func queryTrimsTextStandardizesRootsAndClampsMaximumResults() throws {
