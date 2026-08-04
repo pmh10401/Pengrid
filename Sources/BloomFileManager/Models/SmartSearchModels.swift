@@ -2,6 +2,174 @@ import Foundation
 
 enum SmartSearchValidationError: Error, Equatable, Sendable {
     case emptyText, missingRoots, invalidRoot, queryTooComplex, noSearchableTerms
+    case negativeMinimumBytes, negativeMaximumBytes, invalidByteRange, invalidDateRange
+}
+
+enum SmartSearchItemKind: String, Codable, CaseIterable, Sendable {
+    case all, files, folders
+}
+
+struct SmartSearchMetadataFilter: Codable, Equatable, Sendable {
+    let kind: SmartSearchItemKind
+    let extensions: Set<String>
+    let minimumBytes: Int64?
+    let maximumBytes: Int64?
+    let modifiedAfter: Date?
+    let modifiedBefore: Date?
+
+    init(
+        kind: SmartSearchItemKind = .all,
+        extensionText: String = "",
+        minimumBytes: Int64? = nil,
+        maximumBytes: Int64? = nil,
+        modifiedAfter: Date? = nil,
+        modifiedBefore: Date? = nil
+    ) throws {
+        try Self.validate(
+            minimumBytes: minimumBytes,
+            maximumBytes: maximumBytes,
+            modifiedAfter: modifiedAfter,
+            modifiedBefore: modifiedBefore
+        )
+        self.kind = kind
+        self.extensions = Self.normalizedExtensions(in: extensionText)
+        self.minimumBytes = minimumBytes
+        self.maximumBytes = maximumBytes
+        self.modifiedAfter = modifiedAfter
+        self.modifiedBefore = modifiedBefore
+    }
+
+    func matches(
+        isDirectory: Bool,
+        extension extensionValue: String?,
+        byteSize: Int64?,
+        modifiedAt: Date?
+    ) -> Bool {
+        switch kind {
+        case .all:
+            break
+        case .files where isDirectory:
+            return false
+        case .folders where !isDirectory:
+            return false
+        default:
+            break
+        }
+
+        if !extensions.isEmpty {
+            guard !isDirectory,
+                  let extensionValue,
+                  extensions.contains(Self.normalizedExtension(extensionValue)) else {
+                return false
+            }
+        }
+
+        if minimumBytes != nil || maximumBytes != nil {
+            guard let byteSize else { return false }
+            if let minimumBytes, byteSize < minimumBytes { return false }
+            if let maximumBytes, byteSize > maximumBytes { return false }
+        }
+
+        if modifiedAfter != nil || modifiedBefore != nil {
+            guard let modifiedAt else { return false }
+            if let modifiedAfter, modifiedAt < modifiedAfter { return false }
+            if let modifiedBefore, modifiedAt > modifiedBefore { return false }
+        }
+
+        return true
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind, extensions, minimumBytes, maximumBytes, modifiedAfter, modifiedBefore
+    }
+
+    init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        let decodedExtensions = try values.decodeIfPresent(Set<String>.self, forKey: .extensions) ?? []
+        try self.init(
+            kind: try values.decodeIfPresent(SmartSearchItemKind.self, forKey: .kind) ?? .all,
+            extensionText: decodedExtensions.joined(separator: ","),
+            minimumBytes: try values.decodeIfPresent(Int64.self, forKey: .minimumBytes),
+            maximumBytes: try values.decodeIfPresent(Int64.self, forKey: .maximumBytes),
+            modifiedAfter: try values.decodeIfPresent(Date.self, forKey: .modifiedAfter),
+            modifiedBefore: try values.decodeIfPresent(Date.self, forKey: .modifiedBefore)
+        )
+    }
+
+    func encode(to encoder: any Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(kind, forKey: .kind)
+        try values.encode(extensions.sorted(), forKey: .extensions)
+        try values.encodeIfPresent(minimumBytes, forKey: .minimumBytes)
+        try values.encodeIfPresent(maximumBytes, forKey: .maximumBytes)
+        try values.encodeIfPresent(modifiedAfter, forKey: .modifiedAfter)
+        try values.encodeIfPresent(modifiedBefore, forKey: .modifiedBefore)
+    }
+
+    static func legacy(includeDirectories: Bool) -> Self {
+        Self(
+            kind: includeDirectories ? .all : .files,
+            extensions: [],
+            minimumBytes: nil,
+            maximumBytes: nil,
+            modifiedAfter: nil,
+            modifiedBefore: nil
+        )
+    }
+
+    fileprivate func replacing(kind: SmartSearchItemKind) -> Self {
+        Self(
+            kind: kind,
+            extensions: extensions,
+            minimumBytes: minimumBytes,
+            maximumBytes: maximumBytes,
+            modifiedAfter: modifiedAfter,
+            modifiedBefore: modifiedBefore
+        )
+    }
+
+    private init(
+        kind: SmartSearchItemKind,
+        extensions: Set<String>,
+        minimumBytes: Int64?,
+        maximumBytes: Int64?,
+        modifiedAfter: Date?,
+        modifiedBefore: Date?
+    ) {
+        self.kind = kind
+        self.extensions = extensions
+        self.minimumBytes = minimumBytes
+        self.maximumBytes = maximumBytes
+        self.modifiedAfter = modifiedAfter
+        self.modifiedBefore = modifiedBefore
+    }
+
+    private static func validate(
+        minimumBytes: Int64?,
+        maximumBytes: Int64?,
+        modifiedAfter: Date?,
+        modifiedBefore: Date?
+    ) throws {
+        if let minimumBytes, minimumBytes < 0 { throw SmartSearchValidationError.negativeMinimumBytes }
+        if let maximumBytes, maximumBytes < 0 { throw SmartSearchValidationError.negativeMaximumBytes }
+        if let minimumBytes, let maximumBytes, minimumBytes > maximumBytes { throw SmartSearchValidationError.invalidByteRange }
+        if let modifiedAfter, let modifiedBefore, modifiedAfter > modifiedBefore { throw SmartSearchValidationError.invalidDateRange }
+    }
+
+    private static func normalizedExtensions(in text: String) -> Set<String> {
+        Set(text.split(separator: ",", omittingEmptySubsequences: false).compactMap { component in
+            let normalized = normalizedExtension(String(component))
+            return normalized.isEmpty ? nil : normalized
+        })
+    }
+
+    private static func normalizedExtension(_ value: String) -> String {
+        let withoutLeadingDots = value.trimmingCharacters(in: .whitespacesAndNewlines).drop { $0 == "." }
+        return String(withoutLeadingDots)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .precomposedStringWithCanonicalMapping
+            .folding(options: .caseInsensitive, locale: Locale(identifier: "en_US_POSIX"))
+    }
 }
 
 struct SmartSearchQuery: Codable, Equatable, Sendable {
@@ -17,18 +185,24 @@ struct SmartSearchQuery: Codable, Equatable, Sendable {
     let roots: [URL]
     var includeHidden: Bool
     var includePackages: Bool
-    var includeDirectories: Bool
+    var includeDirectories: Bool {
+        didSet {
+            guard includeDirectories != oldValue else { return }
+            metadata = metadata.replacing(kind: includeDirectories ? .all : .files)
+        }
+    }
+    private(set) var metadata: SmartSearchMetadataFilter
     private(set) var maximumResults: Int
     private let preparedPlan: SmartSearchQueryPlan?
 
     var isWithinComplexityLimits: Bool { preparedPlan != nil }
     var candidateBudget: Int { min(Self.maximumCandidateBudget, max(Self.minimumCandidateBudget, maximumResults * Self.candidateBudgetMultiplier)) }
 
-    init(text: String, roots: [URL], includeHidden: Bool = false, includePackages: Bool = false, includeDirectories: Bool = true, maximumResults: Int = Self.defaultMaximumResults) throws {
-        try self.init(text: text, roots: roots, includeHidden: includeHidden, includePackages: includePackages, includeDirectories: includeDirectories, maximumResults: maximumResults, enforceComplexityLimits: true)
+    init(text: String, roots: [URL], includeHidden: Bool = false, includePackages: Bool = false, includeDirectories: Bool = true, maximumResults: Int = Self.defaultMaximumResults, metadata: SmartSearchMetadataFilter? = nil) throws {
+        try self.init(text: text, roots: roots, includeHidden: includeHidden, includePackages: includePackages, includeDirectories: includeDirectories, maximumResults: maximumResults, metadata: metadata, enforceComplexityLimits: true)
     }
 
-    private init(text: String, roots: [URL], includeHidden: Bool, includePackages: Bool, includeDirectories: Bool, maximumResults: Int, enforceComplexityLimits: Bool) throws {
+    private init(text: String, roots: [URL], includeHidden: Bool, includePackages: Bool, includeDirectories: Bool, maximumResults: Int, metadata: SmartSearchMetadataFilter?, enforceComplexityLimits: Bool) throws {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw SmartSearchValidationError.emptyText }
         guard !roots.isEmpty else { throw SmartSearchValidationError.missingRoots }
@@ -47,7 +221,8 @@ struct SmartSearchQuery: Codable, Equatable, Sendable {
         }
         if enforceComplexityLimits, plan == nil { throw SmartSearchValidationError.queryTooComplex }
         if enforceComplexityLimits, plan?.clauses.isEmpty == true { throw SmartSearchValidationError.noSearchableTerms }
-        self.text = trimmed; self.roots = standardized; self.includeHidden = includeHidden; self.includePackages = includePackages; self.includeDirectories = includeDirectories
+        let resolvedMetadata = metadata ?? .legacy(includeDirectories: includeDirectories)
+        self.text = trimmed; self.roots = standardized; self.includeHidden = includeHidden; self.includePackages = includePackages; self.includeDirectories = resolvedMetadata.kind != .files; self.metadata = resolvedMetadata
         self.maximumResults = maximumResults.clamped(to: Self.maximumResultRange); preparedPlan = plan
     }
 
@@ -58,14 +233,14 @@ struct SmartSearchQuery: Codable, Equatable, Sendable {
     }
     mutating func setMaximumResults(_ value: Int) { maximumResults = value.clamped(to: Self.maximumResultRange) }
 
-    private enum CodingKeys: String, CodingKey { case text, roots, includeHidden, includePackages, includeDirectories, maximumResults }
+    private enum CodingKeys: String, CodingKey { case text, roots, includeHidden, includePackages, includeDirectories, maximumResults, metadata }
     init(from decoder: any Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
-        try self.init(text: values.decode(String.self, forKey: .text), roots: values.decode([URL].self, forKey: .roots), includeHidden: values.decode(Bool.self, forKey: .includeHidden), includePackages: values.decode(Bool.self, forKey: .includePackages), includeDirectories: values.decode(Bool.self, forKey: .includeDirectories), maximumResults: values.decode(Int.self, forKey: .maximumResults), enforceComplexityLimits: false)
+        try self.init(text: values.decode(String.self, forKey: .text), roots: values.decode([URL].self, forKey: .roots), includeHidden: values.decode(Bool.self, forKey: .includeHidden), includePackages: values.decode(Bool.self, forKey: .includePackages), includeDirectories: values.decodeIfPresent(Bool.self, forKey: .includeDirectories) ?? true, maximumResults: values.decode(Int.self, forKey: .maximumResults), metadata: values.decodeIfPresent(SmartSearchMetadataFilter.self, forKey: .metadata), enforceComplexityLimits: false)
     }
     func encode(to encoder: any Encoder) throws {
         var values = encoder.container(keyedBy: CodingKeys.self)
-        try values.encode(text, forKey: .text); try values.encode(roots, forKey: .roots); try values.encode(includeHidden, forKey: .includeHidden); try values.encode(includePackages, forKey: .includePackages); try values.encode(includeDirectories, forKey: .includeDirectories); try values.encode(maximumResults, forKey: .maximumResults)
+        try values.encode(text, forKey: .text); try values.encode(roots, forKey: .roots); try values.encode(includeHidden, forKey: .includeHidden); try values.encode(includePackages, forKey: .includePackages); try values.encode(metadata.kind != .files, forKey: .includeDirectories); try values.encode(maximumResults, forKey: .maximumResults); try values.encode(metadata, forKey: .metadata)
     }
 }
 

@@ -3,6 +3,110 @@ import Testing
 @testable import BloomFileManager
 
 @Suite struct SmartSearchModelTests {
+    @Test func metadataFilterNormalizesExtensionsAndRejectsMissingBoundedMetadata() throws {
+        let filter = try SmartSearchMetadataFilter(
+            kind: .files,
+            extensionText: ".PDF, pdf, TXT",
+            minimumBytes: 10,
+            maximumBytes: 20,
+            modifiedAfter: nil,
+            modifiedBefore: nil
+        )
+
+        #expect(filter.extensions == ["pdf", "txt"])
+        #expect(!filter.matches(isDirectory: false, extension: "pdf", byteSize: nil, modifiedAt: .now))
+        #expect(filter.matches(isDirectory: false, extension: "PDF", byteSize: 10, modifiedAt: .now))
+        #expect(filter.matches(isDirectory: false, extension: "pdf", byteSize: 20, modifiedAt: .now))
+    }
+
+    @Test func legacyFilesOnlySearchStaysFilesOnly() throws {
+        let data = Data(#"{"text":"문서","roots":["file:///tmp"],"includeHidden":false,"includePackages":false,"includeDirectories":false,"maximumResults":500}"#.utf8)
+
+        let query = try JSONDecoder().decode(SmartSearchQuery.self, from: data)
+
+        #expect(query.metadata.kind == .files)
+    }
+
+    @Test func metadataFilterAppliesKindsAndInclusiveDateBounds() throws {
+        let moment = Date(timeIntervalSince1970: 1_700_000_000)
+        let folders = try SmartSearchMetadataFilter(kind: .folders)
+        let dated = try SmartSearchMetadataFilter(
+            modifiedAfter: moment,
+            modifiedBefore: moment
+        )
+
+        #expect(folders.matches(isDirectory: true, extension: nil, byteSize: nil, modifiedAt: nil))
+        #expect(!folders.matches(isDirectory: false, extension: nil, byteSize: nil, modifiedAt: nil))
+        #expect(!dated.matches(isDirectory: false, extension: "txt", byteSize: 1, modifiedAt: nil))
+        #expect(dated.matches(isDirectory: false, extension: "txt", byteSize: 1, modifiedAt: moment))
+    }
+
+    @Test func metadataFilterCanonicalizesExtensionsAndRejectsInvalidRanges() throws {
+        let filter = try SmartSearchMetadataFilter(extensionText: ".PDF, . , e\u{301}XT, ÉXT")
+
+        #expect(filter.extensions == ["pdf", "éxt"])
+        #expect(filter.matches(isDirectory: false, extension: ".ÉXT", byteSize: nil, modifiedAt: nil))
+        #expect(!filter.matches(isDirectory: true, extension: "pdf", byteSize: nil, modifiedAt: nil))
+        #expect(throws: SmartSearchValidationError.negativeMinimumBytes) {
+            try SmartSearchMetadataFilter(minimumBytes: -1)
+        }
+        #expect(throws: SmartSearchValidationError.negativeMaximumBytes) {
+            try SmartSearchMetadataFilter(maximumBytes: -1)
+        }
+        #expect(throws: SmartSearchValidationError.invalidByteRange) {
+            try SmartSearchMetadataFilter(minimumBytes: 21, maximumBytes: 20)
+        }
+        #expect(throws: SmartSearchValidationError.invalidDateRange) {
+            try SmartSearchMetadataFilter(
+                modifiedAfter: Date(timeIntervalSince1970: 2),
+                modifiedBefore: Date(timeIntervalSince1970: 1)
+            )
+        }
+    }
+
+    @Test func metadataCodingRoundTripsAndRetainsLegacyDirectoryFlag() throws {
+        let metadata = try SmartSearchMetadataFilter(
+            kind: .folders,
+            extensionText: "",
+            minimumBytes: 10,
+            maximumBytes: 20,
+            modifiedAfter: Date(timeIntervalSince1970: 1),
+            modifiedBefore: Date(timeIntervalSince1970: 2)
+        )
+        let query = try SmartSearchQuery(
+            text: "documents",
+            roots: [URL(filePath: "/search/root")],
+            metadata: metadata
+        )
+        let encoded = try JSONEncoder().encode(query)
+        let values = try JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+        let decoded = try JSONDecoder().decode(SmartSearchQuery.self, from: encoded)
+        let historicalData = Data(#"{"text":"문서","roots":["file:///tmp"],"includeHidden":false,"includePackages":false,"maximumResults":500}"#.utf8)
+        let historical = try JSONDecoder().decode(SmartSearchQuery.self, from: historicalData)
+
+        #expect(decoded.metadata == metadata)
+        #expect(decoded.includeDirectories)
+        #expect(values?["includeDirectories"] as? Bool == true)
+        #expect(values?["metadata"] != nil)
+        #expect(historical.metadata.kind == .all)
+    }
+
+    @Test func legacyDirectoryToggleRemainsCompatibleWithMetadataCoding() throws {
+        var query = try SmartSearchQuery(
+            text: "documents",
+            roots: [URL(filePath: "/search/root")]
+        )
+
+        query.includeDirectories = false
+        let decoded = try JSONDecoder().decode(
+            SmartSearchQuery.self,
+            from: JSONEncoder().encode(query)
+        )
+
+        #expect(query.metadata.kind == .files)
+        #expect(decoded.metadata.kind == .files)
+    }
+
     @Test func queryTrimsTextStandardizesRootsAndClampsMaximumResults() throws {
         let query = try SmartSearchQuery(
             text: "  Café reports  ",
