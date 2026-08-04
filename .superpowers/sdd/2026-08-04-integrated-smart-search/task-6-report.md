@@ -71,3 +71,10 @@ disabled when no store is supplied.
 - Added and used behavior helpers for action invocation capture, queue handoff, saved filter
   drafts, and injected/coalesced VoiceOver announcements (100-entry progress buckets).
 - Direct helper coverage passed alongside the prior scoped suites.
+
+## Review fix round 3
+
+- Stored the injected announcement coordinator in SwiftUI `@State`, initialized through the
+  backing state in `init`, so its progress-coalescing state survives ordinary view rebuilding.
+- Added direct coverage for searching and action-error announcements, alongside existing
+  progress bucketing and terminal-state coverage.

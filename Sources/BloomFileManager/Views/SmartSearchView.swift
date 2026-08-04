@@ -151,7 +151,7 @@ struct SmartSearchView: View {
     @State private var filterError: String?
     @State private var actionError: String?
     @State private var pendingTrashResults: [SmartSearchResult] = []
-    private let announcements: SmartSearchAnnouncementCoordinator
+    @State private var announcements: SmartSearchAnnouncementCoordinator
 
     init(
         store: SmartSearchStore,
@@ -168,7 +168,7 @@ struct SmartSearchView: View {
         self.operationController = operationController
         self.quickLookController = quickLookController
         self.materializer = materializer
-        announcements = SmartSearchAnnouncementCoordinator(poster: announcer)
+        _announcements = State(initialValue: SmartSearchAnnouncementCoordinator(poster: announcer))
     }
 
     var body: some View {

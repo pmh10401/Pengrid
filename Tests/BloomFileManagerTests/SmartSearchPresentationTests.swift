@@ -14,6 +14,8 @@ import Testing
     #expect(implementation.contains("operationController.runIdentifiedTransfer("))
     #expect(implementation.contains("SmartSearchInvocationCapture"))
     #expect(implementation.contains("SmartSearchMutationHandoff"))
+    #expect(implementation.contains("@State private var announcements"))
+    #expect(implementation.contains("_announcements = State(initialValue:"))
     #expect(implementation.contains("Picker(\"Sort\""))
     #expect(!implementation.contains("selectedColumn"))
     #expect(implementation.contains("AccessibilityIdentifiers.smartSearchRename"))
@@ -72,7 +74,9 @@ import Testing
     coordinator.phase(.cancelled, resultCount: 0, error: nil)
     coordinator.phase(.failed, resultCount: 0, error: "Search failed.")
     coordinator.phase(.results, resultCount: 2, error: nil)
-    #expect(recorder.messages == ["Examined 1 entries…", "Examined 100 entries…", "Search cancelled", "Search failed.", "Found 2 search results"])
+    coordinator.phase(.searching, resultCount: 0, error: nil)
+    coordinator.error("Item changed. Search again.")
+    #expect(recorder.messages == ["Examined 1 entries…", "Examined 100 entries…", "Search cancelled", "Search failed.", "Found 2 search results", "Searching files", "Item changed. Search again."])
 }
 
 @MainActor
