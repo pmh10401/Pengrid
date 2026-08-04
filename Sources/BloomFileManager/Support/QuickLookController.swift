@@ -16,6 +16,15 @@ final class QuickLookController: NSObject, @preconcurrency QLPreviewPanelDataSou
         requestGeneration &+= 1
     }
 
+    /// Invalidates preparation work and closes the concrete system panel without
+    /// requiring a replacement selection. Workspace preview routing owns calls to
+    /// this method so a stale materialization cannot re-open Quick Look.
+    func cancelAndClose() {
+        requestGeneration &+= 1
+        guard isPresenting || !urls.isEmpty else { return }
+        presentPrepared(urls: [])
+    }
+
     func prepareAndPresent(
         requests: [IdentifiedFileRequest],
         materializer: any CloudMaterializing
