@@ -74,6 +74,23 @@ history, and session-only selection and scroll restoration. An open Quick Look
 panel follows selection changes through the same identity and cloud
 materialization safety gates used when it first opens.
 
+### Folder contents preview
+
+Pressing **Space** routes the active selection as follows:
+
+| Selection | Preview |
+| --- | --- |
+| Exactly one ordinary, non-package folder | Pengrid's read-only folder-contents panel |
+| A file, package, symbolic link, or multiple items | System Quick Look |
+
+The folder panel shows one level of immediate children only; it has no open,
+navigation, transfer, rename, archive, or Trash action. Hidden items use the
+same baseline visibility as the pane listing, so they are included. The folder
+route uses descriptor-relative metadata only: it performs no content reads and
+never asks `CloudMaterializing` to download cloud content. A File Provider may
+not expose that metadata locally; in that case the panel says **“Folder contents
+are unavailable without downloading.”**
+
 **Command-F** filters only the active pane's directory listing already loaded
 in memory. It is not recursive or file-content search, and it does not
 download cloud-only files.
