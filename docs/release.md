@@ -1,6 +1,31 @@
 # Pengrid direct release
 
+[한국어](release.ko.md) · **English** · [README](../README.md)
+
 Pengrid is distributed directly for Apple Silicon Macs running macOS 15 or newer. The release does not use App Sandbox entitlements. Its executable filename and compatibility-sensitive internal identity remain `BloomFileManager`.
+
+## Current published Developer Preview
+
+[Pengrid 1.3.0 Developer Preview 3](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.3)
+is the current free binary release:
+
+- DMG: [Pengrid.dmg](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.3/Pengrid.dmg)
+- Tag: `v1.3.0-developer-preview.3`
+- Candidate commit: `5ec4c8789bf7a101b2fbdfd3cb80ccbf062a3bc6`
+- App version: `1.3.0`, build `5`
+- Platform: Apple Silicon, macOS 15 or later
+- Automated result: 851 tests in 66 suites
+- Packaging: release contract tests and arm64 production build passed
+- Artifact checks: app signature, DMG checksum, and mounted app build all passed
+- DMG SHA-256:
+  `1a0498c45ecc13ba57f2a4f8553ef1b0f760cca004cef2d46307780c6b29f0df`
+
+This artifact is ad-hoc signed, not Developer ID signed, and not notarized.
+`spctl --assess --type execute` therefore rejects it as a Developer ID
+distribution, as expected. This is a correctly labelled unsigned Developer
+Preview, not a signed public release. Physical File Provider, removable-volume,
+case-sensitive-volume, keyboard, and accessibility checks that remain
+`NOT RUN` are recorded in the repository verification documents.
 
 ## Version 1.3 release gates
 
@@ -32,11 +57,11 @@ and case-sensitive volumes; disconnect/reconnect during comparison and transfer;
 files; VoiceOver and Full Keyboard Access; Increased Contrast, Reduce Motion, Light Mode,
 and Dark Mode. Automated fixtures and source inspection do not replace those checks.
 
-The distribution gate also remains open until the exact candidate has been signed with a
-valid Developer ID Application identity, accepted by Apple notarization, stapled and
-validated, and accepted by Gatekeeper. An unsigned package is suitable only for local
-inspection or an explicitly labelled Developer Preview; it must not be described as a
-signed public release.
+The optional signed-distribution gate remains open until an exact candidate has
+been signed with a valid Developer ID Application identity, accepted by Apple
+notarization, stapled and validated, and accepted by Gatekeeper. This does not
+block a free package that is explicitly labelled as an unsigned Developer
+Preview. Such a package must never be described as a signed public release.
 
 ## Local unsigned package and Developer Preview
 
@@ -137,6 +162,8 @@ After a successful run, ticket validation is:
 ```bash
 xcrun stapler validate dist/release/Pengrid.app
 ```
+
+## File types and physical-volume limitations
 
 The transfer engine supports regular files, directories, and symbolic links. Device nodes,
 sockets, FIFOs, and other special filesystem entries are rejected with a per-item failure;
