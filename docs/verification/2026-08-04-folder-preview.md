@@ -20,20 +20,21 @@ All commands below used `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Develope
 | PASS — automated | `xcrun swift test --filter DirectoryListingServiceTests` | 2 tests passed. |
 | PASS — automated | `xcrun swift test --filter WorkspaceCommand` | 19 tests in 1 suite passed. |
 | PASS — automated | `xcrun swift test --filter CloudOperationGateTests` | 16 tests in 1 suite passed. |
-| PASS — automated | `xcrun swift test --no-parallel` | 850 tests in 65 suites passed in 37.072 seconds. |
+| PASS — automated | `xcrun swift test --no-parallel` | 851 tests in 66 suites passed in 37.216 seconds. The opt-in provider smoke was explicitly skipped. |
 | PASS — automated | `xcrun swift build -c release` | Production build exited 0. |
 | PASS — automated | `./script/build_and_run.sh --verify` | Debug build exited 0, staged `dist/Pengrid.app`, launched it, and its `pgrep -x BloomFileManager` process check passed. |
 | PASS — automated | `PENGRID_PROVIDER_PREVIEW_SMOKE=1 xcrun swift test --filter ProviderFolderPreviewSmokeTests` | 1 opt-in test passed in 0.046 seconds: direct read-only metadata snapshots against both discovered provider roots. |
 
-The current `FolderPreview` compile emitted the existing AppKit drag/drop
-fixture warnings for `@preconcurrency` conformances in `FavoriteDropTests` and
+The current default full-suite output contained no warning lines. An earlier
+focused `FolderPreview` compile emitted the existing AppKit drag/drop fixture
+warnings for `@preconcurrency` conformances in `FavoriteDropTests` and
 `FileTableViewLifecycleTests`; no warning originated from the provider harness.
 
 ## Structural and automatic feature evidence
 
 | Status | Evidence |
 | --- | --- |
-| PASS — structural/automatic | The coordinator routes exactly one ordinary non-package folder to the folder panel; files, packages, symbolic links, and multi-selection fall back to system Quick Look. The focused 25-test FolderPreview run covers coordinator routing and integration. |
+| PASS — structural/automatic | The coordinator routes exactly one ordinary non-package folder to the folder panel; files, packages, symbolic links, and multi-selection fall back to system Quick Look. The focused FolderPreview run covers coordinator routing and integration. |
 | PASS — structural/automatic | The snapshot path reads only immediate directory entries from a no-follow descriptor, stages the complete result privately, and publishes it once after identity/generation validation. FolderPreview and FileSystemAccess tests cover sorted rows, replacement refusal, cancellation, and stale-result rejection. |
 | PASS — structural/automatic | Preview visibility uses the pane baseline and includes hidden entries; `DirectoryListingServiceTests` verifies the baseline policy. |
 | PASS — structural/automatic | Folder preview does not call `CloudMaterializing` or coordinated content reads. The folder route is metadata-only; no provider snapshot is inferred from this invariant. |
