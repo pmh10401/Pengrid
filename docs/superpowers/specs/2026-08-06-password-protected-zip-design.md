@@ -150,6 +150,8 @@ next queued file operation does not start while this job is waiting.
 For creation:
 
 - accept 8 through 256 UTF-8 bytes;
+- reject an embedded U+0000 scalar because the pinned interoperability API uses
+  NUL-terminated password input;
 - require exact confirmation equality;
 - recommend a 12-character-or-longer passphrase without assigning a misleading
   numeric strength score; and
@@ -162,8 +164,9 @@ without breaking interoperability, so the UI and documentation emphasize a
 long, unique passphrase without claiming that the AES key size alone guarantees
 password strength.
 
-For extraction, accept any non-empty UTF-8 password up to 1,024 bytes. The
-larger compatibility limit does not change the 256-byte creation limit.
+For extraction, accept any non-empty UTF-8 password up to 1,024 bytes, except
+an embedded U+0000 scalar. The larger compatibility limit does not change the
+256-byte creation limit.
 
 Pengrid does not write a password to the pasteboard, but standard secure-field
 paste remains available. It does not offer show-password, remember-password,
@@ -276,6 +279,7 @@ Expose localized English and Korean messages for these categories:
 - password confirmation mismatch or invalid creation length;
 - incorrect password or failed AES authentication;
 - unsupported ZIP encryption;
+- unsupported compression methods inside an archive routed through the protected engine;
 - corrupt or inconsistent ZIP metadata;
 - unsafe archive entry;
 - too many entries or insufficient disk capacity;
