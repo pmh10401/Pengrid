@@ -43,20 +43,34 @@ final class FolderPreviewController: NSObject, FolderPreviewPresenting, NSWindow
     }
 
     func close() {
-        guard previewPanel.isVisible, !isNotifyingClose else { return }
-
-        isProgrammaticClose = true
-        previewPanel.close()
-        isProgrammaticClose = false
+        dismissPanel(programmatically: true)
     }
 
     func handleEscape() {
-        notifyCoordinatorOfClose()
+        dismissPanel(programmatically: false)
     }
 
     func windowWillClose(_ notification: Notification) {
+        model.cancel()
         guard !isProgrammaticClose else { return }
         notifyCoordinatorOfClose()
+    }
+
+    private func dismissPanel(programmatically: Bool) {
+        model.cancel()
+        guard previewPanel.isVisible, !isNotifyingClose else { return }
+
+        if programmatically {
+            closePanelProgrammatically()
+            return
+        }
+        previewPanel.close()
+    }
+
+    private func closePanelProgrammatically() {
+        isProgrammaticClose = true
+        defer { isProgrammaticClose = false }
+        previewPanel.close()
     }
 
     private func notifyCoordinatorOfClose() {
