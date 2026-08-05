@@ -1,202 +1,129 @@
 # Pengrid
 
-Pengrid is a dual-pane macOS file manager. The Swift package, executable, source
-module, bundle identifier, and existing persistence locations retain the internal
-name `BloomFileManager` for compatibility.
+[한국어](README.ko.md) · **English**
 
-## Setup and verification
+Pengrid is a free, open-source, dual-pane file manager for macOS. It combines
+fast keyboard navigation with recursive search, safe queued file operations,
+folder previews, archive tools, directory comparison, and storage inspection.
 
-```bash
-swift test --enable-swift-testing --no-parallel --filter BloomFileManagerTests
-./script/build_and_run.sh --verify
-```
+The Swift package, executable, source module, bundle identifier, and existing
+persistence locations retain the internal name `BloomFileManager` for
+compatibility.
 
-The development bundle is created at `dist/Pengrid.app`. Its executable remains
-`dist/Pengrid.app/Contents/MacOS/BloomFileManager`.
+## Download
 
-## Download the source
+The current build is
+[Pengrid 1.3.0 Developer Preview 3](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.3):
 
-Pengrid is currently available as a developer preview. Download the latest
-reviewed source from the
-[Pengrid repository](https://github.com/pmh10401/Pengrid) as a
-[source ZIP](https://github.com/pmh10401/Pengrid/archive/refs/heads/main.zip),
-or clone the repository:
+- [Download Pengrid.dmg](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.3/Pengrid.dmg)
+- App version: **1.3.0 (build 5)**
+- Requirements: **Apple Silicon Mac, macOS 15 or later**
+- Verification: **851 automated tests in 66 suites**
+- DMG SHA-256:
+  `1a0498c45ecc13ba57f2a4f8553ef1b0f760cca004cef2d46307780c6b29f0df`
+
+> **Developer Preview trust notice**
+>
+> This free DMG is ad-hoc signed. It is not Developer ID signed or notarized,
+> so macOS Gatekeeper may block it. Download it only from this repository's
+> GitHub release page and proceed only if you understand and accept that warning.
+> Pengrid does not ask you to disable macOS security controls.
+
+After downloading, open the DMG and copy `Pengrid.app` to `Applications`.
+See the [release guide](docs/release.md) for artifact verification and local
+packaging instructions.
+
+## Highlights
+
+### Dual-pane workspace
+
+Browse two folders side by side with independent navigation history, sorting,
+selection, and pane-local filename filtering. Copy and move workflows operate
+between the active pane and the other pane.
+
+### Smart Search, including Korean initial consonants
+
+Press **Command-Shift-F** for recursive filename and relative-path search.
+Queries support Korean initial-consonant matching, ordinary text, mixed clauses,
+file/folder type, extension, size, and modified-date filters. Searches can be
+saved and reopened. Result actions revalidate the captured file identity before
+they mutate anything.
+
+### Space-key previews
+
+Press **Space** on one ordinary folder to open Pengrid's read-only, one-level
+folder-contents preview. Files, packages, symbolic links, and multiple
+selections continue to use system Quick Look. Cloud folder preview reads
+available metadata only and does not intentionally download contents.
+
+### Safe operation center
+
+Copy, move, Trash, new-folder, rename, compression, extraction, and undo work
+through one ordered mutation queue. Queued work can be reordered, paused at safe
+checkpoints, or cancelled with cleanup. Retry and undo are offered only when
+identity and fingerprint checks show that repeating or reversing an operation
+will not overwrite or remove replacement data.
+
+### Archives with visible progress
+
+Create and extract **ZIP**, **TAR**, **TAR.GZ/TGZ**, **TAR.BZ2/TBZ/TBZ2**, and
+**TAR.XZ/TXZ** archives. Multi-item preparation uses at most four bounded
+workers; the native archive command remains a single operation. Pengrid reports
+preparation, encoding, and finishing phases without inventing an unreliable byte
+percentage.
+
+### Google Drive and OneDrive
+
+Pengrid discovers Google Drive and OneDrive through macOS File Provider. It does
+not implement direct Google or Microsoft OAuth. Metadata-only search and folder
+preview do not intentionally materialize cloud-only file contents; copy,
+archive, or other content-reading operations may ask macOS to download a source.
+
+### Comparison, Storage Inspector, and accessibility
+
+Directory comparison aligns both sides and supports reviewed transfers with
+identity revalidation. Storage Inspector progressively finds large, old, and
+exact-duplicate local files and sends only explicitly reviewed items to Trash.
+Keyboard access, VoiceOver labels, Reduce Motion, and privacy-preserving status
+text are built into the workspace.
+
+Read the [detailed feature guide](docs/user-guide.md) for commands, behavior,
+safety rules, and current limitations.
+
+## Build from source
+
+Clone the repository:
 
 ```bash
 git clone https://github.com/pmh10401/Pengrid.git
 cd Pengrid
 ```
 
-An unsigned compiled DMG is also available from the
-[Pengrid 1.3 Developer Preview 3](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.3).
-It is not Developer ID signed or notarized, so only open it when you downloaded
-it directly from this repository's GitHub release page.
+Or download the
+[main branch source ZIP](https://github.com/pmh10401/Pengrid/archive/refs/heads/main.zip).
 
-The current verified development target is Apple Silicon on macOS 15 or newer
-with full Xcode installed.
-
-## Build locally
+Build and verify with full Xcode:
 
 ```bash
 env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
-  /usr/bin/xcrun swift test --disable-sandbox --enable-swift-testing --no-parallel --filter BloomFileManagerTests
+  /usr/bin/xcrun swift test --enable-swift-testing --no-parallel \
+  --filter BloomFileManagerTests
 env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
   ./script/build_and_run.sh --verify
 open dist/Pengrid.app
 ```
 
-Locally built or ad-hoc signed artifacts may trigger macOS trust warnings.
-They are development artifacts, not the signed public release.
+The development bundle is created at `dist/Pengrid.app`. Its executable remains
+`dist/Pengrid.app/Contents/MacOS/BloomFileManager`.
 
-Google Drive and OneDrive locations are discovered through macOS File Provider.
-This is macOS File Provider integration, not direct Google or Microsoft
-OAuth/API integration, and Pengrid does not ask for those credentials.
+## Documentation
 
-## Storage Inspector
+- [Detailed feature guide](docs/user-guide.md)
+- [Release and packaging guide](docs/release.md)
+- [Version 1.3 archive verification](docs/verification/version-1.3-archive-checklist.md)
+- [Smart Search verification](docs/verification/2026-08-04-smart-search.md)
+- [Folder preview verification](docs/verification/2026-08-04-folder-preview.md)
+- [Storage Inspector verification](docs/verification/storage-inspector-checklist.md)
 
-Storage Inspector is an on-demand workspace for local folders and directly
-attached volumes. It publishes bounded scan batches progressively, groups only
-fully verified exact duplicates, shows large and long-unmodified files, and
-moves only explicitly reviewed, identity-revalidated selections to the macOS
-Trash while retaining at least one copy. It does not background-index, traverse
-symbolic links or packages, permanently delete files, or analyze cloud-only
-content.
-
-Generated scale, privacy, recovery, and identity-safe cleanup checks are
-automated. Physical storage, real 100,000-file, disconnect/reconnect, Trash,
-accessibility, and appearance checks remain unrun release gates in
-`docs/verification/storage-inspector-checklist.md`.
-
-## Navigation productivity
-
-Each pane has an independent current-folder filename filter, Back and Forward
-history, and session-only selection and scroll restoration. An open Quick Look
-panel follows selection changes through the same identity and cloud
-materialization safety gates used when it first opens.
-
-### Folder contents preview
-
-Pressing **Space** routes the active selection as follows:
-
-| Selection | Preview |
-| --- | --- |
-| Exactly one ordinary, non-package folder | Pengrid's read-only folder-contents panel |
-| A file, package, symbolic link, or multiple items | System Quick Look |
-
-The folder panel shows one level of immediate children only; it has no open,
-navigation, transfer, rename, archive, or Trash action. Hidden items use the
-same baseline visibility as the pane listing, so they are included. The folder
-route uses descriptor-relative metadata only: it performs no content reads and
-never asks `CloudMaterializing` to download cloud content. A File Provider may
-not expose that metadata locally; in that case the panel says **“Folder contents
-are unavailable without downloading.”**
-
-**Command-F** filters only the active pane's directory listing already loaded
-in memory. It is not recursive or file-content search, and it does not
-download cloud-only files.
-
-**Command-Shift-F** opens Smart Search, which recursively searches the selected
-roots by filename and relative path. Korean initial-consonant queries work
-alongside ordinary text: for example, `ㅍㄱ` matches `파일관리`, and mixed input
-such as `ㅍㄱ report` requires both clauses. The filter panel can limit results
-to files or folders, extensions, inclusive size bounds, and inclusive
-modification-date bounds. A query and its filters can be saved, renamed,
-reopened, or deleted with **Saved Searches**.
-
-Smart Search reads names, paths, and ordinary provider metadata only. It does
-not read file contents or materialize online-only Google Drive or OneDrive
-items; a provider may therefore omit metadata it has not exposed locally.
-Search results offer Quick Look, Reveal, opening the other pane, copy or move
-to the other pane, and Trash. Before every action Pengrid rechecks the exact
-identity captured during search. If the item changed, the action safely refuses
-it and asks you to search again; submitted copy, move, and Trash work appears
-in the operation center with normal progress and cancellation controls.
-
-## Safe file operation center
-
-Pengrid sends copy, move, Trash, new-folder, rename, compression, extraction,
-and undo work through one single-worker mutation queue. Waiting jobs start in
-first-in, first-out order and can be moved earlier or later from the operation
-center before they begin. A queued job
-captures the relevant file and destination identities before it waits; if an
-item is replaced or the destination root changes, the job refuses to mutate
-the replacement. The bottom operation-center control shows the current job,
-waiting jobs, and up to 100 newest completed jobs for the current app session.
-History is not written to disk and its labels use item names rather than
-absolute paths.
-
-Pause is cooperative. It takes effect at a safe checkpoint between file items
-or archive phases; Pengrid does not suspend a native archive command that is
-already running. Cancellation likewise finishes the current operation's
-rollback and temporary-file cleanup before the next queued mutation starts.
-If cleanup reports that manual recovery may be needed, automatic queue
-advancement stops and the operation center requires an explicit **Continue
-Queue** action before any waiting mutation can start.
-
-Retry creates a new attempt from the original identity-captured intent. Pengrid
-offers it only when retrying the whole intent cannot repeat an item that already
-succeeded. Storage Inspector cleanup and Undo require an otherwise empty queue
-and cannot be retried as a whole. Undo is deliberately conservative: move,
-rename, and Trash restore
-require the destination identity recorded by the mutation itself and an
-unoccupied original location; removing a new folder, copy, archive, or extracted
-tree requires that same mutation-owned identity and its entire no-follow
-fingerprint to remain unchanged. A replacement conflict, later change, missing
-item, or occupied restore path disables or safely refuses undo instead of
-deleting or overwriting data.
-
-## Archives
-
-Pengrid can create and extract ZIP and TAR-family archives from **File
-Operations** or a file row's contextual menu. Supported archive names are
-**ZIP**, **TAR**, **TAR.GZ** (including **TGZ**), **TAR.BZ2** (including
-**TBZ** and **TBZ2**), and **TAR.XZ** (including **TXZ**). New TAR-family
-archives use the canonical `.tar`, `.tar.gz`, `.tar.bz2`, or `.tar.xz`
-extension; the short extensions are recognized when extracting.
-
-For a multi-item compression, Pengrid first stages the selected sources in a
-private aggregate directory. Only that staging-copy phase runs in parallel,
-with a bounded worker count of no more than four and no more than the available
-processor or source count; the archive command itself is a single local native
-operation. A cloud-backed source may be downloaded first when macOS File
-Provider needs to materialize it.
-
-The status row shows exact top-level item counts while those selected sources
-are prepared. Intermediate visible updates are limited to ten per second while
-the start and completion boundaries are always published. The native `ditto`
-or `tar` encoding phase is intentionally shown as indeterminate because neither
-command exposes a reliable cross-format byte total. **Cancel** remains available
-throughout the operation, and **Finishing archive** appears only after Pengrid
-verifies the staged output and begins its exclusive publication to the
-destination.
-
-Archive destinations are never overwritten. Pengrid chooses an available name
-before starting and exclusive publication rejects a late collision, leaving the
-existing item unchanged. Password-protected archives and 7z and RAR archives
-are not supported in this release.
-
-## Release status
-
-See `docs/release.md`, `docs/verification/version-1.1-checklist.md`,
-`docs/verification/version-1.2-checklist.md`,
-`docs/verification/version-1.3-archive-checklist.md`, and
-`docs/verification/storage-inspector-checklist.md`. The 1.3 GitHub release is
-an explicitly unsigned Developer Preview DMG: it has not been Developer ID
-signed or notarized, and macOS may show a Gatekeeper warning. A signed public
-release still requires the documented Developer ID, notarization, stapling,
-Gatekeeper, and physical-manual gates.
-
-Create and inspect the unsigned local app with:
-
-```bash
-./script/package_release.sh --unsigned
-codesign --verify --deep --strict --verbose=2 dist/release/Pengrid.app
-```
-
-The `--unsigned` mode ad-hoc signs and replaces
-`dist/release/Pengrid.app` and `dist/release/Pengrid.dmg`; it does not produce
-or replace `dist/release/Pengrid.zip`. The `--signed` mode produces and
-publishes the app, DMG, and ZIP. Any ZIP already present after an unsigned run
-may be an older signed release. SwiftPM commands and the internal
-`Sources/BloomFileManager` and `Tests/BloomFileManagerTests` module paths
-remain unchanged.
+Pengrid is under active development. Candidate-specific manual checks that have
+not been run remain marked `NOT RUN` in the verification documents.
