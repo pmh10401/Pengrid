@@ -83,9 +83,9 @@ test_release_tests_run_nonparallel() {
 
 test_version_13_bundle_version_is_declared() {
   assert_file_contains "$SOURCE_SCRIPT" 'APP_VERSION="1.3.0"'
-  assert_file_contains "$SOURCE_SCRIPT" 'BUILD_VERSION="4"'
+  assert_file_contains "$SOURCE_SCRIPT" 'BUILD_VERSION="5"'
   assert_file_contains "$SOURCE_BUILD_SCRIPT" 'APP_VERSION="1.3.0"'
-  assert_file_contains "$SOURCE_BUILD_SCRIPT" 'BUILD_VERSION="4"'
+  assert_file_contains "$SOURCE_BUILD_SCRIPT" 'BUILD_VERSION="5"'
 }
 
 new_fixture() {
