@@ -31,6 +31,7 @@ struct WorkspaceCommandPolicy: Equatable {
     var canTrash: Bool { !isTextEditing && selectionCount > 0 }
     var canOpen: Bool { !isTextEditing && selectionCount > 0 }
     var canQuickLook: Bool { !isTextEditing && selectionCount > 0 }
+    var canClosePreview: Bool { !isTextEditing }
     var canNavigate: Bool { !isTextEditing }
     var canCompress: Bool {
         canRunArchiveOperation && ArchiveSelectionEligibility.canCompress(selectedItems)
@@ -184,6 +185,15 @@ struct WorkspaceQuickLookCommandSelection: Equatable, Sendable {
 }
 
 @MainActor
+enum WorkspaceQuickLookSelectionRouting {
+    static func begin(controller: QuickLookController) -> Bool {
+        guard !Task.isCancelled else { return false }
+        controller.invalidatePendingPreparationForSelectionChange()
+        return controller.isPresenting
+    }
+}
+
+@MainActor
 enum WorkspaceQuickLookCommandRouting {
     static func prepareAndPresent(
         capturedSelection: WorkspaceQuickLookCommandSelection,
@@ -205,6 +215,17 @@ enum WorkspaceQuickLookCommandRouting {
             requests: requests,
             materializer: materializer
         )
+    }
+}
+
+@MainActor
+enum WorkspacePreviewCommandActions {
+    static func closeIfPresented(
+        policy: WorkspaceCommandPolicy,
+        previewCoordinator: WorkspacePreviewCoordinator
+    ) {
+        guard policy.canClosePreview, previewCoordinator.mode != .closed else { return }
+        previewCoordinator.closeAndRestoreFocus()
     }
 }
 
@@ -403,6 +424,7 @@ struct WorkspaceCommands: Commands {
     @FocusedValue(\.storageAnalysisStore) private var focusedStorage
 
     let quickLookController: QuickLookController
+    var previewCoordinator: WorkspacePreviewCoordinator? = nil
     let operationController: FileOperationController
     var smartSearch: SmartSearchStore?
     let storage: StorageAnalysisStore
@@ -429,29 +451,34 @@ struct WorkspaceCommands: Commands {
             .disabled(!policy.canOpen)
 
             Button("Quick Look") {
-                guard policy.canQuickLook, let workspace else { return }
-                let capturedSelection = WorkspaceQuickLookCommandSelection(
+                guard policy.canQuickLook,
+                      let workspace,
+                      let previewCoordinator
+                else { return }
+                let selection = WorkspacePreviewSelection(
                     paneID: workspace.activePaneID,
-                    urls: workspace.selectedURLsForCommands
+                    items: selectedItemsForCommands
                 )
                 Task {
-                    await WorkspaceQuickLookCommandRouting.prepareAndPresent(
-                        capturedSelection: capturedSelection,
-                        currentSelection: {
-                            WorkspaceQuickLookCommandSelection(
-                                paneID: workspace.activePaneID,
-                                urls: workspace.selectedURLsForCommands
-                            )
-                        },
-                        controller: quickLookController,
-                        materializer: materializer,
-                        fileSystem: fileSystem,
-                        accessCoordinator: accessCoordinator
-                    )
+                    await previewCoordinator.toggle(selection: selection)
                 }
             }
             .keyboardShortcut(.space, modifiers: [])
-            .disabled(!policy.canQuickLook)
+            .disabled(!policy.canQuickLook || previewCoordinator == nil)
+
+            Button("Close Preview") {
+                guard let previewCoordinator else { return }
+                WorkspacePreviewCommandActions.closeIfPresented(
+                    policy: policy,
+                    previewCoordinator: previewCoordinator
+                )
+            }
+            .keyboardShortcut(.escape, modifiers: [])
+            .disabled(
+                !policy.canClosePreview
+                    || previewCoordinator == nil
+                    || previewCoordinator?.mode == .closed
+            )
 
             Divider()
 

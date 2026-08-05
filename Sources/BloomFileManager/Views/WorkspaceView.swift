@@ -1,17 +1,8 @@
 import SwiftUI
 
-private struct QuickLookSelectionKey: Hashable {
+private struct PreviewSelectionKey: Hashable {
     let paneID: String
-    let urls: [URL]
-}
-
-@MainActor
-enum WorkspaceQuickLookSelectionRouting {
-    static func begin(controller: QuickLookController) -> Bool {
-        guard !Task.isCancelled else { return false }
-        controller.invalidatePendingPreparationForSelectionChange()
-        return controller.isPresenting
-    }
+    let items: [FileItem]
 }
 
 struct WorkspaceView: View {
@@ -25,6 +16,7 @@ struct WorkspaceView: View {
     let storage: StorageAnalysisStore
     let storageCleanupController: StorageCleanupController
     let quickLookController: QuickLookController
+    let previewCoordinator: WorkspacePreviewCoordinator
     let materializer: any CloudMaterializing
     let fileSystem: any FileSystemAccess
     let cloudWorkspaceActions: any CloudLocationWorkspaceActions
@@ -170,47 +162,26 @@ struct WorkspaceView: View {
                 }
             }
         }
-        .task(id: quickLookSelectionKey) {
-            await updateQuickLookForSelection()
+        .task(id: previewSelectionKey) {
+            await previewCoordinator.selectionDidChange(
+                to: WorkspacePreviewSelection(
+                    paneID: workspace.activePaneID,
+                    items: selectedItemsForPreview
+                )
+            )
         }
     }
 
-    private var quickLookSelectionKey: QuickLookSelectionKey {
-        QuickLookSelectionKey(
+    private var previewSelectionKey: PreviewSelectionKey {
+        PreviewSelectionKey(
             paneID: workspace.activePaneID.rawValue,
-            urls: workspace.selectedURLsForCommands
+            items: selectedItemsForPreview
         )
     }
 
-    private func updateQuickLookForSelection() async {
-        guard WorkspaceQuickLookSelectionRouting.begin(
-            controller: quickLookController
-        ) else { return }
-        let urls = workspace.selectedURLsForCommands
-        guard !urls.isEmpty else {
-            await quickLookController.updateIfPresented(
-                requests: [],
-                materializer: materializer
-            )
-            return
-        }
-        let requests = await WorkspaceOpenActions.identifiedRequests(
-            for: urls,
-            fileSystem: fileSystem,
-            accessCoordinator: cloudAccessCoordinator
-        )
-        guard !Task.isCancelled else { return }
-        guard let requests else {
-            await quickLookController.updateIfPresented(
-                requests: [],
-                materializer: materializer
-            )
-            return
-        }
-        await quickLookController.updateIfPresented(
-            requests: requests,
-            materializer: materializer
-        )
+    private var selectedItemsForPreview: [FileItem] {
+        let selectedURLs = Set(workspace.selectedURLsForCommands)
+        return workspace.activePane.items.filter { selectedURLs.contains($0.url) }
     }
 
     private var pendingConflict: Binding<IdentifiedFileConflict?> {

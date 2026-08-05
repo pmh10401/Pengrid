@@ -123,6 +123,20 @@ import Testing
     }
 }
 
+@Test func textEditingKeepsSpaceAndEscapePriority() {
+    let folder = commandPolicyItem(named: "folder", isDirectory: true)
+    let policy = WorkspaceCommandPolicy(
+        selectionCount: 1,
+        isOperationRunning: false,
+        pasteboardHasFileURLs: false,
+        selectedItems: [folder],
+        isTextEditing: true
+    )
+
+    #expect(!policy.canQuickLook)
+    #expect(!policy.canClosePreview)
+}
+
 private func commandPolicyItem(
     named name: String,
     isDirectory: Bool = false

@@ -61,10 +61,20 @@ struct StorageInspectorRuntimeDependencies {
     let fingerprints: any StorageEntryFingerprintReading
 }
 
+@MainActor
+private final class WorkspacePreviewCloseBinding {
+    weak var previewCoordinator: WorkspacePreviewCoordinator?
+
+    func closePreview() {
+        previewCoordinator?.closeAndRestoreFocus()
+    }
+}
+
 @main
 struct BloomFileManagerApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-    @State private var quickLookController = QuickLookController()
+    @State private var quickLookController: QuickLookController
+    @State private var previewCoordinator: WorkspacePreviewCoordinator
     @State private var operationController: FileOperationController
     @State private var smartSearch: SmartSearchStore
     @State private var smartSearchRouter: SmartSearchActionRouter
@@ -79,6 +89,8 @@ struct BloomFileManagerApp: App {
     private let cloudWorkspaceActions: LiveCloudLocationWorkspaceActions
 
     init() {
+        let quickLookController = QuickLookController()
+        _quickLookController = State(initialValue: quickLookController)
         let cloudDependencies = CloudRuntimeDependencies()
         self.cloudDependencies = cloudDependencies
         let persistence = WorkspacePersistence()
@@ -135,14 +147,33 @@ struct BloomFileManagerApp: App {
         let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
             ?? home
         let restored = persistence.restore(home: home, downloads: downloads)
-        _workspace = State(initialValue: WorkspaceState(
+        let workspace = WorkspaceState(
             restored: restored,
             listingService: cloudDependencies.makeDirectoryListingService(),
             monitor: cloudDependencies.makeDirectoryMonitor(),
             persistence: persistence,
             leftFallbackURL: home,
             rightFallbackURL: downloads
-        ))
+        )
+        _workspace = State(initialValue: workspace)
+
+        let previewCloseBinding = WorkspacePreviewCloseBinding()
+        let folderPreviewModel = FolderPreviewModel(
+            listing: LiveFolderPreviewListing(fileSystem: cloudDependencies.fileSystem)
+        )
+        let folderPreviewController = FolderPreviewController(
+            model: folderPreviewModel,
+            onClose: { previewCloseBinding.closePreview() }
+        )
+        let previewCoordinator = WorkspacePreviewCoordinator(
+            fileSystem: cloudDependencies.fileSystem,
+            quickLookController: quickLookController,
+            folderPresenter: folderPreviewController,
+            materializer: cloudDependencies.materializer,
+            restoreFocus: { workspace.activePane.requestTableFocus() }
+        )
+        previewCloseBinding.previewCoordinator = previewCoordinator
+        _previewCoordinator = State(initialValue: previewCoordinator)
     }
 
     var body: some Scene {
@@ -158,6 +189,7 @@ struct BloomFileManagerApp: App {
                 storage: storage,
                 storageCleanupController: storageCleanupController,
                 quickLookController: quickLookController,
+                previewCoordinator: previewCoordinator,
                 materializer: cloudDependencies.materializer,
                 fileSystem: cloudDependencies.fileSystem,
                 cloudWorkspaceActions: cloudWorkspaceActions,
@@ -171,6 +203,7 @@ struct BloomFileManagerApp: App {
         .commands {
             WorkspaceCommands(
                 quickLookController: quickLookController,
+                previewCoordinator: previewCoordinator,
                 operationController: operationController,
                 smartSearch: smartSearch,
                 storage: storage,
