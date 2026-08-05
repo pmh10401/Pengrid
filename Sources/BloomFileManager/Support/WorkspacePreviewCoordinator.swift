@@ -82,7 +82,7 @@ final class WorkspacePreviewCoordinator {
             cancelConcretePresenters()
         }
         guard !selection.items.isEmpty,
-              isCurrent(selection, generation: routeGeneration)
+              shouldContinueRoute(selection, generation: routeGeneration)
         else { return }
 
         if let item = ordinaryFolder(in: selection) {
@@ -97,7 +97,7 @@ final class WorkspacePreviewCoordinator {
         selection: WorkspacePreviewSelection,
         generation routeGeneration: UInt
     ) async {
-        guard isCurrent(selection, generation: routeGeneration) else { return }
+        guard shouldContinueRoute(selection, generation: routeGeneration) else { return }
         let request: FolderPreviewRequest?
         do {
             request = try await fileSystem.captureFolderPreviewRequest(
@@ -108,10 +108,10 @@ final class WorkspacePreviewCoordinator {
             // Provider or access failure is not a reason to materialize a
             // folder. A successfully captured `nil` (for example, a symlink)
             // remains the explicit system Quick Look fallback below.
-            closeIfCurrent(selection, generation: routeGeneration)
+            closeIfBound(selection, generation: routeGeneration)
             return
         }
-        guard isCurrent(selection, generation: routeGeneration) else { return }
+        guard shouldContinueRoute(selection, generation: routeGeneration) else { return }
 
         guard let request else {
             await routeSystemQuickLook(selection: selection, generation: routeGeneration)
@@ -120,16 +120,16 @@ final class WorkspacePreviewCoordinator {
         guard request.paneID == selection.paneID,
               request.url.standardizedFileURL == item.url.standardizedFileURL,
               request.kind == .ordinaryDirectory,
-              isCurrent(selection, generation: routeGeneration)
+              shouldContinueRoute(selection, generation: routeGeneration)
         else {
-            closeIfCurrent(selection, generation: routeGeneration)
+            closeIfBound(selection, generation: routeGeneration)
             return
         }
 
         // Capturing and presenting a folder request is metadata-only. In
         // particular, this path never invokes the cloud materializer.
         quickLookController.cancelAndClose()
-        guard isCurrent(selection, generation: routeGeneration) else { return }
+        guard shouldContinueRoute(selection, generation: routeGeneration) else { return }
         mode = .folder(request)
         folderPresenter.present(request: request)
     }
@@ -138,27 +138,28 @@ final class WorkspacePreviewCoordinator {
         selection: WorkspacePreviewSelection,
         generation routeGeneration: UInt
     ) async {
-        guard isCurrent(selection, generation: routeGeneration) else { return }
+        guard shouldContinueRoute(selection, generation: routeGeneration) else { return }
         var requests: [IdentifiedFileRequest] = []
         for item in selection.items {
-            guard isCurrent(selection, generation: routeGeneration),
-                  let identity = try? await fileSystem.identity(of: item.url)
-            else {
-                closeIfCurrent(selection, generation: routeGeneration)
+            guard shouldContinueRoute(selection, generation: routeGeneration) else { return }
+            let capturedIdentity = try? await fileSystem.identity(of: item.url)
+            guard shouldContinueRoute(selection, generation: routeGeneration) else { return }
+            guard let identity = capturedIdentity else {
+                closeIfBound(selection, generation: routeGeneration)
                 return
             }
             requests.append(IdentifiedFileRequest(url: item.url, identity: identity))
         }
-        guard isCurrent(selection, generation: routeGeneration) else { return }
+        guard shouldContinueRoute(selection, generation: routeGeneration) else { return }
 
         mode = .systemQuickLook
         await quickLookController.prepareAndPresent(
             requests: requests,
             materializer: materializer
         )
-        guard isCurrent(selection, generation: routeGeneration) else { return }
+        guard shouldContinueRoute(selection, generation: routeGeneration) else { return }
         if !quickLookController.isPresenting {
-            closeIfCurrent(selection, generation: routeGeneration)
+            closeIfBound(selection, generation: routeGeneration)
         }
     }
 
@@ -171,20 +172,36 @@ final class WorkspacePreviewCoordinator {
         return item
     }
 
-    private func isCurrent(
+    private func isBoundToCurrentRoute(
         _ selection: WorkspacePreviewSelection,
         generation expectedGeneration: UInt
     ) -> Bool {
-        !Task.isCancelled
-            && generation == expectedGeneration
+        generation == expectedGeneration
             && activeSelection == selection
     }
 
-    private func closeIfCurrent(
+    /// Cancellation and route binding are independent. A cancelled task may
+    /// still own the current selection; clear that route, but never let a
+    /// superseded generation close newer state.
+    private func shouldContinueRoute(
+        _ selection: WorkspacePreviewSelection,
+        generation expectedGeneration: UInt
+    ) -> Bool {
+        guard isBoundToCurrentRoute(selection, generation: expectedGeneration) else {
+            return false
+        }
+        guard !Task.isCancelled else {
+            closeIfBound(selection, generation: expectedGeneration)
+            return false
+        }
+        return true
+    }
+
+    private func closeIfBound(
         _ selection: WorkspacePreviewSelection,
         generation expectedGeneration: UInt
     ) {
-        guard isCurrent(selection, generation: expectedGeneration) else { return }
+        guard isBoundToCurrentRoute(selection, generation: expectedGeneration) else { return }
         activeSelection = nil
         mode = .closed
         cancelConcretePresenters()

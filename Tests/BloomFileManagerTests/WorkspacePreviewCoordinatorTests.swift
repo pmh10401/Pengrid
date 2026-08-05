@@ -140,6 +140,39 @@ struct WorkspacePreviewCoordinatorTests {
         #expect(folderPresenter.presentedRequests.isEmpty)
         #expect(quickLookPresenter.history == [[second.url]])
     }
+
+    @Test func cancelledMaterializationClearsRouteSoNextSpaceCanOpen() async {
+        let file = previewItem("cancelled.txt", isDirectory: false)
+        let identity = FileIdentity(entryIdentifier: "cancelled", resolvedIdentifier: "cancelled")
+        let materializer = SuspendedPreviewMaterializer()
+        let quickLook = QuickLookController(onPresent: { _ in })
+        let coordinator = WorkspacePreviewCoordinator(
+            fileSystem: RecordingFileSystem(identities: [file.url: identity]),
+            quickLookController: quickLook,
+            folderPresenter: RecordingFolderPreviewPresenter(),
+            materializer: materializer,
+            restoreFocus: {}
+        )
+        let selection = WorkspacePreviewSelection(paneID: .left, items: [file])
+
+        let cancelledRoute = Task { @MainActor in
+            await coordinator.toggle(selection: selection)
+        }
+        #expect(await waitForPreviewCoordinator("materialization to suspend") {
+            await materializer.hasStarted
+        })
+        cancelledRoute.cancel()
+        await materializer.release()
+        await cancelledRoute.value
+
+        #expect(coordinator.mode == .closed)
+        #expect(!quickLook.isPresenting)
+
+        await coordinator.toggle(selection: selection)
+
+        #expect(coordinator.mode == .systemQuickLook)
+        #expect(quickLook.isPresenting)
+    }
 }
 
 @MainActor
@@ -172,6 +205,52 @@ private final class FocusRecorder {
     func restore() {
         count += 1
     }
+}
+
+private actor SuspendedPreviewMaterializer: CloudMaterializing {
+    private var hasSuspended = false
+    private var continuation: CheckedContinuation<Void, Never>?
+    private(set) var hasStarted = false
+
+    func materialize(
+        _ requests: [IdentifiedFileRequest],
+        purpose: CloudPreparationPurpose,
+        progress: @Sendable (CloudMaterializationProgress) async -> Void
+    ) async -> CloudMaterializationResult {
+        hasStarted = true
+        if !hasSuspended {
+            hasSuspended = true
+            await withCheckedContinuation { continuation = $0 }
+        }
+        return CloudMaterializationResult(
+            preparedRequests: requests,
+            failures: [],
+            wasCancelled: false
+        )
+    }
+
+    func release() {
+        continuation?.resume()
+        continuation = nil
+    }
+}
+
+@MainActor
+private func waitForPreviewCoordinator(
+    _ description: String,
+    timeout: Duration = .seconds(1),
+    _ condition: @escaping @MainActor () async -> Bool
+) async -> Bool {
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: timeout)
+    while !(await condition()) {
+        guard clock.now < deadline else {
+            Issue.record("Timed out waiting for \(description).")
+            return false
+        }
+        await Task.yield()
+    }
+    return true
 }
 
 private func previewItem(_ name: String, isDirectory: Bool, isPackage: Bool = false) -> FileItem {
