@@ -32,6 +32,24 @@ import Testing
     #expect(AccessibilityIdentifiers.smartSearchResults == "smartSearch.results")
 }
 
+@Test func folderPreviewAccessibilityIdentifiersAndAnnouncementsRemainStable() throws {
+    #expect(AccessibilityIdentifiers.folderPreviewPanel == "folderPreview.panel")
+    #expect(AccessibilityIdentifiers.folderPreviewTitle == "folderPreview.title")
+    #expect(AccessibilityIdentifiers.folderPreviewParent == "folderPreview.parent")
+    #expect(AccessibilityIdentifiers.folderPreviewStatus == "folderPreview.status")
+    #expect(AccessibilityIdentifiers.folderPreviewTable == "folderPreview.table")
+
+    let implementation = try source(named: "Views/FolderPreviewView.swift")
+    #expect(implementation.contains("AccessibilityIdentifiers.folderPreviewPanel"))
+    #expect(implementation.contains("AccessibilityIdentifiers.folderPreviewStatus"))
+    #expect(implementation.contains(".accessibilityLabel(\"Folder preview status\")"))
+    #expect(implementation.contains(".accessibilityValue(model.statusText)"))
+    #expect(implementation.contains("NSAccessibility.post("))
+    #expect(implementation.contains("notification: .announcementRequested"))
+    #expect(implementation.contains(".announcement: status"))
+    #expect(!implementation.contains("url.path"))
+}
+
 @Test func smartSearchPresentationUsesSafeColumnsAndActionAccessibility() throws {
     let implementation = try source(named: "Views/SmartSearchView.swift")
     #expect(implementation.contains("AccessibilityIdentifiers.smartSearchResults"))
