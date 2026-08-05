@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 
 enum WorkspacePreviewMode: Equatable, Sendable {
     case closed
@@ -20,18 +21,18 @@ protocol FolderPreviewPresenting: AnyObject {
 /// The one authority for workspace Space-preview transitions. It keeps the
 /// concrete system and folder presenters mutually exclusive and rejects every
 /// async result whose captured selection or generation is no longer current.
-@MainActor
+@MainActor @Observable
 final class WorkspacePreviewCoordinator {
     private(set) var mode: WorkspacePreviewMode = .closed
 
-    private let fileSystem: any FileSystemAccess
-    private let quickLookController: QuickLookController
-    private let folderPresenter: any FolderPreviewPresenting
-    private let materializer: any CloudMaterializing
-    private let restoreFocus: @MainActor () -> Void
+    @ObservationIgnored private let fileSystem: any FileSystemAccess
+    @ObservationIgnored private let quickLookController: QuickLookController
+    @ObservationIgnored private let folderPresenter: any FolderPreviewPresenting
+    @ObservationIgnored private let materializer: any CloudMaterializing
+    @ObservationIgnored private let restoreFocus: @MainActor () -> Void
 
-    private var generation: UInt = 0
-    private var activeSelection: WorkspacePreviewSelection?
+    @ObservationIgnored private var generation: UInt = 0
+    @ObservationIgnored private var activeSelection: WorkspacePreviewSelection?
 
     init(
         fileSystem: any FileSystemAccess,

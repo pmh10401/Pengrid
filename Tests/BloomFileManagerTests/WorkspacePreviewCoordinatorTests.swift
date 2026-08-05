@@ -1,9 +1,37 @@
 import Foundation
+import Observation
 import Testing
 @testable import BloomFileManager
 
 @MainActor
 struct WorkspacePreviewCoordinatorTests {
+    @Test func openingFolderPreviewInvalidatesModeObservation() async {
+        let folder = previewItem("folder", isDirectory: true)
+        let request = folderRequest(for: folder, token: "folder")
+        let recorder = ModeObservationRecorder()
+        let coordinator = WorkspacePreviewCoordinator(
+            fileSystem: RecordingFileSystem(
+                identities: [folder.url: request.identity],
+                folderPreviewRequests: [folder.url: request]
+            ),
+            quickLookController: QuickLookController(onPresent: { _ in }),
+            folderPresenter: RecordingFolderPreviewPresenter(),
+            materializer: InMemoryCloudMaterializer(),
+            restoreFocus: {}
+        )
+
+        withObservationTracking {
+            _ = coordinator.mode
+        } onChange: {
+            recorder.recordInvalidation()
+        }
+
+        await coordinator.toggle(selection: .init(paneID: .left, items: [folder]))
+
+        #expect(recorder.invalidationCount == 1)
+        #expect(coordinator.mode == .folder(request))
+    }
+
     @Test func ordinaryFolderUsesFolderModeWithoutMaterialization() async {
         let folder = previewItem("folder", isDirectory: true)
         let request = folderRequest(for: folder, token: "folder")
@@ -172,6 +200,23 @@ struct WorkspacePreviewCoordinatorTests {
 
         #expect(coordinator.mode == .systemQuickLook)
         #expect(quickLook.isPresenting)
+    }
+}
+
+private final class ModeObservationRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    var invalidationCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return count
+    }
+
+    func recordInvalidation() {
+        lock.lock()
+        count += 1
+        lock.unlock()
     }
 }
 
