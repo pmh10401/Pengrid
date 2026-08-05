@@ -76,6 +76,37 @@ VoiceOver checks below.
   The existing `@preconcurrency` and weak-variable compiler warnings remain;
   this change introduced no new warning category.
 
+- [x] **PASS — 2026-08-06 — Developer Preview 3 publication:** The exact
+  `v1.3.0-developer-preview.3` candidate
+  `5ec4c8789bf7a101b2fbdfd3cb80ccbf062a3bc6`, version 1.3.0 (build 5),
+  passed the full serial Swift Testing run with **851 tests in 66 suites**.
+  Release packaging contract tests and the Apple Silicon arm64 production
+  build also exited 0.
+
+  ```bash
+  DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+    swift test --enable-swift-testing --no-parallel \
+    --filter BloomFileManagerTests
+  DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+    ./script/tests/package_release_contract_tests.sh
+  DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+    ./script/package_release.sh --unsigned
+  ```
+
+  The package script produced an arm64, ad-hoc-signed app and verified DMG.
+  Independent checks passed `codesign --verify --deep --strict`,
+  `hdiutil verify`, read-only DMG mounting, the mounted app signature, and
+  mounted `CFBundleVersion` value `5`. The final DMG SHA-256 is
+  `1a0498c45ecc13ba57f2a4f8553ef1b0f760cca004cef2d46307780c6b29f0df`.
+
+  GitHub published the asset at the
+  [Developer Preview 3 release](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.3)
+  with the same SHA-256 digest. A fresh download compared byte-for-byte equal
+  to the verified local artifact. `spctl --assess --type execute` exited 3
+  and rejected the app, which is the expected trust result for an ad-hoc-signed
+  artifact without Developer ID signing or Apple notarization. It is not a
+  packaging-integrity failure and the release notes identify the limitation.
+
 ## Manual verification
 
 - [ ] **NOT RUN — keyboard and menu discovery:** In an active file pane, select
@@ -166,8 +197,14 @@ VoiceOver checks below.
 
 ## Release gate
 
-- [ ] **NOT RUN:** Record dated `PASS`/`FAIL` evidence for every manual item
-  above against the exact candidate commit before treating ZIP or TAR-family
-  archive operations as release-ready capabilities. The release remains an
-  explicitly unsigned Developer Preview until the separate Developer ID,
-  notarization, stapling, and Gatekeeper gates are passed.
+- [x] **PASS — 2026-08-06 — unsigned Developer Preview publication:** The
+  build 5 candidate is published as the explicitly unsigned
+  `v1.3.0-developer-preview.3` prerelease with its trust warning and verified
+  SHA-256 digest.
+
+- [ ] **NOT RUN — physical-manual and signed-distribution gates:** Record dated
+  `PASS`/`FAIL` evidence for every manual item above against the exact
+  candidate before treating all ZIP and TAR-family behavior as physically
+  verified. Developer ID signing, Apple notarization, ticket stapling, and
+  Gatekeeper acceptance also remain uncompleted. Neither result is implied by
+  the automated unsigned publication evidence.
