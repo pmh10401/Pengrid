@@ -2,9 +2,10 @@
 
 [한국어](user-guide.ko.md) · **English** · [README](../README.md)
 
-This guide describes the user-visible behavior of Pengrid 1.3.0 Developer
-Preview 3, including the safety boundaries and features that are deliberately
-not provided.
+This guide records the historical user-visible behavior of Pengrid 1.3.0
+Developer Preview 3, including its safety boundaries and deliberately omitted
+features. The protected-ZIP section below describes a newer source-only feature;
+it is not present in that linked Preview 3 DMG.
 
 ## Requirements and installation
 

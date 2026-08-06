@@ -95,9 +95,21 @@ import Testing
         encoding: .utf8
     )
 
-    #expect(buildSource.contains("THIRD_PARTY_NOTICES.md"))
-    #expect(buildSource.contains("otool -L"))
-    #expect(buildSource.contains("libssl") && buildSource.contains("libcrypto"))
+    let executableBuildSource = buildSource
+        .split(separator: "\n", omittingEmptySubsequences: false)
+        .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("#") }
+        .joined(separator: "\n")
+    #expect(executableBuildSource.contains("THIRD_PARTY_NOTICES.md"))
+    #expect(executableBuildSource.contains("/usr/bin/otool -L \"$binary\""))
+    #expect(executableBuildSource.contains("/usr/bin/grep -Eiq 'libssl|libcrypto'"))
+    #expect(executableBuildSource.contains("verify_native_linkage \"$APP_BINARY\""))
+    #expect(executableBuildSource.contains("--verify|verify) verify_app_bundle"))
+    let buildVerifyPath = try #require(executableBuildSource.range(of: "--verify|verify) verify_app_bundle"))
+    let buildNativeCall = try #require(executableBuildSource.range(of: "verify_native_linkage \"$APP_BINARY\""))
+    let buildNoticeClose = try #require(executableBuildSource.range(of: "exec 9<&-"))
+    #expect(buildNoticeClose.lowerBound < buildVerifyPath.lowerBound)
+    #expect(buildNativeCall.lowerBound < buildVerifyPath.lowerBound)
+    #expect(executableBuildSource[buildVerifyPath.upperBound...].contains("exec 9<&-") == false)
     #expect(releaseSource.contains("THIRD_PARTY_NOTICES.md"))
     #expect(releaseSource.contains("otool -L"))
     #expect(releaseSource.contains("libssl") && releaseSource.contains("libcrypto"))

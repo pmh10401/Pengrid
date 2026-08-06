@@ -2,8 +2,9 @@
 
 **한국어** · [English](user-guide.md) · [README](../README.ko.md)
 
-이 문서는 Pengrid 1.3.0 Developer Preview 3의 사용자 관점 동작, 안전
-경계와 의도적으로 제공하지 않는 기능을 설명합니다.
+이 문서는 Pengrid 1.3.0 Developer Preview 3의 역사적 사용자 관점 동작, 안전
+경계와 의도적으로 제공하지 않는 기능을 기록합니다. 아래 암호 보호 ZIP 절은
+그 프리뷰 DMG에 포함되지 않은 최신 소스 전용 기능을 설명합니다.
 
 ## 요구 사항과 설치
 

@@ -680,6 +680,7 @@ exec 8<&-
 exec 8<&9
 publish_resource "$NOTICE_NAME" "$STAGING_NOTICE" \
   || die "unable to publish third-party notice"
+exec 9<&-
 unset BLOOM_RELEASE_TEST_ICON_HELPER_DEST
 exec 8<&-
 exec 17<&-
@@ -905,6 +906,13 @@ NEW_DMG_ID="$(entry_identity "$PUBLIC_NEW_DMG")"
 publication_checkpoint() {
   local checkpoint="$1"
   local failure_mode
+  if [[ "$TESTING" == 1 && -n "${BLOOM_RELEASE_TEST_PUBLICATION_LOG:-}" ]]; then
+    [[ "$BLOOM_RELEASE_TEST_PUBLICATION_LOG" == "$TEST_TEMP_DIR"/* \
+        && ! -L "$BLOOM_RELEASE_TEST_PUBLICATION_LOG" ]] \
+      || die 'publication test log must remain inside the marked temporary fixture'
+    printf 'PUBLICATION_CHECKPOINT %s\n' "$checkpoint" \
+      >>"$BLOOM_RELEASE_TEST_PUBLICATION_LOG"
+  fi
   [[ "$TESTING" == 1 && "${BLOOM_RELEASE_TEST_FAIL_POINT:-}" == "$checkpoint" ]] \
     || return 0
   failure_mode="${BLOOM_RELEASE_TEST_FAIL_MODE:-return}"
@@ -1034,6 +1042,7 @@ publish_release() {
 
 trap 'exit 130' INT
 trap 'exit 143' TERM
+publication_checkpoint before_publication || die 'release publication preflight checkpoint failed.'
 PUBLICATION_STARTED=true
 if ! publish_release; then
   die 'release publication failed; EXIT cleanup will restore previous artifacts.'

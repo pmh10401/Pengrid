@@ -9,12 +9,16 @@ commit `7b2387161c542fa9f427352dcdef76097d0d692b`.
 - Release/tag: <https://github.com/zlib-ng/minizip-ng/releases/tag/4.2.2>
 - Vendor provenance: the files under `Sources/EncryptedZIPCore/vendor/minizip-ng/`
   are copied from that pinned tag; no floating dependency is used.
-- Compression boundary: minizip-ng uses the system zlib backend (`HAVE_ZLIB`)
-  for Store and Deflate ZIP entries.
-- Crypto boundary: the built-in minizip-ng WinZip AES backend (`HAVE_WZAES`)
-  handles AES-128, AES-192, and AES-256, and the built-in traditional
-  ZipCrypto backend (`HAVE_PKCRYPT`) handles ZipCrypto. The Apple crypto
-  implementation is linked through the system frameworks used by this target.
+- Compression boundary: Store entries use raw stream bytes and do not use zlib.
+  Deflate entries use the system zlib backend (`HAVE_ZLIB`).
+- Crypto boundary: Package.swift excludes the upstream
+  `vendor/minizip-ng/mz_strm_wzaes.c`, `vendor/minizip-ng/mz_crypt.c`, and
+  `vendor/minizip-ng/mz_crypt_apple.c` sources. Pengrid-owned replacements
+  `pengrid_strm_wzaes.c`, `pengrid_crypt.c`, and `pengrid_crypt_apple.c` provide
+  the compatible WinZip AES stream, PBKDF2, and Apple crypto boundary using the
+  system frameworks linked by this target. The compiled ZipCrypto stream is
+  the upstream `vendor/minizip-ng/mz_strm_pkcrypt.c` source enabled by
+  `HAVE_PKCRYPT`.
 - OpenSSL is not bundled and is not a runtime dependency of Pengrid.
 
 The following license text is reproduced unmodified from the vendored upstream

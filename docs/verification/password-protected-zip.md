@@ -152,6 +152,54 @@ These checks remain **NOT RUN** and are not represented as automated passes:
 - Process-list inspection during password entry.
 - Performance benchmarks or large-archive throughput measurements.
 
+## Task 12 fix round 1 verification
+
+Fix round 1 is based on the Task 12 commit `e517656f87885a38d9350e7067f00abb5b70c3b5`.
+The notice provenance now distinguishes raw Store streams from system-zlib
+Deflate, records the three upstream minizip-ng crypto sources excluded by
+`Package.swift`, identifies the Pengrid-owned AES/PBKDF2/Apple replacements, and
+identifies the compiled upstream `mz_strm_pkcrypt.c` ZipCrypto stream.
+
+The package fixture now uses a local `cmp` wrapper that logs exact arguments and
+executes `/usr/bin/cmp`. Its unsigned assertions prove the staged notice
+comparison (`/dev/fd/20`) and first staged `otool -L` call occur before the
+`PUBLICATION_CHECKPOINT before_publication` recorder; the public notice
+comparison (`/dev/fd/21`) occurs after `after_app_install`. The OpenSSL fixture
+seeds old app/DMG markers and proves they remain unchanged with no publication
+checkpoint. The recorder is TESTING-only and remains behind the existing marked
+temporary-fixture guard.
+
+TDD evidence for the load-bearing checks includes these controlled mutations,
+each reverted before the green run: disconnecting the staged notice `cmp`
+caused `notice-otool` to fail; disconnecting the staged binary `otool` caused
+the order assertion to fail with `staged otool ran after publication
+checkpoint`; disconnecting the OpenSSL rejection caused `openssl-linkage` to
+fail with `OpenSSL-linked executable was accepted`. The structural build test
+also captured the pre-fix RED where fd9 closed after the verify path and was
+still referenced by it.
+
+Fix-round commands and results:
+
+- `env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --disable-sandbox --no-parallel --filter BuildScriptTests`: **6 tests passed**, Swift run 1.373 seconds.
+- `/bin/bash script/tests/package_release_contract_tests.sh notice-otool`: PASS.
+- `/bin/bash script/tests/package_release_contract_tests.sh openssl-linkage`: PASS.
+- `/usr/bin/time -p /bin/bash script/tests/package_release_contract_tests.sh`: PASS, real 152.55 seconds (user 71.87, sys 13.58).
+- `/usr/bin/time -p ./script/build_and_run.sh --verify`: PASS, real 9.05 seconds; no app launch.
+- Artifact `otool -L`, no-OpenSSL scan, ad-hoc codesign verification, notice `cmp`, and bundle-structure inspection: PASS. The artifact contains the executable, icon, notice resource, Info.plist, and `_CodeSignature`.
+- Final-tree Task 11 focused filter: **46 tests in 3 suites passed**, Swift run 3.272 seconds, timed real 16.58 seconds; the known 11-fixture warning was emitted.
+
+The complete final Swift suite and final shell contract then passed on this
+fix-round tree:
+
+- Final full Swift suite: **PASS** — 1,033 tests in 76 suites; Swift run
+  49.761 seconds, timed real 50.61 seconds (user 27.47, sys 20.17), exit 0.
+- Final package contract: **PASS** — `package release contract tests: PASS`,
+  timed real 152.55 seconds (user 71.87, sys 13.58), exit 0.
+- The first final-suite launch stopped before test execution with
+  `posix_spawn error: Resource temporarily unavailable` while writing the
+  Swift version file (0 tests ran). The successful run above was a fresh
+  command after that pre-test launcher failure, not a flaky test retry.
+
 ## Task 12 package, notice, and documentation verification
 
 This append-only section records the package-contract and artifact checks for
@@ -164,7 +212,8 @@ self-referential final commit hash. Re-run `git rev-parse HEAD^` and
 
 ### Package and contract evidence
 
-The following commands passed before the final commit:
+The following commands passed before the initial Task 12 commit
+`e517656f87885a38d9350e7067f00abb5b70c3b5`:
 
 | Result | Exact command | Evidence |
 | --- | --- | --- |

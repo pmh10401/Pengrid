@@ -328,6 +328,7 @@ exec 7<&-
 if ! /usr/bin/cmp -s /dev/fd/9 "$APP_RESOURCES/$NOTICE_NAME"; then
   die "bundled third-party notice differs from the repository notice"
 fi
+exec 9<&-
 
 cat >"$INFO_PLIST" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -364,8 +365,6 @@ verify_app_bundle() {
     || die "unable to ad-hoc sign verification app: $APP_BUNDLE"
   /usr/bin/codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE" \
     || die "app bundle signature verification failed: $APP_BUNDLE"
-  /usr/bin/cmp -s /dev/fd/9 "$APP_RESOURCES/$NOTICE_NAME" \
-    || die 'verification app notice differs from the repository notice'
 }
 case "$MODE" in
   run) open_app ;;
@@ -375,4 +374,3 @@ case "$MODE" in
   --verify|verify) verify_app_bundle ;;
   *) echo "usage: $0 [run|--debug|--logs|--telemetry|--verify]" >&2; exit 2 ;;
 esac
-exec 9<&-
