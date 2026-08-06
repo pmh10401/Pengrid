@@ -163,6 +163,8 @@ struct ArchiveOperationStatusPresentation: Equatable, Sendable {
             }
         case .encoding:
             "Encoding archive"
+        case .waitingForPassword:
+            "Waiting for password"
         case .publishing:
             "Finishing archive"
         }

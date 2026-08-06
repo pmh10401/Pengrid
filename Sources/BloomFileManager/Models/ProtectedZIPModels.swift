@@ -38,12 +38,13 @@ struct ArchivePasswordRequest: Identifiable, Sendable, Equatable {
     }
 
     private static func publicBasename(_ value: String) -> String {
-        let withoutNewlines = value
-            .components(separatedBy: .newlines)
-            .joined(separator: " ")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !withoutNewlines.isEmpty else { return "Archive" }
-        let basename = URL(filePath: withoutNewlines).lastPathComponent
+        // Keep only the first public line. Joining lines would allow an
+        // internal archive entry appended after a newline to become part of
+        // the supposedly public basename.
+        let firstLine = value.components(separatedBy: .newlines).first ?? value
+        let trimmed = firstLine.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "Archive" }
+        let basename = URL(filePath: trimmed).lastPathComponent
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return basename.isEmpty ? "Archive" : basename
     }
@@ -155,12 +156,10 @@ struct ProtectedZIPDiagnosticEvent: Sendable, Equatable {
     var cancelled: Int { cancelledCount }
 
     private static func publicBasename(_ value: String) -> String {
-        let withoutNewlines = value
-            .components(separatedBy: .newlines)
-            .joined(separator: " ")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !withoutNewlines.isEmpty else { return "Archive" }
-        let basename = URL(filePath: withoutNewlines).lastPathComponent
+        let firstLine = value.components(separatedBy: .newlines).first ?? value
+        let trimmed = firstLine.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "Archive" }
+        let basename = URL(filePath: trimmed).lastPathComponent
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return basename.isEmpty ? "Archive" : basename
     }

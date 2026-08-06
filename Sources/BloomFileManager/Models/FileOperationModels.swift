@@ -309,11 +309,39 @@ struct FileOperationResult: Sendable, Equatable {
     func addingSafeRelativePaths(
         _ paths: [URL: ComparisonRelativePath]
     ) -> FileOperationResult {
-        FileOperationResult(
+        var mergedPaths = safeRelativePathsBySource
+        for (source, path) in paths {
+            mergedPaths[source.standardizedFileURL] = path
+        }
+        return FileOperationResult(
             outcomes: outcomes,
-            safeRelativePathsBySource: paths,
+            safeRelativePathsBySource: mergedPaths,
             undoDestinationIdentities: undoDestinationIdentities,
             undoDestinationFingerprints: undoDestinationFingerprints
+        )
+    }
+
+    /// Appends an operation result without dropping the safe metadata collected
+    /// by either request. Earlier metadata wins for a repeated key so a later
+    /// request cannot overwrite the identity captured by an earlier publish.
+    func merging(_ other: FileOperationResult) -> FileOperationResult {
+        var paths = safeRelativePathsBySource
+        for (source, path) in other.safeRelativePathsBySource {
+            paths[source] = paths[source] ?? path
+        }
+        var identities = undoDestinationIdentities
+        for (destination, identity) in other.undoDestinationIdentities {
+            identities[destination] = identities[destination] ?? identity
+        }
+        var fingerprints = undoDestinationFingerprints
+        for (destination, fingerprint) in other.undoDestinationFingerprints {
+            fingerprints[destination] = fingerprints[destination] ?? fingerprint
+        }
+        return FileOperationResult(
+            outcomes: outcomes + other.outcomes,
+            safeRelativePathsBySource: paths,
+            undoDestinationIdentities: identities,
+            undoDestinationFingerprints: fingerprints
         )
     }
 

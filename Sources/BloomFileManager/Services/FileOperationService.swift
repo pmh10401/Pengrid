@@ -34,6 +34,35 @@ actor FileOperationService {
         )
     }
 
+    nonisolated func makeRoutingArchiveOperationService(
+        passwordProvider: any ArchivePasswordProviding,
+        protectedEngine: any ProtectedZIPEngine = LiveProtectedZIPEngine(),
+        protectedLogger: any ProtectedZIPLogging = LiveProtectedZIPLogger()
+    ) -> any ArchiveOperating {
+        let sourcePreparer = LiveArchiveSourcePreparationService(fileSystem: fileSystem)
+        let commandRunner = LiveArchiveCommandRunner(
+            fileSystem: fileSystem,
+            sourcePreparer: sourcePreparer
+        )
+        let ordinary = ArchiveOperationService(
+            fileSystem: fileSystem,
+            accessCoordinator: accessCoordinator,
+            commandRunner: commandRunner
+        )
+        let protected = ProtectedZIPOperationService(
+            fileSystem: fileSystem,
+            accessCoordinator: accessCoordinator,
+            sourcePreparer: sourcePreparer,
+            passwordProvider: passwordProvider,
+            engine: protectedEngine,
+            logger: protectedLogger
+        )
+        return RoutingArchiveOperationService(
+            ordinary: ordinary,
+            protected: protected
+        )
+    }
+
     nonisolated func makeUndoService() -> FileOperationUndoService {
         FileOperationUndoService(
             fileSystem: fileSystem,

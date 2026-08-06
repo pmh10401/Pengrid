@@ -22,6 +22,7 @@ enum ArchiveOperationKind: Sendable, Equatable {
 enum ArchiveOperationPhase: Sendable, Equatable {
     case preparingSources(completedCount: Int, totalCount: Int)
     case processingBytes(completedByteCount: Int64, totalByteCount: Int64?)
+    case waitingForPassword
     case encoding
     case publishing
 }
@@ -55,7 +56,7 @@ struct ArchiveOperationProgress: Sendable, Equatable {
             guard let totalByteCount, totalByteCount > 0 else { return nil }
             let safeCompleted = min(max(completedByteCount, 0), totalByteCount)
             return Double(safeCompleted) / Double(totalByteCount)
-        case .encoding, .publishing:
+        case .waitingForPassword, .encoding, .publishing:
             return nil
         }
     }

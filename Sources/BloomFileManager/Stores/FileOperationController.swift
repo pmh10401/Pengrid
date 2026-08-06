@@ -1242,6 +1242,12 @@ final class FileOperationController {
                     totalCount: 0,
                     detail: "Encoding archive"
                 )
+            case .waitingForPassword:
+                FileOperationJobProgress(
+                    completedCount: 0,
+                    totalCount: 0,
+                    detail: "Waiting for password"
+                )
             case .publishing:
                 FileOperationJobProgress(
                     completedCount: 0,

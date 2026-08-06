@@ -184,6 +184,44 @@ struct ArchiveOperationIntegrationTests {
         try expectNoStagingDirectories(in: root.url)
     }
 
+    @Test func extractionRejectsInPlaceArchiveMutationDuringPrivateCopy() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let source = root.url.appending(path: "Source.txt")
+        let archive = root.url.appending(path: "Archive.zip")
+        let destination = root.url.appending(path: "Extracted", directoryHint: .isDirectory)
+        try Data("original archive source".utf8).write(to: source)
+        try await LiveArchiveCommandRunner().run(
+            kind: .compress,
+            format: .zip,
+            sources: [source],
+            destination: archive
+        )
+        let mutation = Data(repeating: 0xA5, count: 32)
+        let fileSystem = LiveFileSystemAccess(onBeforeCopySourceEntryOpen: { opened in
+            guard opened.standardizedFileURL == archive.standardizedFileURL else { return }
+            let handle = try! FileHandle(forWritingTo: archive)
+            try! handle.seek(toOffset: 0)
+            try! handle.write(contentsOf: mutation)
+            try! handle.close()
+        })
+        let parentIdentity = try #require(await fileSystem.identity(of: root.url))
+        let service = ArchiveOperationService(fileSystem: fileSystem)
+        let request = ArchiveRequest(
+            kind: .extract,
+            verifiedSources: identifiedArchiveTestSources([archive]),
+            finalDestination: destination,
+            destinationParentIdentity: parentIdentity,
+            format: .zip
+        )
+
+        let result = await service.perform([request]) { _ in }
+
+        #expect(result.hasFailures)
+        #expect(FileManager.default.fileExists(atPath: destination.path) == false)
+        try expectNoStagingDirectories(in: root.url)
+    }
+
     @Test func dittoCompressionArchivesMultipleSelectedItemsAtTheZIPRoot() async throws {
         let root = try TemporaryDirectory()
         defer { root.remove() }

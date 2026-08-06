@@ -446,6 +446,10 @@ struct LiveArchiveCommandRunner: ArchiveCommandRunning {
         )
         var copiedEntries: [PreparedArchiveCopyEntry] = []
         do {
+            // The source identity gate in the copy primitive protects against a
+            // replacement, while the fingerprint gate protects against an
+            // in-place mutation that races the descriptor-backed copy.
+            let sourceFingerprint = try await fileSystem.fingerprint(of: source.url)
             let copiedIdentity = try await fileSystem.copyAndCaptureIdentity(
                 source.url,
                 identifiedBy: source.identity,
@@ -455,6 +459,10 @@ struct LiveArchiveCommandRunner: ArchiveCommandRunning {
                 url: reservation.item,
                 identity: copiedIdentity
             ))
+            guard try await fileSystem.identity(of: source.url) == source.identity,
+                  try await fileSystem.fingerprint(of: source.url) == sourceFingerprint else {
+                throw FileSystemAccessError.identityMismatch(source.url)
+            }
             let arguments = try Self.arguments(
                 kind: .extract,
                 format: format,
