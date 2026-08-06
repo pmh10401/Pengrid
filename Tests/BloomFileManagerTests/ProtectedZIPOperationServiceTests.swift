@@ -235,7 +235,11 @@ struct ProtectedZIPOperationServiceTests {
         let archive = root.url.appending(path: "Encrypted.zip")
         let destination = root.url.appending(path: "Extracted", directoryHint: .isDirectory)
         try Data("encrypted fixture".utf8).write(to: archive)
-        let fileSystem = LiveFileSystemAccess()
+        let events = Task8EventRecorder()
+        let fileSystem = Task8InstrumentedFileSystem(
+            inner: LiveFileSystemAccess(),
+            cleanupEvents: events
+        )
         let parentIdentity = try #require(await fileSystem.identity(of: root.url))
         let request = ArchiveRequest(
             kind: .extract,
@@ -246,7 +250,9 @@ struct ProtectedZIPOperationServiceTests {
         )
         let provider = Task8RecordingPasswordProvider(
             root: root.url,
-            passwords: ["first-passphrase", "second-passphrase"]
+            passwords: ["first-passphrase", "second-passphrase"],
+            events: events,
+            labelProviderRequests: true
         )
         let engine = Task8RetryEngine()
         let service = ProtectedZIPOperationService(
@@ -265,6 +271,20 @@ struct ProtectedZIPOperationServiceTests {
         #expect(await provider.previousPromptStagingCounts == [1, 1])
         #expect(await provider.previousAttemptFlags == [false, true])
         #expect(await provider.previousSecretsUnavailable == [false, true])
+        #expect(provider.requestIDs.count == 2)
+        #expect(provider.requestIDs[0] != provider.requestIDs[1])
+        let reservations = await fileSystem.stagingReservations
+        #expect(reservations.count == 4)
+        #expect(reservations[2].item != reservations[3].item)
+        #expect(reservations[2].directoryIdentity != reservations[3].directoryIdentity)
+        #expect(await events.values == [
+            "remove-staging-1-succeeded",
+            "provider-1",
+            "remove-staging-2-succeeded",
+            "provider-2",
+            "remove-staging-3-succeeded",
+            "remove-staging-4-succeeded"
+        ])
         try task8ExpectNoStagingDirectories(in: root.url)
     }
 
@@ -784,6 +804,58 @@ struct ProtectedZIPOperationServiceTests {
         #expect(await logger.events.last?.category == .compression)
     }
 
+    @Test @MainActor func combinedCompressionCleanupFailuresPreservePublishedRecoveryMetadata() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let source = root.url.appending(path: "Source.txt")
+        let destination = root.url.appending(path: "Archive.zip")
+        try Data("source".utf8).write(to: source)
+        let cleanupEvents = Task8EventRecorder()
+        let fileSystem = Task8InstrumentedFileSystem(
+            inner: LiveFileSystemAccess(),
+            failRemoveStagingCalls: [1, 2],
+            cleanupEvents: cleanupEvents
+        )
+        let parentIdentity = try #require(await fileSystem.identity(of: root.url))
+        let request = try #require(ArchiveRequest(
+            kind: .compress,
+            verifiedSources: identifiedArchiveTestSources([source]),
+            finalDestination: destination,
+            destinationParentIdentity: parentIdentity,
+            format: .zip,
+            protection: .aes256
+        ))
+        let preparer = Task8FlakySourcePreparer(
+            fileSystem: fileSystem,
+            failures: 1,
+            cleanupEvents: cleanupEvents
+        )
+        let service = ProtectedZIPOperationService(
+            fileSystem: fileSystem,
+            sourcePreparer: preparer,
+            passwordProvider: Task8RecordingPasswordProvider(
+                root: root.url,
+                passwords: ["combined-cleanup-passphrase"]
+            ),
+            engine: Task8RetryEngine(alwaysSucceeds: true),
+            logger: RecordingProtectedZIPLogger()
+        )
+
+        let result = await service.perform([request]) { _ in }
+
+        #expect(result.outcomes == [.recoveryNeeded(source: source)])
+        #expect(FileManager.default.fileExists(atPath: destination.path))
+        #expect(result.undoDestinationIdentity(for: destination) != nil)
+        #expect(result.undoDestinationFingerprint(for: destination) != nil)
+        #expect(await fileSystem.removeStagingDirectoryCalls == 2)
+        #expect(await preparer.cleanupCallCount == 1)
+        #expect(await cleanupEvents.values == [
+            "remove-staging-1-failed",
+            "remove-staging-2-failed",
+            "prepared-cleanup-1-failed"
+        ])
+    }
+
     @Test @MainActor func postPublicationExtractionCleanupRetryReturnsSuccessWithUndoMetadata() async throws {
         let root = try TemporaryDirectory()
         defer { root.remove() }
@@ -828,9 +900,11 @@ struct ProtectedZIPOperationServiceTests {
         let archive = root.url.appending(path: "Encrypted.zip")
         let destination = root.url.appending(path: "Extracted", directoryHint: .isDirectory)
         try Data("encrypted fixture".utf8).write(to: archive)
+        let cleanupEvents = Task8EventRecorder()
         let fileSystem = Task8InstrumentedFileSystem(
             inner: LiveFileSystemAccess(),
-            failPostPublicationCleanupAttempts: .max
+            failPostPublicationCleanupAttempts: .max,
+            cleanupEvents: cleanupEvents
         )
         let parentIdentity = try #require(await fileSystem.identity(of: root.url))
         let request = ArchiveRequest(
@@ -858,6 +932,93 @@ struct ProtectedZIPOperationServiceTests {
         #expect(result.undoDestinationFingerprint(for: destination) != nil)
         #expect(FileManager.default.fileExists(atPath: destination.path))
         #expect(await logger.events.last?.category == .extraction)
+        #expect(await cleanupEvents.values == [
+            "remove-staging-1-succeeded",
+            "remove-staging-2-failed",
+            "remove-staging-3-failed",
+            "remove-staging-4-failed"
+        ])
+    }
+
+    @Test @MainActor func injectedPasswordCoordinatorCancellationCleansServiceStaging() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let archive = root.url.appending(path: "Encrypted.zip")
+        let destination = root.url.appending(path: "Extracted", directoryHint: .isDirectory)
+        try Data("encrypted fixture".utf8).write(to: archive)
+        let fileSystem = Task8InstrumentedFileSystem(inner: LiveFileSystemAccess())
+        let parentIdentity = try #require(await fileSystem.identity(of: root.url))
+        let request = ArchiveRequest(
+            kind: .extract,
+            verifiedSources: identifiedArchiveTestSources([archive]),
+            finalDestination: destination,
+            destinationParentIdentity: parentIdentity,
+            format: .zip
+        )
+        let coordinator = ArchivePasswordPromptCoordinator()
+        let operation = Task {
+            await ProtectedZIPOperationService(
+                fileSystem: fileSystem,
+                passwordProvider: coordinator,
+                engine: Task8RetryEngine(alwaysSucceeds: true),
+                logger: RecordingProtectedZIPLogger()
+            ).perform([request]) { _ in }
+        }
+
+        for _ in 0..<100 where coordinator.pendingRequest == nil {
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+        #expect(coordinator.pendingRequest != nil)
+        operation.cancel()
+        let result = await operation.value
+
+        #expect(result.outcomes == [.cancelled(source: archive)])
+        #expect(coordinator.pendingRequest == nil)
+        try task8ExpectNoStagingDirectories(in: root.url)
+    }
+
+    @Test @MainActor func progressCallbackCancellationIsObservedByEngineAndDoesNotPublish() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let source = root.url.appending(path: "Source.txt")
+        let destination = root.url.appending(path: "Archive.zip")
+        try Data("source".utf8).write(to: source)
+        let fileSystem = Task8InstrumentedFileSystem(inner: LiveFileSystemAccess())
+        let parentIdentity = try #require(await fileSystem.identity(of: root.url))
+        let request = try #require(ArchiveRequest(
+            kind: .compress,
+            verifiedSources: identifiedArchiveTestSources([source]),
+            finalDestination: destination,
+            destinationParentIdentity: parentIdentity,
+            format: .zip,
+            protection: .aes256
+        ))
+        let engine = Task8TaskCancellationBoundaryEngine()
+        let service = ProtectedZIPOperationService(
+            fileSystem: fileSystem,
+            passwordProvider: Task8RecordingPasswordProvider(
+                root: root.url,
+                passwords: ["callback-cancel-passphrase"]
+            ),
+            engine: engine,
+            logger: RecordingProtectedZIPLogger()
+        )
+        let cancellationHandle = Task8OperationCancellationHandle()
+        let operation = Task {
+            await service.perform([request]) { update in
+                if case .processingBytes = update.phase {
+                    cancellationHandle.cancel()
+                }
+            }
+        }
+        cancellationHandle.install(operation)
+
+        let result = await operation.value
+
+        #expect(result.outcomes == [.cancelled(source: source)])
+        #expect(await engine.observedCancellation)
+        #expect(FileManager.default.fileExists(atPath: destination.path) == false)
+        try task8ExpectNoStagingDirectories(in: root.url)
     }
 
     @Test func descriptorOwnerClosesExactlyOnce() throws {
@@ -1030,20 +1191,25 @@ private final class Task8RecordingPasswordProvider: ArchivePasswordProviding {
     private(set) var previousPromptStagingCounts: [Int] = []
     private(set) var previousAttemptFlags: [Bool] = []
     private(set) var previousSecretsUnavailable: [Bool] = []
+    private(set) var requestIDs: [UUID] = []
+    private let labelProviderRequests: Bool
 
     init(
         root: URL,
         passwords: [String],
-        events: Task8EventRecorder? = nil
+        events: Task8EventRecorder? = nil,
+        labelProviderRequests: Bool = false
     ) {
         self.root = root
         self.passwords = passwords
         self.events = events
+        self.labelProviderRequests = labelProviderRequests
     }
 
     func requestPassword(for request: ArchivePasswordRequest) async throws -> ArchiveSecret {
         requestCount += 1
-        await events?.append("provider")
+        requestIDs.append(request.id)
+        await events?.append(labelProviderRequests ? "provider-\(requestCount)" : "provider")
         previousAttemptFlags.append(request.previousAttemptFailed)
         if let previous = retainedSecrets.last {
             previousSecretsUnavailable.append((try? previous.withUnsafeBytes { _ in }) == nil)
@@ -1163,6 +1329,22 @@ private final class Task8LockedCounter: @unchecked Sendable {
 
     func increment() {
         lock.withLock { storage += 1 }
+    }
+}
+
+private final class Task8OperationCancellationHandle: @unchecked Sendable {
+    private let lock = NSLock()
+    private var operation: Task<FileOperationResult, Never>?
+
+    func install(_ operation: Task<FileOperationResult, Never>) {
+        lock.withLock {
+            self.operation = operation
+        }
+    }
+
+    func cancel() {
+        let operation = lock.withLock { self.operation }
+        operation?.cancel()
     }
 }
 
@@ -1322,6 +1504,47 @@ private actor Task8ProgressCancellationEngine: ProtectedZIPEngine {
     }
 }
 
+private actor Task8TaskCancellationBoundaryEngine: ProtectedZIPEngine {
+    private(set) var observedCancellation = false
+
+    func inspect(archive: OpenedFileSystemItem) async throws -> ProtectedZIPInspection {
+        ProtectedZIPInspection(hasEncryptedEntries: true, strongestAESStrength: 256)
+    }
+
+    func preflight(
+        archive: OpenedFileSystemItem,
+        destinationProbeRoot: OpenedEmptyFileSystemItem,
+        limits: ProtectedZIPLimits
+    ) async throws -> ProtectedZIPInspection {
+        ProtectedZIPInspection(hasEncryptedEntries: true, strongestAESStrength: 256)
+    }
+
+    func createAES256(
+        sourceRoot: OpenedFileSystemItem,
+        destination: OpenedEmptyFileSystemItem,
+        password: ArchiveSecret,
+        progress: @escaping @Sendable (ProtectedZIPProgress) async -> Void
+    ) async throws {
+        await progress(ProtectedZIPProgress(completedByteCount: 1, totalByteCount: 1))
+        do {
+            try Task.checkCancellation()
+        } catch is CancellationError {
+            observedCancellation = true
+            throw CancellationError()
+        }
+    }
+
+    func extract(
+        archive: OpenedFileSystemItem,
+        destinationRoot: OpenedEmptyFileSystemItem,
+        password: ArchiveSecret,
+        limits: ProtectedZIPLimits,
+        progress: @escaping @Sendable (ProtectedZIPProgress) async -> Void
+    ) async throws {
+        try Task.checkCancellation()
+    }
+}
+
 private actor Task8RawErrorEngine: ProtectedZIPEngine {
     func inspect(archive: OpenedFileSystemItem) async throws -> ProtectedZIPInspection {
         ProtectedZIPInspection(hasEncryptedEntries: true, strongestAESStrength: 256)
@@ -1433,11 +1656,17 @@ private actor Task8LimitRecordingEngine: ProtectedZIPEngine {
 private actor Task8FlakySourcePreparer: ArchiveSourcePreparing {
     private let live: LiveArchiveSourcePreparationService
     private var failuresRemaining: Int
+    private let cleanupEvents: Task8EventRecorder?
     private(set) var cleanupCallCount = 0
 
-    init(fileSystem: any FileSystemAccess, failures: Int) {
+    init(
+        fileSystem: any FileSystemAccess,
+        failures: Int,
+        cleanupEvents: Task8EventRecorder? = nil
+    ) {
         live = LiveArchiveSourcePreparationService(fileSystem: fileSystem)
         failuresRemaining = max(failures, 0)
+        self.cleanupEvents = cleanupEvents
     }
 
     func prepare(
@@ -1458,8 +1687,10 @@ private actor Task8FlakySourcePreparer: ArchiveSourcePreparing {
         cleanupCallCount += 1
         if failuresRemaining > 0 {
             failuresRemaining -= 1
+            await cleanupEvents?.append("prepared-cleanup-\(cleanupCallCount)-failed")
             throw Task8CleanupError.expected
         }
+        await cleanupEvents?.append("prepared-cleanup-\(cleanupCallCount)-succeeded")
         try await live.cleanup(prepared)
     }
 }
@@ -1468,10 +1699,12 @@ private actor Task8InstrumentedFileSystem: FileSystemAccess {
     private let inner: any FileSystemAccess
     private let availableCapacityOverride: Int64?
     private let beforeExclusiveMove: (@Sendable (URL, URL) throws -> Void)?
+    private let cleanupEvents: Task8EventRecorder?
     private var failRemoveStagingCalls: Set<Int>
     private var failPostPublicationCleanupAttempts: Int
     private var hasPublishedOutput = false
     private(set) var removeStagingDirectoryCalls = 0
+    private(set) var stagingReservations: [StagingReservation] = []
     private(set) var createdEmptyDescriptors: [Int32] = []
     private var openCloseCounters: [Task8LockedCounter] = []
 
@@ -1480,13 +1713,15 @@ private actor Task8InstrumentedFileSystem: FileSystemAccess {
         availableCapacity: Int64? = nil,
         failRemoveStagingCalls: Set<Int> = [],
         failPostPublicationCleanupAttempts: Int = 0,
-        beforeExclusiveMove: (@Sendable (URL, URL) throws -> Void)? = nil
+        beforeExclusiveMove: (@Sendable (URL, URL) throws -> Void)? = nil,
+        cleanupEvents: Task8EventRecorder? = nil
     ) {
         self.inner = inner
         availableCapacityOverride = availableCapacity
         self.failRemoveStagingCalls = failRemoveStagingCalls
         self.failPostPublicationCleanupAttempts = max(failPostPublicationCleanupAttempts, 0)
         self.beforeExclusiveMove = beforeExclusiveMove
+        self.cleanupEvents = cleanupEvents
     }
 
     var createdEmptyDescriptorCount: Int { createdEmptyDescriptors.count }
@@ -1622,29 +1857,37 @@ private actor Task8InstrumentedFileSystem: FileSystemAccess {
     }
 
     func reserveStagingDirectory(beside destination: URL) async throws -> StagingReservation {
-        try await inner.reserveStagingDirectory(beside: destination)
+        let reservation = try await inner.reserveStagingDirectory(beside: destination)
+        stagingReservations.append(reservation)
+        return reservation
     }
 
     func reserveStagingDirectory(
         beside destination: URL,
         parentIdentifiedBy parentIdentity: FileIdentity
     ) async throws -> StagingReservation {
-        try await inner.reserveStagingDirectory(
+        let reservation = try await inner.reserveStagingDirectory(
             beside: destination,
             parentIdentifiedBy: parentIdentity
         )
+        stagingReservations.append(reservation)
+        return reservation
     }
 
     func removeStagingDirectory(_ reservation: StagingReservation) async throws {
         removeStagingDirectoryCalls += 1
+        let attempt = removeStagingDirectoryCalls
         if failRemoveStagingCalls.remove(removeStagingDirectoryCalls) != nil {
+            await cleanupEvents?.append("remove-staging-\(attempt)-failed")
             throw Task8CleanupError.expected
         }
         if hasPublishedOutput, failPostPublicationCleanupAttempts > 0 {
             failPostPublicationCleanupAttempts -= 1
+            await cleanupEvents?.append("remove-staging-\(attempt)-failed")
             throw Task8CleanupError.expected
         }
         try await inner.removeStagingDirectory(reservation)
+        await cleanupEvents?.append("remove-staging-\(attempt)-succeeded")
     }
 
     func fingerprint(of source: URL) async throws -> SourceFingerprint {

@@ -335,19 +335,21 @@ actor ProtectedZIPOperationService: ProtectedZIPOperating, ArchiveOperating {
                 throw error
             }
         } catch {
+            let primaryError = error
             if !preparedCleaned && !preparedCleanupAttempted {
                 do {
                     try await sourcePreparer.cleanup(prepared)
                     preparedCleaned = true
                 } catch {
+                    let cleanupError = error
                     throw ProtectedZIPFailure(
-                        primary: error,
-                        cleanup: error,
-                        publishedOutput: publishedOutput(from: error)
+                        primary: primaryError,
+                        cleanup: cleanupError,
+                        publishedOutput: publishedOutput(from: primaryError)
                     )
                 }
             }
-            throw error
+            throw primaryError
         }
     }
 

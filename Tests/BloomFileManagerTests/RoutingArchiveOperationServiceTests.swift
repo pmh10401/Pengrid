@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import Darwin
 @testable import BloomFileManager
 
 @Suite("RoutingArchiveOperationServiceTests")
@@ -167,6 +168,146 @@ struct RoutingArchiveOperationServiceTests {
         #expect(await protected.sources == [second])
     }
 
+    @Test @MainActor func unsupportedRouteReturnsOneRedactedFailureWithoutPerformingEitherService() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let archive = root.url.appending(path: "Unsupported.zip")
+        let destination = root.url.appending(path: "Extracted", directoryHint: .isDirectory)
+        try Data("unsupported fixture".utf8).write(to: archive)
+        let parentIdentity = try #require(await LiveFileSystemAccess().identity(of: root.url))
+        let request = ArchiveRequest(
+            kind: .extract,
+            verifiedSources: identifiedArchiveTestSources([archive]),
+            finalDestination: destination,
+            destinationParentIdentity: parentIdentity,
+            format: .zip
+        )
+        let ordinary = Task8CountingArchiveOperator()
+        let protected = Task8UnsupportedProtectedOperator()
+        let router = RoutingArchiveOperationService(ordinary: ordinary, protected: protected)
+
+        let result = await router.perform([request]) { _ in }
+
+        #expect(result.outcomes.count == 1)
+        guard case let .failed(source, message) = result.outcomes[0] else {
+            Issue.record("unsupported route must return one failed safe outcome")
+            return
+        }
+        #expect(source == archive)
+        #expect(message == ProtectedZIPError.unsupportedEncryption.errorDescription!)
+        #expect(message.contains("raw-route-sentinel") == false)
+        #expect(await ordinary.performCount == 0)
+        #expect(await protected.performCount == 0)
+    }
+
+    @Test @MainActor func mixedActualRouterPerformMergesOutcomesAndUndoMetadataInInputOrder() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let firstSource = root.url.appending(path: "First.txt")
+        let secondSource = root.url.appending(path: "Second.txt")
+        let firstDestination = root.url.appending(path: "First.zip")
+        let secondDestination = root.url.appending(path: "Second.zip")
+        try Data("first".utf8).write(to: firstSource)
+        try Data("second".utf8).write(to: secondSource)
+        let fileSystem = LiveFileSystemAccess()
+        let parentIdentity = try #require(await fileSystem.identity(of: root.url))
+        let ordinaryRequest = ArchiveRequest(
+            kind: .compress,
+            verifiedSources: identifiedArchiveTestSources([firstSource]),
+            finalDestination: firstDestination,
+            destinationParentIdentity: parentIdentity,
+            format: .zip
+        )
+        let protectedRequest = try #require(ArchiveRequest(
+            kind: .compress,
+            verifiedSources: identifiedArchiveTestSources([secondSource]),
+            finalDestination: secondDestination,
+            destinationParentIdentity: parentIdentity,
+            format: .zip,
+            protection: .aes256
+        ))
+        let ordinary = ArchiveOperationService(
+            fileSystem: fileSystem,
+            commandRunner: Task8WritingArchiveCommandRunner(fileSystem: fileSystem)
+        )
+        let protected = ProtectedZIPOperationService(
+            fileSystem: fileSystem,
+            sourcePreparer: LiveArchiveSourcePreparationService(fileSystem: fileSystem),
+            passwordProvider: RecordingArchivePasswordProvider(
+                passwords: ["mixed-protected-passphrase"]
+            ),
+            engine: RoutingFactoryEngine(),
+            logger: RecordingProtectedZIPLogger()
+        )
+        let router = RoutingArchiveOperationService(ordinary: ordinary, protected: protected)
+
+        let result = await router.perform([ordinaryRequest, protectedRequest]) { _ in }
+
+        let expectedOutcomes: [FileOperationItemOutcome] = [
+            .succeeded(source: firstSource, destination: firstDestination),
+            .succeeded(source: secondSource, destination: secondDestination)
+        ]
+        #expect(result.outcomes == expectedOutcomes)
+        #expect(result.undoDestinationIdentity(for: firstDestination) != nil)
+        #expect(result.undoDestinationIdentity(for: secondDestination) != nil)
+        #expect(result.undoDestinationFingerprint(for: firstDestination) != nil)
+        #expect(result.undoDestinationFingerprint(for: secondDestination) != nil)
+        #expect(FileManager.default.fileExists(atPath: firstDestination.path))
+        #expect(FileManager.default.fileExists(atPath: secondDestination.path))
+    }
+
+    @Test @MainActor func routerClassificationAndProtectedPerformUseDistinctStagedArchiveIdentity() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let archive = root.url.appending(path: "Encrypted.zip")
+        let destination = root.url.appending(path: "Extracted", directoryHint: .isDirectory)
+        try Data("encrypted fixture".utf8).write(to: archive)
+        let fileSystem = LiveFileSystemAccess()
+        let sourceIdentity = try #require(await fileSystem.identity(of: archive))
+        let parentIdentity = try #require(await fileSystem.identity(of: root.url))
+        let request = ArchiveRequest(
+            kind: .extract,
+            verifiedSources: identifiedArchiveTestSources([archive]),
+            finalDestination: destination,
+            destinationParentIdentity: parentIdentity,
+            format: .zip
+        )
+        let engine = Task8IdentityRecordingEngine()
+        let protected = ProtectedZIPOperationService(
+            fileSystem: fileSystem,
+            passwordProvider: RecordingArchivePasswordProvider(
+                passwords: ["staged-identity-passphrase"]
+            ),
+            engine: engine,
+            logger: RecordingProtectedZIPLogger()
+        )
+        let router = RoutingArchiveOperationService(
+            ordinary: ArchiveOperationService(
+                fileSystem: fileSystem,
+                commandRunner: NoopArchiveCommandRunner()
+            ),
+            protected: protected
+        )
+
+        let result = await router.perform([request]) { _ in }
+        let observations = await engine.observations
+
+        #expect(result.outcomes == [.succeeded(source: archive, destination: destination)])
+        #expect(observations.count == 4)
+        #expect(observations[0].phase == "inspect")
+        #expect(observations[0].identity == sourceIdentity)
+        #expect(URL(filePath: observations[0].path).resolvingSymlinksInPath().path
+            == archive.resolvingSymlinksInPath().path)
+        #expect(observations[1].phase == "inspect")
+        #expect(observations[1].identity != sourceIdentity)
+        #expect(URL(filePath: observations[1].path).resolvingSymlinksInPath().path
+            != archive.resolvingSymlinksInPath().path)
+        #expect(observations[2].phase == "preflight")
+        #expect(observations[2].identity == observations[1].identity)
+        #expect(observations[3].phase == "extract")
+        #expect(observations[3].identity == observations[1].identity)
+    }
+
     @Test @MainActor func factoryInjectsProtectedDependenciesAndRetainsThemThroughPublish() async throws {
         let root = try TemporaryDirectory()
         defer { root.remove() }
@@ -255,6 +396,21 @@ private struct NoopArchiveCommandRunner: ArchiveCommandRunning {
     ) async throws -> FileIdentity { FileIdentity(entryIdentifier: "noop", resolvedIdentifier: "noop") }
 }
 
+private struct Task8WritingArchiveCommandRunner: ArchiveCommandRunning {
+    let fileSystem: any FileSystemAccess
+
+    func run(
+        kind: ArchiveOperationKind,
+        format: ArchiveFormat,
+        sources: [IdentifiedFileRequest],
+        destination: URL,
+        destinationParentIdentity: FileIdentity
+    ) async throws -> FileIdentity {
+        try Data("ordinary archive output".utf8).write(to: destination)
+        return try #require(await fileSystem.identity(of: destination))
+    }
+}
+
 private actor Task8RecordingArchiveOperator: ArchiveOperating {
     let route: ArchiveOperationRoute
     private(set) var sources: [URL] = []
@@ -273,6 +429,98 @@ private actor Task8RecordingArchiveOperator: ArchiveOperating {
         return FileOperationResult(outcomes: requests.map {
             .succeeded(source: $0.verifiedSources[0].url, destination: $0.finalDestination)
         })
+    }
+}
+
+private actor Task8CountingArchiveOperator: ArchiveOperating {
+    private(set) var performCount = 0
+
+    func perform(
+        _ requests: [ArchiveRequest],
+        progress: @escaping ArchiveProgressHandler
+    ) async -> FileOperationResult {
+        performCount += 1
+        return FileOperationResult(outcomes: requests.map {
+            .failed(source: $0.verifiedSources[0].url, message: "raw-route-sentinel")
+        })
+    }
+}
+
+private actor Task8UnsupportedProtectedOperator: ProtectedZIPOperating {
+    private(set) var performCount = 0
+
+    func classify(_ request: ArchiveRequest) async -> ArchiveOperationRoute {
+        .unsupported
+    }
+
+    func perform(
+        _ requests: [ArchiveRequest],
+        progress: @escaping ArchiveProgressHandler
+    ) async -> FileOperationResult {
+        performCount += 1
+        return FileOperationResult(outcomes: requests.map {
+            .failed(source: $0.verifiedSources[0].url, message: "raw-route-sentinel")
+        })
+    }
+}
+
+private struct Task8ArchiveObservation: Sendable, Equatable {
+    let phase: String
+    let identity: FileIdentity
+    let path: String
+}
+
+private actor Task8IdentityRecordingEngine: ProtectedZIPEngine {
+    private(set) var observations: [Task8ArchiveObservation] = []
+
+    func inspect(archive: OpenedFileSystemItem) async throws -> ProtectedZIPInspection {
+        observations.append(observation("inspect", archive: archive))
+        return ProtectedZIPInspection(hasEncryptedEntries: true, strongestAESStrength: 256)
+    }
+
+    func preflight(
+        archive: OpenedFileSystemItem,
+        destinationProbeRoot: OpenedEmptyFileSystemItem,
+        limits: ProtectedZIPLimits
+    ) async throws -> ProtectedZIPInspection {
+        observations.append(observation("preflight", archive: archive))
+        return ProtectedZIPInspection(hasEncryptedEntries: true, strongestAESStrength: 256)
+    }
+
+    func createAES256(
+        sourceRoot: OpenedFileSystemItem,
+        destination: OpenedEmptyFileSystemItem,
+        password: ArchiveSecret,
+        progress: @escaping @Sendable (ProtectedZIPProgress) async -> Void
+    ) async throws {}
+
+    func extract(
+        archive: OpenedFileSystemItem,
+        destinationRoot: OpenedEmptyFileSystemItem,
+        password: ArchiveSecret,
+        limits: ProtectedZIPLimits,
+        progress: @escaping @Sendable (ProtectedZIPProgress) async -> Void
+    ) async throws {
+        observations.append(observation("extract", archive: archive))
+    }
+
+    private func observation(
+        _ phase: String,
+        archive: OpenedFileSystemItem
+    ) -> Task8ArchiveObservation {
+        let path = (try? archive.withUnsafeDescriptor { descriptor in
+            var path = [CChar](repeating: 0, count: Int(PATH_MAX))
+            guard Darwin.fcntl(descriptor, F_GETPATH, &path) == 0 else {
+                return ""
+            }
+            let bytes = path.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
+            return String(decoding: bytes, as: UTF8.self)
+        }) ?? ""
+        return Task8ArchiveObservation(
+            phase: phase,
+            identity: archive.identity,
+            path: path
+        )
     }
 }
 
