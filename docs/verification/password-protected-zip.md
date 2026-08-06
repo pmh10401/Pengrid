@@ -151,3 +151,107 @@ These checks remain **NOT RUN** and are not represented as automated passes:
 - DMG/Gatekeeper/signing or notarization behavior.
 - Process-list inspection during password entry.
 - Performance benchmarks or large-archive throughput measurements.
+
+## Task 12 package, notice, and documentation verification
+
+This append-only section records the package-contract and artifact checks for
+the safe-operation-center Task 12 tree. The approved Task 11 parent is
+`e79d11287b49c52043369d23512dfd58b7e0badc` (`test: expose native gate one-shot
+counters`). The candidate identity policy is parent-based: the final docs
+commit is verified as a child of that parent, and this record does not embed a
+self-referential final commit hash. Re-run `git rev-parse HEAD^` and
+`git show --stat HEAD` after the commit to verify that relationship.
+
+### Package and contract evidence
+
+The following commands passed before the final commit:
+
+| Result | Exact command | Evidence |
+| --- | --- | --- |
+| PASS | `env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --disable-sandbox --no-parallel --filter BuildScriptTests` | **6 tests**, 1.349 seconds in the Swift Testing run; known SwiftPM warning lists 11 unhandled committed fixture files. |
+| PASS | `/bin/bash script/tests/package_release_contract_tests.sh` | `package release contract tests: PASS`; all existing publication/rollback cases plus notice-byte and OpenSSL-rejection cases passed (serial shell fixture run). |
+| PASS | `./script/build_and_run.sh --verify` | Nonpublishing arm64 build and verification exited 0 in 9.174 seconds of command wall time; the app was not launched. |
+
+The shell contract creates a fixture-only `otool` recorder. It records
+`OTOOL -L <binary>` and returns a zlib-only dependency list; a second fixture
+returns `libcrypto` and proves the release script fails before publication.
+The notice fixture compares
+`THIRD_PARTY_NOTICES.md` byte-for-byte with
+`Pengrid.app/Contents/Resources/THIRD_PARTY_NOTICES.md`.
+
+### Artifact inspection
+
+The verified local artifact is:
+
+`dist/Pengrid.app`
+
+Its inspected structure contains `Contents/Info.plist`,
+`Contents/MacOS/BloomFileManager`,
+`Contents/Resources/Pengrid.icns`,
+`Contents/Resources/THIRD_PARTY_NOTICES.md`, and `Contents/_CodeSignature`.
+
+`/usr/bin/otool -L dist/Pengrid.app/Contents/MacOS/BloomFileManager` listed
+CoreFoundation, Security, system zlib (`/usr/lib/libz.1.dylib`), AppKit,
+Swift/runtime frameworks, and system libraries. No `libssl` or `libcrypto`
+entry appeared; the explicit OpenSSL scan exited 0.
+
+`/usr/bin/codesign --verify --deep --strict --verbose=2 dist/Pengrid.app`
+reported `valid on disk` and `satisfies its Designated Requirement`.
+`/usr/bin/cmp -s THIRD_PARTY_NOTICES.md
+dist/Pengrid.app/Contents/Resources/THIRD_PARTY_NOTICES.md` exited 0.
+The local build signs ad-hoc for verification only; Developer ID signing and
+notarization were not performed.
+
+### Task 11 regression and final-suite evidence
+
+The focused regression passed **46 tests in 3 suites**:
+
+```text
+env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+  /usr/bin/xcrun swift test --disable-sandbox --no-parallel \
+  --filter 'ProtectedZIPEndToEndTests|ArchiveOperationIntegrationTests|CloudLocationScopedAccessTests'
+```
+
+Measured command wall time was 4.47 seconds (Swift run reported 3.271
+seconds); the same known 11-file fixture warning was emitted.
+
+The final complete Swift suite, final package contract, and static checks were
+run on this final documentation tree:
+
+- Final full Swift suite: **PASS** — `xcrun swift test --disable-sandbox
+  --no-parallel` completed with **1,033 tests in 76 suites** passed after
+  50.071 seconds (timed command: real 50.68, user 26.90, sys 19.66); the
+  known SwiftPM warning lists 11 unhandled committed fixture files.
+- Final package contract: **PASS** — `/usr/bin/time -p /bin/bash
+  script/tests/package_release_contract_tests.sh` reported
+  `package release contract tests: PASS` (real 103.14, user 71.35, sys
+  11.04).
+- Final shell/Markdown/link/sentinel checks: **PASS** — `git diff --check`,
+  `bash -n` for all three owned shell scripts, local Markdown-link/path
+  resolution, documentation-scope scan, no forbidden source or
+  test sentinels, artifact `otool` OpenSSL scan, ad-hoc `codesign --verify`,
+  and notice byte comparison all passed.
+
+### Bilingual documentation checklist
+
+English/Korean README, user guide, and release guide were updated side by side
+for AES-256-only creation; AES-128/192/256 and ZipCrypto Store/Deflate reading;
+visible ZIP names and metadata; nonpersistent passwords and retry prompts;
+Finder/Archive Utility AES caveat; fixture-only third-party evidence;
+non-guaranteed resource forks, ACLs, and xattrs; fail-closed unsafe/oversized
+input and recovery review; unsupported 7z, RAR, protected TAR, Developer ID,
+and notarization. Each guide labels the linked v1.3 preview DMG as predating
+this source feature.
+
+### Physical or external checks still NOT RUN
+
+These checks remain **NOT RUN** and are not implied by the package fixture or
+source evidence:
+
+- Live Finder or Archive Utility AES-ZIP opening.
+- Windows or WinZip interoperability.
+- Live Google Drive or OneDrive materialization with user credentials.
+- Live VoiceOver readout and keyboard/accessibility observations.
+- DMG/Gatekeeper behavior, Developer ID signing, or notarization.
+- Process-list inspection during password entry.
+- Performance benchmarks or large-archive throughput measurements.

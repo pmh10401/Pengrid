@@ -13,6 +13,9 @@ Download the DMG from the
 [Developer Preview 3 release](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.3),
 open it, and copy `Pengrid.app` to `Applications`.
 
+That v1.3 preview DMG predates the protected-ZIP source feature and must not be
+represented as containing it; build this source for the behavior in this guide.
+
 The free DMG is ad-hoc signed, not Developer ID signed, and not notarized.
 Gatekeeper may therefore block it. Pengrid does not instruct users to disable
 macOS security controls. The [release guide](release.md) explains how to verify
@@ -253,7 +256,30 @@ Intermediate preparation updates are limited to ten per second, while phase
 start and completion boundaries are always delivered. Cancel remains available
 throughout the operation.
 
-Password-protected archives, 7z, and RAR are not supported in this release.
+### Password-protected ZIP behavior
+
+Creating a password-protected ZIP is supported for source builds with
+**AES-256 only**. Reading accepts AES-128, AES-192, AES-256, and ZipCrypto
+entries when their compression method is Store or Deflate and the archive
+passes the current safety policy. ZIP filenames, sizes, timestamps, and other
+central-directory metadata remain visible; encryption does not hide filenames.
+
+Pengrid holds a password only for the active request. It does not save,
+recover, or expose passwords. A wrong password or authentication failure asks
+again with a fresh prompt rather than reusing a retained value.
+
+Unsafe paths, traversal, malformed structures, and archives over the configured
+size or entry limits fail closed. If cleanup cannot prove ownership of a
+remaining temporary item, the item is retained for recovery review, queue
+advancement stops, and the user must explicitly continue after review.
+Resource forks, ACLs, and extended attributes are not guaranteed to round-trip.
+Finder and Archive Utility may not open AES ZIP files; the repository's
+third-party interoperability statement is limited to automated committed
+fixtures, not a live Finder, Archive Utility, Windows, or WinZip result.
+
+The source feature does not support 7z, RAR, or password-protected TAR. Developer
+ID signing and notarization are also outside this source feature's supported
+package boundary.
 
 ## Google Drive and OneDrive through macOS File Provider
 
@@ -334,7 +360,7 @@ Developer Preview 3 deliberately does not provide:
 - background indexing or file-content search;
 - guaranteed metadata for every online-only provider item;
 - reliable per-byte progress from native archive tools;
-- password-protected archive, 7z, or RAR support;
+- 7z, RAR, or password-protected TAR support;
 - permanent deletion;
 - automatic removal when ownership or identity cannot be proven.
 

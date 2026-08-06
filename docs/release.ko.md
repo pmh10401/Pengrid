@@ -22,6 +22,10 @@ App Sandbox entitlement를 사용하지 않습니다. 실행 파일명과 호환
 - DMG SHA-256:
   `1a0498c45ecc13ba57f2a4f8553ef1b0f760cca004cef2d46307780c6b29f0df`
 
+위 링크의 v1.3 프리뷰 DMG는 암호로 보호된 ZIP 소스 기능보다 먼저
+만들어졌습니다. DMG에 이 기능이 포함되었다는 증거로 사용할 수 없으며, 아래
+동작이 필요하면 이 소스에서 빌드해야 합니다.
+
 이 파일은 ad-hoc 방식으로 서명되었으며 Developer ID 서명과 Apple 공증을
 받지 않았습니다. 따라서 `spctl --assess --type execute`의 Developer ID
 배포 심사에서 예상대로 거부됩니다. 서명된 공개 릴리스가 아니라 unsigned
@@ -42,10 +46,27 @@ Provider, 이동식 볼륨, 대소문자 구분 볼륨, 키보드 및 접근성 
 적용합니다. 작업자 수는 최대 4개이며 프로세서 수 또는 원본 수를 넘지
 않습니다. 실제 압축과 압축 해제 명령은 하나의 네이티브 작업입니다.
 
-암호로 보호된 압축 파일, RAR 및 7z는 지원하지 않습니다. 필요한 자동·정적
-검증과 실제 수동 검증 결과는
+암호로 보호된 ZIP은 아래 소스 기능 경계에 포함되지만 암호로 보호된 TAR, RAR
+및 7z는 지원하지 않습니다. 필요한 자동·정적 검증과 실제 수동 검증 결과는
 [`docs/verification/version-1.3-archive-checklist.md`](verification/version-1.3-archive-checklist.md)에
 기록합니다.
+
+## 암호로 보호된 ZIP 소스 기능 경계
+
+소스 빌드에서 만드는 암호 보호 ZIP은 **AES-256만** 사용합니다. 현재 안전
+정책을 통과하고 Store 또는 Deflate 방식인 항목은 AES-128, AES-192, AES-256 및
+ZipCrypto를 읽습니다. ZIP 파일명, 크기, 시각 및 중앙 디렉터리 메타데이터는
+그대로 보이므로 암호화는 파일명 개인정보 보호가 아닙니다. 암호는 저장하거나
+복구하지 않으며 실패한 시도 뒤에는 새 요청으로 다시 묻습니다.
+
+위험하거나 잘못된 구조, traversal 또는 크기 제한을 넘는 압축 파일은 fail
+closed로 거부합니다. 남은 임시 항목의 소유권을 증명할 수 없으면 복구 검토를
+위해 보존하고 큐 진행은 명시적인 계속 선택 전까지 기다립니다. 리소스 포크,
+ACL 및 확장 속성은 보장하지 않습니다. Finder와 Archive Utility는 AES ZIP을
+열지 못할 수 있습니다. 타사 호환성은 커밋된 자동 fixture로만 나타내며 실제
+Finder, Archive Utility, Windows 또는 WinZip 검사를 의미하지 않습니다. 7z,
+RAR 및 암호로 보호된 TAR은 지원하지 않습니다. Developer ID 서명과 공증은 이
+소스 기능에서 지원하지 않으며 수행하지 않습니다.
 
 ## 버전 1.2 릴리스 게이트
 
@@ -73,6 +94,9 @@ Apple Silicon Mac에서는 Command Line Tools만으로 로컬 패키징을 수�
 ```bash
 ./script/package_release.sh --unsigned
 codesign --verify --deep --strict --verbose=2 dist/release/Pengrid.app
+otool -L dist/release/Pengrid.app/Contents/MacOS/BloomFileManager
+cmp THIRD_PARTY_NOTICES.md \
+  dist/release/Pengrid.app/Contents/Resources/THIRD_PARTY_NOTICES.md
 file dist/release/Pengrid.app/Contents/MacOS/BloomFileManager
 plutil -p dist/release/Pengrid.app/Contents/Info.plist
 codesign -dvvv --entitlements :- dist/release/Pengrid.app

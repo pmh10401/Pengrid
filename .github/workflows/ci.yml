@@ -31,5 +31,8 @@ jobs:
       - name: Run Swift tests
         run: swift test --enable-swift-testing --no-parallel --filter BloomFileManagerTests
 
-      - name: Verify app launch
+      - name: Verify app bundle and native linkage
         run: ./script/build_and_run.sh --verify
+
+      - name: Run package contract checks
+        run: /bin/bash script/tests/package_release_contract_tests.sh

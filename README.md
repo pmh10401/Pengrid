@@ -15,6 +15,10 @@ compatibility.
 The current build is
 [Pengrid 1.3.0 Developer Preview 3](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.3):
 
+This linked v1.3 preview DMG predates the protected-ZIP source feature. It must
+not be represented as containing that feature; build from this source for the
+behavior documented below.
+
 - [Download Pengrid.dmg](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.3/Pengrid.dmg)
 - App version: **1.3.0 (build 5)**
 - Requirements: **Apple Silicon Mac, macOS 15 or later**
@@ -71,6 +75,22 @@ Create and extract **ZIP**, **TAR**, **TAR.GZ/TGZ**, **TAR.BZ2/TBZ/TBZ2**, and
 workers; the native archive command remains a single operation. Pengrid reports
 preparation, encoding, and finishing phases without inventing an unreliable byte
 percentage.
+
+### Password-protected ZIP
+
+Source builds create password-protected ZIP files with **AES-256 only**. They
+read AES-128, AES-192, AES-256, and ZipCrypto entries using Store or Deflate
+under the current safety policy. ZIP filenames and other central-directory
+metadata remain visible: encryption is not filename privacy. Passwords are
+never saved or recoverable; a failed attempt asks for the password again.
+
+Finder and Archive Utility may not open an AES ZIP. The repository has automated
+fixture evidence for third-party interoperability, not a live interoperability
+claim. Resource forks, ACLs, and extended attributes are not guaranteed. Unsafe
+or oversized archives fail closed; cleanup uncertainty is retained for recovery
+review and the queue waits for an explicit continue decision. 7z, RAR, and
+password-protected TAR remain unsupported, as do Developer ID signing and
+notarization for this source feature.
 
 ### Google Drive and OneDrive
 

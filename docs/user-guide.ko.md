@@ -11,6 +11,10 @@
 [Developer Preview 3 릴리스](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.3)에서
 DMG를 다운로드해 열고 `Pengrid.app`을 `Applications` 폴더로 복사하세요.
 
+이 v1.3 프리뷰 DMG는 암호로 보호된 ZIP 소스 기능보다 먼저 만들어졌으며 해당
+기능이 포함된 것으로 표시해서는 안 됩니다. 이 안내서의 동작은 이 소스에서
+빌드해야 합니다.
+
 무료 DMG는 ad-hoc 방식으로 서명되었으며 Developer ID 서명과 Apple 공증을
 받지 않았습니다. 따라서 Gatekeeper가 실행을 차단할 수 있습니다. Pengrid는
 macOS 보안 기능을 비활성화하라고 안내하지 않습니다. 파일 검증과 로컬 빌드
@@ -242,7 +246,27 @@ Undo는 나중에 생긴 항목을 덮어쓰거나 수정된 결과물을 제거
 중간 준비 업데이트는 초당 10회로 제한하지만 단계의 시작과 완료 경계는 항상
 전달합니다. 전체 작업 동안 Cancel을 사용할 수 있습니다.
 
-암호로 보호된 압축 파일, 7z 및 RAR은 이번 릴리스에서 지원하지 않습니다.
+### 암호로 보호된 ZIP 동작
+
+소스 빌드에서 암호 보호 ZIP을 만들 때는 **AES-256만** 사용합니다. 현재 안전
+정책을 통과하고 압축 방식이 Store 또는 Deflate인 항목은 AES-128, AES-192,
+AES-256 및 ZipCrypto를 읽을 수 있습니다. ZIP 파일명, 크기, 시각 및 중앙
+디렉터리 메타데이터는 보입니다. 암호화는 파일명을 숨기지 않습니다.
+
+Pengrid는 현재 요청 동안에만 암호를 보관합니다. 암호를 저장하거나 복구하거나
+노출하지 않습니다. 암호가 틀리거나 인증에 실패하면 보관한 값을 재사용하지
+않고 새 입력 창을 다시 표시합니다.
+
+위험한 경로, traversal, 잘못된 구조 및 설정된 크기나 항목 제한을 넘는 압축
+파일은 fail closed로 거부합니다. 남은 임시 항목의 소유권을 증명할 수 없으면
+복구 검토를 위해 보존하고 큐 진행을 멈추며, 검토 후 사용자가 명시적으로
+계속해야 합니다. 리소스 포크, ACL 및 확장 속성의 왕복은 보장하지 않습니다.
+Finder와 Archive Utility는 AES ZIP을 열지 못할 수 있습니다. 저장소의 타사
+호환성 설명은 커밋된 자동 fixture로 제한되며 실제 Finder, Archive Utility,
+Windows 또는 WinZip 결과를 뜻하지 않습니다.
+
+이 소스 기능은 7z, RAR 또는 암호로 보호된 TAR을 지원하지 않습니다. Developer
+ID 서명과 공증도 지원되는 패키지 경계 밖에 있습니다.
 
 ## macOS File Provider를 통한 Google Drive와 OneDrive
 
@@ -322,7 +346,7 @@ Developer Preview 3에서는 다음 기능을 의도적으로 제공하지 않�
 - background index 또는 file-content search
 - 모든 온라인 전용 provider 항목에 대한 메타데이터 보장
 - 네이티브 압축 도구의 신뢰할 수 있는 바이트 단위 진행률
-- 암호로 보호된 압축 파일, 7z 또는 RAR
+- 7z, RAR 또는 암호로 보호된 TAR
 - 영구 삭제
 - 소유권 또는 동일성을 증명할 수 없는 항목의 자동 제거
 

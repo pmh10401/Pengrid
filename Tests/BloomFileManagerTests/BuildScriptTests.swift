@@ -69,7 +69,7 @@ import Testing
     #expect(source.contains("fstatat(resourcesFD"))
     #expect(source.contains("/bin/mv") == false)
     #expect(source.contains("/usr/bin/mktemp") == false)
-    #expect(source.contains("exec 9") == false)
+    #expect(source.contains("exec 9<\"$NOTICE_SOURCE\""))
     let openStage = try #require(source.range(of: "openat(resourcesFD"))
     let readSource = try #require(source.range(of: "read(sourceFD"))
     let writeStage = try #require(source.range(of: "write(stageFD"))
@@ -79,6 +79,28 @@ import Testing
     #expect(readSource.lowerBound < writeStage.lowerBound)
     #expect(writeStage.lowerBound < publish.lowerBound)
     #expect(publish.lowerBound < closeSourceFD.lowerBound)
+}
+
+@Test func buildAndReleaseScriptsVerifyProtectedZipNoticeAndNativeLinkage() throws {
+    let repositoryRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let buildSource = try String(
+        contentsOf: repositoryRoot.appendingPathComponent("script/build_and_run.sh"),
+        encoding: .utf8
+    )
+    let releaseSource = try String(
+        contentsOf: repositoryRoot.appendingPathComponent("script/package_release.sh"),
+        encoding: .utf8
+    )
+
+    #expect(buildSource.contains("THIRD_PARTY_NOTICES.md"))
+    #expect(buildSource.contains("otool -L"))
+    #expect(buildSource.contains("libssl") && buildSource.contains("libcrypto"))
+    #expect(releaseSource.contains("THIRD_PARTY_NOTICES.md"))
+    #expect(releaseSource.contains("otool -L"))
+    #expect(releaseSource.contains("libssl") && releaseSource.contains("libcrypto"))
 }
 
 @Test func buildScriptCreatesPengridBundleWithCanonicalIconAndLegacyIdentity() throws {
@@ -106,6 +128,10 @@ import Testing
     try fileManager.copyItem(
         at: repositoryRoot.appendingPathComponent("script/build_and_run.sh"),
         to: scriptDirectory.appendingPathComponent("build_and_run.sh")
+    )
+    try fileManager.copyItem(
+        at: repositoryRoot.appendingPathComponent("THIRD_PARTY_NOTICES.md"),
+        to: temporaryRoot.appendingPathComponent("THIRD_PARTY_NOTICES.md")
     )
 
     let canonicalIcon = Data("canonical-pengrid-icon".utf8)

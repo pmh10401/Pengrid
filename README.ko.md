@@ -14,6 +14,10 @@ Pengrid는 macOS용 무료 오픈소스 듀얼 패널 파일 관리자입니다.
 현재 배포 버전은
 [Pengrid 1.3.0 Developer Preview 3](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.3)입니다.
 
+위 링크의 v1.3 프리뷰 DMG는 암호로 보호된 ZIP 소스 기능보다 먼저
+만들어졌습니다. 이 기능이 포함된 것으로 표시해서는 안 되며, 아래 동작을
+사용하려면 이 소스에서 빌드해야 합니다.
+
 - [Pengrid.dmg 다운로드](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.3/Pengrid.dmg)
 - 앱 버전: **1.3.0 (빌드 5)**
 - 요구 사항: **Apple Silicon Mac, macOS 15 이상**
@@ -72,6 +76,21 @@ Pengrid의 읽기 전용 폴더 미리보기가 열립니다. 파일, 패키지,
 최대 4개의 제한된 작업자를 사용하지만 실제 압축 명령은 하나의 작업으로
 실행됩니다. 신뢰할 수 없는 바이트 백분율을 만들어내는 대신 준비, 인코딩,
 마무리 단계를 구분해 표시합니다.
+
+### 암호로 보호된 ZIP
+
+이 소스에서 만드는 암호 보호 ZIP은 **AES-256만** 사용합니다. 현재 안전 정책에
+따라 Store 또는 Deflate 항목을 포함한 AES-128, AES-192, AES-256 및 ZipCrypto를
+읽을 수 있습니다. ZIP 파일명과 중앙 디렉터리 메타데이터는 보입니다. 암호화는
+파일명 개인정보 보호가 아닙니다. 암호는 저장하거나 복구하지 않으며, 실패한
+시도 뒤에는 암호를 다시 묻습니다.
+
+Finder와 Archive Utility는 AES ZIP을 열지 못할 수 있습니다. 저장소에는 타사
+호환성에 대한 자동 fixture 증거만 있으며 실제 호환성을 주장하지 않습니다.
+리소스 포크, ACL 및 확장 속성은 보장하지 않습니다. 안전하지 않거나 크기 제한을
+넘는 압축 파일은 fail closed로 거부하며, 정리 소유권을 증명하지 못한 결과는
+복구 검토를 위해 보존하고 큐는 명시적인 계속 선택 전까지 멈춥니다. 7z, RAR,
+암호로 보호된 TAR, Developer ID 서명 및 공증은 지원하지 않습니다.
 
 ### Google Drive와 OneDrive
 

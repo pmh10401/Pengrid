@@ -6,6 +6,7 @@ SOURCE_SCRIPT="$SOURCE_ROOT/script/package_release.sh"
 SOURCE_BUILD_SCRIPT="$SOURCE_ROOT/script/build_and_run.sh"
 SOURCE_FAKE_TOOL="$SOURCE_ROOT/script/tests/fake_release_tool.sh"
 SOURCE_ICON="$SOURCE_ROOT/Assets/Pengrid/Pengrid.icns"
+SOURCE_NOTICE="$SOURCE_ROOT/THIRD_PARTY_NOTICES.md"
 CI_WORKFLOW="$SOURCE_ROOT/.github/workflows/ci.yml"
 VERSION_1_CHECKLIST="$SOURCE_ROOT/docs/verification/version-1-checklist.md"
 VERSION_11_CHECKLIST="$SOURCE_ROOT/docs/verification/version-1.1-checklist.md"
@@ -88,6 +89,20 @@ test_version_13_bundle_version_is_declared() {
   assert_file_contains "$SOURCE_BUILD_SCRIPT" 'BUILD_VERSION="5"'
 }
 
+test_notice_and_native_linkage_contract_is_declared() {
+  assert_file_contains "$SOURCE_SCRIPT" 'THIRD_PARTY_NOTICES.md'
+  assert_file_contains "$SOURCE_SCRIPT" 'otool -L'
+  assert_file_contains "$SOURCE_SCRIPT" 'libssl'
+  assert_file_contains "$SOURCE_SCRIPT" 'libcrypto'
+  assert_file_contains "$SOURCE_BUILD_SCRIPT" 'THIRD_PARTY_NOTICES.md'
+  assert_file_contains "$SOURCE_BUILD_SCRIPT" 'otool -L'
+  assert_file_contains "$SOURCE_BUILD_SCRIPT" 'libssl'
+  assert_file_contains "$SOURCE_BUILD_SCRIPT" 'libcrypto'
+  assert_file_exists "$SOURCE_NOTICE"
+  assert_file_contains "$CI_WORKFLOW" 'script/tests/package_release_contract_tests.sh'
+  assert_file_contains "$CI_WORKFLOW" './script/build_and_run.sh --verify'
+}
+
 new_fixture() {
   local fixture="$TEST_ROOT/$1"
   /bin/mkdir -p \
@@ -99,6 +114,7 @@ new_fixture() {
   /bin/cp "$SOURCE_SCRIPT" "$fixture/repo/script/package_release.sh"
   /bin/chmod +x "$fixture/repo/script/package_release.sh"
   /bin/cp "$SOURCE_ICON" "$fixture/repo/Assets/Pengrid/Pengrid.icns"
+  /bin/cp "$SOURCE_NOTICE" "$fixture/repo/THIRD_PARTY_NOTICES.md"
   echo 'test fixture' >"$fixture/repo/.bloom-release-test-fixture"
   /bin/cp "$SOURCE_FAKE_TOOL" "$fixture/tools/fake_release_tool.sh"
   /bin/chmod +x "$fixture/tools/fake_release_tool.sh"
@@ -106,6 +122,18 @@ new_fixture() {
   for tool in swift xcodebuild security xcrun codesign file lipo hdiutil getconf; do
     /bin/ln -s "$fixture/tools/fake_release_tool.sh" "$fixture/tools/$tool"
   done
+  /bin/cat >"$fixture/tools/otool" <<'OTOOL'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "${1:-}" == '-L' && $# -eq 2 ]] || exit 64
+echo "OTOOL $*" >>"$FAKE_RELEASE_LOG"
+if [[ "${FAKE_OTOOL_OPENSSL:-0}" == 1 ]]; then
+  echo '/usr/lib/libcrypto.dylib'
+else
+  echo '/usr/lib/libz.1.dylib'
+fi
+OTOOL
+  /bin/chmod +x "$fixture/tools/otool"
   echo "$fixture"
 }
 
@@ -420,6 +448,30 @@ test_unsigned_creates_a_verified_dmg() {
   /usr/bin/grep -q '^HDIUTIL$' "$fixture/commands.log" || fail 'hdiutil was not invoked'
 }
 
+test_unsigned_notice_is_byte_identical_and_otool_executes() {
+  local fixture release_dir
+  fixture="$(new_fixture unsigned-notice-otool)"
+  release_dir="$fixture/repo/dist/release"
+  run_fixture "$fixture" -- --unsigned >"$fixture/output" 2>&1
+  assert_file_exists "$release_dir/Pengrid.app/Contents/Resources/THIRD_PARTY_NOTICES.md"
+  assert_files_equal \
+    "$fixture/repo/THIRD_PARTY_NOTICES.md" \
+    "$release_dir/Pengrid.app/Contents/Resources/THIRD_PARTY_NOTICES.md"
+  assert_file_contains "$fixture/commands.log" 'OTOOL -L '
+}
+
+test_openssl_dependency_is_rejected_before_publication() {
+  local fixture
+  fixture="$(new_fixture openssl-linkage-rejected)"
+  if run_fixture "$fixture" FAKE_OTOOL_OPENSSL=1 -- --unsigned >"$fixture/output" 2>&1; then
+    fail 'OpenSSL-linked executable was accepted'
+  fi
+  assert_file_contains "$fixture/commands.log" 'OTOOL -L '
+  assert_file_contains "$fixture/output" 'unexpected OpenSSL dependency'
+  [[ ! -e "$fixture/repo/dist/release/Pengrid.app" ]] \
+    || fail 'OpenSSL-linked executable was published'
+}
+
 test_rejected_notary_preserves_release_and_diagnostics() {
   local fixture diagnostic_path
   fixture="$(new_fixture rejected-notary)"
@@ -578,6 +630,7 @@ run_all_contract_tests() {
   test_version_13_release_contract_is_documented
   test_release_tests_run_nonparallel
   test_version_13_bundle_version_is_declared
+  test_notice_and_native_linkage_contract_is_declared
   test_pengrid_release_identity_preserves_legacy_executable_and_icon
   test_icon_source_symlink_is_rejected
   test_icon_source_replacement_cannot_change_staged_bytes
@@ -594,6 +647,8 @@ run_all_contract_tests() {
   test_hardened_runtime_is_required
   test_unsigned_preserves_existing_signed_zip
   test_unsigned_creates_a_verified_dmg
+  test_unsigned_notice_is_byte_identical_and_otool_executes
+  test_openssl_dependency_is_rejected_before_publication
   test_rejected_notary_preserves_release_and_diagnostics
   test_publish_failure_rolls_back_both_artifacts
   test_abrupt_publication_exit_rolls_back
@@ -618,6 +673,12 @@ case "${1:-all}" in
     ;;
   real-swift-helper-fallback)
     test_real_swift_helper_fallback_receives_production_arguments
+    ;;
+  notice-otool)
+    test_unsigned_notice_is_byte_identical_and_otool_executes
+    ;;
+  openssl-linkage)
+    test_openssl_dependency_is_rejected_before_publication
     ;;
   *)
     fail "unknown contract test selection: $1"

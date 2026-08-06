@@ -20,6 +20,10 @@ is the current free binary release:
 - DMG SHA-256:
   `1a0498c45ecc13ba57f2a4f8553ef1b0f760cca004cef2d46307780c6b29f0df`
 
+The linked v1.3 preview DMG predates the protected-ZIP source feature. It is
+not evidence that the DMG contains that feature; build this source for the
+behavior described below.
+
 This artifact is ad-hoc signed, not Developer ID signed, and not notarized.
 `spctl --assess --type execute` therefore rejects it as a Developer ID
 distribution, as expected. This is a correctly labelled unsigned Developer
@@ -39,11 +43,31 @@ cancellation safety, and VoiceOver-aware archive status. During multi-source
 compression, parallelism is limited to staging copies in the private aggregate
 directory, bounded to at most four workers and never beyond available
 processors or sources; archiving and extraction remain single native tool
-operations. Password-protected archives and RAR and 7z archives are excluded.
+operations. Protected ZIP is covered by the source feature boundary below;
+password-protected TAR, RAR, and 7z archives are excluded.
 The feature gate is not passed until every required automated and static check
 is current and every physical-manual scenario in
 [`docs/verification/version-1.3-archive-checklist.md`](verification/version-1.3-archive-checklist.md)
 has recorded evidence.
+
+## Protected ZIP source feature boundary
+
+Source builds create password-protected ZIP files as **AES-256 only**. Reading
+accepts AES-128, AES-192, AES-256, and ZipCrypto entries when they use Store or
+Deflate and pass the current safety policy. ZIP filenames, sizes, timestamps,
+and other central-directory metadata remain visible, so encryption is not
+filename privacy. Passwords are not saved or recoverable; after a failed
+attempt, Pengrid prompts again with a fresh request.
+
+Unsafe, malformed, traversal, or oversized archives fail closed. If cleanup
+cannot prove ownership of a remaining temporary item, it is retained for
+recovery review and queue advancement waits for an explicit continue decision.
+Resource forks, ACLs, and extended attributes are not guaranteed. Finder and
+Archive Utility may not open AES ZIP files; third-party interoperability is
+represented only by automated committed fixtures, not live Finder, Archive
+Utility, Windows, or WinZip checks. 7z, RAR, and password-protected TAR are
+unsupported. Developer ID signing and notarization are unsupported and are not
+performed for this source feature.
 
 ## Version 1.2 release gates
 
@@ -70,6 +94,9 @@ Command Line Tools are sufficient for local packaging on an Apple Silicon Mac:
 ```bash
 ./script/package_release.sh --unsigned
 codesign --verify --deep --strict --verbose=2 dist/release/Pengrid.app
+otool -L dist/release/Pengrid.app/Contents/MacOS/BloomFileManager
+cmp THIRD_PARTY_NOTICES.md \
+  dist/release/Pengrid.app/Contents/Resources/THIRD_PARTY_NOTICES.md
 file dist/release/Pengrid.app/Contents/MacOS/BloomFileManager
 plutil -p dist/release/Pengrid.app/Contents/Info.plist
 codesign -dvvv --entitlements :- dist/release/Pengrid.app
