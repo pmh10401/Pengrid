@@ -307,6 +307,7 @@ private final class ProtectedZIPProgressBridge: @unchecked Sendable {
     private let initialDeliveryGate = DispatchSemaphore(value: 0)
     private var cancelled = false
     private var finished = false
+    private var initialGateSignaled = false
     private var initialPending: ProtectedZIPProgressEvent?
     private var initialDelivered = false
     private var latestIntermediate: ProtectedZIPProgressEvent?
@@ -353,7 +354,7 @@ private final class ProtectedZIPProgressBridge: @unchecked Sendable {
         lock.lock()
         cancelled = true
         lock.unlock()
-        initialDeliveryGate.signal()
+        signalInitialGateIfNeeded()
     }
 
     func finish() {
@@ -368,7 +369,7 @@ private final class ProtectedZIPProgressBridge: @unchecked Sendable {
         lock.unlock()
         // If native returned before the initial event could be delivered (for
         // example an overflow/error callback), never leave its gate blocked.
-        initialDeliveryGate.signal()
+        signalInitialGateIfNeeded()
     }
 
     func consume() async {
@@ -385,13 +386,13 @@ private final class ProtectedZIPProgressBridge: @unchecked Sendable {
                 _ = await wakeIterator.next()
                 continue
             }
-            if event.completed == 0 {
-                // Signal before validating Int64 representability.  Native
-                // callbacks wait for this acknowledgement, and an oversized
-                // initial total must not strand the worker.
-                initialDeliveryGate.signal()
-            }
+            let isInitial = event.completed == 0
             guard event.completed <= UInt64(Int64.max), event.total <= UInt64(Int64.max) else {
+                if isInitial {
+                    // An unrepresentable initial event is dropped, but native
+                    // still needs its one-shot acknowledgement immediately.
+                    signalInitialGateIfNeeded()
+                }
                 continue
             }
             await progress(
@@ -400,9 +401,25 @@ private final class ProtectedZIPProgressBridge: @unchecked Sendable {
                     totalByteCount: Int64(event.total)
                 )
             )
+            if isInitial {
+                // Preserve the cancellation boundary: native may continue
+                // only after the caller has observed the initial callback.
+                signalInitialGateIfNeeded()
+            }
             lastDelivery = ContinuousClock.now
             lastDeliveredEvent = event
         }
+    }
+
+    private func signalInitialGateIfNeeded() {
+        lock.lock()
+        guard !initialGateSignaled else {
+            lock.unlock()
+            return
+        }
+        initialGateSignaled = true
+        lock.unlock()
+        initialDeliveryGate.signal()
     }
 
     private func nextEvent(
