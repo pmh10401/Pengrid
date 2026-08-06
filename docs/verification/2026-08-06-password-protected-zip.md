@@ -61,7 +61,7 @@ developer directory above.
 | --- | --- | --- |
 | PASS | `env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --disable-sandbox --no-parallel --filter 'ProtectedZIPEngineWriterTests\|ProtectedZIPOperationServiceTests'` | 44 tests in 2 suites passed. |
 | PASS | `env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --disable-sandbox --no-parallel --filter 'ProtectedZIP'` | 104 tests in 5 suites passed. |
-| PASS | `env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --disable-sandbox --no-parallel` | 1,048 tests in 76 suites passed; Swift run 50.052 seconds. |
+| PASS | `env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --disable-sandbox --no-parallel` | 1,056 tests in 77 suites passed; prior full run before the final lifecycle addition. |
 | PASS | `./script/build_and_run.sh --verify` | Non-launching arm64 build, ad-hoc signature, and artifact verification exited 0 (8.526 seconds). |
 | PASS | `/bin/bash script/tests/package_release_contract_tests.sh` | `package release contract tests: PASS`. |
 
@@ -115,3 +115,19 @@ The mutation failed as intended: the test observed an unexpected early
 and plaintext descendants remaining (four failed expectations at lines 243 and
 251–253 of `ApplicationTerminationTests.swift`). Restoring the wait gate
 returned the focused suite to green.
+
+## Post-commit verification — 7755113 (2026-08-06)
+
+The committed lifecycle change was verified from clean `HEAD` with the
+following serial commands:
+
+| Status | Exact command | Result |
+| --- | --- | --- |
+| PASS | `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test --disable-sandbox --no-parallel --scratch-path /tmp/pengrid-protectedzip-final --filter ProtectedZIP` | 104 tests in 5 suites passed (11.635 seconds). |
+| PASS | `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test --disable-sandbox --no-parallel --scratch-path /tmp/pengrid-full-final2` | 1,056 tests in 77 suites passed (50.495 seconds). |
+| PASS | `./script/build_and_run.sh --verify` | Debug arm64 build, ad-hoc signing, and artifact verification passed (7.32 seconds); `codesign` reported valid on disk and satisfied its designated requirement. |
+| PASS | `/bin/bash script/tests/package_release_contract_tests.sh` | `package release contract tests: PASS`. |
+
+The SwiftPM runs emitted only the repository's existing warning about 11
+committed ProtectedZIP fixtures being unhandled resources (plus unrelated
+test-source warning diagnostics); no lifecycle warning or failure occurred.

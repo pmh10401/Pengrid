@@ -1561,3 +1561,12 @@ release task.
 
 The broad repository test/build matrix and the final independent review remain
 the parent task's integration gates.
+
+## Post-commit verification progress — 7755113 (2026-08-06)
+
+- [x] ProtectedZIP regression filter: 104 tests in 5 suites passed.
+- [x] Full serial SwiftPM suite: 1,056 tests in 77 suites passed.
+- [x] `./script/build_and_run.sh --verify`: arm64 build, ad-hoc signature,
+  and artifact checks passed; codesign verification was valid.
+- [x] `/bin/bash script/tests/package_release_contract_tests.sh` passed.
+- [x] Verification details and exact commands appended to the focused record.
