@@ -155,6 +155,12 @@ struct ArchiveOperationStatusPresentation: Equatable, Sendable {
         progressLabel = switch progress.phase {
         case let .preparingSources(completedCount, totalCount):
             "Preparing files, \(min(max(completedCount, 0), max(totalCount, 0))) of \(max(totalCount, 0))"
+        case let .processingBytes(completedByteCount, totalByteCount):
+            if let totalByteCount, totalByteCount > 0 {
+                "Processing archive, \(min(max(completedByteCount, 0), totalByteCount)) of \(totalByteCount)"
+            } else {
+                "Processing archive"
+            }
         case .encoding:
             "Encoding archive"
         case .publishing:

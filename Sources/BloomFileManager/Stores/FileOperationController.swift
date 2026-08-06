@@ -1230,6 +1230,12 @@ final class FileOperationController {
                     totalCount: totalCount,
                     detail: "Preparing files"
                 )
+            case let .processingBytes(completedByteCount, totalByteCount):
+                FileOperationJobProgress(
+                    completedCount: Int(clamping: completedByteCount),
+                    totalCount: totalByteCount.map(Int.init(clamping:)) ?? 0,
+                    detail: "Processing archive"
+                )
             case .encoding:
                 FileOperationJobProgress(
                     completedCount: 0,

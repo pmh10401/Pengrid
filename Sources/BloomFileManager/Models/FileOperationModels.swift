@@ -61,6 +61,36 @@ struct ArchiveDestinationPlan: Sendable, Equatable {
     let sourceDisplayNames: [String]
     let destinations: [URL]
     let formats: [ArchiveFormat]
+    let protection: ArchiveProtection
+
+    init(
+        kind: ArchiveOperationKind,
+        selectedSources: [URL],
+        sourceDisplayNames: [String],
+        destinations: [URL],
+        formats: [ArchiveFormat],
+        protection: ArchiveProtection = .none
+    ) {
+        self.kind = kind
+        self.selectedSources = selectedSources
+        self.sourceDisplayNames = sourceDisplayNames
+        self.destinations = destinations
+        self.formats = formats
+        self.protection = Self.isAllowed(
+            kind: kind,
+            formats: formats,
+            protection: protection
+        ) ? protection : .none
+    }
+
+    private static func isAllowed(
+        kind: ArchiveOperationKind,
+        formats: [ArchiveFormat],
+        protection: ArchiveProtection
+    ) -> Bool {
+        protection == .none
+            || (kind == .compress && formats.count == 1 && formats.first == .zip)
+    }
 
     func requests(
         for verifiedSources: [IdentifiedFileRequest],
@@ -79,7 +109,8 @@ struct ArchiveDestinationPlan: Sendable, Equatable {
                     finalDestination: destinations[0],
                     destinationParentIdentity: destinationParentIdentity,
                     progressDisplayName: destinations[0].lastPathComponent,
-                    format: formats[0]
+                    format: formats[0],
+                    protection: protection
                 )
             ]
         case .extract:
@@ -93,7 +124,8 @@ struct ArchiveDestinationPlan: Sendable, Equatable {
                     finalDestination: destinations[index],
                     destinationParentIdentity: destinationParentIdentity,
                     progressDisplayName: sourceDisplayNames[index],
-                    format: formats[index]
+                    format: formats[index],
+                    protection: protection
                 )
             }
         }
@@ -105,9 +137,12 @@ enum ArchiveDestinationPlanner {
         selectedItems: [FileItem],
         in directory: URL,
         occupiedNames: Set<String>,
-        format: ArchiveFormat = .zip
+        format: ArchiveFormat = .zip,
+        protection: ArchiveProtection = .none
     ) -> ArchiveDestinationPlan? {
-        guard ArchiveSelectionEligibility.canCompress(selectedItems) else { return nil }
+        guard ArchiveSelectionEligibility.canCompress(selectedItems),
+              protection == .none || (format == .zip && protection == .aes256)
+        else { return nil }
         let proposedName = selectedItems.count == 1
             ? "\(selectedItems[0].name)\(format.canonicalSuffix)"
             : "Archive\(format.canonicalSuffix)"
@@ -120,16 +155,20 @@ enum ArchiveDestinationPlanner {
             selectedSources: selectedItems.map(\.url),
             sourceDisplayNames: selectedItems.map(\.name),
             destinations: [directory.appending(path: destinationName)],
-            formats: [format]
+            formats: [format],
+            protection: protection
         )
     }
 
     static func extraction(
         selectedItems: [FileItem],
         in directory: URL,
-        occupiedNames: Set<String>
+        occupiedNames: Set<String>,
+        protection: ArchiveProtection = .none
     ) -> ArchiveDestinationPlan? {
-        guard ArchiveSelectionEligibility.canExtract(selectedItems) else { return nil }
+        guard ArchiveSelectionEligibility.canExtract(selectedItems),
+              protection == .none
+        else { return nil }
         var occupied = occupiedNames
         var destinations: [URL] = []
         var formats: [ArchiveFormat] = []
@@ -154,7 +193,8 @@ enum ArchiveDestinationPlanner {
             selectedSources: selectedItems.map(\.url),
             sourceDisplayNames: selectedItems.map(\.name),
             destinations: destinations,
-            formats: formats
+            formats: formats,
+            protection: protection
         )
     }
 }
