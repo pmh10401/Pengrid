@@ -14,6 +14,104 @@ enum ArchivePasswordPromptError: Error, Equatable, LocalizedError, Sendable {
     }
 }
 
+private final class ArchivePasswordPromptTicket: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<ArchiveSecret, Error>?
+    private var result: Result<ArchiveSecret, Error>?
+
+    var isResolved: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return result != nil
+    }
+
+    func install(_ continuation: CheckedContinuation<ArchiveSecret, Error>) {
+        lock.lock()
+        if let result {
+            lock.unlock()
+            resume(continuation, with: result)
+            return
+        }
+        self.continuation = continuation
+        lock.unlock()
+    }
+
+    func resolve(returning secret: ArchiveSecret) {
+        let continuation: CheckedContinuation<ArchiveSecret, Error>?
+
+        lock.lock()
+        guard result == nil else {
+            lock.unlock()
+            secret.invalidate()
+            return
+        }
+        let result: Result<ArchiveSecret, Error> = .success(secret)
+        self.result = result
+        continuation = self.continuation
+        self.continuation = nil
+        lock.unlock()
+
+        if let continuation {
+            resume(continuation, with: result)
+        }
+    }
+
+    func cancel() {
+        let continuation: CheckedContinuation<ArchiveSecret, Error>?
+
+        lock.lock()
+        guard result == nil else {
+            lock.unlock()
+            return
+        }
+        let result: Result<ArchiveSecret, Error> = .failure(CancellationError())
+        self.result = result
+        continuation = self.continuation
+        self.continuation = nil
+        lock.unlock()
+
+        if let continuation {
+            resume(continuation, with: result)
+        }
+    }
+
+    deinit {
+        cancel()
+    }
+
+    private func resume(
+        _ continuation: CheckedContinuation<ArchiveSecret, Error>,
+        with result: Result<ArchiveSecret, Error>
+    ) {
+        switch result {
+        case let .success(secret):
+            continuation.resume(returning: secret)
+        case let .failure(error):
+            continuation.resume(throwing: error)
+        }
+    }
+}
+
+private final class ArchivePasswordPromptLifecycle: @unchecked Sendable {
+    private let lock = NSLock()
+    private var ticket: ArchivePasswordPromptTicket?
+
+    func set(_ ticket: ArchivePasswordPromptTicket?) {
+        lock.withLock {
+            self.ticket = ticket
+        }
+    }
+
+    func cancel() {
+        let ticket = lock.withLock {
+            let ticket = self.ticket
+            self.ticket = nil
+            return ticket
+        }
+        ticket?.cancel()
+    }
+}
+
 @MainActor
 protocol ArchivePasswordProviding: AnyObject, Sendable {
     func requestPassword(for request: ArchivePasswordRequest) async throws -> ArchiveSecret
@@ -24,31 +122,66 @@ final class ArchivePasswordPromptCoordinator: ArchivePasswordProviding {
     private(set) var pendingRequest: ArchivePasswordRequest?
     private(set) var validationError: ArchivePasswordValidationError?
 
-    private var pendingContinuation: CheckedContinuation<ArchiveSecret, Error>?
+    private nonisolated let ticketLifecycle = ArchivePasswordPromptLifecycle()
+    private var pendingTicket: ArchivePasswordPromptTicket?
     private var pendingRequestID: UUID?
 
+    deinit {
+        ticketLifecycle.cancel()
+    }
+
     func requestPassword(for request: ArchivePasswordRequest) async throws -> ArchiveSecret {
-        guard pendingContinuation == nil, pendingRequest == nil else {
+        let ticket = ArchivePasswordPromptTicket()
+        try begin(request: request, ticket: ticket)
+        do {
+            return try await Self.awaitResult(for: ticket)
+        } catch {
+            // The cancellation handler resumes the ticket from a
+            // nonisolated context. Clear observable coordinator state on the
+            // main actor before the request task reports its error.
+            clearPendingState(if: ticket)
+            throw error
+        }
+    }
+
+    private func begin(
+        request: ArchivePasswordRequest,
+        ticket: ArchivePasswordPromptTicket
+    ) throws {
+        // A cancellation handler may have resolved the ticket off-actor just
+        // before its weak cleanup hop runs. Reclaim that state before deciding
+        // whether another prompt can begin.
+        if let pendingTicket, pendingTicket.isResolved {
+            clearPendingState(if: pendingTicket)
+        }
+
+        guard pendingTicket == nil, pendingRequest == nil else {
             throw ArchivePasswordPromptError.closed
         }
 
-        return try await withTaskCancellationHandler(operation: {
-            try await withCheckedThrowingContinuation {
-                (continuation: CheckedContinuation<ArchiveSecret, Error>) in
-                begin(request: request, continuation: continuation)
-            }
-        }, onCancel: {
-            // Cancellation handlers are not isolated to the main actor. Hop
-            // back with only the public request ID; no user input crosses the
-            // boundary and a stale callback cannot dismiss a newer prompt.
-            Task { @MainActor [weak self] in
-                self?.cancel(requestID: request.id)
-            }
-        })
+        pendingRequest = request
+        validationError = nil
+        pendingRequestID = request.id
+        pendingTicket = ticket
+        ticketLifecycle.set(ticket)
     }
 
     func submit(password: String, confirmation: String?) {
         guard let request = pendingRequest else { return }
+        submit(password: password, confirmation: confirmation, requestID: request.id)
+    }
+
+    func submit(
+        password: String,
+        confirmation: String?,
+        requestID: UUID
+    ) {
+        guard let request = pendingRequest,
+              request.id == requestID,
+              let ticket = pendingTicket,
+              !ticket.isResolved else {
+            return
+        }
 
         switch request.purpose {
         case .createAES256:
@@ -66,7 +199,12 @@ final class ArchivePasswordPromptCoordinator: ArchivePasswordProviding {
                         validationError = .confirmationMismatch
                         return
                     }
-                    finishCreating(password: password, confirmation: confirmation)
+                    finishCreating(
+                        password: password,
+                        confirmation: confirmation,
+                        requestID: requestID,
+                        ticket: ticket
+                    )
                     return
                 }
                 validationError = error
@@ -76,7 +214,7 @@ final class ArchivePasswordPromptCoordinator: ArchivePasswordProviding {
 
         case .extract:
             guard let error = Self.validate(password, minimumBytes: 1, maximumBytes: 1_024) else {
-                finishExtracting(password: password)
+                finishExtracting(password: password, requestID: requestID, ticket: ticket)
                 return
             }
             validationError = error
@@ -90,44 +228,26 @@ final class ArchivePasswordPromptCoordinator: ArchivePasswordProviding {
 
     func cancel(requestID: UUID) {
         guard pendingRequestID == requestID,
-              let continuation = pendingContinuation else {
+              let ticket = pendingTicket else {
             return
         }
 
         clearPendingState()
-        continuation.resume(throwing: CancellationError())
+        ticket.cancel()
     }
 
-    private func begin(
-        request: ArchivePasswordRequest,
-        continuation: CheckedContinuation<ArchiveSecret, Error>
+    private func finishCreating(
+        password: String,
+        confirmation: String,
+        requestID: UUID,
+        ticket: ArchivePasswordPromptTicket
     ) {
-        guard pendingContinuation == nil, pendingRequest == nil else {
-            continuation.resume(throwing: ArchivePasswordPromptError.closed)
-            return
-        }
-
-        // A task cancelled before its continuation is installed must not
-        // leave a visible prompt behind. The cancellation handler also runs,
-        // but the ID match keeps that later callback harmless.
-        guard !Task.isCancelled else {
-            continuation.resume(throwing: CancellationError())
-            return
-        }
-
-        pendingRequest = request
-        validationError = nil
-        pendingRequestID = request.id
-        pendingContinuation = continuation
-    }
-
-    private func finishCreating(password: String, confirmation: String) {
         do {
             let secret = try ArchiveSecret.creation(
                 password: password,
                 confirmation: confirmation
             )
-            finish(with: secret)
+            finish(with: secret, requestID: requestID, ticket: ticket)
         } catch let error as ArchiveSecretError {
             validationError = Self.validationError(for: error, input: password)
         } catch {
@@ -135,9 +255,17 @@ final class ArchivePasswordPromptCoordinator: ArchivePasswordProviding {
         }
     }
 
-    private func finishExtracting(password: String) {
+    private func finishExtracting(
+        password: String,
+        requestID: UUID,
+        ticket: ArchivePasswordPromptTicket
+    ) {
         do {
-            finish(with: try ArchiveSecret.extraction(password: password))
+            finish(
+                with: try ArchiveSecret.extraction(password: password),
+                requestID: requestID,
+                ticket: ticket
+            )
         } catch let error as ArchiveSecretError {
             validationError = Self.validationError(for: error, input: password)
         } catch {
@@ -145,23 +273,46 @@ final class ArchivePasswordPromptCoordinator: ArchivePasswordProviding {
         }
     }
 
-    private func finish(with secret: ArchiveSecret) {
-        guard let continuation = pendingContinuation else {
-            // This should only be reachable if a future caller changes the
-            // state machine. Avoid retaining the secret if no waiter exists.
+    private func finish(
+        with secret: ArchiveSecret,
+        requestID: UUID,
+        ticket: ArchivePasswordPromptTicket
+    ) {
+        guard pendingRequestID == requestID, pendingTicket === ticket else {
+            // Cancellation or a newer request won the race. The ticket owns
+            // no successful secret in this branch, so wipe it immediately.
             secret.invalidate()
             return
         }
 
         clearPendingState()
-        continuation.resume(returning: secret)
+        ticket.resolve(returning: secret)
     }
 
     private func clearPendingState() {
         pendingRequest = nil
         validationError = nil
         pendingRequestID = nil
-        pendingContinuation = nil
+        pendingTicket = nil
+        ticketLifecycle.set(nil)
+    }
+
+    private func clearPendingState(if ticket: ArchivePasswordPromptTicket) {
+        guard pendingTicket === ticket else { return }
+        clearPendingState()
+    }
+
+    private static func awaitResult(
+        for ticket: ArchivePasswordPromptTicket
+    ) async throws -> ArchiveSecret {
+        try await withTaskCancellationHandler(operation: {
+            try await withCheckedThrowingContinuation {
+                (continuation: CheckedContinuation<ArchiveSecret, Error>) in
+                ticket.install(continuation)
+            }
+        }, onCancel: {
+            ticket.cancel()
+        })
     }
 
     private static func validate(

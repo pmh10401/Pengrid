@@ -43,10 +43,71 @@ struct ArchivePasswordPresentationTests {
 
         #expect(presentation.title == "압축 파일 암호 입력")
         #expect(presentation.subtitle == "Secret Archive.zip")
+        #expect(presentation.aesWarning == nil)
         #expect(presentation.genericDamageError == "암호가 올바르지 않거나 암호화된 데이터가 손상되었습니다.")
         #expect(presentation.lengthNote == "암호는 UTF-8 기준 1~1,024바이트여야 합니다.")
         #expect(presentation.filenameVisibilityNote == "보호된 ZIP에서도 파일 이름은 표시됩니다.")
-        #expect(presentation.aesWarning == "이 ZIP 파일은 AES-256 암호화를 사용합니다.")
+    }
+
+    @Test func liveFormStateUsesModeSpecificFieldsFocusValidationAndClearing() {
+        let sentinel = "form-sentinel"
+        var creation = ArchivePasswordFormState(
+            purpose: .createAES256,
+            password: sentinel,
+            confirmation: sentinel
+        )
+        #expect(creation.secureFieldCount == 2)
+        #expect(creation.firstFocusTarget == .password)
+        #expect(creation.canSubmit)
+        let creationSubmission = creation.captureAndClear()
+        #expect(creation.password.isEmpty)
+        #expect(creation.confirmation.isEmpty)
+        #expect(creationSubmission.password == sentinel)
+        #expect(creationSubmission.confirmation == sentinel)
+        #expect(String(reflecting: creation).contains(sentinel) == false)
+
+        var extraction = ArchivePasswordFormState(
+            purpose: .extract,
+            password: sentinel,
+            confirmation: "ignored"
+        )
+        #expect(extraction.secureFieldCount == 1)
+        #expect(extraction.firstFocusTarget == .password)
+        #expect(extraction.canSubmit)
+        let extractionSubmission = extraction.captureAndClear()
+        #expect(extraction.password.isEmpty)
+        #expect(extraction.confirmation.isEmpty)
+        #expect(extractionSubmission.password == sentinel)
+        #expect(extractionSubmission.confirmation == nil)
+        #expect(String(reflecting: extraction).contains(sentinel) == false)
+
+        #expect(ArchivePasswordFormState(
+            purpose: .createAES256,
+            password: "short",
+            confirmation: "short"
+        ).canSubmit == false)
+        #expect(ArchivePasswordFormState(
+            purpose: .extract,
+            password: "before\0after",
+            confirmation: ""
+        ).canSubmit == false)
+    }
+
+    @Test func presentationAndAccessibilityNeverReflectFormSentinel() {
+        let request = ArchivePasswordRequest(
+            id: UUID(),
+            purpose: .extract,
+            archiveBasename: "/private/Archive.zip",
+            previousAttemptFailed: false
+        )
+        let presentation = ArchivePasswordSheet.presentation(for: request, locale: Locale(identifier: "en"))
+        let rendered = String(reflecting: presentation)
+        #expect(rendered.contains("form-sentinel") == false)
+        #expect(presentation.accessibilityLabel.contains("form-sentinel") == false)
+        #expect(presentation.passwordLabel == "Password")
+        #expect(presentation.confirmationLabel == "Confirm Password")
+        #expect(presentation.cancelLabel == "Cancel")
+        #expect(presentation.submitLabel == "Unlock")
     }
 
     @Test func presentationSourceUsesSecureFieldsKeyboardPathsAndNarrowIdentifiers() throws {
@@ -63,8 +124,11 @@ struct ArchivePasswordPresentationTests {
         #expect(source.contains("AccessibilityIdentifiers.archivePasswordValidation"))
         #expect(source.contains("AccessibilityIdentifiers.archivePasswordSubmit"))
         #expect(source.contains("AccessibilityIdentifiers.archivePasswordCancel"))
+        #expect(source.contains("formState.firstFocusTarget"))
         #expect(source.contains("password = \"\""))
         #expect(source.contains("confirmation = \"\""))
+        #expect(source.contains("requestID: request.id"))
+        #expect(source.contains("if let aesWarning = copy.aesWarning"))
         #expect(source.contains("pasteboard") == false)
         #expect(source.contains("remember") == false)
         #expect(source.contains("hint") == false)
