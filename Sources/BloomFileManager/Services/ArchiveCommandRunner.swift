@@ -2,6 +2,12 @@ import Darwin
 import Foundation
 
 typealias ArchiveCommandProgressHandler = @Sendable (ArchiveOperationPhase) async -> Void
+typealias ArchiveNativeProcessHandler = @Sendable (
+    ArchiveOperationKind,
+    ArchiveFormat,
+    [String],
+    Int32
+) async throws -> Void
 
 protocol ArchiveCommandRunning: Sendable {
     func run(
@@ -46,6 +52,7 @@ struct LiveArchiveCommandRunner: ArchiveCommandRunning {
     private static let standardErrorLimit = 16_384
     private let fileSystem: any FileSystemAccess
     private let sourcePreparer: any ArchiveSourcePreparing
+    private let nativeProcess: ArchiveNativeProcessHandler?
 
     init(
         fileSystem: any FileSystemAccess = LiveFileSystemAccess(),
@@ -54,6 +61,17 @@ struct LiveArchiveCommandRunner: ArchiveCommandRunning {
         self.fileSystem = fileSystem
         self.sourcePreparer = sourcePreparer
             ?? LiveArchiveSourcePreparationService(fileSystem: fileSystem)
+        self.nativeProcess = nil
+    }
+
+    init(
+        fileSystem: any FileSystemAccess,
+        sourcePreparer: any ArchiveSourcePreparing,
+        nativeProcess: @escaping ArchiveNativeProcessHandler
+    ) {
+        self.fileSystem = fileSystem
+        self.sourcePreparer = sourcePreparer
+        self.nativeProcess = nativeProcess
     }
 
     func run(
@@ -118,12 +136,21 @@ struct LiveArchiveCommandRunner: ArchiveCommandRunning {
             await progress(.encoding)
             try Task.checkCancellation()
 
-            try await runNativeProcess(
-                kind: kind,
-                format: format,
-                arguments: preparedCommand.arguments,
-                outputDescriptor: output.descriptor
-            )
+            if let nativeProcess {
+                try await nativeProcess(
+                    kind,
+                    format,
+                    preparedCommand.arguments,
+                    output.descriptor
+                )
+            } else {
+                try await runNativeProcess(
+                    kind: kind,
+                    format: format,
+                    arguments: preparedCommand.arguments,
+                    outputDescriptor: output.descriptor
+                )
+            }
         } catch {
             let outputCleanupError = await cleanupOutput(
                 destination,
@@ -138,12 +165,23 @@ struct LiveArchiveCommandRunner: ArchiveCommandRunning {
             }
             throw error
         }
-        guard try await fileSystem.identity(of: destination) == output.identity else {
-            _ = await preparedCommand.cleanup(
+        do {
+            guard try await fileSystem.identity(of: destination) == output.identity else {
+                throw ArchiveOperationError.recoveryRequired
+            }
+        } catch {
+            let outputCleanupError = await cleanupOutput(
+                destination,
+                identity: output.identity
+            )
+            let preparationCleanupError = await preparedCommand.cleanup(
                 using: fileSystem,
                 sourcePreparer: sourcePreparer
             )
-            throw ArchiveOperationError.recoveryRequired
+            guard outputCleanupError == nil, preparationCleanupError == nil else {
+                throw ArchiveOperationError.recoveryRequired
+            }
+            throw error
         }
         guard await preparedCommand.cleanup(
             using: fileSystem,

@@ -202,4 +202,264 @@ import Testing
             format: format
         ) == expected)
     }
+
+    @Test func postProcessIdentityLookupErrorCleansOutputAndPreparedSources() async {
+        let destination = URL(filePath: "/tmp/runner-verification-error.zip")
+        let parentIdentity = FileIdentity(
+            entryIdentifier: "parent",
+            resolvedIdentifier: "parent"
+        )
+        let outputIdentity = FileIdentity(
+            entryIdentifier: "output",
+            resolvedIdentifier: "output"
+        )
+        let fileSystem = RunnerVerificationFileSystem(
+            destination: destination,
+            parentIdentity: parentIdentity,
+            outputIdentity: outputIdentity,
+            identityError: .lookupFailed
+        )
+        let sourcePreparer = RecordingArchiveSourcePreparer(
+            prepared: PreparedArchiveSources.fixture()
+        )
+        let runner = LiveArchiveCommandRunner(
+            fileSystem: fileSystem,
+            sourcePreparer: sourcePreparer,
+            nativeProcess: { _, _, _, _ in }
+        )
+
+        await #expect(throws: RunnerVerificationError.lookupFailed) {
+            try await runner.run(
+                kind: .compress,
+                format: .zip,
+                sources: [IdentifiedFileRequest(
+                    url: URL(filePath: "/tmp/source.txt"),
+                    identity: outputIdentity
+                )],
+                destination: destination,
+                destinationParentIdentity: parentIdentity
+            )
+        }
+        #expect(await fileSystem.removedOutputIdentities == [outputIdentity])
+        #expect(await sourcePreparer.cleanupCount == 1)
+    }
+
+    @Test func postProcessIdentityLookupCleanupFailureRequiresRecovery() async {
+        let destination = URL(filePath: "/tmp/runner-verification-cleanup-error.zip")
+        let parentIdentity = FileIdentity(
+            entryIdentifier: "parent",
+            resolvedIdentifier: "parent"
+        )
+        let outputIdentity = FileIdentity(
+            entryIdentifier: "output",
+            resolvedIdentifier: "output"
+        )
+        let fileSystem = RunnerVerificationFileSystem(
+            destination: destination,
+            parentIdentity: parentIdentity,
+            outputIdentity: outputIdentity,
+            identityError: .lookupFailed
+        )
+        let sourcePreparer = RecordingArchiveSourcePreparer(
+            prepared: PreparedArchiveSources.fixture(),
+            cleanupError: .cleanupFailed
+        )
+        let runner = LiveArchiveCommandRunner(
+            fileSystem: fileSystem,
+            sourcePreparer: sourcePreparer,
+            nativeProcess: { _, _, _, _ in }
+        )
+
+        await #expect(throws: ArchiveOperationError.recoveryRequired) {
+            try await runner.run(
+                kind: .compress,
+                format: .zip,
+                sources: [IdentifiedFileRequest(
+                    url: URL(filePath: "/tmp/source.txt"),
+                    identity: outputIdentity
+                )],
+                destination: destination,
+                destinationParentIdentity: parentIdentity
+            )
+        }
+        #expect(await fileSystem.removedOutputIdentities == [outputIdentity])
+        #expect(await sourcePreparer.cleanupCount == 1)
+    }
+}
+
+private enum RunnerVerificationError: Error, Equatable {
+    case lookupFailed
+    case cleanupFailed
+}
+
+private actor RecordingArchiveSourcePreparer: ArchiveSourcePreparing {
+    let prepared: PreparedArchiveSources
+    let cleanupError: RunnerVerificationError?
+    private(set) var cleanupCount = 0
+
+    init(
+        prepared: PreparedArchiveSources,
+        cleanupError: RunnerVerificationError? = nil
+    ) {
+        self.prepared = prepared
+        self.cleanupError = cleanupError
+    }
+
+    func prepare(
+        _ sources: [IdentifiedFileRequest],
+        beside destination: URL,
+        parentIdentity: FileIdentity,
+        progress: @escaping ArchiveCommandProgressHandler
+    ) async throws -> PreparedArchiveSources {
+        prepared
+    }
+
+    func cleanup(_ prepared: PreparedArchiveSources) async throws {
+        cleanupCount += 1
+        if let cleanupError {
+            throw cleanupError
+        }
+    }
+}
+
+private actor RunnerVerificationFileSystem: FileSystemAccess {
+    let destination: URL
+    let parentIdentity: FileIdentity
+    let outputIdentity: FileIdentity
+    let identityError: RunnerVerificationError?
+    private(set) var removedOutputIdentities: [FileIdentity] = []
+
+    init(
+        destination: URL,
+        parentIdentity: FileIdentity,
+        outputIdentity: FileIdentity,
+        identityError: RunnerVerificationError?
+    ) {
+        self.destination = destination
+        self.parentIdentity = parentIdentity
+        self.outputIdentity = outputIdentity
+        self.identityError = identityError
+    }
+
+    func exists(_ url: URL) async -> Bool { false }
+
+    func createDirectory(_ url: URL) async throws {}
+
+    func createEmptyItemAndCaptureIdentity(
+        _ url: URL,
+        kind: EmptyFileSystemItemKind,
+        parentIdentifiedBy expectedParentIdentity: FileIdentity
+    ) async throws -> OpenedEmptyFileSystemItem {
+        guard url == destination, expectedParentIdentity == parentIdentity else {
+            throw RunnerVerificationError.lookupFailed
+        }
+        return OpenedEmptyFileSystemItem(identity: outputIdentity, descriptor: -1)
+    }
+
+    func copyAndCaptureIdentity(_ source: URL, to destination: URL) async throws -> FileIdentity {
+        outputIdentity
+    }
+
+    func move(_ source: URL, to destination: URL) async throws {}
+
+    func moveExclusively(_ source: URL, to destination: URL) async throws {}
+
+    func remove(_ url: URL) async throws {}
+
+    func replace(_ destination: URL, with stagedItem: URL) async throws {}
+
+    func identity(of url: URL) async throws -> FileIdentity? {
+        if url == destination, let identityError {
+            throw identityError
+        }
+        return parentIdentity
+    }
+
+    func move(_ source: URL, identifiedBy identity: FileIdentity, to destination: URL) async throws {}
+
+    func remove(_ url: URL, identifiedBy identity: FileIdentity) async throws {
+        if url == destination {
+            removedOutputIdentities.append(identity)
+        }
+    }
+
+    func replace(
+        _ destination: URL,
+        identifiedBy destinationIdentity: FileIdentity,
+        with stagedItem: URL,
+        identifiedBy stagedIdentity: FileIdentity
+    ) async throws {}
+
+    func reserveStagingDirectory(beside destination: URL) async throws -> StagingReservation {
+        PreparedArchiveSources.fixture().reservation
+    }
+
+    func removeStagingDirectory(_ reservation: StagingReservation) async throws {}
+
+    func fingerprint(of source: URL) async throws -> SourceFingerprint {
+        SourceFingerprint(entries: [])
+    }
+
+    func trash(_ url: URL) async throws {}
+
+    func trash(_ url: URL, identifiedBy identity: FileIdentity) async throws {}
+
+    func trashAndReturnResultingURL(
+        _ url: URL,
+        identifiedBy identity: FileIdentity
+    ) async throws -> URL? { nil }
+
+    func quarantineForTrash(
+        _ url: URL,
+        identifiedBy identity: FileIdentity
+    ) async throws -> StorageTrashQuarantine {
+        fatalError("unused")
+    }
+
+    func moveTrashQuarantineAtomically(
+        _ quarantine: StorageTrashQuarantine
+    ) async throws -> URL {
+        fatalError("unused")
+    }
+
+    func names(in directory: URL) async throws -> Set<String> { [] }
+
+    func volumeIdentifier(for url: URL) async throws -> String { "test" }
+
+    func byteSize(of url: URL) async throws -> Int64? { nil }
+
+    func availableCapacity(at url: URL) async throws -> Int64? { nil }
+
+    func prepareDirectoryHierarchy(
+        root: URL,
+        identifiedBy rootIdentity: FileIdentity,
+        relativeComponents: [String]
+    ) async throws -> PreparedDirectoryHierarchy {
+        fatalError("unused")
+    }
+
+    func removeEmptyOwnedDirectories(
+        root: URL,
+        identifiedBy rootIdentity: FileIdentity,
+        directories: [PreparedDirectoryHierarchy.OwnedDirectory]
+    ) async throws {}
+}
+
+private extension PreparedArchiveSources {
+    static func fixture() -> PreparedArchiveSources {
+        let root = URL(filePath: "/tmp/prepared-archive-sources")
+        let identity = FileIdentity(
+            entryIdentifier: "staging",
+            resolvedIdentifier: "staging"
+        )
+        return PreparedArchiveSources(
+            root: root,
+            reservation: StagingReservation(
+                directory: root,
+                directoryIdentity: identity,
+                item: root.appending(path: "payload")
+            ),
+            copiedEntries: []
+        )
+    }
 }
