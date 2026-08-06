@@ -37,6 +37,8 @@ typedef struct mz_stream_wzaes_s {
     uint8_t crypt_block[MZ_AES_BLOCK_SIZE];
     void *hmac;
     uint8_t nonce[MZ_AES_BLOCK_SIZE];
+    uint8_t footer_checked;
+    uint8_t hmac_finalized;
 } mz_stream_wzaes;
 
 static mz_stream_vtbl mz_stream_wzaes_vtbl = {
@@ -57,6 +59,8 @@ static void mz_stream_wzaes_clear_state(mz_stream_wzaes *wzaes) {
     wzaes->crypt_pos = 0;
     wzaes->mode = 0;
     wzaes->initialized = 0;
+    wzaes->footer_checked = 0;
+    wzaes->hmac_finalized = 0;
 }
 
 int32_t mz_stream_wzaes_open(void *stream, const char *path, int32_t mode) {
@@ -71,15 +75,17 @@ int32_t mz_stream_wzaes_open(void *stream, const char *path, int32_t mode) {
     const char *password = path;
     int32_t status = MZ_OK;
 
-    memset(kbuf, 0, sizeof(kbuf));
-    memset(verify, 0, sizeof(verify));
-    memset(verify_expected, 0, sizeof(verify_expected));
-    memset(salt_value, 0, sizeof(salt_value));
+    pengrid_secure_clear(kbuf, sizeof(kbuf));
+    pengrid_secure_clear(verify, sizeof(verify));
+    pengrid_secure_clear(verify_expected, sizeof(verify_expected));
+    pengrid_secure_clear(salt_value, sizeof(salt_value));
     if (!wzaes)
         return MZ_PARAM_ERROR;
     wzaes->total_in = 0;
     wzaes->total_out = 0;
     wzaes->initialized = 0;
+    wzaes->footer_checked = 0;
+    wzaes->hmac_finalized = 0;
 
     if (mz_stream_is_open(wzaes->stream.base) != MZ_OK) {
         status = MZ_OPEN_ERROR;
@@ -126,7 +132,7 @@ int32_t mz_stream_wzaes_open(void *stream, const char *path, int32_t mode) {
         goto cleanup;
 
     wzaes->crypt_pos = MZ_AES_BLOCK_SIZE;
-    memset(wzaes->nonce, 0, sizeof(wzaes->nonce));
+    pengrid_secure_clear(wzaes->nonce, sizeof(wzaes->nonce));
     mz_crypt_aes_reset(wzaes->aes);
     status = mz_crypt_aes_set_encrypt_key(wzaes->aes, kbuf, key_length, NULL, 0);
     if (status != MZ_OK)
@@ -213,8 +219,33 @@ int32_t mz_stream_wzaes_read(void *stream, void *buf, int32_t size) {
     max_total_in = wzaes->max_total_in - MZ_AES_FOOTER_SIZE;
     if ((int64_t)bytes_to_read > (max_total_in - wzaes->total_in))
         bytes_to_read = (int32_t)(max_total_in - wzaes->total_in);
-    if (bytes_to_read <= 0)
+    if (bytes_to_read <= 0) {
+        uint8_t expected_hash[MZ_AES_AUTHCODE_SIZE];
+        uint8_t computed_hash[MZ_HASH_SHA1_SIZE];
+        int32_t status = MZ_OK;
+        if ((wzaes->mode & MZ_OPEN_MODE_READ) == 0 || wzaes->footer_checked)
+            return 0;
+        pengrid_secure_clear(expected_hash, sizeof(expected_hash));
+        pengrid_secure_clear(computed_hash, sizeof(computed_hash));
+        if (mz_stream_read(wzaes->stream.base, expected_hash, MZ_AES_AUTHCODE_SIZE) != MZ_AES_AUTHCODE_SIZE) {
+            status = MZ_READ_ERROR;
+        } else if (!wzaes->hmac_finalized) {
+            if (mz_crypt_hmac_end(wzaes->hmac, computed_hash, sizeof(computed_hash)) != MZ_OK)
+                status = MZ_CRC_ERROR;
+            else if (memcmp(computed_hash, expected_hash, MZ_AES_AUTHCODE_SIZE) != 0)
+                status = MZ_CRC_ERROR;
+            wzaes->hmac_finalized = 1;
+        }
+        wzaes->total_in += MZ_AES_AUTHCODE_SIZE;
+        wzaes->footer_checked = 1;
+        pengrid_secure_clear(expected_hash, sizeof(expected_hash));
+        pengrid_secure_clear(computed_hash, sizeof(computed_hash));
+        if (status != MZ_OK) {
+            wzaes->error = status;
+            return status;
+        }
         return 0;
+    }
     read = mz_stream_read(wzaes->stream.base, buf, bytes_to_read);
     if (read > 0) {
         mz_crypt_hmac_update(wzaes->hmac, (uint8_t *)buf, read);
@@ -266,15 +297,18 @@ int32_t mz_stream_wzaes_close(void *stream) {
     uint8_t computed_hash[MZ_HASH_SHA1_SIZE];
     int32_t status = MZ_OK;
 
-    memset(expected_hash, 0, sizeof(expected_hash));
-    memset(computed_hash, 0, sizeof(computed_hash));
+    pengrid_secure_clear(expected_hash, sizeof(expected_hash));
+    pengrid_secure_clear(computed_hash, sizeof(computed_hash));
     if (!wzaes) {
         status = MZ_PARAM_ERROR;
         goto cleanup;
     }
-    if (mz_crypt_hmac_end(wzaes->hmac, computed_hash, sizeof(computed_hash)) != MZ_OK) {
-        status = MZ_CRC_ERROR;
-        goto cleanup;
+    if (!wzaes->hmac_finalized) {
+        if (mz_crypt_hmac_end(wzaes->hmac, computed_hash, sizeof(computed_hash)) != MZ_OK) {
+            status = MZ_CRC_ERROR;
+            goto cleanup;
+        }
+        wzaes->hmac_finalized = 1;
     }
     if (wzaes->mode & MZ_OPEN_MODE_WRITE) {
         if (mz_stream_write(wzaes->stream.base, computed_hash, MZ_AES_AUTHCODE_SIZE) != MZ_AES_AUTHCODE_SIZE) {
@@ -283,13 +317,15 @@ int32_t mz_stream_wzaes_close(void *stream) {
         }
         wzaes->total_out += MZ_AES_AUTHCODE_SIZE;
     } else if (wzaes->mode & MZ_OPEN_MODE_READ) {
-        if (mz_stream_read(wzaes->stream.base, expected_hash, MZ_AES_AUTHCODE_SIZE) != MZ_AES_AUTHCODE_SIZE) {
+        if (!wzaes->footer_checked && mz_stream_read(wzaes->stream.base, expected_hash, MZ_AES_AUTHCODE_SIZE) != MZ_AES_AUTHCODE_SIZE) {
             status = MZ_READ_ERROR;
             goto cleanup;
         }
-        wzaes->total_in += MZ_AES_AUTHCODE_SIZE;
-        if (memcmp(computed_hash, expected_hash, MZ_AES_AUTHCODE_SIZE) != 0)
+        if (!wzaes->footer_checked)
+            wzaes->total_in += MZ_AES_AUTHCODE_SIZE;
+        if (!wzaes->footer_checked && memcmp(computed_hash, expected_hash, MZ_AES_AUTHCODE_SIZE) != 0)
             status = MZ_CRC_ERROR;
+        wzaes->footer_checked = 1;
     }
 
 cleanup:
@@ -381,6 +417,7 @@ void mz_stream_wzaes_delete(void **stream) {
         return;
     wzaes = (mz_stream_wzaes *)*stream;
     if (wzaes) {
+        mz_stream_wzaes_clear_state(wzaes);
         mz_crypt_aes_delete(&wzaes->aes);
         mz_crypt_hmac_delete(&wzaes->hmac);
         pengrid_secure_clear(wzaes, sizeof(*wzaes));

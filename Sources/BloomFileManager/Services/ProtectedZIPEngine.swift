@@ -234,10 +234,15 @@ private final class ProtectedZIPProgressBridge: @unchecked Sendable {
 
     func consume() async {
         var lastDelivery: ContinuousClock.Instant?
+        var lastDeliveredEvent: ProtectedZIPProgressEvent?
         var wakeIterator = wakeStream.makeAsyncIterator()
         while true {
-            guard let event = nextEvent(lastDelivery: &lastDelivery) else {
+            guard let event = nextEvent(lastDelivery: &lastDelivery, lastDeliveredEvent: &lastDeliveredEvent) else {
                 if isDone() { return }
+                if shouldWaitForFinalGate() {
+                    try? await Task.sleep(for: .milliseconds(100))
+                    continue
+                }
                 _ = await wakeIterator.next()
                 continue
             }
@@ -251,10 +256,14 @@ private final class ProtectedZIPProgressBridge: @unchecked Sendable {
                 )
             )
             lastDelivery = ContinuousClock.now
+            lastDeliveredEvent = event
         }
     }
 
-    private func nextEvent(lastDelivery: inout ContinuousClock.Instant?) -> ProtectedZIPProgressEvent? {
+    private func nextEvent(
+        lastDelivery: inout ContinuousClock.Instant?,
+        lastDeliveredEvent: inout ProtectedZIPProgressEvent?
+    ) -> ProtectedZIPProgressEvent? {
         lock.lock()
         defer { lock.unlock() }
         if let initialPending {
@@ -265,6 +274,15 @@ private final class ProtectedZIPProgressBridge: @unchecked Sendable {
         if finished {
             latestIntermediate = nil
             if let finalPending {
+                if lastDeliveredEvent?.completed == finalPending.completed,
+                   lastDeliveredEvent?.total == finalPending.total {
+                    self.finalPending = nil
+                    return nil
+                }
+                if let lastDelivery,
+                   lastDelivery.duration(to: ContinuousClock.now) < .milliseconds(100) {
+                    return nil
+                }
                 self.finalPending = nil
                 return finalPending
             }
@@ -277,6 +295,12 @@ private final class ProtectedZIPProgressBridge: @unchecked Sendable {
             return nil
         }
         return latestIntermediate
+    }
+
+    private func shouldWaitForFinalGate() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return finished && finalPending != nil
     }
 
     private func isDone() -> Bool {

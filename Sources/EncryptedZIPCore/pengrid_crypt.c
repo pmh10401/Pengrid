@@ -45,14 +45,15 @@ int32_t mz_crypt_pbkdf2(const uint8_t *password, int32_t password_length, const 
     uint8_t uu[MZ_HASH_SHA1_SIZE];
     uint8_t ux[MZ_HASH_SHA1_SIZE];
 
-    memset(uu, 0, sizeof(uu));
-    memset(ux, 0, sizeof(ux));
+    pengrid_secure_clear(uu, sizeof(uu));
+    pengrid_secure_clear(ux, sizeof(ux));
+    if (key)
+        pengrid_secure_clear(key, key_length);
     if (!password || !salt || !key) {
         err = MZ_PARAM_ERROR;
         goto pbkdf2_cleanup;
     }
 
-    memset(key, 0, key_length);
     hmac1 = mz_crypt_hmac_create();
     hmac2 = mz_crypt_hmac_create();
     hmac3 = mz_crypt_hmac_create();
@@ -75,7 +76,7 @@ int32_t mz_crypt_pbkdf2(const uint8_t *password, int32_t password_length, const 
         block_count = (uint16_t)(1 + ((uint16_t)key_length - 1) / MZ_HASH_SHA1_SIZE);
 
     for (i = 0; (err == MZ_OK) && (i < block_count); i += 1) {
-        memset(ux, 0, sizeof(ux));
+        pengrid_secure_clear(ux, sizeof(ux));
         err = mz_crypt_hmac_copy(hmac2, hmac3);
         if (err != MZ_OK)
             break;
@@ -106,6 +107,12 @@ int32_t mz_crypt_pbkdf2(const uint8_t *password, int32_t password_length, const 
     }
 
 pbkdf2_cleanup:
+    if (hmac3)
+        mz_crypt_hmac_reset(hmac3);
+    if (hmac1)
+        mz_crypt_hmac_reset(hmac1);
+    if (hmac2)
+        mz_crypt_hmac_reset(hmac2);
     mz_crypt_hmac_delete(&hmac3);
     mz_crypt_hmac_delete(&hmac1);
     mz_crypt_hmac_delete(&hmac2);

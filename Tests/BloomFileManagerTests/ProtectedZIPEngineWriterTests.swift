@@ -54,6 +54,13 @@ private struct ArchiveEntryStructure: Equatable {
     let aesStrength: UInt8
     let aesVendorMethod: UInt16
     let hasZIP64Extra: Bool
+    let flags: UInt16
+    let compressedSize: UInt64
+    let uncompressedSize: UInt64
+    let externalAttributes: UInt32
+    let modifiedDate: UInt16
+    let modifiedTime: UInt16
+    let localHeaderOffset: UInt64
     let dataOffset: Int
 }
 
@@ -270,6 +277,40 @@ struct ProtectedZIPEngineWriterTests {
         })
     }
 
+    @Test func parserUsesCentralDirectoryWhenLocalDescriptorSizesAreZero() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let source = root.url.appending(path: "source", directoryHint: .isDirectory)
+        let archiveURL = root.url.appending(path: "archive.zip")
+        try FileManager.default.createDirectory(at: source, withIntermediateDirectories: false)
+        try Data(repeating: 0x11, count: 128).write(to: source.appending(path: "z.bin"))
+        try Data(repeating: 0x22, count: 256).write(to: source.appending(path: "a.bin"))
+        let sourceItem = try openedDirectory(source)
+        defer { sourceItem.close() }
+        let destination = try createDestination(archiveURL)
+        defer { Darwin.close(destination.descriptor) }
+        let password = "central-directory-parser-password"
+        let secret = try ArchiveSecret.creation(password: password, confirmation: password)
+        try await LiveProtectedZIPEngine().createAES256(
+            sourceRoot: sourceItem,
+            destination: destination,
+            password: secret,
+            progress: { _ in }
+        )
+
+        let original = try parseArchiveStructure(Data(contentsOf: archiveURL))
+        var localSizesZero = try Data(contentsOf: archiveURL)
+        for entry in original.entries {
+            let localOffset = Int(entry.localHeaderOffset)
+            setLittleEndianUInt32(&localSizesZero, at: localOffset + 18, value: 0)
+            setLittleEndianUInt32(&localSizesZero, at: localOffset + 22, value: 0)
+        }
+        let reparsed = try parseArchiveStructure(localSizesZero)
+        #expect(reparsed.entryNames == original.entryNames)
+        #expect(reparsed.entries.map(\.dataOffset) == original.entries.map(\.dataOffset))
+        #expect(reparsed.entries.map(\.compressedSize) == original.entries.map(\.compressedSize))
+    }
+
     @Test func readerRejectsTamperedEncryptedPayload() async throws {
         let root = try TemporaryDirectory()
         defer { root.remove() }
@@ -294,10 +335,128 @@ struct ProtectedZIPEngineWriterTests {
         var bytes = try Data(contentsOf: archiveURL)
         let structure = try parseArchiveStructure(bytes)
         guard let entry = structure.entries.first else { throw ProtectedZIPReaderTestError.read(-1) }
-        bytes[entry.dataOffset + 16] ^= 0x01
+        let ciphertextOffset = entry.dataOffset + 18 // AES-256 salt (16) + verifier (2)
+        guard ciphertextOffset < entry.dataOffset + Int(entry.compressedSize) - 10 else {
+            throw ProtectedZIPReaderTestError.read(-1)
+        }
+        bytes[ciphertextOffset] ^= 0x01
         try bytes.write(to: tamperedURL)
         #expect(throws: ProtectedZIPReaderTestError.self) {
             _ = try readFirstAESArchiveEntry(at: tamperedURL, password: password)
+        }
+
+        let authTamperedURL = root.url.appending(path: "auth-tampered.zip")
+        var authTampered = try Data(contentsOf: archiveURL)
+        let authOffset = entry.dataOffset + Int(entry.compressedSize) - 10
+        guard authOffset >= entry.dataOffset, authOffset + 10 <= authTampered.count else {
+            throw ProtectedZIPReaderTestError.read(-1)
+        }
+        authTampered[authOffset] ^= 0x01
+        try authTampered.write(to: authTamperedURL)
+        #expect(throws: ProtectedZIPReaderTestError.self) {
+            _ = try readFirstAESArchiveEntry(at: authTamperedURL, password: password)
+        }
+    }
+
+    @Test func writerPreservesDeterministicOrderModesAndDOSModificationTimes() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let source = root.url.appending(path: "source", directoryHint: .isDirectory)
+        let archiveURL = root.url.appending(path: "archive.zip")
+        try FileManager.default.createDirectory(at: source, withIntermediateDirectories: false)
+        let firstURL = source.appending(path: "z.txt")
+        let secondURL = source.appending(path: "a.txt")
+        try Data("z".utf8).write(to: firstURL)
+        try Data("a".utf8).write(to: secondURL)
+        #expect(firstURL.path.withCString { Darwin.chmod($0, mode_t(0o740)) } == 0)
+        #expect(secondURL.path.withCString { Darwin.chmod($0, mode_t(0o604)) } == 0)
+        let firstDate = Date(timeIntervalSince1970: 1_700_000_000)
+        let secondDate = Date(timeIntervalSince1970: 1_700_000_100)
+        try FileManager.default.setAttributes([.modificationDate: firstDate], ofItemAtPath: firstURL.path)
+        try FileManager.default.setAttributes([.modificationDate: secondDate], ofItemAtPath: secondURL.path)
+        let firstInformation = try fileStat(firstURL)
+        let secondInformation = try fileStat(secondURL)
+
+        let sourceItem = try openedDirectory(source)
+        defer { sourceItem.close() }
+        let destination = try createDestination(archiveURL)
+        defer { Darwin.close(destination.descriptor) }
+        let password = "metadata-round-trip-password"
+        let secret = try ArchiveSecret.creation(password: password, confirmation: password)
+        try await LiveProtectedZIPEngine().createAES256(
+            sourceRoot: sourceItem,
+            destination: destination,
+            password: secret,
+            progress: { _ in }
+        )
+
+        let structure = try parseArchiveStructure(Data(contentsOf: archiveURL))
+        #expect(structure.entryNames == ["a.txt", "z.txt"])
+        let first = try #require(structure.entries.first { $0.name == "a.txt" })
+        let second = try #require(structure.entries.first { $0.name == "z.txt" })
+        #expect(first.externalAttributes >> 16 & 0o7777 == UInt32(secondInformation.st_mode & 0o7777))
+        #expect(second.externalAttributes >> 16 & 0o7777 == UInt32(firstInformation.st_mode & 0o7777))
+        #expect(dosDateTime(first.modifiedDate, first.modifiedTime).distance(to: secondDate) <= 2)
+        #expect(dosDateTime(second.modifiedDate, second.modifiedTime).distance(to: firstDate) <= 2)
+    }
+
+    @Test func writerRejectsMutationAfterEnumerationBeforeOpen() throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let source = root.url.appending(path: "source", directoryHint: .isDirectory)
+        let archiveURL = root.url.appending(path: "archive.zip")
+        try FileManager.default.createDirectory(at: source, withIntermediateDirectories: false)
+        let payloadURL = source.appending(path: "payload.bin")
+        try Data(repeating: 0x5A, count: 1024).write(to: payloadURL)
+        let sourceItem = try openedDirectory(source)
+        defer { sourceItem.close() }
+        let destination = try createDestination(archiveURL)
+        defer { Darwin.close(destination.descriptor) }
+        let password = Array("mutation-race-password".utf8)
+        let context = MutationRaceContext(url: payloadURL)
+        let status = try sourceItem.withUnsafeDescriptor { sourceDescriptor in
+            password.withUnsafeBufferPointer { passwordBuffer in
+                pengrid_zip_create_aes256(
+                    sourceDescriptor,
+                    destination.descriptor,
+                    passwordBuffer.baseAddress,
+                    passwordBuffer.count,
+                    mutationRaceProgressCallback,
+                    Unmanaged.passUnretained(context).toOpaque()
+                )
+            }
+        }
+        #expect(context.didMutate)
+        #expect(status == PENGRID_ZIP_STATUS_IO_ERROR)
+    }
+
+    @Test func writerProgressFinalBoundaryHonorsStrictTenHertz() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let source = root.url.appending(path: "source", directoryHint: .isDirectory)
+        let archiveURL = root.url.appending(path: "archive.zip")
+        try FileManager.default.createDirectory(at: source, withIntermediateDirectories: false)
+        try Data("tiny".utf8).write(to: source.appending(path: "payload.txt"))
+        let sourceItem = try openedDirectory(source)
+        defer { sourceItem.close() }
+        let destination = try createDestination(archiveURL)
+        defer { Darwin.close(destination.descriptor) }
+        let password = "strict-progress-password"
+        let secret = try ArchiveSecret.creation(password: password, confirmation: password)
+        let progress = ProtectedZIPProgressCollector()
+        try await LiveProtectedZIPEngine().createAES256(
+            sourceRoot: sourceItem,
+            destination: destination,
+            password: secret,
+            progress: { await progress.append($0) }
+        )
+
+        let samples = await progress.samples
+        #expect(samples.first?.value.completedByteCount == 0)
+        #expect(samples.last?.value.totalByteCount == 4)
+        #expect(samples.count >= 2)
+        for pair in zip(samples, samples.dropFirst()) {
+            #expect(pair.0.at.duration(to: pair.1.at) >= .milliseconds(100))
         }
     }
 
@@ -360,12 +519,48 @@ struct ProtectedZIPEngineWriterTests {
     }
 }
 
+private struct ProtectedZIPProgressSample: Sendable {
+    let value: ProtectedZIPProgress
+    let at: ContinuousClock.Instant
+}
+
 private actor ProtectedZIPProgressCollector {
     private(set) var values: [ProtectedZIPProgress] = []
+    private(set) var samples: [ProtectedZIPProgressSample] = []
 
     func append(_ value: ProtectedZIPProgress) {
         values.append(value)
+        samples.append(ProtectedZIPProgressSample(value: value, at: .now))
     }
+}
+
+private final class MutationRaceContext: @unchecked Sendable {
+    let url: URL
+    var didMutate = false
+
+    init(url: URL) {
+        self.url = url
+    }
+}
+
+private func mutationRaceProgressCallback(
+    _ completed: UInt64,
+    _ total: UInt64,
+    _ rawContext: UnsafeMutableRawPointer?
+) -> Int32 {
+    guard completed == 0, let rawContext else { return 0 }
+    let context = Unmanaged<MutationRaceContext>.fromOpaque(rawContext).takeUnretainedValue()
+    guard !context.didMutate else { return 0 }
+    let descriptor = context.url.path.withCString {
+        Darwin.open($0, O_WRONLY | O_APPEND | O_CLOEXEC | O_NOFOLLOW)
+    }
+    guard descriptor >= 0 else { return 1 }
+    var marker: UInt8 = 0xA5
+    let written = Darwin.write(descriptor, &marker, 1)
+    _ = Darwin.close(descriptor)
+    guard written == 1 else { return 1 }
+    context.didMutate = true
+    return 0
 }
 
 private actor ProtectedZIPStartSignal {
@@ -461,45 +656,38 @@ private func parseArchiveStructure(_ data: Data) throws -> ArchiveStructure {
     let eocdOffset = try findLastSignature(eocdSignature, in: data)
     let diskNumber = try littleEndianUInt16(data, at: eocdOffset + 4)
     let centralDiskNumber = try littleEndianUInt16(data, at: eocdOffset + 6)
-    let centralOffset = Int(try littleEndianUInt32(data, at: eocdOffset + 16))
-    guard centralOffset >= 0, centralOffset < data.count else {
+    let centralOffset32 = try littleEndianUInt32(data, at: eocdOffset + 16)
+    let centralSize32 = try littleEndianUInt32(data, at: eocdOffset + 12)
+    guard centralOffset32 != UInt32.max, centralSize32 != UInt32.max else {
         throw ProtectedZIPReaderTestError.read(-1)
     }
-
-    var localCursor = 0
-    var localDataOffsets: [Int: Int] = [:]
-    while localCursor + 4 <= centralOffset,
-          try littleEndianUInt32(data, at: localCursor) == localSignature {
-        let compressedSize32 = try littleEndianUInt32(data, at: localCursor + 18)
-        let nameLength = Int(try littleEndianUInt16(data, at: localCursor + 26))
-        let extraLength = Int(try littleEndianUInt16(data, at: localCursor + 28))
-        let dataOffset = localCursor + 30 + nameLength + extraLength
-        guard dataOffset <= data.count else { throw ProtectedZIPReaderTestError.read(-1) }
-        let compressedSize: UInt64
-        if compressedSize32 == UInt32.max {
-            compressedSize = try zip64CompressedSize(data, extraOffset: localCursor + 30 + nameLength, extraLength: extraLength)
-        } else {
-            compressedSize = UInt64(compressedSize32)
-        }
-        guard compressedSize <= UInt64(data.count - dataOffset) else {
-            throw ProtectedZIPReaderTestError.read(-1)
-        }
-        localDataOffsets[localCursor] = dataOffset
-        localCursor = dataOffset + Int(compressedSize)
+    let centralOffset = Int(centralOffset32)
+    let centralEnd = centralOffset + Int(centralSize32)
+    guard centralOffset >= 0, centralEnd >= centralOffset, centralEnd <= eocdOffset else {
+        throw ProtectedZIPReaderTestError.read(-1)
     }
 
     var entries: [ArchiveEntryStructure] = []
     var centralCursor = centralOffset
-    while centralCursor + 4 <= data.count,
-          try littleEndianUInt32(data, at: centralCursor) == centralSignature {
+    while centralCursor < centralEnd {
+        guard centralCursor + 46 <= centralEnd,
+              try littleEndianUInt32(data, at: centralCursor) == centralSignature else {
+            throw ProtectedZIPReaderTestError.read(-1)
+        }
+        let flags = try littleEndianUInt16(data, at: centralCursor + 8)
         let compressionMethod = try littleEndianUInt16(data, at: centralCursor + 10)
+        let modifiedTime = try littleEndianUInt16(data, at: centralCursor + 12)
+        let modifiedDate = try littleEndianUInt16(data, at: centralCursor + 14)
+        let uncompressedSize32 = try littleEndianUInt32(data, at: centralCursor + 24)
         let compressedSize32 = try littleEndianUInt32(data, at: centralCursor + 20)
         let nameLength = Int(try littleEndianUInt16(data, at: centralCursor + 28))
         let extraLength = Int(try littleEndianUInt16(data, at: centralCursor + 30))
         let commentLength = Int(try littleEndianUInt16(data, at: centralCursor + 32))
+        let externalAttributes = try littleEndianUInt32(data, at: centralCursor + 38)
         let nameOffset = centralCursor + 46
         let extraOffset = nameOffset + nameLength
-        guard extraOffset + extraLength + commentLength <= data.count else {
+        let recordEnd = extraOffset + extraLength + commentLength
+        guard recordEnd >= extraOffset, recordEnd <= centralEnd, recordEnd <= data.count else {
             throw ProtectedZIPReaderTestError.read(-1)
         }
         let nameBytes = data[nameOffset..<(nameOffset + nameLength)]
@@ -507,12 +695,36 @@ private func parseArchiveStructure(_ data: Data) throws -> ArchiveStructure {
             throw ProtectedZIPReaderTestError.read(-1)
         }
         let extra = try parseArchiveExtras(data, offset: extraOffset, length: extraLength)
+        var zip64Index = 0
+        let uncompressedSize: UInt64
+        if uncompressedSize32 == UInt32.max {
+            guard zip64Index < extra.zip64Values.count else { throw ProtectedZIPReaderTestError.read(-1) }
+            uncompressedSize = extra.zip64Values[zip64Index]
+            zip64Index += 1
+        } else {
+            uncompressedSize = UInt64(uncompressedSize32)
+        }
+        let compressedSize: UInt64
+        if compressedSize32 == UInt32.max {
+            guard zip64Index < extra.zip64Values.count else { throw ProtectedZIPReaderTestError.read(-1) }
+            compressedSize = extra.zip64Values[zip64Index]
+            zip64Index += 1
+        } else {
+            compressedSize = UInt64(compressedSize32)
+        }
         let localHeaderOffset32 = try littleEndianUInt32(data, at: centralCursor + 42)
-        let localHeaderOffset: UInt64? = localHeaderOffset32 == UInt32.max
-            ? extra.zip64LocalHeaderOffset
-            : UInt64(localHeaderOffset32)
-        let dataOffset = localHeaderOffset.flatMap { localDataOffsets[Int($0)] } ?? 0
-        _ = compressedSize32
+        let localHeaderOffset: UInt64
+        if localHeaderOffset32 == UInt32.max {
+            guard zip64Index < extra.zip64Values.count else { throw ProtectedZIPReaderTestError.read(-1) }
+            localHeaderOffset = extra.zip64Values[zip64Index]
+        } else {
+            localHeaderOffset = UInt64(localHeaderOffset32)
+        }
+        guard localHeaderOffset <= UInt64(Int.max) else { throw ProtectedZIPReaderTestError.read(-1) }
+        let dataOffset = try parseLocalDataOffset(data, at: Int(localHeaderOffset), signature: localSignature)
+        guard compressedSize <= UInt64(data.count - dataOffset) else {
+            throw ProtectedZIPReaderTestError.read(-1)
+        }
         entries.append(
             ArchiveEntryStructure(
                 name: name,
@@ -520,12 +732,19 @@ private func parseArchiveStructure(_ data: Data) throws -> ArchiveStructure {
                 aesStrength: extra.aesStrength,
                 aesVendorMethod: extra.aesVendorMethod,
                 hasZIP64Extra: extra.hasZIP64,
+                flags: flags,
+                compressedSize: compressedSize,
+                uncompressedSize: uncompressedSize,
+                externalAttributes: externalAttributes,
+                modifiedDate: modifiedDate,
+                modifiedTime: modifiedTime,
+                localHeaderOffset: localHeaderOffset,
                 dataOffset: dataOffset
             )
         )
-        centralCursor = extraOffset + extraLength + commentLength
+        centralCursor = recordEnd
     }
-    guard !entries.isEmpty || centralOffset == eocdOffset else {
+    guard centralCursor == centralEnd, !entries.isEmpty || centralOffset == eocdOffset else {
         throw ProtectedZIPReaderTestError.read(-1)
     }
     return ArchiveStructure(
@@ -539,7 +758,7 @@ private struct ParsedArchiveExtras {
     var aesStrength: UInt8 = 0
     var aesVendorMethod: UInt16 = 0
     var hasZIP64 = false
-    var zip64LocalHeaderOffset: UInt64?
+    var zip64Values: [UInt64] = []
 }
 
 private func parseArchiveExtras(_ data: Data, offset: Int, length: Int) throws -> ParsedArchiveExtras {
@@ -556,8 +775,9 @@ private func parseArchiveExtras(_ data: Data, offset: Int, length: Int) throws -
             result.aesVendorMethod = try littleEndianUInt16(data, at: payload + 5)
         } else if fieldType == 0x0001 {
             result.hasZIP64 = true
-            if fieldLength >= 24 {
-                result.zip64LocalHeaderOffset = try littleEndianUInt64(data, at: payload + 16)
+            guard fieldLength % 8 == 0 else { throw ProtectedZIPReaderTestError.read(-1) }
+            for valueOffset in stride(from: payload, to: payload + fieldLength, by: 8) {
+                result.zip64Values.append(try littleEndianUInt64(data, at: valueOffset))
             }
         }
         cursor = payload + fieldLength
@@ -565,21 +785,18 @@ private func parseArchiveExtras(_ data: Data, offset: Int, length: Int) throws -
     return result
 }
 
-private func zip64CompressedSize(_ data: Data, extraOffset: Int, extraLength: Int) throws -> UInt64 {
-    var cursor = extraOffset
-    let end = extraOffset + extraLength
-    while cursor + 4 <= end {
-        let fieldType = try littleEndianUInt16(data, at: cursor)
-        let fieldLength = Int(try littleEndianUInt16(data, at: cursor + 2))
-        let payload = cursor + 4
-        guard payload + fieldLength <= end else { throw ProtectedZIPReaderTestError.read(-1) }
-        if fieldType == 0x0001 {
-            guard fieldLength >= 16 else { throw ProtectedZIPReaderTestError.read(-1) }
-            return try littleEndianUInt64(data, at: payload + 8)
-        }
-        cursor = payload + fieldLength
+private func parseLocalDataOffset(_ data: Data, at offset: Int, signature: UInt32) throws -> Int {
+    guard offset >= 0, offset + 30 <= data.count,
+          try littleEndianUInt32(data, at: offset) == signature else {
+        throw ProtectedZIPReaderTestError.read(-1)
     }
-    throw ProtectedZIPReaderTestError.read(-1)
+    let nameLength = Int(try littleEndianUInt16(data, at: offset + 26))
+    let extraLength = Int(try littleEndianUInt16(data, at: offset + 28))
+    let dataOffset = offset + 30 + nameLength + extraLength
+    guard dataOffset >= offset, dataOffset <= data.count else {
+        throw ProtectedZIPReaderTestError.read(-1)
+    }
+    return dataOffset
 }
 
 private func findLastSignature(_ signature: UInt32, in data: Data) throws -> Int {
@@ -603,6 +820,13 @@ private func littleEndianUInt32(_ data: Data, at offset: Int) throws -> UInt32 {
         (UInt32(data[offset + 3]) << 24)
 }
 
+private func setLittleEndianUInt32(_ data: inout Data, at offset: Int, value: UInt32) {
+    data[offset] = UInt8(truncatingIfNeeded: value)
+    data[offset + 1] = UInt8(truncatingIfNeeded: value >> 8)
+    data[offset + 2] = UInt8(truncatingIfNeeded: value >> 16)
+    data[offset + 3] = UInt8(truncatingIfNeeded: value >> 24)
+}
+
 private func littleEndianUInt64(_ data: Data, at offset: Int) throws -> UInt64 {
     var value: UInt64 = 0
     guard offset >= 0, offset + 8 <= data.count else { throw ProtectedZIPReaderTestError.read(-1) }
@@ -610,6 +834,30 @@ private func littleEndianUInt64(_ data: Data, at offset: Int) throws -> UInt64 {
         value |= UInt64(data[offset + index]) << (index * 8)
     }
     return value
+}
+
+private func fileStat(_ url: URL) throws -> stat {
+    let descriptor = url.path.withCString { Darwin.open($0, O_RDONLY | O_NOFOLLOW | O_CLOEXEC) }
+    guard descriptor >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+    defer { Darwin.close(descriptor) }
+    var information = stat()
+    guard Darwin.fstat(descriptor, &information) == 0 else {
+        throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+    }
+    return information
+}
+
+private func dosDateTime(_ date: UInt16, _ time: UInt16) -> Date {
+    var components = tm()
+    components.tm_year = Int32(((date >> 9) & 0x7F) + 1980 - 1900)
+    components.tm_mon = Int32(((date >> 5) & 0x0F) - 1)
+    components.tm_mday = Int32(date & 0x1F)
+    components.tm_hour = Int32((time >> 11) & 0x1F)
+    components.tm_min = Int32((time >> 5) & 0x3F)
+    components.tm_sec = Int32((time & 0x1F) * 2)
+    components.tm_isdst = -1
+    let seconds = mktime(&components)
+    return Date(timeIntervalSince1970: TimeInterval(seconds))
 }
 
 private func openedDirectory(_ url: URL) throws -> OpenedFileSystemItem {
