@@ -23,10 +23,11 @@ All commands below exited 0.
 
 | Status | Exact command | Result |
 | --- | --- | --- |
-| PASS — focused Task 11 | `env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --disable-sandbox --no-parallel --filter 'ProtectedZIPEndToEndTests\|ArchiveOperationIntegrationTests\|CloudLocationScopedAccessTests'` | **46 tests in 3 suites**, 3.237 seconds; target `arm64e-apple-macos14.0`; no warning or error lines in this cached invocation. |
-| PASS — Task 5 writer/native cancellation regression | `env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --disable-sandbox --no-parallel --filter 'ProtectedZIPEngineWriterTests\|ProtectedZIPOperationServiceTests/progressCallbackCancellationIsObservedByEngineAndDoesNotPublish'` | **15 tests in 2 suites**, 1.238 seconds; target `arm64e-apple-macos14.0`; no warning or error lines. |
-| PASS — Task 7–10 regression | `env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --disable-sandbox --no-parallel --filter 'ArchivePasswordPromptCoordinatorTests\|ArchivePasswordPresentationTests\|ProtectedZIPOperationServiceTests\|RoutingArchiveOperationServiceTests\|FileOperationControllerTests\|FileOperationCenterViewTests\|WorkspaceCommandTests\|WorkspaceCommandPolicyTests\|OperationStatusViewTests\|AccessibilityPresentationTests'` | **173 tests in 7 suites**, 0.468 seconds; target `arm64e-apple-macos14.0`; no warning or error lines. |
-| PASS — final full suite | `env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --disable-sandbox --no-parallel` | **1032 tests in 76 suites**, 49.550 seconds; target `arm64e-apple-macos14.0`; no warning or error lines. |
+| PASS — native gate lifecycle + cancellation | `env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --disable-sandbox --no-parallel --filter 'ProtectedZIPEndToEndTests/nativeProgressGateIsOneShotAndSafeWhenCleared\|ProtectedZIPEndToEndTests/cancellingDuringAuthenticatedEntryLeavesNoPublishedArchive'` | **2 tests in 1 suite**, 0.396 seconds; target `arm64e-apple-macos14.0`; no warning or error lines. |
+| PASS — focused Task 11 | `env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --disable-sandbox --no-parallel --filter 'ProtectedZIPEndToEndTests\|ArchiveOperationIntegrationTests\|CloudLocationScopedAccessTests'` | **46 tests in 3 suites**, 3.263 seconds; target `arm64e-apple-macos14.0`; no warning or error lines in this cached invocation. |
+| PASS — Task 5 writer/native cancellation regression | `env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --disable-sandbox --no-parallel --filter 'ProtectedZIPEngineWriterTests\|ProtectedZIPOperationServiceTests/progressCallbackCancellationIsObservedByEngineAndDoesNotPublish'` | **15 tests in 2 suites**, 1.260 seconds; target `arm64e-apple-macos14.0`; no warning or error lines. |
+| PASS — Task 7–10 regression | `env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --disable-sandbox --no-parallel --filter 'ArchivePasswordPromptCoordinatorTests\|ArchivePasswordPresentationTests\|ProtectedZIPOperationServiceTests\|RoutingArchiveOperationServiceTests\|FileOperationControllerTests\|FileOperationCenterViewTests\|WorkspaceCommandTests\|WorkspaceCommandPolicyTests\|OperationStatusViewTests\|AccessibilityPresentationTests'` | **173 tests in 7 suites**, 0.465 seconds; target `arm64e-apple-macos14.0`; no warning or error lines. |
+| PASS — final full suite | `env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --disable-sandbox --no-parallel` | **1032 tests in 76 suites**, 49.261 seconds; target `arm64e-apple-macos14.0`; no warning or error lines. |
 
 SwiftPM planning is cache-sensitive: a cold focused plan may additionally
 print the known warning that 11 ProtectedZIP fixture files are unhandled. The
@@ -80,7 +81,9 @@ are the only independent compatibility evidence recorded here.
   cancellation at the native writer's first positive non-final checkpoint both
   publish no destination and leave no staging directory. The test-only C gate
   is disabled by default, one-shot, and safely reset between real operations;
-  the old async progress-wrapper gate is not used.
+  the old async progress-wrapper gate is not used. The lifecycle proof keeps
+  each of two armed gates active through bounded real successful completion
+  before clearing it, then verifies a third unarmed operation succeeds.
 - Cloud materialization emits its completion event before the protected prompt;
   this is a deterministic scoped-access/materializer seam, not a live Google
   Drive or OneDrive run.

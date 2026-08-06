@@ -795,24 +795,41 @@ struct ProtectedZIPEndToEndTests {
             workspace.left.selection = [source]
 
             if index <= 2 {
-                armNativeProgressGate()
+                do {
+                    armNativeProgressGate()
+                    defer {
+                        clearNativeProgressGate()
+                        releaseNativeProgressGate()
+                    }
+                    #expect(await controller.compressSelection(
+                        workspace,
+                        format: .zip,
+                        protection: .aes256
+                    ))
+                    #expect(await waitForNativeProgressGate(timeoutMilliseconds: 5_000))
+                    releaseNativeProgressGate()
+                    await waitForControllerIdle(controller)
+                    guard !controller.isRunning else {
+                        controller.cancelActiveJob()
+                        return
+                    }
+                    #expect(controller.lastResult?.outcomes == [
+                        .succeeded(source: source, destination: archive)
+                    ])
+                    #expect(FileManager.default.fileExists(atPath: archive.path))
+                }
+            } else {
+                #expect(await controller.compressSelection(
+                    workspace,
+                    format: .zip,
+                    protection: .aes256
+                ))
+                await waitForControllerIdle(controller)
+                #expect(controller.lastResult?.outcomes == [
+                    .succeeded(source: source, destination: archive)
+                ])
+                #expect(FileManager.default.fileExists(atPath: archive.path))
             }
-            #expect(await controller.compressSelection(
-                workspace,
-                format: .zip,
-                protection: .aes256
-            ))
-            if index <= 2 {
-                #expect(await waitForNativeProgressGate(timeoutMilliseconds: 5_000))
-                releaseNativeProgressGate()
-                clearNativeProgressGate()
-                releaseNativeProgressGate()
-            }
-            await waitForControllerIdle(controller)
-            #expect(controller.lastResult?.outcomes == [
-                .succeeded(source: source, destination: archive)
-            ])
-            #expect(FileManager.default.fileExists(atPath: archive.path))
         }
         #expect(provider.requestCount == 3)
         try archiveTestExpectNoStagingDirectories(in: root.url)
