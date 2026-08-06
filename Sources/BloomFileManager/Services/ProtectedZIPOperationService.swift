@@ -139,13 +139,18 @@ actor ProtectedZIPOperationService: ProtectedZIPOperating, ArchiveOperating {
                 requestResult = try await performOne(request, progress: progress)
             } catch {
                 let source = representativeSource(for: request)
-                if isCancellation(error) {
-                    requestResult = FileOperationResult(outcomes: [
-                        .cancelled(source: source)
-                    ])
-                } else if requiresRecovery(error) {
+                let publishedOutput = publishedOutput(from: error)
+                if requiresRecovery(error) {
                     requestResult = FileOperationResult(outcomes: [
                         .recoveryNeeded(source: source)
+                    ], undoDestinationIdentities: publishedOutput.map {
+                        [request.finalDestination: $0.identity]
+                    } ?? [:], undoDestinationFingerprints: publishedOutput?.fingerprint.map {
+                        [request.finalDestination: $0]
+                    } ?? [:])
+                } else if isCancellation(error) {
+                    requestResult = FileOperationResult(outcomes: [
+                        .cancelled(source: source)
                     ])
                 } else {
                     requestResult = FileOperationResult(outcomes: [
@@ -156,7 +161,10 @@ actor ProtectedZIPOperationService: ProtectedZIPOperating, ArchiveOperating {
             result = result.merging(requestResult)
             await logger.record(ProtectedZIPDiagnosticEvent(
                 category: request.kind == .compress ? .compression : .extraction,
-                archiveBasename: request.finalDestination.lastPathComponent,
+                archiveBasename: request.kind == .extract
+                    ? request.verifiedSources.first?.url.lastPathComponent
+                        ?? request.finalDestination.lastPathComponent
+                    : request.finalDestination.lastPathComponent,
                 duration: Date().timeIntervalSince(startedAt),
                 succeededCount: requestResult.outcomes.count(where: Self.isSuccess),
                 failedCount: requestResult.outcomes.count(where: Self.isFailure),
@@ -212,11 +220,7 @@ actor ProtectedZIPOperationService: ProtectedZIPOperating, ArchiveOperating {
             }
         )
         var preparedCleaned = false
-        defer {
-            if !preparedCleaned {
-                Task { try? await self.sourcePreparer.cleanup(prepared) }
-            }
-        }
+        var preparedCleanupAttempted = false
 
         do {
             try await requireDestinationParentIdentity(request)
@@ -240,6 +244,7 @@ actor ProtectedZIPOperationService: ProtectedZIPOperating, ArchiveOperating {
                 parentIdentifiedBy: request.destinationParentIdentity
             )
             var outputIdentity: FileIdentity?
+            var publishedOutput: ProtectedZIPPublishedOutput?
             do {
                 let output = try await fileSystem.createEmptyItemAndCaptureIdentity(
                     reservation.item,
@@ -288,40 +293,58 @@ actor ProtectedZIPOperationService: ProtectedZIPOperating, ArchiveOperating {
                     to: request.finalDestination,
                     destinationParentIdentifiedBy: request.destinationParentIdentity
                 )
-                guard try await fileSystem.identity(of: request.finalDestination) == outputIdentity else {
-                    throw ProtectedZIPError.identityChanged
-                }
-                let fingerprint = try? await fileSystem.fingerprint(of: request.finalDestination)
-                try await fileSystem.removeStagingDirectory(reservation)
-                try await sourcePreparer.cleanup(prepared)
-                preparedCleaned = true
-                return FileOperationResult(
-                    outcomes: [.succeeded(
-                        source: representativeSource(for: request),
-                        destination: request.finalDestination
-                    )],
-                    undoDestinationIdentities: [request.finalDestination: outputIdentity!],
-                    undoDestinationFingerprints: fingerprint.map {
-                        [request.finalDestination: $0]
-                    } ?? [:]
+                publishedOutput = try await capturePublishedOutput(
+                    at: request.finalDestination,
+                    identity: outputIdentity!
                 )
+                try await cleanupPublishedReservation(
+                    reservation,
+                    itemIdentity: outputIdentity!,
+                    publishedOutput: publishedOutput!
+                )
+                preparedCleanupAttempted = true
+                try await cleanupPreparedSourcesAfterPublication(
+                    prepared,
+                    publishedOutput: publishedOutput!
+                )
+                preparedCleaned = true
+                return result(for: publishedOutput!, request: request)
             } catch {
+                if let publishedOutput {
+                    if let failure = error as? ProtectedZIPFailure,
+                       failure.publishedOutput != nil {
+                        throw failure
+                    }
+                    throw ProtectedZIPFailure(
+                        primary: error,
+                        cleanup: nil,
+                        publishedOutput: publishedOutput
+                    )
+                }
                 let cleanupError = await cleanupOutputReservation(
                     reservation,
                     itemIdentity: outputIdentity
                 )
                 if cleanupError != nil {
-                    throw ProtectedZIPFailure(primary: error, cleanup: cleanupError)
+                    throw ProtectedZIPFailure(
+                        primary: error,
+                        cleanup: cleanupError,
+                        publishedOutput: nil
+                    )
                 }
                 throw error
             }
         } catch {
-            if !preparedCleaned {
+            if !preparedCleaned && !preparedCleanupAttempted {
                 do {
                     try await sourcePreparer.cleanup(prepared)
                     preparedCleaned = true
                 } catch {
-                    throw ProtectedZIPFailure(primary: error, cleanup: error)
+                    throw ProtectedZIPFailure(
+                        primary: error,
+                        cleanup: error,
+                        publishedOutput: publishedOutput(from: error)
+                    )
                 }
             }
             throw error
@@ -341,6 +364,7 @@ actor ProtectedZIPOperationService: ProtectedZIPOperating, ArchiveOperating {
             parentIdentifiedBy: request.destinationParentIdentity
         )
         var inputIdentity: FileIdentity?
+        var inputCleanupAttempted = false
         do {
             let before = try await fileSystem.fingerprint(of: source.url)
             let copied = try await fileSystem.copyAndCaptureIdentity(
@@ -354,6 +378,11 @@ actor ProtectedZIPOperationService: ProtectedZIPOperating, ArchiveOperating {
                 throw ProtectedZIPError.identityChanged
             }
 
+            // Reopen the private staged copy and inspect that descriptor
+            // before preflight or any password request. Classification (when
+            // invoked by the router) inspected the original source; this is a
+            // distinct staged reinspection with a defer installed before the
+            // engine can throw.
             let openedArchive = try await fileSystem.openItem(
                 inputReservation.item,
                 kind: .regularFile,
@@ -398,20 +427,32 @@ actor ProtectedZIPOperationService: ProtectedZIPOperating, ArchiveOperating {
                 let secret = try await passwordProvider.requestPassword(for: passwordRequest)
                 defer { secret.invalidate() }
                 do {
-                    let attemptResult = try await extractionAttempt(
+                    let publishedOutput = try await extractionAttempt(
                         request: request,
                         archive: openedArchive,
                         password: secret,
                         limits: limits,
                         progress: progress
                     )
-                    guard await cleanupInputReservation(
-                        inputReservation,
-                        itemIdentity: inputIdentity
-                    ) == nil else {
-                        throw ProtectedZIPError.recoveryRequired
+                    do {
+                        inputCleanupAttempted = true
+                        try await cleanupInputReservationOrThrow(
+                            inputReservation,
+                            itemIdentity: inputIdentity,
+                            publishedOutput: publishedOutput
+                        )
+                    } catch {
+                        if let failure = error as? ProtectedZIPFailure,
+                           failure.publishedOutput != nil {
+                            throw failure
+                        }
+                        throw ProtectedZIPFailure(
+                            primary: error,
+                            cleanup: nil,
+                            publishedOutput: publishedOutput
+                        )
                     }
-                    return attemptResult
+                    return result(for: publishedOutput, request: request)
                 } catch let error as ProtectedZIPError
                     where error == .incorrectPasswordOrDamagedData {
                     previousAttemptFailed = true
@@ -419,12 +460,19 @@ actor ProtectedZIPOperationService: ProtectedZIPOperating, ArchiveOperating {
                 }
             }
         } catch {
+            if inputCleanupAttempted {
+                throw error
+            }
             let cleanupError = await cleanupInputReservation(
                 inputReservation,
                 itemIdentity: inputIdentity
             )
             if cleanupError != nil {
-                throw ProtectedZIPFailure(primary: error, cleanup: cleanupError)
+                throw ProtectedZIPFailure(
+                    primary: error,
+                    cleanup: cleanupError,
+                    publishedOutput: publishedOutput(from: error)
+                )
             }
             throw error
         }
@@ -436,12 +484,13 @@ actor ProtectedZIPOperationService: ProtectedZIPOperating, ArchiveOperating {
         password: ArchiveSecret,
         limits: ProtectedZIPLimits,
         progress: @escaping ArchiveProgressHandler
-    ) async throws -> FileOperationResult {
+    ) async throws -> ProtectedZIPPublishedOutput {
         let reservation = try await fileSystem.reserveStagingDirectory(
             beside: request.finalDestination,
             parentIdentifiedBy: request.destinationParentIdentity
         )
         var outputIdentity: FileIdentity?
+        var publishedOutput: ProtectedZIPPublishedOutput?
         do {
             let output = try await fileSystem.createEmptyItemAndCaptureIdentity(
                 reservation.item,
@@ -484,28 +533,38 @@ actor ProtectedZIPOperationService: ProtectedZIPOperating, ArchiveOperating {
                 to: request.finalDestination,
                 destinationParentIdentifiedBy: request.destinationParentIdentity
             )
-            guard try await fileSystem.identity(of: request.finalDestination) == output.identity else {
-                throw ProtectedZIPError.identityChanged
-            }
-            let fingerprint = try? await fileSystem.fingerprint(of: request.finalDestination)
-            try await fileSystem.removeStagingDirectory(reservation)
-            return FileOperationResult(
-                outcomes: [.succeeded(
-                    source: representativeSource(for: request),
-                    destination: request.finalDestination
-                )],
-                undoDestinationIdentities: [request.finalDestination: output.identity],
-                undoDestinationFingerprints: fingerprint.map {
-                    [request.finalDestination: $0]
-                } ?? [:]
+            publishedOutput = try await capturePublishedOutput(
+                at: request.finalDestination,
+                identity: output.identity
             )
+            try await cleanupPublishedReservation(
+                reservation,
+                itemIdentity: output.identity,
+                publishedOutput: publishedOutput!
+            )
+            return publishedOutput!
         } catch {
+            if let publishedOutput {
+                if let failure = error as? ProtectedZIPFailure,
+                   failure.publishedOutput != nil {
+                    throw failure
+                }
+                throw ProtectedZIPFailure(
+                    primary: error,
+                    cleanup: nil,
+                    publishedOutput: publishedOutput
+                )
+            }
             let cleanupError = await cleanupOutputReservation(
                 reservation,
                 itemIdentity: outputIdentity
             )
             if cleanupError != nil {
-                throw ProtectedZIPFailure(primary: error, cleanup: cleanupError)
+                throw ProtectedZIPFailure(
+                    primary: error,
+                    cleanup: cleanupError,
+                    publishedOutput: nil
+                )
             }
             throw error
         }
@@ -543,10 +602,127 @@ actor ProtectedZIPOperationService: ProtectedZIPOperating, ArchiveOperating {
         } catch {
             let cleanupError = await cleanupOutputReservation(probe, itemIdentity: probeIdentity)
             if cleanupError != nil {
-                throw ProtectedZIPFailure(primary: error, cleanup: cleanupError)
+                throw ProtectedZIPFailure(
+                    primary: error,
+                    cleanup: cleanupError,
+                    publishedOutput: nil
+                )
             }
             throw error
         }
+    }
+
+    private func cleanupPublishedReservation(
+        _ reservation: StagingReservation,
+        itemIdentity: FileIdentity?,
+        publishedOutput: ProtectedZIPPublishedOutput
+    ) async throws {
+        do {
+            try await cleanupInputReservationOrThrow(
+                reservation,
+                itemIdentity: itemIdentity,
+                publishedOutput: publishedOutput
+            )
+        } catch {
+            if let failure = error as? ProtectedZIPFailure,
+               failure.publishedOutput != nil {
+                throw failure
+            }
+            throw ProtectedZIPFailure(
+                primary: error,
+                cleanup: nil,
+                publishedOutput: publishedOutput
+            )
+        }
+    }
+
+    private func cleanupPreparedSourcesAfterPublication(
+        _ prepared: PreparedArchiveSources,
+        publishedOutput: ProtectedZIPPublishedOutput
+    ) async throws {
+        do {
+            try await sourcePreparer.cleanup(prepared)
+        } catch let firstError {
+            do {
+                try await sourcePreparer.cleanup(prepared)
+            } catch let retryError {
+                throw ProtectedZIPFailure(
+                    primary: firstError,
+                    cleanup: retryError,
+                    publishedOutput: publishedOutput
+                )
+            }
+        }
+    }
+
+    private func cleanupInputReservationOrThrow(
+        _ reservation: StagingReservation,
+        itemIdentity: FileIdentity?,
+        publishedOutput: ProtectedZIPPublishedOutput
+    ) async throws {
+        do {
+            try await requireCleanup(
+                reservation,
+                itemIdentity: itemIdentity
+            )
+        } catch let firstError {
+            do {
+                try await requireCleanup(
+                    reservation,
+                    itemIdentity: itemIdentity
+                )
+            } catch let retryError {
+                throw ProtectedZIPFailure(
+                    primary: firstError,
+                    cleanup: retryError,
+                    publishedOutput: publishedOutput
+                )
+            }
+        }
+    }
+
+    private func requireCleanup(
+        _ reservation: StagingReservation,
+        itemIdentity: FileIdentity?
+    ) async throws {
+        if let cleanupError = await cleanupInputReservation(
+            reservation,
+            itemIdentity: itemIdentity
+        ) {
+            throw cleanupError
+        }
+    }
+
+    private func capturePublishedOutput(
+        at destination: URL,
+        identity: FileIdentity
+    ) async throws -> ProtectedZIPPublishedOutput {
+        guard try await fileSystem.identity(of: destination) == identity else {
+            throw ProtectedZIPError.identityChanged
+        }
+        return ProtectedZIPPublishedOutput(
+            destination: destination,
+            identity: identity,
+            fingerprint: try? await fileSystem.fingerprint(of: destination)
+        )
+    }
+
+    private func result(
+        for publishedOutput: ProtectedZIPPublishedOutput,
+        request: ArchiveRequest
+    ) -> FileOperationResult {
+        FileOperationResult(
+            outcomes: [.succeeded(
+                source: representativeSource(for: request),
+                destination: request.finalDestination
+            )],
+            undoDestinationIdentities: [
+                publishedOutput.destination: publishedOutput.identity
+            ],
+            undoDestinationFingerprints: publishedOutput.fingerprint.map {
+                [publishedOutput.destination: $0]
+            } ?? [:]
+        )
     }
 
     private func extractionLimits(
@@ -646,9 +822,16 @@ actor ProtectedZIPOperationService: ProtectedZIPOperating, ArchiveOperating {
     }
 }
 
+private struct ProtectedZIPPublishedOutput: Sendable {
+    let destination: URL
+    let identity: FileIdentity
+    let fingerprint: SourceFingerprint?
+}
+
 private struct ProtectedZIPFailure: LocalizedError, Sendable {
     let primary: any Error
     let cleanup: (any Error)?
+    let publishedOutput: ProtectedZIPPublishedOutput?
 
     var errorDescription: String? {
         cleanup == nil ? primary.localizedDescription : ProtectedZIPError.recoveryRequired.errorDescription
@@ -662,6 +845,15 @@ private func isCancellation(_ error: any Error) -> Bool {
     return false
 }
 
+private func publishedOutput(
+    from error: any Error
+) -> ProtectedZIPPublishedOutput? {
+    if let failure = error as? ProtectedZIPFailure {
+        return failure.publishedOutput ?? publishedOutput(from: failure.primary)
+    }
+    return nil
+}
+
 private func requiresRecovery(_ error: any Error) -> Bool {
     if let protected = error as? ProtectedZIPError, protected == .recoveryRequired {
         return true
@@ -669,7 +861,9 @@ private func requiresRecovery(_ error: any Error) -> Bool {
     if let operation = error as? ArchiveOperationError, operation == .recoveryRequired {
         return true
     }
-    if let failure = error as? ProtectedZIPFailure { return failure.cleanup != nil }
+    if let failure = error as? ProtectedZIPFailure {
+        return failure.cleanup != nil || failure.publishedOutput != nil
+    }
     return false
 }
 

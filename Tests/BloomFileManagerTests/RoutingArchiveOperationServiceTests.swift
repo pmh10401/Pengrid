@@ -64,6 +64,43 @@ struct RoutingArchiveOperationServiceTests {
         #expect(await router.route(for: tarExtraction) == .ordinary)
     }
 
+    @Test @MainActor func routerClassifiesOriginalThenProtectedServiceReinspectsStagedCopy() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let archive = root.url.appending(path: "Encrypted.zip")
+        let destination = root.url.appending(path: "Extracted", directoryHint: .isDirectory)
+        try Data("encrypted fixture".utf8).write(to: archive)
+        let fileSystem = LiveFileSystemAccess()
+        let parentIdentity = try #require(await fileSystem.identity(of: root.url))
+        let request = ArchiveRequest(
+            kind: .extract,
+            verifiedSources: identifiedArchiveTestSources([archive]),
+            finalDestination: destination,
+            destinationParentIdentity: parentIdentity,
+            format: .zip
+        )
+        let engine = RecordingRouteEngine(inspections: [
+            ProtectedZIPInspection(hasEncryptedEntries: true),
+            ProtectedZIPInspection(hasEncryptedEntries: true)
+        ])
+        let protected = ProtectedZIPOperationService(
+            fileSystem: fileSystem,
+            passwordProvider: RecordingArchivePasswordProvider(passwords: ["route-passphrase"]),
+            engine: engine,
+            logger: RecordingProtectedZIPLogger()
+        )
+        let ordinary = ArchiveOperationService(
+            fileSystem: fileSystem,
+            commandRunner: NoopArchiveCommandRunner()
+        )
+        let router = RoutingArchiveOperationService(ordinary: ordinary, protected: protected)
+
+        let result = await router.perform([request]) { _ in }
+
+        #expect(result.outcomes == [.succeeded(source: archive, destination: destination)])
+        #expect(await engine.events == ["inspect", "inspect", "preflight"])
+    }
+
     @Test func mergingRetainsRequestOrderAndMetadata() {
         let first = URL(filePath: "/tmp/first")
         let second = URL(filePath: "/tmp/second")
@@ -129,10 +166,46 @@ struct RoutingArchiveOperationServiceTests {
         #expect(await ordinary.sources == [first])
         #expect(await protected.sources == [second])
     }
+
+    @Test @MainActor func factoryInjectsProtectedDependenciesAndRetainsThemThroughPublish() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let source = root.url.appending(path: "Source.txt")
+        let destination = root.url.appending(path: "Factory.zip")
+        try Data("source".utf8).write(to: source)
+        let fileSystem = LiveFileSystemAccess()
+        let parentIdentity = try #require(await fileSystem.identity(of: root.url))
+        let request = try #require(ArchiveRequest(
+            kind: .compress,
+            verifiedSources: identifiedArchiveTestSources([source]),
+            finalDestination: destination,
+            destinationParentIdentity: parentIdentity,
+            format: .zip,
+            protection: .aes256
+        ))
+        let provider = RecordingArchivePasswordProvider(passwords: ["factory-passphrase"])
+        let engine = RoutingFactoryEngine()
+        let logger = RecordingProtectedZIPLogger()
+        let fileOperationService = FileOperationService(fileSystem: fileSystem)
+        let router = fileOperationService.makeRoutingArchiveOperationService(
+            passwordProvider: provider,
+            protectedEngine: engine,
+            protectedLogger: logger
+        )
+
+        let result = await router.perform([request]) { _ in }
+
+        #expect(result.outcomes == [.succeeded(source: source, destination: destination)])
+        #expect(provider.requestCount == 1)
+        #expect(await engine.createCount == 1)
+        #expect(await logger.events.last?.category == .compression)
+        #expect(FileManager.default.fileExists(atPath: destination.path))
+    }
 }
 
 private actor RecordingRouteEngine: ProtectedZIPEngine {
     private var inspections: [ProtectedZIPInspection]
+    private(set) var events: [String] = []
 
     init(inspections: [ProtectedZIPInspection] = []) {
         self.inspections = inspections
@@ -143,14 +216,18 @@ private actor RecordingRouteEngine: ProtectedZIPEngine {
     }
 
     func inspect(archive: OpenedFileSystemItem) async throws -> ProtectedZIPInspection {
-        inspections.isEmpty ? ProtectedZIPInspection() : inspections.removeFirst()
+        events.append("inspect")
+        return inspections.isEmpty ? ProtectedZIPInspection() : inspections.removeFirst()
     }
 
     func preflight(
         archive: OpenedFileSystemItem,
         destinationProbeRoot: OpenedEmptyFileSystemItem,
         limits: ProtectedZIPLimits
-    ) async throws -> ProtectedZIPInspection { ProtectedZIPInspection() }
+    ) async throws -> ProtectedZIPInspection {
+        events.append("preflight")
+        return ProtectedZIPInspection()
+    }
 
     func createAES256(
         sourceRoot: OpenedFileSystemItem,
@@ -217,4 +294,37 @@ private actor Task8RecordingProtectedOperator: ProtectedZIPOperating {
             .succeeded(source: $0.verifiedSources[0].url, destination: $0.finalDestination)
         })
     }
+}
+
+private actor RoutingFactoryEngine: ProtectedZIPEngine {
+    private(set) var createCount = 0
+
+    func inspect(archive: OpenedFileSystemItem) async throws -> ProtectedZIPInspection {
+        ProtectedZIPInspection()
+    }
+
+    func preflight(
+        archive: OpenedFileSystemItem,
+        destinationProbeRoot: OpenedEmptyFileSystemItem,
+        limits: ProtectedZIPLimits
+    ) async throws -> ProtectedZIPInspection {
+        ProtectedZIPInspection()
+    }
+
+    func createAES256(
+        sourceRoot: OpenedFileSystemItem,
+        destination: OpenedEmptyFileSystemItem,
+        password: ArchiveSecret,
+        progress: @escaping @Sendable (ProtectedZIPProgress) async -> Void
+    ) async throws {
+        createCount += 1
+    }
+
+    func extract(
+        archive: OpenedFileSystemItem,
+        destinationRoot: OpenedEmptyFileSystemItem,
+        password: ArchiveSecret,
+        limits: ProtectedZIPLimits,
+        progress: @escaping @Sendable (ProtectedZIPProgress) async -> Void
+    ) async throws {}
 }
