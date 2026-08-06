@@ -396,8 +396,8 @@ struct ProtectedZIPEngineWriterTests {
         let second = try #require(structure.entries.first { $0.name == "z.txt" })
         #expect(first.externalAttributes >> 16 & 0o7777 == UInt32(secondInformation.st_mode & 0o7777))
         #expect(second.externalAttributes >> 16 & 0o7777 == UInt32(firstInformation.st_mode & 0o7777))
-        #expect(dosDateTime(first.modifiedDate, first.modifiedTime).distance(to: secondDate) <= 2)
-        #expect(dosDateTime(second.modifiedDate, second.modifiedTime).distance(to: firstDate) <= 2)
+        #expect(abs(dosDateTime(first.modifiedDate, first.modifiedTime).distance(to: secondDate)) <= 2)
+        #expect(abs(dosDateTime(second.modifiedDate, second.modifiedTime).distance(to: firstDate)) <= 2)
     }
 
     @Test func writerRejectsMutationAfterEnumerationBeforeOpen() throws {
@@ -454,6 +454,9 @@ struct ProtectedZIPEngineWriterTests {
         let samples = await progress.samples
         #expect(samples.first?.value.completedByteCount == 0)
         #expect(samples.last?.value.totalByteCount == 4)
+        let final = try #require(samples.last)
+        #expect(final.value.completedByteCount == 4)
+        #expect(final.value.completedByteCount == final.value.totalByteCount)
         #expect(samples.count >= 2)
         for pair in zip(samples, samples.dropFirst()) {
             #expect(pair.0.at.duration(to: pair.1.at) >= .milliseconds(100))

@@ -125,8 +125,13 @@ int32_t mz_crypt_sha_begin(void *handle) {
 int32_t mz_crypt_sha_update(void *handle, const void *buf, int32_t size) {
     mz_crypt_sha *sha = (mz_crypt_sha *)handle;
 
-    if (!sha || !buf || !sha->initialized)
+    if (!sha)
         return MZ_PARAM_ERROR;
+    if (!buf || size < 0 || !sha->initialized) {
+        if (sha->initialized)
+            mz_crypt_sha_reset(sha);
+        return MZ_PARAM_ERROR;
+    }
 
     switch (sha->algorithm) {
     case MZ_HASH_SHA1:
@@ -144,11 +149,13 @@ int32_t mz_crypt_sha_update(void *handle, const void *buf, int32_t size) {
     case MZ_HASH_SHA512:
         sha->error = CC_SHA512_Update(&sha->ctx512, buf, size);
         break;
+    default:
+        mz_crypt_sha_reset(sha);
+        return MZ_PARAM_ERROR;
     }
 
     if (!sha->error) {
-        pengrid_secure_clear(&sha->ctx512, sizeof(sha->ctx512));
-        sha->initialized = 0;
+        mz_crypt_sha_reset(sha);
         return MZ_HASH_ERROR;
     }
 
@@ -158,12 +165,16 @@ int32_t mz_crypt_sha_update(void *handle, const void *buf, int32_t size) {
 int32_t mz_crypt_sha_end(void *handle, uint8_t *digest, int32_t digest_size) {
     mz_crypt_sha *sha = (mz_crypt_sha *)handle;
 
-    if (!sha || !digest || !sha->initialized)
+    if (!sha)
         return MZ_PARAM_ERROR;
+    if (!digest || digest_size < 0 || !sha->initialized) {
+        if (sha->initialized)
+            mz_crypt_sha_reset(sha);
+        return MZ_PARAM_ERROR;
+    }
     if (sha->algorithm < MZ_HASH_SHA1 || sha->algorithm > MZ_HASH_SHA512 ||
         digest_size < mz_crypt_sha_digest_size[sha->algorithm - MZ_HASH_SHA1]) {
-        pengrid_secure_clear(&sha->ctx512, sizeof(sha->ctx512));
-        sha->initialized = 0;
+        mz_crypt_sha_reset(sha);
         return MZ_PARAM_ERROR;
     }
 
@@ -183,23 +194,31 @@ int32_t mz_crypt_sha_end(void *handle, uint8_t *digest, int32_t digest_size) {
     case MZ_HASH_SHA512:
         sha->error = CC_SHA512_Final(digest, &sha->ctx512);
         break;
+    default:
+        mz_crypt_sha_reset(sha);
+        return MZ_PARAM_ERROR;
     }
 
     if (!sha->error) {
-        pengrid_secure_clear(&sha->ctx512, sizeof(sha->ctx512));
-        sha->initialized = 0;
+        mz_crypt_sha_reset(sha);
         return MZ_HASH_ERROR;
     }
 
-    pengrid_secure_clear(&sha->ctx512, sizeof(sha->ctx512));
-    sha->initialized = 0;
+    mz_crypt_sha_reset(sha);
     return MZ_OK;
 }
 
 int32_t mz_crypt_sha_set_algorithm(void *handle, uint16_t algorithm) {
     mz_crypt_sha *sha = (mz_crypt_sha *)handle;
-    if (algorithm < MZ_HASH_SHA1 || algorithm > MZ_HASH_SHA512)
+    if (!sha)
         return MZ_PARAM_ERROR;
+    if (algorithm < MZ_HASH_SHA1 || algorithm > MZ_HASH_SHA512) {
+        if (sha->initialized)
+            mz_crypt_sha_reset(sha);
+        return MZ_PARAM_ERROR;
+    }
+    if (sha->initialized)
+        mz_crypt_sha_reset(sha);
     sha->algorithm = algorithm;
     return MZ_OK;
 }
@@ -260,32 +279,44 @@ void mz_crypt_aes_reset(void *handle) {
     aes->mode = mode;
 }
 
+static int32_t mz_crypt_aes_fail(mz_crypt_aes *aes, int32_t status) {
+    if (aes)
+        mz_crypt_aes_reset(aes);
+    return status;
+}
+
 int32_t mz_crypt_aes_encrypt(void *handle, const void *aad, int32_t aad_size, uint8_t *buf, int32_t size) {
     mz_crypt_aes *aes = (mz_crypt_aes *)handle;
     size_t data_moved = 0;
 
-    if (!aes || !buf || size % MZ_AES_BLOCK_SIZE != 0 || !aes->crypt)
+    if (!aes)
         return MZ_PARAM_ERROR;
+    if (!buf || size < 0 || size % MZ_AES_BLOCK_SIZE != 0 || !aes->crypt)
+        return mz_crypt_aes_fail(aes, MZ_PARAM_ERROR);
+    if (aad_size < 0 || (aad_size > 0 && !aad))
+        return mz_crypt_aes_fail(aes, MZ_PARAM_ERROR);
+    if (aes->mode != MZ_AES_MODE_CBC && aes->mode != MZ_AES_MODE_ECB && aes->mode != MZ_AES_MODE_GCM)
+        return mz_crypt_aes_fail(aes, MZ_PARAM_ERROR);
 
     if (aes->mode == MZ_AES_MODE_GCM) {
 #if MZ_TARGET_APPSTORE
-        return MZ_SUPPORT_ERROR;
+        return mz_crypt_aes_fail(aes, MZ_SUPPORT_ERROR);
 #else
         if (aad && aad_size > 0) {
             aes->error = CCCryptorGCMAddAAD(aes->crypt, aad, aad_size);
             if (aes->error != kCCSuccess)
-                return MZ_CRYPT_ERROR;
+                return mz_crypt_aes_fail(aes, MZ_CRYPT_ERROR);
         }
         aes->error = CCCryptorGCMEncrypt(aes->crypt, buf, size, buf);
 #endif
     } else {
         if (aad && aad_size > 0)
-            return MZ_PARAM_ERROR;
+            return mz_crypt_aes_fail(aes, MZ_PARAM_ERROR);
         aes->error = CCCryptorUpdate(aes->crypt, buf, size, buf, size, &data_moved);
     }
 
     if (aes->error != kCCSuccess)
-        return MZ_CRYPT_ERROR;
+        return mz_crypt_aes_fail(aes, MZ_CRYPT_ERROR);
 
     return size;
 }
@@ -296,20 +327,22 @@ int32_t mz_crypt_aes_encrypt_final(void *handle, uint8_t *buf, int32_t size, uin
     size_t tag_outsize = tag_size;
 #endif
 
-    if (!aes || !tag || !tag_size || !aes->crypt || aes->mode != MZ_AES_MODE_GCM)
+    if (!aes)
         return MZ_PARAM_ERROR;
+    if (!tag || tag_size <= 0 || size < 0 || (!buf && size > 0) || !aes->crypt || aes->mode != MZ_AES_MODE_GCM)
+        return mz_crypt_aes_fail(aes, MZ_PARAM_ERROR);
 
 #if MZ_TARGET_APPSTORE
-    return MZ_SUPPORT_ERROR;
+    return mz_crypt_aes_fail(aes, MZ_SUPPORT_ERROR);
 #else
     aes->error = CCCryptorGCMEncrypt(aes->crypt, buf, size, buf);
     if (aes->error != kCCSuccess)
-        return MZ_CRYPT_ERROR;
+        return mz_crypt_aes_fail(aes, MZ_CRYPT_ERROR);
 
     aes->error = CCCryptorGCMFinal(aes->crypt, tag, &tag_outsize);
 
     if (aes->error != kCCSuccess)
-        return MZ_CRYPT_ERROR;
+        return mz_crypt_aes_fail(aes, MZ_CRYPT_ERROR);
 
     return size;
 #endif
@@ -319,28 +352,34 @@ int32_t mz_crypt_aes_decrypt(void *handle, const void *aad, int32_t aad_size, ui
     mz_crypt_aes *aes = (mz_crypt_aes *)handle;
     size_t data_moved = 0;
 
-    if (!aes || !buf || size % MZ_AES_BLOCK_SIZE != 0 || !aes->crypt)
+    if (!aes)
         return MZ_PARAM_ERROR;
+    if (!buf || size < 0 || size % MZ_AES_BLOCK_SIZE != 0 || !aes->crypt)
+        return mz_crypt_aes_fail(aes, MZ_PARAM_ERROR);
+    if (aad_size < 0 || (aad_size > 0 && !aad))
+        return mz_crypt_aes_fail(aes, MZ_PARAM_ERROR);
+    if (aes->mode != MZ_AES_MODE_CBC && aes->mode != MZ_AES_MODE_ECB && aes->mode != MZ_AES_MODE_GCM)
+        return mz_crypt_aes_fail(aes, MZ_PARAM_ERROR);
 
     if (aes->mode == MZ_AES_MODE_GCM) {
 #if MZ_TARGET_APPSTORE
-        return MZ_SUPPORT_ERROR;
+        return mz_crypt_aes_fail(aes, MZ_SUPPORT_ERROR);
 #else
         if (aad && aad_size > 0) {
             aes->error = CCCryptorGCMAddAAD(aes->crypt, aad, aad_size);
             if (aes->error != kCCSuccess)
-                return MZ_CRYPT_ERROR;
+                return mz_crypt_aes_fail(aes, MZ_CRYPT_ERROR);
         }
         aes->error = CCCryptorGCMDecrypt(aes->crypt, buf, size, buf);
 #endif
     } else {
         if (aad && aad_size > 0)
-            return MZ_PARAM_ERROR;
+            return mz_crypt_aes_fail(aes, MZ_PARAM_ERROR);
         aes->error = CCCryptorUpdate(aes->crypt, buf, size, buf, size, &data_moved);
     }
 
     if (aes->error != kCCSuccess)
-        return MZ_CRYPT_ERROR;
+        return mz_crypt_aes_fail(aes, MZ_CRYPT_ERROR);
 
     return size;
 }
@@ -355,32 +394,43 @@ int32_t mz_crypt_aes_decrypt_final(void *handle, uint8_t *buf, int32_t size, con
     int32_t is_ok = 0;
 #endif
 
-    if (!aes || !tag || !tag_length || !aes->crypt || aes->mode != MZ_AES_MODE_GCM)
+    if (!aes)
         return MZ_PARAM_ERROR;
+    if (!tag || tag_length <= 0 || size < 0 || (!buf && size > 0) || !aes->crypt || aes->mode != MZ_AES_MODE_GCM) {
+#if !MZ_TARGET_APPSTORE
+        pengrid_secure_clear(tag_actual_buf, sizeof(tag_actual_buf));
+#endif
+        return mz_crypt_aes_fail(aes, MZ_PARAM_ERROR);
+    }
 
 #if MZ_TARGET_APPSTORE
-    return MZ_SUPPORT_ERROR;
+    return mz_crypt_aes_fail(aes, MZ_SUPPORT_ERROR);
 #else
     aes->error = CCCryptorGCMDecrypt(aes->crypt, buf, size, buf);
     if (aes->error != kCCSuccess)
-        return MZ_CRYPT_ERROR;
+        goto crypt_error;
 
     /* CCCryptorGCMFinal does not verify tag */
     aes->error = CCCryptorGCMFinal(aes->crypt, tag_actual, &tag_actual_len);
 
     if (aes->error != kCCSuccess)
-        return MZ_CRYPT_ERROR;
+        goto crypt_error;
     if (tag_length != (int32_t)tag_actual_len)
-        return MZ_CRYPT_ERROR;
+        goto crypt_error;
 
     /* Timing safe comparison */
     for (; c > 0; c--)
         is_ok |= *tag++ ^ *tag_actual++;
 
     if (is_ok)
-        return MZ_CRYPT_ERROR;
+        goto crypt_error;
 
+    pengrid_secure_clear(tag_actual_buf, sizeof(tag_actual_buf));
     return size;
+
+crypt_error:
+    pengrid_secure_clear(tag_actual_buf, sizeof(tag_actual_buf));
+    return mz_crypt_aes_fail(aes, MZ_CRYPT_ERROR);
 #endif
 }
 
@@ -389,18 +439,25 @@ static int32_t mz_crypt_aes_set_key(void *handle, const void *key, int32_t key_l
     mz_crypt_aes *aes = (mz_crypt_aes *)handle;
     CCMode mode;
 
+    if (!aes)
+        return MZ_PARAM_ERROR;
+    if (key_length < 0 || iv_length < 0 || (key_length > 0 && !key) || (iv_length > 0 && !iv))
+        return mz_crypt_aes_fail(aes, MZ_PARAM_ERROR);
     if (aes->mode == MZ_AES_MODE_CBC)
         mode = kCCModeCBC;
     else if (aes->mode == MZ_AES_MODE_ECB)
         mode = kCCModeECB;
-    else if (aes->mode == MZ_AES_MODE_GCM)
+    else if (aes->mode == MZ_AES_MODE_GCM) {
 #if !MZ_TARGET_APPSTORE
         mode = kCCModeGCM;
 #else
+        mz_crypt_aes_reset(aes);
         return MZ_SUPPORT_ERROR;
 #endif
-    else
+    } else {
+        mz_crypt_aes_reset(aes);
         return MZ_PARAM_ERROR;
+    }
 
     mz_crypt_aes_reset(handle);
 
@@ -408,14 +465,14 @@ static int32_t mz_crypt_aes_set_key(void *handle, const void *key, int32_t key_l
                                          &aes->crypt);
 
     if (aes->error != kCCSuccess)
-        return MZ_HASH_ERROR;
+        return mz_crypt_aes_fail(aes, MZ_HASH_ERROR);
 
 #if !MZ_TARGET_APPSTORE
     if (aes->mode == MZ_AES_MODE_GCM) {
         aes->error = CCCryptorGCMAddIV(aes->crypt, iv, iv_length);
 
         if (aes->error != kCCSuccess)
-            return MZ_HASH_ERROR;
+            return mz_crypt_aes_fail(aes, MZ_HASH_ERROR);
     }
 #endif
 
@@ -434,6 +491,10 @@ int32_t mz_crypt_aes_set_decrypt_key(void *handle, const void *key, int32_t key_
 
 void mz_crypt_aes_set_mode(void *handle, int32_t mode) {
     mz_crypt_aes *aes = (mz_crypt_aes *)handle;
+    if (!aes)
+        return;
+    if (aes->crypt)
+        mz_crypt_aes_reset(aes);
     aes->mode = mode;
 }
 
@@ -482,12 +543,20 @@ void mz_crypt_hmac_reset(void *handle) {
     hmac->error = 0;
 }
 
+static int32_t mz_crypt_hmac_fail(mz_crypt_hmac *hmac, int32_t status) {
+    if (hmac)
+        mz_crypt_hmac_reset(hmac);
+    return status;
+}
+
 int32_t mz_crypt_hmac_init(void *handle, const void *key, int32_t key_length) {
     mz_crypt_hmac *hmac = (mz_crypt_hmac *)handle;
     CCHmacAlgorithm algorithm = 0;
 
-    if (!hmac || !key)
+    if (!hmac)
         return MZ_PARAM_ERROR;
+    if (!key || key_length < 0)
+        return mz_crypt_hmac_fail(hmac, MZ_PARAM_ERROR);
 
     mz_crypt_hmac_reset(handle);
 
@@ -496,7 +565,7 @@ int32_t mz_crypt_hmac_init(void *handle, const void *key, int32_t key_length) {
     else if (hmac->algorithm == MZ_HASH_SHA256)
         algorithm = kCCHmacAlgSHA256;
     else
-        return MZ_PARAM_ERROR;
+        return mz_crypt_hmac_fail(hmac, MZ_PARAM_ERROR);
 
     CCHmacInit(&hmac->ctx, algorithm, key, key_length);
     hmac->initialized = 1;
@@ -506,8 +575,10 @@ int32_t mz_crypt_hmac_init(void *handle, const void *key, int32_t key_length) {
 int32_t mz_crypt_hmac_update(void *handle, const void *buf, int32_t size) {
     mz_crypt_hmac *hmac = (mz_crypt_hmac *)handle;
 
-    if (!hmac || !buf || !hmac->initialized)
+    if (!hmac)
         return MZ_PARAM_ERROR;
+    if (!buf || size < 0 || !hmac->initialized)
+        return mz_crypt_hmac_fail(hmac, MZ_PARAM_ERROR);
 
     CCHmacUpdate(&hmac->ctx, buf, size);
     return MZ_OK;
@@ -516,30 +587,35 @@ int32_t mz_crypt_hmac_update(void *handle, const void *buf, int32_t size) {
 int32_t mz_crypt_hmac_end(void *handle, uint8_t *digest, int32_t digest_size) {
     mz_crypt_hmac *hmac = (mz_crypt_hmac *)handle;
 
-    if (!hmac || !digest || !hmac->initialized)
+    if (!hmac)
         return MZ_PARAM_ERROR;
+    if (!digest || digest_size < 0 || !hmac->initialized)
+        return mz_crypt_hmac_fail(hmac, MZ_PARAM_ERROR);
 
     if (hmac->algorithm == MZ_HASH_SHA1) {
         if (digest_size < MZ_HASH_SHA1_SIZE) {
-            mz_crypt_hmac_free(handle);
-            return MZ_BUF_ERROR;
+            return mz_crypt_hmac_fail(hmac, MZ_BUF_ERROR);
+        }
+        CCHmacFinal(&hmac->ctx, digest);
+    } else if (hmac->algorithm == MZ_HASH_SHA256) {
+        if (digest_size < MZ_HASH_SHA256_SIZE) {
+            return mz_crypt_hmac_fail(hmac, MZ_BUF_ERROR);
         }
         CCHmacFinal(&hmac->ctx, digest);
     } else {
-        if (digest_size < MZ_HASH_SHA256_SIZE) {
-            mz_crypt_hmac_free(handle);
-            return MZ_BUF_ERROR;
-        }
-        CCHmacFinal(&hmac->ctx, digest);
+        return mz_crypt_hmac_fail(hmac, MZ_PARAM_ERROR);
     }
 
-    pengrid_secure_clear(&hmac->ctx, sizeof(hmac->ctx));
-    hmac->initialized = 0;
+    mz_crypt_hmac_reset(hmac);
     return MZ_OK;
 }
 
 void mz_crypt_hmac_set_algorithm(void *handle, uint16_t algorithm) {
     mz_crypt_hmac *hmac = (mz_crypt_hmac *)handle;
+    if (!hmac)
+        return;
+    if (hmac->initialized)
+        mz_crypt_hmac_reset(hmac);
     hmac->algorithm = algorithm;
 }
 
@@ -547,12 +623,17 @@ int32_t mz_crypt_hmac_copy(void *src_handle, void *target_handle) {
     mz_crypt_hmac *source = (mz_crypt_hmac *)src_handle;
     mz_crypt_hmac *target = (mz_crypt_hmac *)target_handle;
 
-    if (!source || !target)
+    if (!target)
         return MZ_PARAM_ERROR;
+    if (!source)
+        return mz_crypt_hmac_fail(target, MZ_PARAM_ERROR);
+    if (source == target)
+        return source->initialized ? MZ_OK : MZ_PARAM_ERROR;
 
-    pengrid_secure_clear(&target->ctx, sizeof(target->ctx));
+    mz_crypt_hmac_reset(target);
     memcpy(&target->ctx, &source->ctx, sizeof(CCHmacContext));
     target->initialized = source->initialized;
+    target->algorithm = source->algorithm;
     return MZ_OK;
 }
 

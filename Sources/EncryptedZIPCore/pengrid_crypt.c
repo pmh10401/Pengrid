@@ -107,6 +107,8 @@ int32_t mz_crypt_pbkdf2(const uint8_t *password, int32_t password_length, const 
     }
 
 pbkdf2_cleanup:
+    if (err != MZ_OK && key)
+        pengrid_secure_clear(key, key_length);
     if (hmac3)
         mz_crypt_hmac_reset(hmac3);
     if (hmac1)

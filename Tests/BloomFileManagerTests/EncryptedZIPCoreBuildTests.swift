@@ -12,6 +12,26 @@ import Testing
     #expect(bytes.allSatisfy { $0 == 0 })
 }
 
+@Test func encryptedZIPCoreCryptoErrorPathsKeepSecureCleanup() throws {
+    let packageRoot = URL(filePath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let apple = try String(contentsOf: packageRoot.appending(path: "Sources/EncryptedZIPCore/pengrid_crypt_apple.c"), encoding: .utf8)
+    let wzaes = try String(contentsOf: packageRoot.appending(path: "Sources/EncryptedZIPCore/pengrid_strm_wzaes.c"), encoding: .utf8)
+    let pbkdf2 = try String(contentsOf: packageRoot.appending(path: "Sources/EncryptedZIPCore/pengrid_crypt.c"), encoding: .utf8)
+
+    #expect(apple.contains("if (!digest || digest_size < 0 || !sha->initialized) {"))
+    #expect(apple.contains("mz_crypt_sha_reset(sha);"))
+    #expect(apple.contains("static int32_t mz_crypt_aes_fail"))
+    #expect(apple.contains("return mz_crypt_aes_fail(aes, MZ_CRYPT_ERROR);"))
+    #expect(apple.contains("static int32_t mz_crypt_hmac_fail"))
+    #expect(apple.contains("return mz_crypt_hmac_fail(hmac, MZ_PARAM_ERROR);"))
+    #expect(wzaes.contains("wzaes->error = status;\n            mz_stream_wzaes_clear_state(wzaes);\n            return status;"))
+    #expect(wzaes.contains("if (written < 0) {\n            mz_stream_wzaes_clear_state(wzaes);\n            return written;\n        }"))
+    #expect(pbkdf2.contains("if (err != MZ_OK && key)\n        pengrid_secure_clear(key, key_length);"))
+}
+
 @Test func encryptedZIPCoreInspectsAPlainZIPWithoutConsumingTheCallerDescriptor() throws {
     let root = try TemporaryDirectory()
     defer { root.remove() }

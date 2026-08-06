@@ -190,16 +190,28 @@ int32_t mz_stream_wzaes_is_open(void *stream) {
 
 static int32_t mz_stream_wzaes_ctr_encrypt(void *stream, uint8_t *buf, int32_t size) {
     mz_stream_wzaes *wzaes = (mz_stream_wzaes *)stream;
-    uint32_t pos = wzaes->crypt_pos;
+    uint32_t pos;
     uint32_t i = 0;
 
+    if (!wzaes)
+        return MZ_PARAM_ERROR;
+    if (!buf || size < 0) {
+        mz_stream_wzaes_clear_state(wzaes);
+        return MZ_PARAM_ERROR;
+    }
+    pos = wzaes->crypt_pos;
     while (i < (uint32_t)size) {
         if (pos == MZ_AES_BLOCK_SIZE) {
             uint32_t j = 0;
+            int32_t status;
             while (j < 8 && !++wzaes->nonce[j])
                 j += 1;
             memcpy(wzaes->crypt_block, wzaes->nonce, MZ_AES_BLOCK_SIZE);
-            mz_crypt_aes_encrypt(wzaes->aes, NULL, 0, wzaes->crypt_block, sizeof(wzaes->crypt_block));
+            status = mz_crypt_aes_encrypt(wzaes->aes, NULL, 0, wzaes->crypt_block, sizeof(wzaes->crypt_block));
+            if (status != (int32_t)sizeof(wzaes->crypt_block)) {
+                mz_stream_wzaes_clear_state(wzaes);
+                return status;
+            }
             pos = 0;
         }
         buf[i++] ^= wzaes->crypt_block[pos++];
@@ -214,8 +226,12 @@ int32_t mz_stream_wzaes_read(void *stream, void *buf, int32_t size) {
     int32_t bytes_to_read = size;
     int32_t read;
 
-    if (!wzaes || !buf || size < 0)
+    if (!wzaes)
         return MZ_PARAM_ERROR;
+    if (!buf || size < 0) {
+        mz_stream_wzaes_clear_state(wzaes);
+        return MZ_PARAM_ERROR;
+    }
     max_total_in = wzaes->max_total_in - MZ_AES_FOOTER_SIZE;
     if ((int64_t)bytes_to_read > (max_total_in - wzaes->total_in))
         bytes_to_read = (int32_t)(max_total_in - wzaes->total_in);
@@ -242,14 +258,30 @@ int32_t mz_stream_wzaes_read(void *stream, void *buf, int32_t size) {
         pengrid_secure_clear(computed_hash, sizeof(computed_hash));
         if (status != MZ_OK) {
             wzaes->error = status;
+            mz_stream_wzaes_clear_state(wzaes);
             return status;
         }
         return 0;
     }
     read = mz_stream_read(wzaes->stream.base, buf, bytes_to_read);
+    if (read < 0) {
+        wzaes->error = read;
+        mz_stream_wzaes_clear_state(wzaes);
+        return read;
+    }
     if (read > 0) {
-        mz_crypt_hmac_update(wzaes->hmac, (uint8_t *)buf, read);
-        mz_stream_wzaes_ctr_encrypt(stream, (uint8_t *)buf, read);
+        int32_t status = mz_crypt_hmac_update(wzaes->hmac, (uint8_t *)buf, read);
+        if (status != MZ_OK) {
+            wzaes->error = status;
+            mz_stream_wzaes_clear_state(wzaes);
+            return status;
+        }
+        status = mz_stream_wzaes_ctr_encrypt(stream, (uint8_t *)buf, read);
+        if (status != MZ_OK) {
+            wzaes->error = status;
+            mz_stream_wzaes_clear_state(wzaes);
+            return status;
+        }
         wzaes->total_in += read;
     }
     return read;
@@ -262,19 +294,35 @@ int32_t mz_stream_wzaes_write(void *stream, const void *buf, int32_t size) {
     int32_t total_written = 0;
     int32_t written = 0;
 
-    if (!wzaes || !buf || size < 0)
+    if (!wzaes)
         return MZ_PARAM_ERROR;
+    if (!buf || size < 0) {
+        mz_stream_wzaes_clear_state(wzaes);
+        return MZ_PARAM_ERROR;
+    }
     bytes_to_write = sizeof(wzaes->buffer);
     do {
         if (bytes_to_write > (size - total_written))
             bytes_to_write = (size - total_written);
         memcpy(wzaes->buffer, buf_ptr, bytes_to_write);
         buf_ptr += bytes_to_write;
-        mz_stream_wzaes_ctr_encrypt(stream, wzaes->buffer, bytes_to_write);
-        mz_crypt_hmac_update(wzaes->hmac, wzaes->buffer, bytes_to_write);
+        int32_t status = mz_stream_wzaes_ctr_encrypt(stream, wzaes->buffer, bytes_to_write);
+        if (status != MZ_OK) {
+            wzaes->error = status;
+            mz_stream_wzaes_clear_state(wzaes);
+            return status;
+        }
+        status = mz_crypt_hmac_update(wzaes->hmac, wzaes->buffer, bytes_to_write);
+        if (status != MZ_OK) {
+            wzaes->error = status;
+            mz_stream_wzaes_clear_state(wzaes);
+            return status;
+        }
         written = mz_stream_write(wzaes->stream.base, wzaes->buffer, bytes_to_write);
-        if (written < 0)
+        if (written < 0) {
+            mz_stream_wzaes_clear_state(wzaes);
             return written;
+        }
         total_written += written;
     } while (total_written < size && written > 0);
     wzaes->total_out += total_written;
@@ -283,12 +331,24 @@ int32_t mz_stream_wzaes_write(void *stream, const void *buf, int32_t size) {
 
 int64_t mz_stream_wzaes_tell(void *stream) {
     mz_stream_wzaes *wzaes = (mz_stream_wzaes *)stream;
-    return wzaes ? mz_stream_tell(wzaes->stream.base) : MZ_TELL_ERROR;
+    int64_t result;
+    if (!wzaes)
+        return MZ_TELL_ERROR;
+    result = mz_stream_tell(wzaes->stream.base);
+    if (result < 0)
+        mz_stream_wzaes_clear_state(wzaes);
+    return result;
 }
 
 int32_t mz_stream_wzaes_seek(void *stream, int64_t offset, int32_t origin) {
     mz_stream_wzaes *wzaes = (mz_stream_wzaes *)stream;
-    return wzaes ? mz_stream_seek(wzaes->stream.base, offset, origin) : MZ_SEEK_ERROR;
+    int32_t result;
+    if (!wzaes)
+        return MZ_SEEK_ERROR;
+    result = mz_stream_seek(wzaes->stream.base, offset, origin);
+    if (result != MZ_OK)
+        mz_stream_wzaes_clear_state(wzaes);
+    return result;
 }
 
 int32_t mz_stream_wzaes_close(void *stream) {
@@ -354,8 +414,12 @@ void mz_stream_wzaes_set_strength(void *stream, uint8_t strength) {
 
 int32_t mz_stream_wzaes_get_prop_int64(void *stream, int32_t prop, int64_t *value) {
     mz_stream_wzaes *wzaes = (mz_stream_wzaes *)stream;
-    if (!wzaes || !value)
+    if (!wzaes)
         return MZ_PARAM_ERROR;
+    if (!value) {
+        mz_stream_wzaes_clear_state(wzaes);
+        return MZ_PARAM_ERROR;
+    }
     switch (prop) {
     case MZ_STREAM_PROP_TOTAL_IN:
         *value = wzaes->total_in;
@@ -373,6 +437,7 @@ int32_t mz_stream_wzaes_get_prop_int64(void *stream, int32_t prop, int64_t *valu
         *value = MZ_AES_AUTHCODE_SIZE;
         break;
     default:
+        mz_stream_wzaes_clear_state(wzaes);
         return MZ_EXIST_ERROR;
     }
     return MZ_OK;
@@ -386,6 +451,7 @@ int32_t mz_stream_wzaes_set_prop_int64(void *stream, int32_t prop, int64_t value
         wzaes->max_total_in = value;
         return MZ_OK;
     }
+    mz_stream_wzaes_clear_state(wzaes);
     return MZ_EXIST_ERROR;
 }
 
