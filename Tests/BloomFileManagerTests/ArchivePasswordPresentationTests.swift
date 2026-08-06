@@ -93,6 +93,147 @@ struct ArchivePasswordPresentationTests {
         ).canSubmit == false)
     }
 
+    @Test func creationFormStateBoundariesDriveButtonDisabledAndReturnGuard() {
+        let cases: [(
+            password: String,
+            confirmation: String,
+            fieldsValid: Bool,
+            canSubmit: Bool
+        )] = [
+            (String(repeating: "a", count: 7), String(repeating: "a", count: 7), false, false),
+            (String(repeating: "a", count: 8), String(repeating: "a", count: 8), true, true),
+            (String(repeating: "a", count: 256), String(repeating: "a", count: 256), true, true),
+            (String(repeating: "a", count: 257), String(repeating: "a", count: 257), false, false),
+            ("abcdefgh\0", "abcdefgh\0", false, false),
+            ("abcdefgh", "abcdefgi", true, false)
+        ]
+
+        for entry in cases {
+            let state = ArchivePasswordFormState(
+                purpose: .createAES256,
+                password: entry.password,
+                confirmation: entry.confirmation
+            )
+            #expect(
+                ArchivePasswordFormState.isValid(entry.password, purpose: .createAES256)
+                    == entry.fieldsValid &&
+                ArchivePasswordFormState.isValid(entry.confirmation, purpose: .createAES256)
+                    == entry.fieldsValid
+            )
+            #expect(state.canSubmit == entry.canSubmit)
+            #expect((!state.canSubmit) == (!entry.canSubmit))
+
+            var returnState = state
+            var callbackSubmission: ArchivePasswordSubmission?
+            let returnHandled = returnState.submit(using: { _, submission in
+                callbackSubmission = submission
+            })
+            #expect(returnHandled == entry.canSubmit)
+            #expect((callbackSubmission != nil) == entry.canSubmit)
+        }
+    }
+
+    @Test func extractionFormStateBoundariesDriveButtonDisabledAndReturnGuard() {
+        let cases: [(password: String, valid: Bool)] = [
+            ("", false),
+            ("a", true),
+            (String(repeating: "a", count: 1_024), true),
+            (String(repeating: "a", count: 1_025), false),
+            ("a\0b", false)
+        ]
+
+        for entry in cases {
+            let state = ArchivePasswordFormState(
+                purpose: .extract,
+                password: entry.password
+            )
+            #expect(
+                ArchivePasswordFormState.isValid(entry.password, purpose: .extract)
+                    == entry.valid
+            )
+            #expect(state.canSubmit == entry.valid)
+            #expect((!state.canSubmit) == (!entry.valid))
+
+            var returnState = state
+            var callbackSubmission: ArchivePasswordSubmission?
+            let returnHandled = returnState.submit(using: { _, submission in
+                callbackSubmission = submission
+            })
+            #expect(returnHandled == entry.valid)
+            #expect((callbackSubmission != nil) == entry.valid)
+        }
+    }
+
+    @Test func liveSubmitAndCancelHelpersClearBeforeCallbacks() {
+        let sentinel = "form-sentinel"
+        var form = ArchivePasswordFormState(
+            purpose: .createAES256,
+            password: sentinel,
+            confirmation: sentinel
+        )
+        var submitObservedCleared = false
+        var submitted: ArchivePasswordSubmission?
+        let didSubmit = form.submit(using: { clearedState, submission in
+            submitObservedCleared = clearedState.password.isEmpty
+                && clearedState.confirmation.isEmpty
+            submitted = submission
+        })
+        #expect(didSubmit)
+        #expect(submitObservedCleared)
+        #expect(form.password.isEmpty)
+        #expect(form.confirmation.isEmpty)
+        #expect(submitted?.password == sentinel)
+        #expect(submitted?.confirmation == sentinel)
+
+        var cancelForm = ArchivePasswordFormState(
+            purpose: .createAES256,
+            password: sentinel,
+            confirmation: sentinel
+        )
+        var cancelObservedCleared = false
+        cancelForm.cancel(using: { clearedState in
+            cancelObservedCleared = clearedState.password.isEmpty
+                && clearedState.confirmation.isEmpty
+        })
+        #expect(cancelObservedCleared)
+        #expect(cancelForm.password.isEmpty)
+        #expect(cancelForm.confirmation.isEmpty)
+    }
+
+    @Test func liveAccessibilityProjectionNeverReflectsFormSentinel() {
+        let sentinel = "form-sentinel"
+        let request = ArchivePasswordRequest(
+            id: UUID(),
+            purpose: .createAES256,
+            archiveBasename: "Archive.zip",
+            previousAttemptFailed: true
+        )
+        let presentation = ArchivePasswordSheet.presentation(
+            for: request,
+            locale: Locale(identifier: "en")
+        )
+        let projection = ArchivePasswordSheet.AccessibilityProjection(
+            request: request,
+            presentation: presentation
+        )
+        let form = ArchivePasswordFormState(
+            purpose: request.purpose,
+            password: sentinel,
+            confirmation: sentinel
+        )
+
+        #expect(mirrorContainsSentinel(projection, sentinel: sentinel) == false)
+        #expect(mirrorContainsSentinel(presentation, sentinel: sentinel) == false)
+        #expect(mirrorContainsSentinel(form, sentinel: sentinel))
+        #expect(projection.containerLabel == presentation.accessibilityLabel)
+        #expect(projection.passwordLabel == presentation.passwordLabel)
+        #expect(projection.passwordIdentifier == AccessibilityIdentifiers.archivePasswordField)
+        #expect(projection.confirmationIdentifier == AccessibilityIdentifiers.archivePasswordConfirmationField)
+        #expect(projection.validationIdentifier == AccessibilityIdentifiers.archivePasswordValidation)
+        #expect(projection.submitIdentifier == AccessibilityIdentifiers.archivePasswordSubmit)
+        #expect(projection.cancelIdentifier == AccessibilityIdentifiers.archivePasswordCancel)
+    }
+
     @Test func presentationAndAccessibilityNeverReflectFormSentinel() {
         let request = ArchivePasswordRequest(
             id: UUID(),
@@ -129,6 +270,11 @@ struct ArchivePasswordPresentationTests {
         #expect(source.contains("confirmation = \"\""))
         #expect(source.contains("requestID: request.id"))
         #expect(source.contains("if let aesWarning = copy.aesWarning"))
+        #expect(source.contains("AccessibilityProjection(request: request, presentation: copy)"))
+        #expect(source.contains("submitFromKeyboard()"))
+        #expect(source.contains("submit(using:"))
+        #expect(source.contains("cancel(using:"))
+        #expect(source.contains(".disabled(!formState.canSubmit)"))
         #expect(source.contains("pasteboard") == false)
         #expect(source.contains("remember") == false)
         #expect(source.contains("hint") == false)
@@ -163,5 +309,36 @@ struct ArchivePasswordPresentationTests {
             .appending(path: "Sources/BloomFileManager", directoryHint: .isDirectory)
             .appending(path: relativePath)
         return try String(contentsOf: url, encoding: .utf8)
+    }
+
+    private func mirrorContainsSentinel(
+        _ value: Any,
+        sentinel: String,
+        depth: Int = 0,
+        visited: inout Set<ObjectIdentifier>
+    ) -> Bool {
+        guard depth < 12 else { return false }
+        if Mirror(reflecting: value).displayStyle == .class,
+           let object = value as AnyObject? {
+            let identifier = ObjectIdentifier(object)
+            guard visited.insert(identifier).inserted else { return false }
+        }
+        if String(reflecting: value).contains(sentinel) { return true }
+        for child in Mirror(reflecting: value).children {
+            if mirrorContainsSentinel(
+                child.value,
+                sentinel: sentinel,
+                depth: depth + 1,
+                visited: &visited
+            ) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func mirrorContainsSentinel(_ value: Any, sentinel: String) -> Bool {
+        var visited = Set<ObjectIdentifier>()
+        return mirrorContainsSentinel(value, sentinel: sentinel, visited: &visited)
     }
 }

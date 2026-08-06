@@ -226,7 +226,7 @@ struct ArchivePasswordPromptCoordinatorTests {
     }
 
     @MainActor
-    @Test func coordinatorDeinitCancelsPendingTaskAndReleasesOwner() async {
+    @Test func pendingOwnerIsRetainedUntilTaskCancellationThenReleased() async {
         var owner: ArchivePasswordPromptCoordinator? = ArchivePasswordPromptCoordinator()
         weak var weakOwner = owner
         let task = Task { [weak owner] in
@@ -241,6 +241,35 @@ struct ArchivePasswordPromptCoordinatorTests {
         #expect(owner?.pendingRequest == nil)
         owner = nil
         #expect(weakOwner == nil)
+    }
+
+    @MainActor
+    @Test func coordinatorNeverRetainsFormSentinelOrArchiveSecretState() async throws {
+        let sentinel = "form-sentinel"
+        let coordinator = ArchivePasswordPromptCoordinator()
+        let task = Task { try await coordinator.requestPassword(for: Self.creationRequest) }
+        await Task.yield()
+
+        coordinator.submit(
+            password: sentinel + "\0",
+            confirmation: sentinel + "\0",
+            requestID: Self.creationRequest.id
+        )
+        #expect(coordinator.validationError == .containsNull)
+        #expect(Self.mirrorContains(coordinator, text: sentinel) == false)
+        #expect(Self.mirrorContainsArchiveSecret(coordinator) == false)
+
+        let accepted = String(repeating: "x", count: 8)
+        coordinator.submit(
+            password: accepted,
+            confirmation: accepted,
+            requestID: Self.creationRequest.id
+        )
+        let secret = try await task.value
+        #expect(Self.mirrorContains(coordinator, text: sentinel) == false)
+        #expect(Self.mirrorContainsArchiveSecret(coordinator) == false)
+        #expect(Self.mirrorContains(coordinator, text: accepted) == false)
+        secret.invalidate()
     }
 
     @MainActor
@@ -369,6 +398,69 @@ struct ArchivePasswordPromptCoordinatorTests {
             return (validation, nil)
         }
         return (nil, try await task.value)
+    }
+
+    private static func mirrorContains(
+        _ value: Any,
+        text: String,
+        depth: Int = 0,
+        visited: inout Set<ObjectIdentifier>
+    ) -> Bool {
+        guard depth < 16 else { return false }
+        if Mirror(reflecting: value).displayStyle == .class,
+           let object = value as AnyObject? {
+            let identifier = ObjectIdentifier(object)
+            guard visited.insert(identifier).inserted else { return false }
+        }
+        if String(reflecting: value).contains(text) { return true }
+        for child in Mirror(reflecting: value).children {
+            if mirrorContains(
+                child.value,
+                text: text,
+                depth: depth + 1,
+                visited: &visited
+            ) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private static func mirrorContains(_ value: Any, text: String) -> Bool {
+        var visited = Set<ObjectIdentifier>()
+        return mirrorContains(value, text: text, visited: &visited)
+    }
+
+    private static func mirrorContainsArchiveSecret(
+        _ value: Any,
+        depth: Int = 0,
+        visited: inout Set<ObjectIdentifier>
+    ) -> Bool {
+        guard depth < 16 else { return false }
+        let mirror = Mirror(reflecting: value)
+        if mirror.subjectType == ArchiveSecret.self {
+            return true
+        }
+        if mirror.displayStyle == .class,
+           let object = value as AnyObject? {
+            let identifier = ObjectIdentifier(object)
+            guard visited.insert(identifier).inserted else { return false }
+        }
+        for child in mirror.children {
+            if mirrorContainsArchiveSecret(
+                child.value,
+                depth: depth + 1,
+                visited: &visited
+            ) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private static func mirrorContainsArchiveSecret(_ value: Any) -> Bool {
+        var visited = Set<ObjectIdentifier>()
+        return mirrorContainsArchiveSecret(value, visited: &visited)
     }
 
 }

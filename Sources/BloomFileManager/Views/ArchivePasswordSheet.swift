@@ -50,7 +50,7 @@ struct ArchivePasswordFormState: Equatable, Sendable {
         return submission
     }
 
-    private static func isValid(
+    static func isValid(
         _ input: String,
         purpose: ArchivePasswordPurpose
     ) -> Bool {
@@ -65,6 +65,23 @@ struct ArchivePasswordFormState: Equatable, Sendable {
         case .extract:
             return (1...1_024).contains(byteCount)
         }
+    }
+
+    mutating func submit(
+        using callback: (ArchivePasswordFormState, ArchivePasswordSubmission) -> Void
+    ) -> Bool {
+        guard canSubmit else { return false }
+        let submission = captureAndClear()
+        callback(self, submission)
+        return true
+    }
+
+    mutating func cancel(
+        using callback: (ArchivePasswordFormState) -> Void
+    ) {
+        password = ""
+        confirmation = ""
+        callback(self)
     }
 }
 
@@ -81,6 +98,43 @@ struct ArchivePasswordSheet: View {
         let confirmationLabel: String
         let cancelLabel: String
         let submitLabel: String
+    }
+
+    struct AccessibilityProjection: Equatable, Sendable {
+        let containerLabel: String
+        let containerIdentifier: String
+        let passwordLabel: String
+        let passwordIdentifier: String
+        let confirmationLabel: String
+        let confirmationIdentifier: String
+        let validationLabel: String
+        let validationIdentifier: String
+        let cancelLabel: String
+        let cancelIdentifier: String
+        let submitLabel: String
+        let submitIdentifier: String
+        let confirmationVisible: Bool
+
+        init(
+            request: ArchivePasswordRequest,
+            presentation: Presentation
+        ) {
+            containerLabel = presentation.accessibilityLabel
+            containerIdentifier = AccessibilityIdentifiers.archivePasswordSheet
+            passwordLabel = presentation.passwordLabel
+            passwordIdentifier = AccessibilityIdentifiers.archivePasswordField
+            confirmationLabel = presentation.confirmationLabel
+            confirmationIdentifier = AccessibilityIdentifiers.archivePasswordConfirmationField
+            validationLabel = request.previousAttemptFailed
+                ? presentation.genericDamageError
+                : "Validation"
+            validationIdentifier = AccessibilityIdentifiers.archivePasswordValidation
+            cancelLabel = presentation.cancelLabel
+            cancelIdentifier = AccessibilityIdentifiers.archivePasswordCancel
+            submitLabel = presentation.submitLabel
+            submitIdentifier = AccessibilityIdentifiers.archivePasswordSubmit
+            confirmationVisible = request.purpose == .createAES256
+        }
     }
 
     let request: ArchivePasswordRequest
@@ -161,6 +215,7 @@ struct ArchivePasswordSheet: View {
 
     var body: some View {
         let copy = Self.presentation(for: request)
+        let accessibility = AccessibilityProjection(request: request, presentation: copy)
 
         VStack(alignment: .leading, spacing: 14) {
             Text(copy.title)
@@ -187,18 +242,16 @@ struct ArchivePasswordSheet: View {
             SecureField(copy.passwordLabel, text: $password)
                 .textFieldStyle(.roundedBorder)
                 .focused($focusedField, equals: .password)
-                .accessibilityLabel(copy.passwordLabel)
-                .accessibilityIdentifier(AccessibilityIdentifiers.archivePasswordField)
+                .accessibilityLabel(accessibility.passwordLabel)
+                .accessibilityIdentifier(accessibility.passwordIdentifier)
                 .onSubmit { submitIfValid() }
 
-            if formState.secureFieldCount == 2 {
+            if accessibility.confirmationVisible {
                 SecureField(copy.confirmationLabel, text: $confirmation)
                     .textFieldStyle(.roundedBorder)
                     .focused($focusedField, equals: .confirmation)
-                    .accessibilityLabel(copy.confirmationLabel)
-                    .accessibilityIdentifier(
-                        AccessibilityIdentifiers.archivePasswordConfirmationField
-                    )
+                    .accessibilityLabel(accessibility.confirmationLabel)
+                    .accessibilityIdentifier(accessibility.confirmationIdentifier)
                     .onSubmit { submitIfValid() }
             }
 
@@ -206,44 +259,45 @@ struct ArchivePasswordSheet: View {
                 Text(copy.genericDamageError)
                     .font(.callout)
                     .foregroundStyle(.red)
-                    .accessibilityIdentifier(AccessibilityIdentifiers.archivePasswordValidation)
+                    .accessibilityLabel(accessibility.validationLabel)
+                    .accessibilityIdentifier(accessibility.validationIdentifier)
             }
 
             if let validationError = coordinator.validationError {
                 Text(ProtectedZIPStrings.passwordValidationMessage(for: validationError))
                     .font(.callout)
                     .foregroundStyle(.red)
-                    .accessibilityIdentifier(AccessibilityIdentifiers.archivePasswordValidation)
+                    .accessibilityLabel(accessibility.validationLabel)
+                    .accessibilityIdentifier(accessibility.validationIdentifier)
             }
 
             HStack {
-                Button(copy.cancelLabel, role: .cancel) {
+                Button(accessibility.cancelLabel, role: .cancel) {
                     cancel()
                 }
                 .keyboardShortcut(.cancelAction)
-                .accessibilityIdentifier(AccessibilityIdentifiers.archivePasswordCancel)
+                .accessibilityIdentifier(accessibility.cancelIdentifier)
 
                 Spacer()
 
-                Button(copy.submitLabel) {
-                    submit()
+                Button(accessibility.submitLabel) {
+                    _ = submitFromButton()
                 }
                 .keyboardShortcut(.defaultAction)
                 .disabled(!formState.canSubmit)
-                .accessibilityIdentifier(AccessibilityIdentifiers.archivePasswordSubmit)
+                .accessibilityIdentifier(accessibility.submitIdentifier)
             }
         }
         .padding(24)
         .frame(minWidth: 480)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel(copy.accessibilityLabel)
-        .accessibilityIdentifier(AccessibilityIdentifiers.archivePasswordSheet)
+        .accessibilityLabel(accessibility.containerLabel)
+        .accessibilityIdentifier(accessibility.containerIdentifier)
         .onAppear {
             focusedField = formState.firstFocusTarget
         }
         .onKeyPress(.return) {
-            guard formState.canSubmit else { return .ignored }
-            submit()
+            guard submitFromKeyboard() else { return .ignored }
             return .handled
         }
         .onKeyPress(.escape) {
@@ -261,27 +315,38 @@ struct ArchivePasswordSheet: View {
     }
 
     private func submitIfValid() {
-        guard formState.canSubmit else { return }
-        submit()
+        _ = submitFromKeyboard()
     }
 
-    private func submit() {
+    private func submitFromKeyboard() -> Bool {
+        submitForm()
+    }
+
+    private func submitFromButton() -> Bool {
+        submitForm()
+    }
+
+    private func submitForm() -> Bool {
         var state = formState
-        let submission = state.captureAndClear()
-        password = state.password
-        confirmation = state.confirmation
-        coordinator.submit(
-            password: submission.password,
-            confirmation: submission.confirmation,
-            requestID: request.id
-        )
+        return state.submit(using: { clearedState, submission in
+            password = clearedState.password
+            confirmation = clearedState.confirmation
+            coordinator.submit(
+                password: submission.password,
+                confirmation: submission.confirmation,
+                requestID: request.id
+            )
+        })
     }
 
     private func cancel() {
-        password = ""
-        confirmation = ""
-        coordinator.cancel(requestID: request.id)
-        dismiss()
+        var state = formState
+        state.cancel(using: { clearedState in
+            password = clearedState.password
+            confirmation = clearedState.confirmation
+            coordinator.cancel(requestID: request.id)
+            dismiss()
+        })
     }
 
     private nonisolated static func isKorean(_ locale: Locale) -> Bool {
