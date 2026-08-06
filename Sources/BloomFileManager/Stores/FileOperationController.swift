@@ -92,14 +92,11 @@ final class FileOperationController {
             && operationTask == nil
     }
 
-    /// Termination must remain blocked when a prior operation reported that
-    /// cleanup requires recovery review.
+    /// Termination must remain blocked until the user acknowledges a prior
+    /// recovery result. `lastResult` remains historical UI state after that
+    /// acknowledgement, so the queue marker is the termination veto.
     var hasRecoveryRequiredResultForTermination: Bool {
         isQueueBlockedByRecovery
-            || lastResult?.outcomes.contains(where: {
-                if case .recoveryNeeded = $0 { return true }
-                return false
-            }) == true
     }
 
     var requiresTerminationPreparation: Bool {

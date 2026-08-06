@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import AppKit
 import Testing
 @testable import BloomFileManager
 
@@ -126,6 +127,32 @@ struct ApplicationTerminationTests {
     }
 
     @MainActor
+    @Test func recoveryAcknowledgementAllowsImmediateRetryQuit() async {
+        let fixture = try! TerminationFixture()
+        await fixture.workspace.loadInitialDirectories()
+        let controller = fixture.makeController(archiveOperator: RecoveryTerminationArchiveOperator())
+        fixture.workspace.left.selection = [fixture.source]
+        #expect(await controller.compressSelection(fixture.workspace, format: .zip, protection: .aes256))
+        await waitUntilTerminationCondition { !controller.isRunning }
+        #expect(controller.isQueueBlockedByRecovery)
+
+        let replies = TerminationReplyRecorder()
+        let coordinator = ApplicationTerminationCoordinator(
+            operationController: controller,
+            passwordCoordinator: nil,
+            timeout: .seconds(1),
+            pollInterval: .milliseconds(1),
+            reply: { replies.append($0) }
+        )
+        #expect(coordinator.applicationShouldTerminate() == .terminateLater)
+        await waitForTerminationReply(replies)
+        #expect(replies.values == [false])
+        #expect(controller.continueAfterRecovery())
+        #expect(coordinator.applicationShouldTerminate() == .terminateNow)
+        #expect(replies.values == [false])
+    }
+
+    @MainActor
     @Test func successfulCancellationRepliesTrueOnlyAfterControllerIdle() async {
         let fixture = try! TerminationFixture()
         await fixture.workspace.loadInitialDirectories()
@@ -173,6 +200,79 @@ struct ApplicationTerminationTests {
         #expect(coordinator.applicationShouldTerminate() == .terminateLater)
         await waitForTerminationReply(replies)
         #expect(replies.values == [true])
+        await gate.release()
+    }
+
+    @MainActor
+    @Test func releasingCoordinatorInvalidatesPreparationWithoutReplyOrStuckGate() async {
+        let fixture = try! TerminationFixture()
+        await fixture.workspace.loadInitialDirectories()
+        let gate = TerminationGate()
+        let controller = fixture.makeController(
+            archiveOperator: GatedTerminationArchiveOperator(gate: gate)
+        )
+        fixture.workspace.left.selection = [fixture.source]
+        #expect(await controller.compressSelection(fixture.workspace, format: .zip, protection: .aes256))
+        await gate.waitUntilEntered()
+
+        let replies = TerminationReplyRecorder()
+        var coordinator: ApplicationTerminationCoordinator? = ApplicationTerminationCoordinator(
+            operationController: controller,
+            passwordCoordinator: nil,
+            timeout: .seconds(2),
+            pollInterval: .milliseconds(1),
+            reply: { replies.append($0) }
+        )
+        let weakCoordinator = WeakTerminationCoordinatorBox(coordinator)
+        #expect(coordinator?.applicationShouldTerminate() == .terminateLater)
+        coordinator = nil
+
+        await waitUntilTerminationCondition {
+            weakCoordinator.value == nil && !controller.isTerminationPreparationActive
+        }
+        #expect(replies.values.isEmpty)
+        #expect(controller.isTerminationPreparationActive == false)
+        await gate.release()
+        await waitUntilTerminationCondition { !controller.isRunning }
+    }
+
+    @MainActor
+    @Test func appDelegateReconfigurationInvalidatesOldPreparationAndRepliesOnceFromNewCoordinator() async {
+        let fixture = try! TerminationFixture()
+        await fixture.workspace.loadInitialDirectories()
+        let gate = TerminationGate()
+        let controller = fixture.makeController(
+            archiveOperator: GatedTerminationArchiveOperator(gate: gate)
+        )
+        fixture.workspace.left.selection = [fixture.source]
+        #expect(await controller.compressSelection(fixture.workspace, format: .zip, protection: .aes256))
+        await gate.waitUntilEntered()
+
+        let appDelegate = AppDelegate()
+        let oldReplies = TerminationReplyRecorder()
+        let newReplies = TerminationReplyRecorder()
+        let passwordCoordinator = ArchivePasswordPromptCoordinator()
+        appDelegate.configureTermination(
+            operationController: controller,
+            passwordCoordinator: passwordCoordinator,
+            reply: { oldReplies.append($0) }
+        )
+        #expect(appDelegate.applicationShouldTerminate(NSApplication.shared) == .terminateLater)
+
+        appDelegate.configureTermination(
+            operationController: controller,
+            passwordCoordinator: passwordCoordinator,
+            reply: { newReplies.append($0) }
+        )
+        await Task.yield()
+        #expect(oldReplies.values.isEmpty)
+        #expect(newReplies.values.isEmpty)
+        #expect(controller.isTerminationPreparationActive == false)
+
+        #expect(appDelegate.applicationShouldTerminate(NSApplication.shared) == .terminateLater)
+        await waitForTerminationReply(newReplies)
+        #expect(oldReplies.values.isEmpty)
+        #expect(newReplies.values == [true])
         await gate.release()
     }
 
@@ -263,6 +363,15 @@ private final class TerminationReplyRecorder {
 
     func append(_ value: Bool) {
         values.append(value)
+    }
+}
+
+@MainActor
+private final class WeakTerminationCoordinatorBox {
+    weak var value: ApplicationTerminationCoordinator?
+
+    init(_ value: ApplicationTerminationCoordinator?) {
+        self.value = value
     }
 }
 
