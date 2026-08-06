@@ -4,6 +4,23 @@ import Testing
 
 @MainActor
 struct FileOperationControllerTests {
+    @Test func legacyCompressionMethodValueRemainsTwoArgumentCallable() async throws {
+        let fixture = await makeProtectedWorkspace()
+        let archiveService = RecordingArchiveOperator()
+        let controller = FileOperationController(
+            service: FileOperationService(fileSystem: fixture.fileSystem),
+            materializer: InMemoryCloudMaterializer(),
+            archiveService: archiveService
+        )
+        let legacy: @MainActor (WorkspaceState, ArchiveFormat) async -> Bool =
+            controller.compressSelection
+
+        #expect(await legacy(fixture.workspace, .zip))
+        await waitUntilIdle(controller)
+        #expect(await archiveService.recordedRequests().count == 1)
+        #expect(await archiveService.recordedRequests().first?.protection == ArchiveProtection.none)
+    }
+
     @Test func archivePreparationPublicationIsLimitedToTenHertzExceptBoundaries() {
         var gate = ArchiveProgressPublicationGate()
         let start = ContinuousClock.now

@@ -288,8 +288,20 @@ final class FileOperationController {
     @discardableResult
     func compressSelection(
         _ workspace: WorkspaceState,
+        format: ArchiveFormat = .zip
+    ) async -> Bool {
+        await compressSelection(
+            workspace,
+            format: format,
+            protection: .none
+        )
+    }
+
+    @discardableResult
+    func compressSelection(
+        _ workspace: WorkspaceState,
         format: ArchiveFormat = .zip,
-        protection: ArchiveProtection = .none
+        protection: ArchiveProtection
     ) async -> Bool {
         guard let capture = archiveSelectionCapture(in: workspace),
               let plan = ArchiveDestinationPlanner.compression(
