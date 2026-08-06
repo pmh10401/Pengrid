@@ -3,6 +3,27 @@ import EncryptedZIPCore
 import Foundation
 import Testing
 
+@_silgen_name("pengrid_zipcrypto_test_reset")
+private func pengrid_zipcrypto_test_reset()
+
+@_silgen_name("pengrid_zipcrypto_test_dirty_observed")
+private func pengrid_zipcrypto_test_dirty_observed() -> Int32
+
+@_silgen_name("pengrid_zipcrypto_test_zero_observed")
+private func pengrid_zipcrypto_test_zero_observed() -> Int32
+
+@_silgen_name("pengrid_zipcrypto_test_cleanup_count")
+private func pengrid_zipcrypto_test_cleanup_count() -> UInt32
+
+@_silgen_name("pengrid_zipcrypto_test_last_cleanup_path")
+private func pengrid_zipcrypto_test_last_cleanup_path() -> Int32
+
+@_silgen_name("pengrid_zipcrypto_test_prime_and_close_twice")
+private func pengrid_zipcrypto_test_prime_and_close_twice()
+
+@_silgen_name("pengrid_zipcrypto_test_prime_and_delete_without_close")
+private func pengrid_zipcrypto_test_prime_and_delete_without_close()
+
 @Test func encryptedZIPCoreIsPinnedAndClearsBuffers() {
     #expect(String(cString: pengrid_zip_core_version()) == "minizip-ng 4.2.2")
     var bytes = Array("public-test-secret".utf8)
@@ -30,6 +51,37 @@ import Testing
     #expect(wzaes.contains("wzaes->error = status;\n            mz_stream_wzaes_clear_state(wzaes);\n            return status;"))
     #expect(wzaes.contains("if (written < 0) {\n            mz_stream_wzaes_clear_state(wzaes);\n            return written;\n        }"))
     #expect(pbkdf2.contains("if (err != MZ_OK && key)\n        pengrid_secure_clear(key, key_length);"))
+}
+
+@Test func encryptedZIPCoreBuildUsesPengridOwnedZipCryptoReplacement() throws {
+    let packageRoot = URL(filePath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let package = try String(contentsOf: packageRoot.appending(path: "Package.swift"), encoding: .utf8)
+    #expect(package.contains("vendor/minizip-ng/mz_strm_pkcrypt.c"))
+    #expect(FileManager.default.fileExists(atPath: packageRoot.appending(path: "Sources/EncryptedZIPCore/pengrid_strm_pkcrypt.c").path))
+
+    pengrid_zipcrypto_test_reset()
+    #expect(pengrid_zipcrypto_test_dirty_observed() == 0)
+    #expect(pengrid_zipcrypto_test_zero_observed() == 0)
+    #expect(pengrid_zipcrypto_test_cleanup_count() == 0)
+}
+
+@Test func encryptedZIPCoreCloseAndDeleteInstrumentationAreIdempotent() {
+    pengrid_zipcrypto_test_reset()
+    pengrid_zipcrypto_test_prime_and_close_twice()
+    #expect(pengrid_zipcrypto_test_dirty_observed() == 1)
+    #expect(pengrid_zipcrypto_test_zero_observed() == 1)
+    #expect(pengrid_zipcrypto_test_cleanup_count() == 2)
+    #expect(pengrid_zipcrypto_test_last_cleanup_path() == 2)
+
+    pengrid_zipcrypto_test_reset()
+    pengrid_zipcrypto_test_prime_and_delete_without_close()
+    #expect(pengrid_zipcrypto_test_dirty_observed() == 1)
+    #expect(pengrid_zipcrypto_test_zero_observed() == 1)
+    #expect(pengrid_zipcrypto_test_cleanup_count() == 1)
+    #expect(pengrid_zipcrypto_test_last_cleanup_path() == 3)
 }
 
 @Test func encryptedZIPCoreInspectsAPlainZIPWithoutConsumingTheCallerDescriptor() throws {

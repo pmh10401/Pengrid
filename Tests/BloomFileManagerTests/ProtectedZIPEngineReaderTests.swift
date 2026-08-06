@@ -13,6 +13,21 @@ private func pengrid_root_test_fail_next_cleanup()
 @_silgen_name("pengrid_root_test_substitute_next_cleanup_object")
 private func pengrid_root_test_substitute_next_cleanup_object()
 
+@_silgen_name("pengrid_zipcrypto_test_reset")
+private func pengrid_zipcrypto_test_reset()
+
+@_silgen_name("pengrid_zipcrypto_test_dirty_observed")
+private func pengrid_zipcrypto_test_dirty_observed() -> Int32
+
+@_silgen_name("pengrid_zipcrypto_test_zero_observed")
+private func pengrid_zipcrypto_test_zero_observed() -> Int32
+
+@_silgen_name("pengrid_zipcrypto_test_cleanup_count")
+private func pengrid_zipcrypto_test_cleanup_count() -> UInt32
+
+@_silgen_name("pengrid_zipcrypto_test_last_cleanup_path")
+private func pengrid_zipcrypto_test_last_cleanup_path() -> Int32
+
 private typealias RootIdentityTestHook = @convention(c) () -> Void
 
 private func rootIdentityTestHook(_ name: String) -> RootIdentityTestHook? {
@@ -49,6 +64,44 @@ func pengrid_test_cancel_during_native_read(
 
 @Suite("ProtectedZIPEngineReaderTests", .serialized)
 struct ProtectedZIPEngineReaderTests {
+    @Test func zipCryptoSuccessfulExtractionClearsStateOnCloseAndDelete() async throws {
+        pengrid_zipcrypto_test_reset()
+        let fixture = try Data(contentsOf: protectedZIPFixtureURL("infozip-zipcrypto.zip"))
+        let root = try await extract(fixture, password: "fixture-zipcrypto-password")
+        defer { try? FileManager.default.removeItem(at: root.deletingLastPathComponent()) }
+        #expect(try String(contentsOf: root.appending(path: "Legacy.txt"), encoding: .utf8) == "Info-ZIP ZipCrypto compatibility fixture\n")
+        #expect(pengrid_zipcrypto_test_dirty_observed() == 1)
+        #expect(pengrid_zipcrypto_test_zero_observed() == 1)
+        #expect(pengrid_zipcrypto_test_cleanup_count() >= 1)
+        #expect(pengrid_zipcrypto_test_last_cleanup_path() == 2 || pengrid_zipcrypto_test_last_cleanup_path() == 3)
+    }
+
+    @Test func zipCryptoWrongPasswordClearsStateAfterOpenFailure() async throws {
+        pengrid_zipcrypto_test_reset()
+        let fixture = try Data(contentsOf: protectedZIPFixtureURL("infozip-zipcrypto.zip"))
+        await #expect(throws: ProtectedZIPError.incorrectPasswordOrDamagedData) {
+            try await extract(fixture, password: "wrong-zipcrypto-password")
+        }
+        #expect(pengrid_zipcrypto_test_dirty_observed() == 1)
+        #expect(pengrid_zipcrypto_test_zero_observed() == 1)
+        #expect(pengrid_zipcrypto_test_cleanup_count() >= 1)
+        #expect(pengrid_zipcrypto_test_last_cleanup_path() == 1 || pengrid_zipcrypto_test_last_cleanup_path() == 2 || pengrid_zipcrypto_test_last_cleanup_path() == 3)
+    }
+
+    @Test func zipCryptoTruncatedHeaderClearsStateAfterReadFailure() async throws {
+        pengrid_zipcrypto_test_reset()
+        let truncated = RawZIPFixtureBuilder.archive(entries: [
+            .regular(name: "truncated.txt", bytes: [0x01, 0x02, 0x03], flags: 1)
+        ])
+        await #expect(throws: ProtectedZIPError.incorrectPasswordOrDamagedData) {
+            try await extract(truncated, password: "fixture-password")
+        }
+        #expect(pengrid_zipcrypto_test_dirty_observed() == 1)
+        #expect(pengrid_zipcrypto_test_zero_observed() == 1)
+        #expect(pengrid_zipcrypto_test_cleanup_count() >= 1)
+        #expect(pengrid_zipcrypto_test_last_cleanup_path() == 1 || pengrid_zipcrypto_test_last_cleanup_path() == 2 || pengrid_zipcrypto_test_last_cleanup_path() == 3)
+    }
+
     @Test func readerExtractsIndependentAESAndLegacyFixtures() async throws {
         try await expectFixture(
             "7zip-aes256.zip",
@@ -687,6 +740,43 @@ struct ProtectedZIPEngineReaderTests {
         #expect(status == PENGRID_ZIP_STATUS_CANCELLED)
         #expect(state.didRead)
         #expect(try FileManager.default.contentsOfDirectory(at: outputURL, includingPropertiesForKeys: nil).isEmpty)
+    }
+
+    @Test func zipCryptoNativeCancellationClearsStateWithoutPublishingOutput() throws {
+        pengrid_zipcrypto_test_reset()
+        let temporary = try TemporaryDirectory()
+        defer { temporary.remove() }
+        let archiveURL = temporary.url.appending(path: "archive.zip")
+        try Data(contentsOf: protectedZIPFixtureURL("infozip-zipcrypto.zip")).write(to: archiveURL)
+        let outputURL = temporary.url.appending(path: "output", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: outputURL, withIntermediateDirectories: false)
+        let archiveDescriptor = try openedDescriptorForTest(archiveURL, flags: O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+        let outputDescriptor = try openedDescriptorForTest(outputURL, flags: O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        defer { Darwin.close(archiveDescriptor); Darwin.close(outputDescriptor) }
+        let state = NativeCancellationState()
+        let password = Array("fixture-zipcrypto-password".utf8)
+        let limits = pengrid_zip_limits_t(
+            maximum_entry_count: 100_000,
+            maximum_output_bytes: 16 * 1024 * 1024,
+            capacity_reserve_bytes: 0
+        )
+        let status = password.withUnsafeBytes { bytes in
+            pengrid_zip_extract(
+                archiveDescriptor,
+                outputDescriptor,
+                bytes.baseAddress?.assumingMemoryBound(to: UInt8.self),
+                bytes.count,
+                limits,
+                pengrid_test_cancel_during_native_read,
+                Unmanaged.passUnretained(state).toOpaque()
+            )
+        }
+        #expect(status == PENGRID_ZIP_STATUS_CANCELLED)
+        #expect(state.didRead)
+        #expect(try FileManager.default.contentsOfDirectory(at: outputURL, includingPropertiesForKeys: nil).isEmpty)
+        #expect(pengrid_zipcrypto_test_dirty_observed() == 1)
+        #expect(pengrid_zipcrypto_test_zero_observed() == 1)
+        #expect(pengrid_zipcrypto_test_cleanup_count() >= 1)
     }
 
     @Test func publicReaderAnchorsOwnedDescriptorsWhenCallerFdsAreClosedAndReused() throws {

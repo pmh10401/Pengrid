@@ -13,12 +13,15 @@ commit `7b2387161c542fa9f427352dcdef76097d0d692b`.
   Deflate entries use the system zlib backend (`HAVE_ZLIB`).
 - Crypto boundary: Package.swift excludes the upstream
   `vendor/minizip-ng/mz_strm_wzaes.c`, `vendor/minizip-ng/mz_crypt.c`, and
-  `vendor/minizip-ng/mz_crypt_apple.c` sources. Pengrid-owned replacements
-  `pengrid_strm_wzaes.c`, `pengrid_crypt.c`, and `pengrid_crypt_apple.c` provide
-  the compatible WinZip AES stream, PBKDF2, and Apple crypto boundary using the
-  system frameworks linked by this target. The compiled ZipCrypto stream is
-  the upstream `vendor/minizip-ng/mz_strm_pkcrypt.c` source enabled by
-  `HAVE_PKCRYPT`.
+  `vendor/minizip-ng/mz_crypt_apple.c`, and
+  `vendor/minizip-ng/mz_strm_pkcrypt.c` sources. Pengrid-owned replacements
+  `pengrid_strm_wzaes.c`, `pengrid_crypt.c`, `pengrid_crypt_apple.c`, and
+  `pengrid_strm_pkcrypt.c` provide compatible WinZip AES, PBKDF2, Apple crypto,
+  and ZipCrypto stream boundaries. The replacement retains the pinned
+  minizip-ng ABI and wire algorithm while clearing ZipCrypto derived state on
+  open failure, close, and delete; it does not make an external
+  interoperability or security-strength claim for legacy ZipCrypto beyond the
+  committed fixture evidence.
 - OpenSSL is not bundled and is not a runtime dependency of Pengrid.
 
 The following license text is reproduced unmodified from the vendored upstream

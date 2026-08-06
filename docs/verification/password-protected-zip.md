@@ -152,6 +152,64 @@ These checks remain **NOT RUN** and are not represented as automated passes:
 - Process-list inspection during password entry.
 - Performance benchmarks or large-archive throughput measurements.
 
+## Final review fix A — ZipCrypto derived-state cleanup
+
+Fix A is based on the approved whole-feature review base `e0e5e00` and is
+limited to the compiled traditional ZipCrypto stream. The pinned upstream
+`vendor/minizip-ng/mz_strm_pkcrypt.c` remains byte-for-byte unchanged and is
+excluded from `Package.swift`; `pengrid_strm_pkcrypt.c` supplies the same
+minizip stream ABI and wire algorithm with Pengrid-owned cleanup. The notice
+records this provenance boundary without making an external interoperability
+claim beyond the committed fixture evidence.
+
+The opt-in test instrumentation starts disabled and exposes only dirty/zero
+booleans, cleanup count, and cleanup-path category. It never exposes keys,
+password bytes, headers, or stream context. Tests observed non-zero derived
+state before cleanup and completely zero derived state after successful
+ZipCrypto extraction/close, wrong-password open failure, truncated-header
+failure, native cancellation, idempotent close, and direct delete without
+close. A mutation that disconnected the central three-word `keys[3]` wipe
+caused all four reader cleanup tests to fail their zero-state assertions; the
+wipe was restored before the green and regression runs.
+
+Fix A focused evidence (all commands run serially on macOS arm64 with
+`DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`):
+
+- TDD RED: the pre-replacement focused build compiled upstream
+  `mz_strm_pkcrypt.c` and failed at link with undefined
+  `pengrid_zipcrypto_test_*` instrumentation symbols.
+- Native GREEN: `xcrun swift test --disable-sandbox --no-parallel --filter
+  'EncryptedZIPCoreBuildTests|ProtectedZIPEngineReaderTests/zipCrypto'` — 14
+  tests passed after the replacement was compiled.
+- Mutation RED: disconnecting the central key wipe made the successful,
+  wrong-password, truncated-header, and cancellation tests each observe
+  `zero_observed == 0`; the exact wipe line was restored.
+- Reader regression: `xcrun swift test --disable-sandbox --no-parallel
+  --filter ProtectedZIPEngineReaderTests` — 36 tests passed, including the
+  committed `infozip-zipcrypto.zip` extraction fixture.
+- Protected Task 5–11 regressions: the protected reader/writer, operation,
+  routing, UI, queue, and ordinary archive filters passed 233 tests in 11
+  suites.
+- Final full Swift suite: **1,039 tests in 76 suites passed** (Swift run
+  52.479s). `./script/build_and_run.sh --verify` passed; `swift package
+  describe` showed only the Pengrid ZipCrypto replacement source, vendor-byte
+  SHA-256 remained
+  `628d06745def3734422d1586dba0affb02fd1d4cc3eb2e8b285200ea19f7fe26`, and
+  artifact linkage/notice-byte checks passed with no OpenSSL dependency.
+- Targeted `notice-otool` and `openssl-linkage` package contracts passed; the
+  full release-contract script passed in 107.76s.
+
+The stream cleanup helper preserves vtable/base linkage through close and
+until delete has finished. It clears keys, the full encrypted write buffer,
+verification values/version, and the borrowed password pointer on every
+cleanup. It clears totals/error state where the minizip ABI permits; a
+successful write close retains only the total counters needed for minizip's
+post-close `TOTAL_OUT` query, and delete clears those counters as well. The
+full struct is then securely cleared immediately before `free`.
+Open-failure, close, and delete paths are idempotent and null the caller's
+delete pointer. No password, key, header, or raw engine error is logged or
+exposed.
+
 ## Task 12 fix round 1 verification
 
 Fix round 1 is based on the Task 12 commit `e517656f87885a38d9350e7067f00abb5b70c3b5`.

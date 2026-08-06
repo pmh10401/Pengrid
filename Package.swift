@@ -13,7 +13,8 @@ let package = Package(
                 "vendor/minizip-ng/LICENSE",
                 "vendor/minizip-ng/mz_crypt.c",
                 "vendor/minizip-ng/mz_crypt_apple.c",
-                "vendor/minizip-ng/mz_strm_wzaes.c"
+                "vendor/minizip-ng/mz_strm_wzaes.c",
+                "vendor/minizip-ng/mz_strm_pkcrypt.c"
             ],
             publicHeadersPath: "include",
             cSettings: [
