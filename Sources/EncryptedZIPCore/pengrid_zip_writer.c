@@ -32,6 +32,8 @@ static volatile int32_t pengrid_zip_progress_gate_armed;
 static int32_t pengrid_zip_progress_gate_entered;
 static int32_t pengrid_zip_progress_gate_released;
 static int32_t pengrid_zip_progress_gate_consumed;
+static uint64_t pengrid_zip_progress_gate_candidate_count;
+static uint64_t pengrid_zip_progress_gate_entry_count;
 static pthread_mutex_t pengrid_zip_progress_gate_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t pengrid_zip_progress_gate_condition = PTHREAD_COND_INITIALIZER;
 
@@ -45,6 +47,8 @@ void pengrid_zip_test_arm_first_positive_progress_checkpoint(void) {
     pengrid_zip_progress_gate_entered = 0;
     pengrid_zip_progress_gate_released = 0;
     pengrid_zip_progress_gate_consumed = 0;
+    pengrid_zip_progress_gate_candidate_count = 0;
+    pengrid_zip_progress_gate_entry_count = 0;
     __sync_lock_test_and_set(&pengrid_zip_progress_gate_armed, 1);
     pthread_cond_broadcast(&pengrid_zip_progress_gate_condition);
     pthread_mutex_unlock(&pengrid_zip_progress_gate_mutex);
@@ -63,6 +67,22 @@ void pengrid_zip_test_clear_first_positive_progress_checkpoint(void) {
     pengrid_zip_progress_gate_released = 1;
     pthread_cond_broadcast(&pengrid_zip_progress_gate_condition);
     pthread_mutex_unlock(&pengrid_zip_progress_gate_mutex);
+}
+
+uint64_t pengrid_zip_test_positive_non_final_checkpoint_count(void) {
+    uint64_t count;
+    pthread_mutex_lock(&pengrid_zip_progress_gate_mutex);
+    count = pengrid_zip_progress_gate_candidate_count;
+    pthread_mutex_unlock(&pengrid_zip_progress_gate_mutex);
+    return count;
+}
+
+uint64_t pengrid_zip_test_progress_gate_entry_count(void) {
+    uint64_t count;
+    pthread_mutex_lock(&pengrid_zip_progress_gate_mutex);
+    count = pengrid_zip_progress_gate_entry_count;
+    pthread_mutex_unlock(&pengrid_zip_progress_gate_mutex);
+    return count;
 }
 
 int32_t pengrid_zip_test_wait_for_first_positive_progress_checkpoint(uint32_t timeout_milliseconds) {
@@ -103,17 +123,20 @@ static void pengrid_zip_test_hold_first_positive_progress_checkpoint(
         return;
 
     pthread_mutex_lock(&pengrid_zip_progress_gate_mutex);
-    if (!pengrid_zip_progress_gate_consumed &&
-        __sync_fetch_and_add(&pengrid_zip_progress_gate_armed, 0) != 0) {
-        pengrid_zip_progress_gate_consumed = 1;
-        pengrid_zip_progress_gate_entered = 1;
-        pthread_cond_broadcast(&pengrid_zip_progress_gate_condition);
-        while (!pengrid_zip_progress_gate_released &&
-               __sync_fetch_and_add(&pengrid_zip_progress_gate_armed, 0) != 0) {
-            pthread_cond_wait(
-                &pengrid_zip_progress_gate_condition,
-                &pengrid_zip_progress_gate_mutex
-            );
+    if (__sync_fetch_and_add(&pengrid_zip_progress_gate_armed, 0) != 0) {
+        pengrid_zip_progress_gate_candidate_count += 1;
+        if (!pengrid_zip_progress_gate_consumed) {
+            pengrid_zip_progress_gate_consumed = 1;
+            pengrid_zip_progress_gate_entry_count += 1;
+            pengrid_zip_progress_gate_entered = 1;
+            pthread_cond_broadcast(&pengrid_zip_progress_gate_condition);
+            while (!pengrid_zip_progress_gate_released &&
+                   __sync_fetch_and_add(&pengrid_zip_progress_gate_armed, 0) != 0) {
+                pthread_cond_wait(
+                    &pengrid_zip_progress_gate_condition,
+                    &pengrid_zip_progress_gate_mutex
+                );
+            }
         }
     }
     pthread_mutex_unlock(&pengrid_zip_progress_gate_mutex);

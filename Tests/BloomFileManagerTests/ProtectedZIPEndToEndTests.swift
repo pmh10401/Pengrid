@@ -6,6 +6,7 @@ import Testing
 
 private typealias NativeProgressGateVoidHook = @convention(c) () -> Void
 private typealias NativeProgressGateWaitHook = @convention(c) (UInt32) -> Int32
+private typealias NativeProgressGateCountHook = @convention(c) () -> UInt64
 
 private func nativeProgressGateVoidHook(_ name: String) -> NativeProgressGateVoidHook? {
     guard let symbol = Darwin.dlsym(
@@ -25,6 +26,16 @@ private func nativeProgressGateWaitHook() -> NativeProgressGateWaitHook? {
         return nil
     }
     return unsafeBitCast(symbol, to: NativeProgressGateWaitHook.self)
+}
+
+private func nativeProgressGateCountHook(_ name: String) -> NativeProgressGateCountHook? {
+    guard let symbol = Darwin.dlsym(
+        UnsafeMutableRawPointer(bitPattern: -2),
+        name
+    ) else {
+        return nil
+    }
+    return unsafeBitCast(symbol, to: NativeProgressGateCountHook.self)
 }
 
 private func waitForNativeProgressGate(timeoutMilliseconds: UInt32) async -> Bool {
@@ -756,8 +767,14 @@ struct ProtectedZIPEndToEndTests {
         let clearNativeProgressGate = nativeProgressGateVoidHook(
             "pengrid_zip_test_clear_first_positive_progress_checkpoint"
         ),
-        nativeProgressGateWaitHook() != nil else {
-            Issue.record("native writer progress checkpoint gate is not exported")
+        nativeProgressGateWaitHook() != nil,
+        let positiveNonFinalCheckpointCount = nativeProgressGateCountHook(
+            "pengrid_zip_test_positive_non_final_checkpoint_count"
+        ),
+        let progressGateEntryCount = nativeProgressGateCountHook(
+            "pengrid_zip_test_progress_gate_entry_count"
+        ) else {
+            Issue.record("native writer progress checkpoint counters are not exported")
             return
         }
         clearNativeProgressGate()
@@ -769,6 +786,7 @@ struct ProtectedZIPEndToEndTests {
 
         let root = try TemporaryDirectory()
         defer { root.remove() }
+        // 2 MiB produces many deterministic 64 KiB positive non-final callbacks.
         let payload = Data(repeating: 0x42, count: 2 * 1_024 * 1_024)
         let provider = E2ERecordingArchivePasswordProvider(
             passwords: [
@@ -801,6 +819,8 @@ struct ProtectedZIPEndToEndTests {
                         clearNativeProgressGate()
                         releaseNativeProgressGate()
                     }
+                    #expect(positiveNonFinalCheckpointCount() == 0)
+                    #expect(progressGateEntryCount() == 0)
                     #expect(await controller.compressSelection(
                         workspace,
                         format: .zip,
@@ -813,12 +833,18 @@ struct ProtectedZIPEndToEndTests {
                         controller.cancelActiveJob()
                         return
                     }
+                    let candidateCount = positiveNonFinalCheckpointCount()
+                    let gateEntryCount = progressGateEntryCount()
+                    #expect(candidateCount > 1)
+                    #expect(gateEntryCount == 1)
                     #expect(controller.lastResult?.outcomes == [
                         .succeeded(source: source, destination: archive)
                     ])
                     #expect(FileManager.default.fileExists(atPath: archive.path))
                 }
             } else {
+                let candidatesBeforeUnarmed = positiveNonFinalCheckpointCount()
+                let entriesBeforeUnarmed = progressGateEntryCount()
                 #expect(await controller.compressSelection(
                     workspace,
                     format: .zip,
@@ -829,6 +855,8 @@ struct ProtectedZIPEndToEndTests {
                     .succeeded(source: source, destination: archive)
                 ])
                 #expect(FileManager.default.fileExists(atPath: archive.path))
+                #expect(positiveNonFinalCheckpointCount() == candidatesBeforeUnarmed)
+                #expect(progressGateEntryCount() == entriesBeforeUnarmed)
             }
         }
         #expect(provider.requestCount == 3)
