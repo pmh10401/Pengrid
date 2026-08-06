@@ -179,6 +179,8 @@ enum ProtectedZIPError: Error, LocalizedError, Sendable, Equatable {
     case identityChanged
     case cancelled
     case recoveryRequired
+    case engineSetupFailed
+    case engineLaunchFailed
 
     // Stable compatibility spellings for callers that use noun-first labels.
     static var identityChange: Self { .identityChanged }

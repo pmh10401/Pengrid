@@ -56,6 +56,84 @@ struct ProtectedZIPModelTests {
         ) == nil)
     }
 
+    @Test func directProtectedPlanConstructionFailsInsteadOfDowngradingToNone() throws {
+        let root = URL(filePath: "/tmp/protected-zip-model-tests")
+        let source = fixtureItem(named: "자료", in: root)
+
+        let invalidPlan = ArchiveDestinationPlan(
+            kind: .compress,
+            selectedSources: [source.url],
+            sourceDisplayNames: [source.name],
+            destinations: [root.appending(path: "자료.tar")],
+            formats: [.tar],
+            protection: .aes256
+        )
+        #expect(invalidPlan == nil)
+
+        let ordinaryPlan = ArchiveDestinationPlan(
+            kind: .compress,
+            selectedSources: [source.url],
+            sourceDisplayNames: [source.name],
+            destinations: [root.appending(path: "자료.tar")],
+            formats: [.tar]
+        )
+        #expect(ordinaryPlan.protection == .none)
+
+        let validPlan = try #require(ArchiveDestinationPlan(
+            kind: .compress,
+            selectedSources: [source.url],
+            sourceDisplayNames: [source.name],
+            destinations: [root.appending(path: "자료.zip")],
+            formats: [.zip],
+            protection: .aes256
+        ))
+        #expect(validPlan.protection == .aes256)
+    }
+
+    @Test func directProtectedRequestConstructionFailsInsteadOfDowngradingToNone() throws {
+        let source = URL(filePath: "/tmp/자료.txt")
+        let sourceRequest = IdentifiedFileRequest(
+            url: source,
+            identity: FileIdentity(
+                entryIdentifier: "source-entry",
+                resolvedIdentifier: "source-resolved"
+            )
+        )
+        let parentIdentity = FileIdentity(
+            entryIdentifier: "parent-entry",
+            resolvedIdentifier: "parent-resolved"
+        )
+
+        let invalidRequest = ArchiveRequest(
+            kind: .compress,
+            verifiedSources: [sourceRequest],
+            finalDestination: URL(filePath: "/tmp/자료.tar"),
+            destinationParentIdentity: parentIdentity,
+            format: .tar,
+            protection: .aes256
+        )
+        #expect(invalidRequest == nil)
+
+        let ordinaryRequest = ArchiveRequest(
+            kind: .compress,
+            verifiedSources: [sourceRequest],
+            finalDestination: URL(filePath: "/tmp/자료.tar"),
+            destinationParentIdentity: parentIdentity,
+            format: .tar
+        )
+        #expect(ordinaryRequest.protection == .none)
+
+        let validRequest = try #require(ArchiveRequest(
+            kind: .compress,
+            verifiedSources: [sourceRequest],
+            finalDestination: URL(filePath: "/tmp/자료.zip"),
+            destinationParentIdentity: parentIdentity,
+            format: .zip,
+            protection: .aes256
+        ))
+        #expect(validRequest.protection == .aes256)
+    }
+
     @Test func protectedByteProgressClampsAndZeroOrNilTotalsAreIndeterminate() {
         let clamped = ArchiveOperationProgress(
             kind: .extract,
@@ -150,7 +228,9 @@ struct ProtectedZIPModelTests {
             .outputBudgetOverflow,
             .identityChanged,
             .cancelled,
-            .recoveryRequired
+            .recoveryRequired,
+            .engineSetupFailed,
+            .engineLaunchFailed
         ]
         let sentinel = "public-secret-sentinel"
 
@@ -178,6 +258,23 @@ struct ProtectedZIPModelTests {
             for: .unsafeEntry,
             locale: Locale(identifier: "ja")
         ) == "The archive contains an unsafe item.")
+
+        #expect(ProtectedZIPStrings.message(
+            for: .engineSetupFailed,
+            locale: Locale(identifier: "en")
+        ) == "The protected ZIP engine could not be configured.")
+        #expect(ProtectedZIPStrings.message(
+            for: .engineSetupFailed,
+            locale: Locale(identifier: "ko")
+        ) == "보호된 ZIP 엔진을 설정할 수 없습니다.")
+        #expect(ProtectedZIPStrings.message(
+            for: .engineLaunchFailed,
+            locale: Locale(identifier: "en")
+        ) == "The protected ZIP engine could not be started.")
+        #expect(ProtectedZIPStrings.message(
+            for: .engineLaunchFailed,
+            locale: Locale(identifier: "ko")
+        ) == "보호된 ZIP 엔진을 시작할 수 없습니다.")
     }
 
     @Test func passwordValidationCopyNeverIncludesInput() {

@@ -54,6 +54,10 @@ enum ProtectedZIPStrings {
             "The archive operation was cancelled."
         case .recoveryRequired:
             "Archive cleanup could not finish safely and requires recovery review."
+        case .engineSetupFailed:
+            "The protected ZIP engine could not be configured."
+        case .engineLaunchFailed:
+            "The protected ZIP engine could not be started."
         }
     }
 
@@ -83,6 +87,10 @@ enum ProtectedZIPStrings {
             "압축 작업이 취소되었습니다."
         case .recoveryRequired:
             "압축 정리를 안전하게 완료하지 못해 복구 검토가 필요합니다."
+        case .engineSetupFailed:
+            "보호된 ZIP 엔진을 설정할 수 없습니다."
+        case .engineLaunchFailed:
+            "보호된 ZIP 엔진을 시작할 수 없습니다."
         }
     }
 

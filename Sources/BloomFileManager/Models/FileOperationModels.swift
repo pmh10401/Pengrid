@@ -68,19 +68,58 @@ struct ArchiveDestinationPlan: Sendable, Equatable {
         selectedSources: [URL],
         sourceDisplayNames: [String],
         destinations: [URL],
+        formats: [ArchiveFormat]
+    ) {
+        self.init(
+            kind: kind,
+            selectedSources: selectedSources,
+            sourceDisplayNames: sourceDisplayNames,
+            destinations: destinations,
+            formats: formats,
+            protection: .none,
+            validated: ()
+        )
+    }
+
+    init?(
+        kind: ArchiveOperationKind,
+        selectedSources: [URL],
+        sourceDisplayNames: [String],
+        destinations: [URL],
         formats: [ArchiveFormat],
-        protection: ArchiveProtection = .none
+        protection: ArchiveProtection
+    ) {
+        guard Self.isAllowed(
+            kind: kind,
+            formats: formats,
+            protection: protection
+        ) else { return nil }
+        self.init(
+            kind: kind,
+            selectedSources: selectedSources,
+            sourceDisplayNames: sourceDisplayNames,
+            destinations: destinations,
+            formats: formats,
+            protection: protection,
+            validated: ()
+        )
+    }
+
+    private init(
+        kind: ArchiveOperationKind,
+        selectedSources: [URL],
+        sourceDisplayNames: [String],
+        destinations: [URL],
+        formats: [ArchiveFormat],
+        protection: ArchiveProtection,
+        validated _: Void
     ) {
         self.kind = kind
         self.selectedSources = selectedSources
         self.sourceDisplayNames = sourceDisplayNames
         self.destinations = destinations
         self.formats = formats
-        self.protection = Self.isAllowed(
-            kind: kind,
-            formats: formats,
-            protection: protection
-        ) ? protection : .none
+        self.protection = protection
     }
 
     private static func isAllowed(
@@ -102,8 +141,18 @@ struct ArchiveDestinationPlan: Sendable, Equatable {
         switch kind {
         case .compress:
             guard destinations.count == 1, formats.count == 1 else { return nil }
-            return [
-                ArchiveRequest(
+            let request: ArchiveRequest?
+            if protection == .none {
+                request = ArchiveRequest(
+                    kind: .compress,
+                    verifiedSources: verifiedSources,
+                    finalDestination: destinations[0],
+                    destinationParentIdentity: destinationParentIdentity,
+                    progressDisplayName: destinations[0].lastPathComponent,
+                    format: formats[0]
+                )
+            } else {
+                request = ArchiveRequest(
                     kind: .compress,
                     verifiedSources: verifiedSources,
                     finalDestination: destinations[0],
@@ -112,7 +161,9 @@ struct ArchiveDestinationPlan: Sendable, Equatable {
                     format: formats[0],
                     protection: protection
                 )
-            ]
+            }
+            guard let request else { return nil }
+            return [request]
         case .extract:
             guard destinations.count == verifiedSources.count,
                   formats.count == verifiedSources.count
@@ -124,8 +175,7 @@ struct ArchiveDestinationPlan: Sendable, Equatable {
                     finalDestination: destinations[index],
                     destinationParentIdentity: destinationParentIdentity,
                     progressDisplayName: sourceDisplayNames[index],
-                    format: formats[index],
-                    protection: protection
+                    format: formats[index]
                 )
             }
         }
@@ -193,8 +243,7 @@ enum ArchiveDestinationPlanner {
             selectedSources: selectedItems.map(\.url),
             sourceDisplayNames: selectedItems.map(\.name),
             destinations: destinations,
-            formats: formats,
-            protection: protection
+            formats: formats
         )
     }
 }

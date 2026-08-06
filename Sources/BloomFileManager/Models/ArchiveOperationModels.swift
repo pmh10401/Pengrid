@@ -76,15 +76,45 @@ struct ArchiveRequest: Sendable, Equatable {
         finalDestination: URL,
         destinationParentIdentity: FileIdentity,
         progressDisplayName: String? = nil,
-        format: ArchiveFormat = .zip,
-        protection: ArchiveProtection = .none
+        format: ArchiveFormat = .zip
     ) {
         self.kind = kind
         self.verifiedSources = verifiedSources
         self.finalDestination = finalDestination
         self.destinationParentIdentity = destinationParentIdentity
         self.format = format
-        self.protection = kind == .compress && format == .zip ? protection : .none
+        self.protection = .none
+        if let progressDisplayName {
+            self.progressDisplayName = progressDisplayName
+        } else {
+            self.progressDisplayName = switch kind {
+            case .compress:
+                finalDestination.lastPathComponent
+            case .extract:
+                verifiedSources.first?.url.lastPathComponent
+                    ?? finalDestination.lastPathComponent
+            }
+        }
+    }
+
+    init?(
+        kind: ArchiveOperationKind,
+        verifiedSources: [IdentifiedFileRequest],
+        finalDestination: URL,
+        destinationParentIdentity: FileIdentity,
+        progressDisplayName: String? = nil,
+        format: ArchiveFormat = .zip,
+        protection: ArchiveProtection
+    ) {
+        guard protection == .none || (kind == .compress && format == .zip) else {
+            return nil
+        }
+        self.kind = kind
+        self.verifiedSources = verifiedSources
+        self.finalDestination = finalDestination
+        self.destinationParentIdentity = destinationParentIdentity
+        self.format = format
+        self.protection = protection
         if let progressDisplayName {
             self.progressDisplayName = progressDisplayName
         } else {
