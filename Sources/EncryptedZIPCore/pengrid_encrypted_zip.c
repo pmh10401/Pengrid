@@ -8,6 +8,9 @@
 #include <limits.h>
 #include <string.h>
 
+/* ZIP general-purpose bit 6 indicates strong encryption. */
+#define PENGRID_ZIP_FLAG_STRONG_ENCRYPTION (1u << 6)
+
 static int32_t pengrid_map_zip_status(int32_t status) {
     switch (status) {
     case MZ_OK:
@@ -52,6 +55,8 @@ static int32_t pengrid_inspect_entries(void *zip, pengrid_zip_inspection_t *resu
         result->total_uncompressed_bytes += uncompressed_size;
         if ((file_info->flag & MZ_ZIP_FLAG_ENCRYPTED) != 0) {
             result->has_encrypted_entries = 1;
+            if ((file_info->flag & PENGRID_ZIP_FLAG_STRONG_ENCRYPTION) != 0)
+                result->has_unsupported_encryption = 1;
             if (file_info->aes_version != 0) {
                 if (file_info->aes_strength < MZ_AES_STRENGTH_128 ||
                     file_info->aes_strength > MZ_AES_STRENGTH_256) {

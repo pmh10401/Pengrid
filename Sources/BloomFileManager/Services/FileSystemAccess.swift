@@ -43,12 +43,11 @@ final class OpenedFileSystemItem: @unchecked Sendable {
 
     func close() {
         lock.lock()
+        defer { lock.unlock() }
         guard let descriptor else {
-            lock.unlock()
             return
         }
         self.descriptor = nil
-        lock.unlock()
         Darwin.close(descriptor)
     }
 

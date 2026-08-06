@@ -48,13 +48,11 @@ final class ArchiveSecret: @unchecked Sendable, CustomStringConvertible {
 
     func invalidate() {
         lock.lock()
+        defer { lock.unlock() }
         guard let bytes else {
-            lock.unlock()
             return
         }
         self.bytes = nil
-        lock.unlock()
-
         pengrid_secure_clear(bytes, length)
         bytes.deallocate()
     }

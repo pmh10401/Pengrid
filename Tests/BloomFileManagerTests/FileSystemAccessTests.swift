@@ -568,4 +568,68 @@ struct FileSystemAccessTests {
             )
         }
     }
+
+    @Test func openItemCloseWaitsForAnActiveBorrowAndConcurrentCloseCompletes() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let source = root.url.appending(path: "archive.zip")
+        try Data("archive".utf8).write(to: source)
+
+        let fileSystem = LiveFileSystemAccess()
+        let identity = try #require(await fileSystem.identity(of: source))
+        let item = try await fileSystem.openItem(source, kind: .regularFile, identifiedBy: identity)
+        let release = DispatchSemaphore(value: 0)
+        let enteredLatch = FileSystemTestLatch()
+        let borrowFinished = FileSystemTestLatch()
+        DispatchQueue.global().async {
+            _ = try? item.withUnsafeDescriptor { descriptor in
+                Task { await enteredLatch.signal() }
+                _ = release.wait(timeout: .now() + 2)
+                return descriptor
+            }
+            Task { await borrowFinished.signal() }
+        }
+        #expect(await waitForFileSystemSignal(enteredLatch))
+
+        let closeFinished = FileSystemTestLatch()
+        DispatchQueue.global().async {
+            item.close()
+            Task { await closeFinished.signal() }
+        }
+        #expect(!(await waitForFileSystemSignal(closeFinished, timeout: .milliseconds(50))))
+        release.signal()
+        #expect(await waitForFileSystemSignal(closeFinished))
+        #expect(await waitForFileSystemSignal(borrowFinished))
+
+        DispatchQueue.concurrentPerform(iterations: 16) { _ in
+            item.close()
+        }
+        #expect(throws: FileSystemAccessError.descriptorClosed(source)) {
+            try item.withUnsafeDescriptor { $0 }
+        }
+    }
+}
+
+private actor FileSystemTestLatch {
+    private var signaled = false
+
+    func signal() {
+        signaled = true
+    }
+
+    func isSignaled() -> Bool {
+        signaled
+    }
+}
+
+private func waitForFileSystemSignal(
+    _ latch: FileSystemTestLatch,
+    timeout: Duration = .seconds(1)
+) async -> Bool {
+    let start = ContinuousClock.now
+    while !(await latch.isSignaled()) {
+        if start.duration(to: ContinuousClock.now) >= timeout { return false }
+        try? await Task.sleep(for: .milliseconds(1))
+    }
+    return true
 }
