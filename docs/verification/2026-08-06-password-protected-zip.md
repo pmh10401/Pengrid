@@ -61,7 +61,7 @@ developer directory above.
 | --- | --- | --- |
 | PASS | `env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --disable-sandbox --no-parallel --filter 'ProtectedZIPEngineWriterTests\|ProtectedZIPOperationServiceTests'` | 44 tests in 2 suites passed. |
 | PASS | `env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --disable-sandbox --no-parallel --filter 'ProtectedZIP'` | 104 tests in 5 suites passed. |
-| PASS | `env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --disable-sandbox --no-parallel` | 1,056 tests in 77 suites passed; prior full run before the final lifecycle addition. |
+| PASS | `env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --disable-sandbox --no-parallel` | 1,048 tests in 76 suites passed; historical baseline before the final lifecycle addition. |
 | PASS | `./script/build_and_run.sh --verify` | Non-launching arm64 build, ad-hoc signature, and artifact verification exited 0 (8.526 seconds). |
 | PASS | `/bin/bash script/tests/package_release_contract_tests.sh` | `package release contract tests: PASS`. |
 
