@@ -51,6 +51,13 @@ The encrypted symlink fixture uses the public password
 `fixture-aes-symlink-passphrase`; its central UNIX1 metadata and authenticated
 payload both name `target.txt`.
 
+The adversarial encrypted symlink fixtures were generated in a temporary copy
+of the same pinned minizip-ng sources with the central UNIX1 target fixed at
+`target.txt`. `minizip-aes256-symlink-mismatch.zip` authenticates a different
+payload (`other.txt`), while `minizip-aes256-symlink-nul.zip` authenticates
+`target\0x`; neither generator nor temporary binary is committed or used at
+runtime.
+
 ## Contents and hashes
 
 | Fixture | Encryption | Public password | Expected entry and UTF-8 bytes | SHA-256 |
@@ -63,3 +70,5 @@ payload both name `target.txt`.
 | `aes-password-257.zip` | WinZip AES-256 | `String(repeating: "p", count: 257)` | `Strength.txt` — `AES compatibility fixture\n` (26 bytes) | `d3c81a181b198de65bd64e7e58b7de4022c69572af8b57a53ef070979ce7930e` |
 | `aes-password-1024.zip` | WinZip AES-256 | `String(repeating: "p", count: 1_024)` | `Strength.txt` — `AES compatibility fixture\n` (26 bytes) | `95f64f040e506e695e9e94074827bf2a793b1595dac1ea6e0576d17e9409eb87` |
 | `minizip-aes256-symlink.zip` | WinZip AES-256 | `fixture-aes-symlink-passphrase` | `link` → `target.txt` (10 authenticated payload bytes) | `04179e98fd60abf9f91d10ed8efcd9a9a721b2ec1a6c305abb4bbc435064a3f7` |
+| `minizip-aes256-symlink-mismatch.zip` | WinZip AES-256 | `fixture-aes-symlink-passphrase` | central `target.txt`; authenticated payload `other.txt` (9 bytes) | `f17d693d44828b784a73c6319c80ad04ac77959c282b67cf7549147b7209d69d` |
+| `minizip-aes256-symlink-nul.zip` | WinZip AES-256 | `fixture-aes-symlink-passphrase` | central `target.txt`; authenticated payload `target\0x` (8 bytes) | `058a5ee7ee4e595244fe3cd65acb6b49cb8211c34ceab8b0ea79a041d26f60ff` |

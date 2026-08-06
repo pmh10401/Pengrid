@@ -155,6 +155,30 @@ static int pengrid_reader_entry_compare(const void *lhs, const void *rhs) {
     return strcmp(left->path, right->path);
 }
 
+static size_t pengrid_reader_path_depth(const char *path) {
+    size_t depth = 0;
+    if (!path || path[0] == '\0')
+        return 0;
+    depth = 1;
+    for (const char *cursor = path; *cursor; cursor++) {
+        if (*cursor == '/')
+            depth += 1;
+    }
+    return depth;
+}
+
+static int pengrid_reader_directory_metadata_compare(const void *lhs, const void *rhs) {
+    const pengrid_reader_entry *left = *(const pengrid_reader_entry *const *)lhs;
+    const pengrid_reader_entry *right = *(const pengrid_reader_entry *const *)rhs;
+    size_t left_depth = pengrid_reader_path_depth(left->path);
+    size_t right_depth = pengrid_reader_path_depth(right->path);
+    if (left_depth > right_depth)
+        return -1;
+    if (left_depth < right_depth)
+        return 1;
+    return strcmp(left->path, right->path);
+}
+
 static pengrid_reader_entry *pengrid_reader_find_sorted_entry(
     pengrid_reader_entry **sorted,
     size_t count,
@@ -791,20 +815,41 @@ entry_cleanup:
         status = PENGRID_ZIP_STATUS_WRONG_PASSWORD_OR_DAMAGE;
     if (status == PENGRID_ZIP_STATUS_OK && validated_entries) {
         /* Apply directory metadata after all children so the final directory
-           mtime is not changed by later child creation. */
-        for (size_t index = validated_entries->count; index > 0; index--) {
-            const pengrid_reader_entry *entry = &validated_entries->entries[index - 1];
-            if (!entry->is_directory || !entry->has_mode)
-                continue;
+           mtime is not changed by later child creation. Restrictive parents
+           are applied after their descendants, independent of archive order. */
+        pengrid_reader_entry **directories = (pengrid_reader_entry **)malloc(
+            validated_entries->count * sizeof(*directories)
+        );
+        size_t directory_count = 0;
+        if (!directories && validated_entries->count > 0) {
+            status = PENGRID_ZIP_STATUS_INTERNAL_ERROR;
+        }
+        for (size_t index = 0;
+             status == PENGRID_ZIP_STATUS_OK && index < validated_entries->count;
+             index++) {
+            pengrid_reader_entry *entry = &validated_entries->entries[index];
+            if (entry->is_directory && entry->has_mode)
+                directories[directory_count++] = entry;
+        }
+        if (status == PENGRID_ZIP_STATUS_OK)
+            qsort(
+                directories,
+                directory_count,
+                sizeof(*directories),
+                pengrid_reader_directory_metadata_compare
+            );
+        for (size_t index = 0;
+             status == PENGRID_ZIP_STATUS_OK && index < directory_count;
+             index++) {
+            const pengrid_reader_entry *entry = directories[index];
             status = pengrid_reader_check_root_identity(root_fd, root_device, root_inode);
             if (status != PENGRID_ZIP_STATUS_OK)
                 break;
             status = pengrid_root_apply_directory_metadata(
                 root_fd, entry->path, entry->mode, entry->modified_date
             );
-            if (status != PENGRID_ZIP_STATUS_OK)
-                break;
         }
+        free(directories);
     }
     if (status == PENGRID_ZIP_STATUS_OK && progress && progress(total, total, progress_context) != 0)
         status = PENGRID_ZIP_STATUS_CANCELLED;

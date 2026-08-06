@@ -366,6 +366,9 @@ private final class ProtectedZIPProgressBridge: @unchecked Sendable {
         wakeContinuation.yield(())
         wakeContinuation.finish()
         lock.unlock()
+        // If native returned before the initial event could be delivered (for
+        // example an overflow/error callback), never leave its gate blocked.
+        initialDeliveryGate.signal()
     }
 
     func consume() async {
@@ -382,6 +385,12 @@ private final class ProtectedZIPProgressBridge: @unchecked Sendable {
                 _ = await wakeIterator.next()
                 continue
             }
+            if event.completed == 0 {
+                // Signal before validating Int64 representability.  Native
+                // callbacks wait for this acknowledgement, and an oversized
+                // initial total must not strand the worker.
+                initialDeliveryGate.signal()
+            }
             guard event.completed <= UInt64(Int64.max), event.total <= UInt64(Int64.max) else {
                 continue
             }
@@ -391,9 +400,6 @@ private final class ProtectedZIPProgressBridge: @unchecked Sendable {
                     totalByteCount: Int64(event.total)
                 )
             )
-            if event.completed == 0 {
-                initialDeliveryGate.signal()
-            }
             lastDelivery = ContinuousClock.now
             lastDeliveredEvent = event
         }

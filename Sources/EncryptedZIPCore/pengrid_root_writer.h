@@ -69,6 +69,9 @@ int32_t pengrid_root_apply_directory_metadata(
 void pengrid_root_test_fail_next_tracking(void);
 void pengrid_root_test_fail_next_cleanup(void);
 void pengrid_root_test_substitute_next_cleanup_object(void);
+void pengrid_root_test_fail_next_identity_stat(void);
+void pengrid_root_test_fail_next_symlink_identity_stat(void);
+void pengrid_root_test_fail_next_rollback(void);
 
 #ifdef __cplusplus
 }

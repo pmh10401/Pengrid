@@ -21,6 +21,14 @@
 #define PENGRID_ZIP_MAX_PASSWORD_LENGTH (256u)
 #define PENGRID_ZIP_WRITE_BUFFER_SIZE (64u * 1024u)
 
+static volatile int32_t pengrid_zip_override_regular_size_count;
+static volatile uint64_t pengrid_zip_override_regular_size;
+
+void pengrid_zip_test_override_next_regular_size(uint64_t size) {
+    __sync_lock_test_and_set(&pengrid_zip_override_regular_size, size);
+    __sync_fetch_and_add(&pengrid_zip_override_regular_size_count, 1);
+}
+
 typedef enum {
     PENGRID_ZIP_ENTRY_DIRECTORY = 1,
     PENGRID_ZIP_ENTRY_REGULAR = 2,
@@ -428,6 +436,8 @@ static int32_t pengrid_zip_append_entry(
     }
     if (list->total_uncompressed > UINT64_MAX - content_size)
         return PENGRID_ZIP_STATUS_OVERFLOW;
+    if (list->total_uncompressed > (uint64_t)INT64_MAX - content_size)
+        return PENGRID_ZIP_STATUS_OVERFLOW;
     if (list->count == SIZE_MAX)
         return PENGRID_ZIP_STATUS_OVERFLOW;
     if (list->count == list->capacity) {
@@ -483,6 +493,13 @@ static int32_t pengrid_zip_collect_directory(
         if (fstatat(dirfd(directory), item->d_name, &information, AT_SYMLINK_NOFOLLOW) != 0) {
             status = PENGRID_ZIP_STATUS_IO_ERROR;
             break;
+        }
+        if (S_ISREG(information.st_mode) &&
+            __sync_fetch_and_add(&pengrid_zip_override_regular_size_count, 0) > 0) {
+            __sync_fetch_and_sub(&pengrid_zip_override_regular_size_count, 1);
+            information.st_size = (off_t)__sync_fetch_and_add(
+                &pengrid_zip_override_regular_size, 0
+            );
         }
         relative_path = pengrid_zip_join_path(prefix, item->d_name);
         if (!relative_path) {

@@ -40,6 +40,15 @@ private func testMZZipReaderEntryClose(_ handle: UnsafeMutableRawPointer?) -> In
 @_silgen_name("mz_stream_delete")
 private func testMZStreamDelete(_ stream: UnsafeMutablePointer<UnsafeMutableRawPointer?>)
 
+private typealias WriterSizeOverrideHook = @convention(c) (UInt64) -> Void
+
+private func writerSizeOverrideHook() -> WriterSizeOverrideHook? {
+    guard let symbol = Darwin.dlsym(UnsafeMutableRawPointer(bitPattern: -2), "pengrid_zip_test_override_next_regular_size") else {
+        return nil
+    }
+    return unsafeBitCast(symbol, to: WriterSizeOverrideHook.self)
+}
+
 private enum ProtectedZIPReaderTestError: Error {
     case open(Int32)
     case read(Int32)
@@ -486,6 +495,39 @@ struct ProtectedZIPEngineWriterTests {
         let values = await progress.values
         #expect(values.count == 1)
         #expect(values == [ProtectedZIPProgress(completedByteCount: 0, totalByteCount: 0)])
+    }
+
+    @Test func writerRejectsAggregateProgressOverflowBeforeInitialCallback() throws {
+        guard let overrideNextSize = writerSizeOverrideHook() else {
+            #expect(Bool(false), "aggregate-size overflow test seam is not exported")
+            return
+        }
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let source = root.url.appending(path: "source", directoryHint: .isDirectory)
+        let archiveURL = root.url.appending(path: "archive.zip")
+        try FileManager.default.createDirectory(at: source, withIntermediateDirectories: false)
+        try Data([1]).write(to: source.appending(path: "a.bin"))
+        try Data([2]).write(to: source.appending(path: "b.bin"))
+        let sourceItem = try openedDirectory(source)
+        defer { sourceItem.close() }
+        let destination = try createDestination(archiveURL)
+        defer { Darwin.close(destination.descriptor) }
+        overrideNextSize(UInt64(Int64.max))
+        let password = Array("aggregate-overflow-password".utf8)
+        let status = try sourceItem.withUnsafeDescriptor { sourceDescriptor in
+            try password.withUnsafeBufferPointer { passwordBuffer in
+                pengrid_zip_create_aes256(
+                    sourceDescriptor,
+                    destination.descriptor,
+                    passwordBuffer.baseAddress,
+                    passwordBuffer.count,
+                    nil,
+                    nil
+                )
+            }
+        }
+        #expect(status == PENGRID_ZIP_STATUS_OVERFLOW)
     }
 
     @Test func writerKeepsSlowProgressDeliveryBoundedAndCallerDescriptorsOwned() async throws {

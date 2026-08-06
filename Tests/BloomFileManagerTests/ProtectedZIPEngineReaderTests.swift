@@ -13,6 +13,15 @@ private func pengrid_root_test_fail_next_cleanup()
 @_silgen_name("pengrid_root_test_substitute_next_cleanup_object")
 private func pengrid_root_test_substitute_next_cleanup_object()
 
+private typealias RootIdentityTestHook = @convention(c) () -> Void
+
+private func rootIdentityTestHook(_ name: String) -> RootIdentityTestHook? {
+    name.withCString { symbolName in
+        guard let symbol = Darwin.dlsym(UnsafeMutableRawPointer(bitPattern: -2), symbolName) else { return nil }
+        return unsafeBitCast(symbol, to: RootIdentityTestHook.self)
+    }
+}
+
 @_cdecl("pengrid_test_reanchor_progress")
 func pengrid_test_reanchor_progress(
     _ completed: UInt64,
@@ -125,6 +134,46 @@ struct ProtectedZIPEngineReaderTests {
         await #expect(throws: ProtectedZIPError.unsafeEntry) {
             try await preflight(RawZIPFixtureBuilder.archive(entries: [nulMetadata]))
         }
+
+        let absoluteMetadata = RawZIPFixtureBuilder.Entry.symlink(
+            name: "link",
+            targetBytes: Array("/outside".utf8)
+        )
+        await #expect(throws: ProtectedZIPError.unsafeEntry) {
+            try await preflight(RawZIPFixtureBuilder.archive(entries: [absoluteMetadata]))
+        }
+
+        // Central-directory metadata is sufficient for preflight. The local
+        // payload is deliberately truncated, so only authenticated extraction
+        // should observe the damage.
+        let truncatedPayload = RawZIPFixtureBuilder.Entry(
+            nameBytes: Array("link".utf8),
+            bytes: Array("target.txt".utf8),
+            externalAttributes: UInt32(S_IFLNK | 0o777) << 16,
+            declaredCompressedSize: 32,
+            declaredUncompressedSize: 32,
+            extraField: RawZIPFixtureBuilder.unixSymlinkExtra(targetBytes: Array("target.txt".utf8))
+        )
+        let truncatedFixture = RawZIPFixtureBuilder.archive(entries: [truncatedPayload])
+        let inspection = try await preflight(truncatedFixture)
+        #expect(inspection.entryCount == 1)
+        await #expect(throws: ProtectedZIPError.incorrectPasswordOrDamagedData) {
+            try await extract(truncatedFixture, password: "fixture-password")
+        }
+
+        let encryptedFixture = try Data(contentsOf: protectedZIPFixtureURL("minizip-aes256-symlink.zip"))
+        var damagedBytes = Array(encryptedFixture)
+        if let centralOffset = firstCentralDirectoryOffset(in: damagedBytes), centralOffset >= 26 {
+            // Keep the local header and data descriptor intact while flipping
+            // the final ciphertext byte immediately before the descriptor.
+            damagedBytes[centralOffset - 25] ^= 0x01
+        }
+        let damagedFixture = Data(damagedBytes)
+        let damagedInspection = try await preflight(damagedFixture)
+        #expect(damagedInspection.entryCount == 1)
+        await #expect(throws: ProtectedZIPError.incorrectPasswordOrDamagedData) {
+            try await extract(damagedFixture, password: "fixture-aes-symlink-passphrase")
+        }
     }
 
     @Test func authenticatedSymlinkPayloadMustMatchCentralMetadataAndContainNoNUL() async throws {
@@ -146,6 +195,18 @@ struct ProtectedZIPEngineReaderTests {
         )
         await #expect(throws: ProtectedZIPError.unsafeEntry) {
             try await extract(RawZIPFixtureBuilder.archive(entries: [nulPayload]), password: "fixture-password")
+        }
+
+        let encryptedMismatch = try Data(contentsOf: protectedZIPFixtureURL("minizip-aes256-symlink-mismatch.zip"))
+        await #expect(throws: ProtectedZIPError.incorrectPasswordOrDamagedData) {
+            try await extract(encryptedMismatch, password: "fixture-aes-symlink-passphrase")
+        }
+
+        let encryptedNUL = try Data(contentsOf: protectedZIPFixtureURL("minizip-aes256-symlink-nul.zip"))
+        let encryptedNULInspection = try await preflight(encryptedNUL)
+        #expect(encryptedNULInspection.entryCount == 1)
+        await #expect(throws: ProtectedZIPError.unsafeEntry) {
+            try await extract(encryptedNUL, password: "fixture-aes-symlink-passphrase")
         }
     }
 
@@ -361,6 +422,75 @@ struct ProtectedZIPEngineReaderTests {
         #expect(abs(actual.timeIntervalSince(expected)) <= 2)
     }
 
+    @Test func nestedDirectoryMetadataAppliesDeepestFirst() async throws {
+        // Child metadata is deliberately listed before its restrictive parent
+        // in central-directory order. Extraction must apply directory metadata
+        // deepest-first so reopening the child does not require execute access
+        // through the already-restricted parent.
+        let dosDate = UInt16((2024 - 1980) << 9 | 1 << 5 | 2)
+        let dosTime = UInt16(3 << 11 | 4 << 5 | 3)
+        let fixture = RawZIPFixtureBuilder.archive(entries: [
+            RawZIPFixtureBuilder.Entry(
+                nameBytes: Array("parent/child/".utf8),
+                bytes: [],
+                externalAttributes: UInt32(S_IFDIR | 0o750) << 16,
+                dosTime: dosTime,
+                dosDate: dosDate
+            ),
+            RawZIPFixtureBuilder.Entry(
+                nameBytes: Array("parent/".utf8),
+                bytes: [],
+                externalAttributes: UInt32(S_IFDIR) << 16,
+                dosTime: dosTime,
+                dosDate: dosDate
+            ),
+            RawZIPFixtureBuilder.Entry(
+                nameBytes: Array("parent/child/file.txt".utf8),
+                bytes: [7],
+                externalAttributes: UInt32(S_IFREG | 0o640) << 16,
+                dosTime: dosTime,
+                dosDate: dosDate
+            )
+        ])
+        let root = try await extract(fixture, password: "fixture-password")
+        let parent = root.appending(path: "parent", directoryHint: .isDirectory)
+        let parentAttributes = try FileManager.default.attributesOfItem(atPath: parent.path)
+        // A mode-000 parent cannot be traversed by ordinary path lookups; the
+        // extraction helper has already returned, so restore execute access for
+        // assertions without changing the on-disk metadata under test.
+        #expect(Darwin.chmod(parent.path, 0o755) == 0)
+        let child = parent.appending(path: "child", directoryHint: .isDirectory)
+        let file = child.appending(path: "file.txt")
+        let childAttributes = try FileManager.default.attributesOfItem(atPath: child.path)
+        let fileAttributes = try FileManager.default.attributesOfItem(atPath: file.path)
+        #expect((parentAttributes[.posixPermissions] as? NSNumber)?.intValue == 0o000)
+        #expect((childAttributes[.posixPermissions] as? NSNumber)?.intValue == 0o750)
+        #expect((fileAttributes[.posixPermissions] as? NSNumber)?.intValue == 0o640)
+        let expected = DateComponents(calendar: Calendar.current, timeZone: TimeZone.current, year: 2024, month: 1, day: 2, hour: 3, minute: 4, second: 6).date!
+        for attributes in [parentAttributes, childAttributes, fileAttributes] {
+            let actual = attributes[.modificationDate] as! Date
+            #expect(abs(actual.timeIntervalSince(expected)) <= 2)
+        }
+    }
+
+    @Test func readerRejectsFalseDeclaredRegularSizeDuringExtraction() async throws {
+        let fixture = RawZIPFixtureBuilder.archive(entries: [
+            RawZIPFixtureBuilder.Entry(
+                nameBytes: Array("oversized.bin".utf8),
+                bytes: [1, 2, 3],
+                declaredCompressedSize: 64,
+                declaredUncompressedSize: 64
+            )
+        ])
+        let generousLimits = ProtectedZIPLimits(
+            maximumOutputByteCount: 1 * 1024 * 1024,
+            capacityReserveByteCount: ProtectedZIPLimits.minimumCapacityReserve
+        )
+        await #expect(throws: ProtectedZIPError.incorrectPasswordOrDamagedData) {
+            try await extract(fixture, password: "fixture-password", limits: generousLimits)
+        }
+    }
+
     @Test func readerRejectsTruncatedAuthenticationAndWrongPasswordAsRedactedDamage() async throws {
         let fixtureURL = protectedZIPFixtureURL("7zip-aes256.zip")
         let fixture = try Data(contentsOf: fixtureURL)
@@ -446,6 +576,81 @@ struct ProtectedZIPEngineReaderTests {
         await #expect(throws: ProtectedZIPError.recoveryRequired) {
             try await extract(fixture, password: "fixture-password", limits: limits)
         }
+    }
+
+    @Test func identityStatFailureRollsBackRegularProbeWithoutResidue() async throws {
+        guard let failIdentityStat = rootIdentityTestHook("pengrid_root_test_fail_next_identity_stat") else {
+            #expect(Bool(false), "identity-stat test seam is not exported")
+            return
+        }
+        failIdentityStat()
+        let fixture = RawZIPFixtureBuilder.archive(entries: [
+            .regular(name: "probe.txt", bytes: [1, 2, 3])
+        ])
+        await #expect(throws: ProtectedZIPError.engineSetupFailed) {
+            try await preflight(fixture)
+        }
+    }
+
+    @Test func identityStatFailureRollsBackDirectoryProbeWithoutResidue() async throws {
+        guard let failIdentityStat = rootIdentityTestHook("pengrid_root_test_fail_next_identity_stat") else {
+            #expect(Bool(false), "identity-stat test seam is not exported")
+            return
+        }
+        failIdentityStat()
+        let fixture = RawZIPFixtureBuilder.archive(entries: [
+            .directory(name: "probe")
+        ])
+        await #expect(throws: ProtectedZIPError.engineSetupFailed) {
+            try await preflight(fixture)
+        }
+    }
+
+    @Test func identityStatFailureOnImplicitParentRollsBackNestedProbeWithoutResidue() async throws {
+        guard let failIdentityStat = rootIdentityTestHook("pengrid_root_test_fail_next_identity_stat") else {
+            #expect(Bool(false), "identity-stat test seam is not exported")
+            return
+        }
+        failIdentityStat()
+        let fixture = RawZIPFixtureBuilder.archive(entries: [
+            .regular(name: "nested/implicit/probe.txt", bytes: [1])
+        ])
+        await #expect(throws: ProtectedZIPError.engineSetupFailed) {
+            try await preflight(fixture)
+        }
+    }
+
+    @Test func identityStatFailureOnSymlinkProbeEscalatesRecoveryWithResidue() async throws {
+        guard let failSymlinkIdentityStat = rootIdentityTestHook("pengrid_root_test_fail_next_symlink_identity_stat") else {
+            #expect(Bool(false), "symlink identity-stat test seam is not exported")
+            return
+        }
+        failSymlinkIdentityStat()
+        let fixture = RawZIPFixtureBuilder.archive(entries: [
+            .symlink(name: "link", target: "target.txt")
+        ])
+        let (error, leftovers) = try await runExtractionFailure(
+            fixture,
+            password: "fixture-password"
+        )
+        #expect(error == .recoveryRequired)
+        #expect(leftovers == ["link"])
+    }
+
+    @Test func identityStatRollbackFailureEscalatesRecoveryWithResidue() async throws {
+        guard let failIdentityStat = rootIdentityTestHook("pengrid_root_test_fail_next_identity_stat"),
+              let failRollback = rootIdentityTestHook("pengrid_root_test_fail_next_rollback") else {
+            #expect(Bool(false), "identity-stat rollback test seams are not exported")
+            return
+        }
+        failIdentityStat()
+        failRollback()
+        let fixture = RawZIPFixtureBuilder.archive(entries: [
+            .regular(name: "payload.txt", bytes: [1, 2, 3])
+        ])
+        let (error, leftovers) = try await runPreflightFailure(fixture)
+        #expect(error == .recoveryRequired)
+        #expect(leftovers == ["payload.txt"])
     }
 
     @Test func nativeEntryReadCancellationLeavesOutputRootEmpty() throws {
@@ -616,6 +821,70 @@ struct ProtectedZIPEngineReaderTests {
         }
     }
 
+    private func runPreflightFailure(_ fixture: Data) async throws -> (ProtectedZIPError, [String]) {
+        let temporary = try TemporaryDirectory()
+        defer { temporary.remove() }
+        let archiveURL = temporary.url.appending(path: "archive.zip")
+        try fixture.write(to: archiveURL)
+        let archive = try openedArchive(archiveURL)
+        defer { archive.close() }
+        let probeURL = temporary.url.appending(path: "probe", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: probeURL, withIntermediateDirectories: false)
+        let probe = try openedDirectoryRoot(probeURL)
+        defer { Darwin.close(probe.descriptor) }
+        do {
+            _ = try await LiveProtectedZIPEngine().preflight(
+                archive: archive,
+                destinationProbeRoot: probe,
+                limits: ProtectedZIPLimits(
+                    maximumOutputByteCount: 16 * 1024 * 1024,
+                    capacityReserveByteCount: ProtectedZIPLimits.minimumCapacityReserve
+                )
+            )
+            return (.engineSetupFailed, try directoryNames(at: probeURL))
+        } catch let error as ProtectedZIPError {
+            return (error, try directoryNames(at: probeURL))
+        }
+    }
+
+    private func runExtractionFailure(
+        _ fixture: Data,
+        password: String
+    ) async throws -> (ProtectedZIPError, [String]) {
+        let temporary = try TemporaryDirectory()
+        defer { temporary.remove() }
+        let archiveURL = temporary.url.appending(path: "archive.zip")
+        try fixture.write(to: archiveURL)
+        let archive = try openedArchive(archiveURL)
+        defer { archive.close() }
+        let destinationURL = temporary.url.appending(path: "output", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: destinationURL, withIntermediateDirectories: false)
+        let destination = try openedDirectoryRoot(destinationURL)
+        defer { Darwin.close(destination.descriptor) }
+        do {
+            let secret = try ArchiveSecret.extraction(password: password)
+            try await LiveProtectedZIPEngine().extract(
+                archive: archive,
+                destinationRoot: destination,
+                password: secret,
+                limits: ProtectedZIPLimits(
+                    maximumOutputByteCount: 16 * 1024 * 1024,
+                    capacityReserveByteCount: ProtectedZIPLimits.minimumCapacityReserve
+                ),
+                progress: { _ in }
+            )
+            return (.engineSetupFailed, try directoryNames(at: destinationURL))
+        } catch let error as ProtectedZIPError {
+            return (error, try directoryNames(at: destinationURL))
+        }
+    }
+
+    private func directoryNames(at url: URL) throws -> [String] {
+        try FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: nil)
+            .map(\.lastPathComponent)
+            .sorted()
+    }
+
     private func extract(
         _ fixture: Data,
         password: String,
@@ -678,6 +947,14 @@ struct ProtectedZIPEngineReaderTests {
             .deletingLastPathComponent()
             .appending(path: "Fixtures/ProtectedZIP", directoryHint: .isDirectory)
             .appending(path: filename)
+    }
+
+    private func firstCentralDirectoryOffset(in bytes: [UInt8]) -> Int? {
+        guard bytes.count >= 4 else { return nil }
+        return stride(from: 0, to: bytes.count - 3, by: 1).first { index in
+            bytes[index] == 0x50 && bytes[index + 1] == 0x4B
+                && bytes[index + 2] == 0x01 && bytes[index + 3] == 0x02
+        }
     }
 
     private func openedArchive(_ url: URL) throws -> OpenedFileSystemItem {

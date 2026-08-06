@@ -25,6 +25,9 @@
 static volatile int32_t pengrid_root_fail_tracking_count;
 static volatile int32_t pengrid_root_fail_cleanup_count;
 static volatile int32_t pengrid_root_substitute_cleanup_count;
+static volatile int32_t pengrid_root_fail_identity_stat_count;
+static volatile int32_t pengrid_root_fail_symlink_identity_stat_count;
+static volatile int32_t pengrid_root_fail_rollback_count;
 
 void pengrid_root_test_fail_next_tracking(void) {
     __sync_fetch_and_add(&pengrid_root_fail_tracking_count, 1);
@@ -36,6 +39,53 @@ void pengrid_root_test_fail_next_cleanup(void) {
 
 void pengrid_root_test_substitute_next_cleanup_object(void) {
     __sync_fetch_and_add(&pengrid_root_substitute_cleanup_count, 1);
+}
+
+void pengrid_root_test_fail_next_identity_stat(void) {
+    __sync_fetch_and_add(&pengrid_root_fail_identity_stat_count, 1);
+}
+
+void pengrid_root_test_fail_next_symlink_identity_stat(void) {
+    __sync_fetch_and_add(&pengrid_root_fail_symlink_identity_stat_count, 1);
+}
+
+void pengrid_root_test_fail_next_rollback(void) {
+    __sync_fetch_and_add(&pengrid_root_fail_rollback_count, 1);
+}
+
+static int pengrid_root_should_fail_identity_stat(void) {
+    if (__sync_fetch_and_add(&pengrid_root_fail_identity_stat_count, 0) <= 0)
+        return 0;
+    __sync_fetch_and_sub(&pengrid_root_fail_identity_stat_count, 1);
+    errno = EIO;
+    return 1;
+}
+
+static int32_t pengrid_root_fstat_after_create(int descriptor, struct stat *information) {
+    if (pengrid_root_should_fail_identity_stat())
+        return -1;
+    return fstat(descriptor, information);
+}
+
+static int32_t pengrid_root_fstatat_after_create(
+    int parent_fd,
+    const char *leaf,
+    struct stat *information) {
+    if (pengrid_root_should_fail_identity_stat())
+        return -1;
+    return fstatat(parent_fd, leaf, information, AT_SYMLINK_NOFOLLOW);
+}
+
+static int32_t pengrid_root_fstatat_symlink_after_create(
+    int parent_fd,
+    const char *leaf,
+    struct stat *information) {
+    if (__sync_fetch_and_add(&pengrid_root_fail_symlink_identity_stat_count, 0) > 0) {
+        __sync_fetch_and_sub(&pengrid_root_fail_symlink_identity_stat_count, 1);
+        errno = EIO;
+        return -1;
+    }
+    return pengrid_root_fstatat_after_create(parent_fd, leaf, information);
 }
 
 static int32_t pengrid_root_status_from_errno(int error, uint8_t collision_is_unsafe) {
@@ -437,6 +487,10 @@ static int32_t pengrid_root_remove_if_owned(
     int flags;
     if (parent_fd < 0 || !leaf || !expected)
         return PENGRID_ZIP_STATUS_INVALID_ARGUMENT;
+    if (__sync_fetch_and_add(&pengrid_root_fail_rollback_count, 0) > 0) {
+        __sync_fetch_and_sub(&pengrid_root_fail_rollback_count, 1);
+        return PENGRID_ZIP_STATUS_RECOVERY_REQUIRED;
+    }
     if (fstatat(parent_fd, leaf, &current, AT_SYMLINK_NOFOLLOW) != 0)
         return PENGRID_ZIP_STATUS_RECOVERY_REQUIRED;
     if (current.st_dev != expected->st_dev || current.st_ino != expected->st_ino ||
@@ -446,6 +500,32 @@ static int32_t pengrid_root_remove_if_owned(
     if (unlinkat(parent_fd, leaf, flags) != 0)
         return PENGRID_ZIP_STATUS_RECOVERY_REQUIRED;
     return PENGRID_ZIP_STATUS_OK;
+}
+
+static int pengrid_root_identity_matches(
+    const struct stat *expected,
+    const struct stat *actual) {
+    if (!expected || !actual)
+        return 0;
+    return expected->st_dev == actual->st_dev &&
+        expected->st_ino == actual->st_ino &&
+        (expected->st_mode & S_IFMT) == (actual->st_mode & S_IFMT);
+}
+
+/* A descriptor is an identity anchor for directories and regular files.  A
+ * failed post-create stat may therefore be retried and rolled back only after
+ * the descriptor identity agrees with the current parent/leaf name. */
+static int32_t pengrid_root_rollback_from_descriptor(
+    int parent_fd,
+    const char *leaf,
+    int descriptor) {
+    struct stat opened;
+    struct stat current;
+    if (descriptor < 0 || fstat(descriptor, &opened) != 0 ||
+        fstatat(parent_fd, leaf, &current, AT_SYMLINK_NOFOLLOW) != 0 ||
+        !pengrid_root_identity_matches(&opened, &current))
+        return PENGRID_ZIP_STATUS_RECOVERY_REQUIRED;
+    return pengrid_root_remove_if_owned(parent_fd, leaf, &opened);
 }
 
 static int32_t pengrid_root_open_or_create_parent(
@@ -535,13 +615,18 @@ static int32_t pengrid_root_open_or_create_parent(
             built[built_length] = '\0';
             if (created_parent) {
                 struct stat child_information;
-                if (fstatat(current, cursor, &child_information, AT_SYMLINK_NOFOLLOW) != 0) {
+                if (pengrid_root_fstatat_after_create(current, cursor, &child_information) != 0) {
+                    int32_t rollback_status = pengrid_root_rollback_from_descriptor(
+                        current, cursor, next
+                    );
                     close(next);
                     close(current);
                     free(copy);
                     free(*leaf);
                     *leaf = NULL;
-                    return PENGRID_ZIP_STATUS_IO_ERROR;
+                    return rollback_status == PENGRID_ZIP_STATUS_OK
+                        ? PENGRID_ZIP_STATUS_IO_ERROR
+                        : PENGRID_ZIP_STATUS_RECOVERY_REQUIRED;
                 }
                 int32_t record_status = pengrid_root_append_created(created, built, &child_information);
                 if (record_status != PENGRID_ZIP_STATUS_OK) {
@@ -583,11 +668,23 @@ int32_t pengrid_root_probe_path(
             status = pengrid_root_status_from_errno(errno, 1);
             goto cleanup;
         } else {
+            int descriptor = openat(parent, leaf, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
             struct stat information;
-            if (fstatat(parent, leaf, &information, AT_SYMLINK_NOFOLLOW) != 0) {
-                status = PENGRID_ZIP_STATUS_IO_ERROR;
+            if (descriptor < 0) {
+                status = PENGRID_ZIP_STATUS_RECOVERY_REQUIRED;
                 goto cleanup;
             }
+            if (pengrid_root_fstatat_after_create(parent, leaf, &information) != 0) {
+                int32_t rollback_status = pengrid_root_rollback_from_descriptor(
+                    parent, leaf, descriptor
+                );
+                close(descriptor);
+                status = rollback_status == PENGRID_ZIP_STATUS_OK
+                    ? PENGRID_ZIP_STATUS_IO_ERROR
+                    : PENGRID_ZIP_STATUS_RECOVERY_REQUIRED;
+                goto cleanup;
+            }
+            close(descriptor);
             status = pengrid_root_append_created(created, normalized_path, &information);
             if (status != PENGRID_ZIP_STATUS_OK) {
                 int32_t rollback_status = pengrid_root_remove_if_owned(parent, leaf, &information);
@@ -604,9 +701,14 @@ int32_t pengrid_root_probe_path(
             goto cleanup;
         }
         struct stat information;
-        if (fstat(descriptor, &information) != 0) {
+        if (pengrid_root_fstat_after_create(descriptor, &information) != 0) {
+            int32_t rollback_status = pengrid_root_rollback_from_descriptor(
+                parent, leaf, descriptor
+            );
             close(descriptor);
-            status = PENGRID_ZIP_STATUS_IO_ERROR;
+            status = rollback_status == PENGRID_ZIP_STATUS_OK
+                ? PENGRID_ZIP_STATUS_IO_ERROR
+                : PENGRID_ZIP_STATUS_RECOVERY_REQUIRED;
             goto cleanup;
         }
         close(descriptor);
@@ -642,10 +744,15 @@ int32_t pengrid_root_create_file(
         return status;
     }
     struct stat information;
-    if (fstat(*descriptor, &information) != 0) {
+    if (pengrid_root_fstat_after_create(*descriptor, &information) != 0) {
+        int32_t rollback_status = pengrid_root_rollback_from_descriptor(
+            parent, leaf, *descriptor
+        );
         close(*descriptor);
         *descriptor = -1;
-        status = PENGRID_ZIP_STATUS_IO_ERROR;
+        status = rollback_status == PENGRID_ZIP_STATUS_OK
+            ? PENGRID_ZIP_STATUS_IO_ERROR
+            : PENGRID_ZIP_STATUS_RECOVERY_REQUIRED;
         close(parent);
         free(leaf);
         return status;
@@ -682,9 +789,18 @@ int32_t pengrid_root_create_directory(
             status = PENGRID_ZIP_STATUS_UNSUPPORTED_ENTRY;
         }
     } else {
+        int descriptor = openat(parent, leaf, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
         struct stat information;
-        if (fstatat(parent, leaf, &information, AT_SYMLINK_NOFOLLOW) != 0) {
-            status = PENGRID_ZIP_STATUS_IO_ERROR;
+        if (descriptor < 0) {
+            status = PENGRID_ZIP_STATUS_RECOVERY_REQUIRED;
+        } else if (pengrid_root_fstatat_after_create(parent, leaf, &information) != 0) {
+            int32_t rollback_status = pengrid_root_rollback_from_descriptor(
+                parent, leaf, descriptor
+            );
+            status = rollback_status == PENGRID_ZIP_STATUS_OK
+                ? PENGRID_ZIP_STATUS_IO_ERROR
+                : PENGRID_ZIP_STATUS_RECOVERY_REQUIRED;
+            close(descriptor);
         } else {
             status = pengrid_root_append_created(created, normalized_path, &information);
             if (status != PENGRID_ZIP_STATUS_OK) {
@@ -692,6 +808,7 @@ int32_t pengrid_root_create_directory(
                 if (rollback_status != PENGRID_ZIP_STATUS_OK)
                     status = PENGRID_ZIP_STATUS_RECOVERY_REQUIRED;
             }
+            close(descriptor);
         }
     }
     close(parent);
@@ -723,8 +840,12 @@ int32_t pengrid_root_create_symlink(
         status = pengrid_root_status_from_errno(errno, 1);
     } else {
         struct stat information;
-        if (fstatat(parent, leaf, &information, AT_SYMLINK_NOFOLLOW) != 0) {
-            status = PENGRID_ZIP_STATUS_IO_ERROR;
+        if (pengrid_root_fstatat_symlink_after_create(parent, leaf, &information) != 0) {
+            /* A symlink has no safe descriptor anchor.  Without a successful
+             * identity stat we cannot prove that the path still names the
+             * object just created, so leave it for recovery rather than
+             * attempting a blind unlink. */
+            status = PENGRID_ZIP_STATUS_RECOVERY_REQUIRED;
         } else {
             status = pengrid_root_append_created(created, normalized_path, &information);
             if (status != PENGRID_ZIP_STATUS_OK) {
