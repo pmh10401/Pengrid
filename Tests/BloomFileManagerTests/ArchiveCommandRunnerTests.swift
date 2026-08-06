@@ -129,7 +129,7 @@ import Testing
         processorCount: Int,
         expected: Int
     ) {
-        #expect(LiveArchiveCommandRunner.aggregatePreparationWorkerCount(
+        #expect(LiveArchiveSourcePreparationService.aggregatePreparationWorkerCount(
             sourceCount: sourceCount,
             activeProcessorCount: processorCount
         ) == expected)

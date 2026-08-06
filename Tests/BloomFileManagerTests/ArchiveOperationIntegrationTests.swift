@@ -104,7 +104,7 @@ struct ArchiveOperationIntegrationTests {
             .encoding
         ])
         #expect(FileManager.default.fileExists(atPath: archive.path))
-        try expectNoAggregateSourceDirectories(in: root.url)
+        try expectNoStagingDirectories(in: root.url)
     }
 
     @Test func extractionReportsOnlyEncodingBeforeLaunchingNativeCommand() async throws {
@@ -201,7 +201,7 @@ struct ArchiveOperationIntegrationTests {
             sources: [firstSource, secondSource],
             destination: archive
         )
-        try expectNoAggregateSourceDirectories(in: root.url)
+        try expectNoStagingDirectories(in: root.url)
         try await runner.run(kind: .extract, format: .zip, sources: [archive], destination: extraction)
 
         #expect(try Data(contentsOf: extraction.appending(path: "First.txt"))
@@ -316,7 +316,7 @@ struct ArchiveOperationIntegrationTests {
             includingPropertiesForKeys: nil
         ).map(\.lastPathComponent)
         #expect(Set(extractedNames) == Set(sources.map(\.0)))
-        try expectNoAggregateSourceDirectories(in: root.url)
+        try expectNoStagingDirectories(in: root.url)
     }
 
     @Test(arguments: [
@@ -473,16 +473,6 @@ private func expectNoStagingDirectories(in directory: URL) throws {
         includingPropertiesForKeys: nil
     )
     #expect(children.contains { $0.lastPathComponent.hasPrefix(".bloom-staging-") } == false)
-}
-
-private func expectNoAggregateSourceDirectories(in directory: URL) throws {
-    let children = try FileManager.default.contentsOfDirectory(
-        at: directory,
-        includingPropertiesForKeys: nil
-    )
-    #expect(children.contains {
-        $0.lastPathComponent.hasPrefix(".archive-source-")
-    } == false)
 }
 
 private func writeHostileTarFixture(to destination: URL) throws {
