@@ -1570,3 +1570,17 @@ the parent task's integration gates.
   and artifact checks passed; codesign verification was valid.
 - [x] `/bin/bash script/tests/package_release_contract_tests.sh` passed.
 - [x] Verification details and exact commands appended to the focused record.
+
+## Final review fixes progress — 460d4dc (2026-08-07)
+
+- [x] Recovery acknowledgement clears the termination veto without erasing
+  historical `lastResult` state; retry Quit is covered.
+- [x] Polling context no longer retains its coordinator across suspension;
+  invalidation/deinitialization clears the controller gate and suppresses stale
+  replies.
+- [x] AppDelegate replacement invalidates the prior coordinator; release and
+  reconfiguration tests cover weak lifetime and one-reply behavior.
+- [x] Recovery-marker and strong-capture mutations were run to failure and
+  reverted; focused coverage is 11/11 green.
+- [x] ProtectedZIP (104/5), full serial (1,059/77), build verification, and
+  package contract checks all pass after the fixes.

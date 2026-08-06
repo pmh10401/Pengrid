@@ -131,3 +131,42 @@ following serial commands:
 The SwiftPM runs emitted only the repository's existing warning about 11
 committed ProtectedZIP fixtures being unhandled resources (plus unrelated
 test-source warning diagnostics); no lifecycle warning or failure occurred.
+
+## Final review fixes — 460d4dc (2026-08-07)
+
+The follow-up review fixes make the termination veto represent only the
+unacknowledged `isQueueBlockedByRecovery` marker (the historical `lastResult`
+remains available to the operation center), and move polling into a context
+whose task never strongly captures its coordinator. Reconfiguration and
+deinitialization invalidate the context, clear the controller's preparation
+gate, and suppress obsolete replies.
+
+Focused regression coverage now includes recovery acknowledgement and retry,
+coordinator release without a stale reply or stuck gate, and AppDelegate
+reconfiguration with exactly one reply from the replacement coordinator.
+
+The focused command passed 11 tests in 1 suite (0.117 seconds):
+
+```text
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+  swift test --disable-sandbox --no-parallel \
+  --scratch-path /tmp/pengrid-termination-green-review-final \
+  --filter ApplicationTerminationTests
+```
+
+Both review mutations were captured and reverted. Restoring the stale
+`lastResult` recovery check made
+`recoveryAcknowledgementAllowsImmediateRetryQuit` fail at line 151 because
+retry Quit returned `.terminateLater` (raw value 2) instead of `.terminateNow`
+(raw value 1). Replacing the weak completion capture with a strong `self`
+capture made `releasingCoordinatorInvalidatesPreparationWithoutReplyOrStuckGate`
+fail at line 233 after an obsolete `[true]` reply was emitted.
+
+The post-fix serial verification matrix is:
+
+| Status | Exact command | Result |
+| --- | --- | --- |
+| PASS | `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test --disable-sandbox --no-parallel --scratch-path /tmp/pengrid-protectedzip-review-final --filter ProtectedZIP` | 104 tests in 5 suites passed (11.565 seconds). |
+| PASS | `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test --disable-sandbox --no-parallel --scratch-path /tmp/pengrid-full-review-final` | 1,059 tests in 77 suites passed (50.781 seconds). |
+| PASS | `./script/build_and_run.sh --verify` | Debug arm64 build, ad-hoc signing, and artifact verification passed (4.57 seconds); codesign reported valid on disk and satisfied its designated requirement. |
+| PASS | `/bin/bash script/tests/package_release_contract_tests.sh` | `package release contract tests: PASS`. |
