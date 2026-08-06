@@ -645,7 +645,7 @@ extension FileTableView {
         @objc private func copyFromMenu() { parent.onCopy() }
         @objc private func pasteFromMenu() { parent.onPaste() }
         @objc private func compressFromMenu() { parent.onCompress(.zip) }
-        @objc private func compressProtectedFromMenu() { parent.onCompressProtected() }
+        @objc func compressProtectedFromMenu() { parent.onCompressProtected() }
         @objc private func compressAsFromMenu(_ sender: NSMenuItem) {
             guard ArchiveFormat.allCases.indices.contains(sender.tag) else { return }
             parent.onCompress(ArchiveFormat.allCases[sender.tag])

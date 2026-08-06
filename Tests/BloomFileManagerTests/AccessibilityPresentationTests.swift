@@ -43,37 +43,109 @@ import Testing
     #expect(AccessibilityIdentifiers.archivePasswordCancel == "archivePassword.cancel")
 }
 
-@Test func protectedPasswordPresentationWaitsForOtherSheetsWithoutDroppingRequest() {
-    let request = ArchivePasswordRequest(
-        id: UUID(),
-        purpose: .createAES256,
-        archiveBasename: "자료.zip",
-        previousAttemptFailed: false
+@Test @MainActor
+func passwordSheetIdentityWinsOverDeferredConflictAndSearchWithoutCancellingCoordinator() async throws {
+    let request = makePasswordRequest(
+        id: UUID(uuidString: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")!
     )
+    let coordinator = ArchivePasswordPromptCoordinator()
+    let task = Task { try await coordinator.requestPassword(for: request) }
+    await Task.yield()
 
-    #expect(WorkspacePasswordPromptRouting.requestToPresent(
+    var state = WorkspaceModalPresentationState()
+    state.passwordSheetDidAppear(requestID: request.id)
+
+    #expect(state.passwordRequestToPresent(
+        pending: request,
+        conflictPresented: true,
+        searchPresented: true
+    ) == request)
+    #expect(!state.allowsOtherModalPresentation)
+    #expect(coordinator.pendingRequest == request)
+
+    coordinator.cancel(requestID: request.id)
+    await #expect(throws: CancellationError.self) { try await task.value }
+}
+
+@Test @MainActor
+func explicitPasswordDismissalReleasesGateForDeferredModal() async throws {
+    let request = makePasswordRequest(
+        id: UUID(uuidString: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")!
+    )
+    let coordinator = ArchivePasswordPromptCoordinator()
+    let task = Task { try await coordinator.requestPassword(for: request) }
+    await Task.yield()
+
+    var state = WorkspaceModalPresentationState()
+    state.passwordSheetDidAppear(requestID: request.id)
+    #expect(!state.allowsOtherModalPresentation)
+
+    let dismissedID = state.passwordSheetDidDisappear(requestID: request.id)
+    #expect(dismissedID == request.id)
+    #expect(state.allowsOtherModalPresentation)
+    #expect(state.passwordRequestToPresent(
+        pending: nil,
+        conflictPresented: true,
+        searchPresented: false
+    ) == nil)
+
+    coordinator.cancel(requestID: request.id)
+    await #expect(throws: CancellationError.self) { try await task.value }
+}
+
+@Test
+func otherModalPresentFirstDefersPasswordRequestWithoutChangingItsIdentity() {
+    let request = makePasswordRequest(
+        id: UUID(uuidString: "cccccccc-cccc-cccc-cccc-cccccccccccc")!
+    )
+    let state = WorkspaceModalPresentationState()
+
+    #expect(state.passwordRequestToPresent(
         pending: request,
         conflictPresented: true,
         searchPresented: false
     ) == nil)
-    #expect(WorkspacePasswordPromptRouting.requestToPresent(
+    #expect(state.passwordRequestToPresent(
         pending: request,
         conflictPresented: false,
         searchPresented: true
     ) == nil)
-    #expect(WorkspacePasswordPromptRouting.requestToPresent(
+    #expect(state.passwordRequestToPresent(
         pending: request,
         conflictPresented: false,
         searchPresented: false
     ) == request)
-    #expect(WorkspacePasswordPromptRouting.shouldCancel(
-        dismissedRequestID: request.id,
-        pending: request
-    ))
-    #expect(!WorkspacePasswordPromptRouting.shouldCancel(
-        dismissedRequestID: UUID(),
-        pending: request
-    ))
+}
+
+@Test @MainActor
+func stalePasswordDismissalCannotCancelNewCoordinatorRequest() async throws {
+    let requestA = makePasswordRequest(
+        id: UUID(uuidString: "dddddddd-dddd-dddd-dddd-dddddddddddd")!
+    )
+    let requestB = makePasswordRequest(
+        id: UUID(uuidString: "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee")!
+    )
+    let coordinator = ArchivePasswordPromptCoordinator()
+    let taskA = Task { try await coordinator.requestPassword(for: requestA) }
+    await Task.yield()
+
+    var state = WorkspaceModalPresentationState()
+    state.passwordSheetDidAppear(requestID: requestA.id)
+    let dismissedA = state.passwordSheetDidDisappear(requestID: requestA.id)
+    #expect(dismissedA == requestA.id)
+    coordinator.cancel(requestID: requestA.id)
+    await #expect(throws: CancellationError.self) { try await taskA.value }
+
+    let taskB = Task { try await coordinator.requestPassword(for: requestB) }
+    await Task.yield()
+    state.passwordSheetDidAppear(requestID: requestB.id)
+
+    #expect(state.passwordSheetDidDisappear(requestID: requestA.id) == nil)
+    coordinator.cancel(requestID: requestA.id)
+    #expect(coordinator.pendingRequest == requestB)
+
+    coordinator.cancel(requestID: requestB.id)
+    await #expect(throws: CancellationError.self) { try await taskB.value }
 }
 
 @Test func appWiresOneCoordinatorIdentityAcrossServiceControllerStateAndWorkspace() throws {
@@ -274,8 +346,12 @@ import Testing
     #expect(workspace.contains("ArchivePasswordSheet("))
     #expect(workspace.contains("request: request"))
     #expect(workspace.contains("coordinator: passwordCoordinator"))
-    #expect(workspace.contains("cancel(requestID: request.id)"))
-    #expect(workspace.contains("WorkspacePasswordPromptRouting.requestToPresent"))
+    #expect(workspace.contains("passwordSheetDidDisappear"))
+    #expect(workspace.contains("passwordCoordinator.cancel(requestID: requestID)"))
+    #expect(workspace.contains("WorkspaceModalPresentationState"))
+    #expect(workspace.contains("passwordSheetDidAppear"))
+    #expect(workspace.contains("passwordSheetDidDisappear"))
+    #expect(workspace.contains("allowsOtherModalPresentation"))
 
     let app = try source(named: "App/BloomFileManagerApp.swift")
     #expect(app.contains(
@@ -337,6 +413,15 @@ import Testing
     #expect(storageResultsTable.contains(
         "StorageResultsAccessibilityPresentation.label(section: section)"
     ))
+}
+
+private func makePasswordRequest(id: UUID) -> ArchivePasswordRequest {
+    ArchivePasswordRequest(
+        id: id,
+        purpose: .createAES256,
+        archiveBasename: "자료.zip",
+        previousAttemptFailed: false
+    )
 }
 
 private func source(named relativePath: String) throws -> String {

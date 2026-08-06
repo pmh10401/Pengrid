@@ -1,5 +1,7 @@
+import AppKit
 import Foundation
 import Testing
+import SwiftUI
 @testable import BloomFileManager
 
 private actor EmptySmartSearchService: SmartSearching {
@@ -70,6 +72,63 @@ struct WorkspaceCommandTests {
         #expect(request.kind == .compress)
         #expect(request.format == .zip)
         #expect(request.protection == .aes256)
+    }
+
+    @Test func protectedFileTableContextMenuBuildsAndDispatchesRealMenuItem() throws {
+        let directory = URL(filePath: "/workspace", directoryHint: .isDirectory)
+        let source = directory.appending(path: "Report.txt")
+        let item = FileItem(
+            url: source,
+            name: "Report.txt",
+            isDirectory: false,
+            isPackage: false,
+            modifiedAt: nil,
+            byteSize: 8,
+            typeDescription: "Document"
+        )
+        var selection: Set<URL> = [source]
+        var protectedCallbackCount = 0
+        let view = FileTableView(
+            items: [item],
+            selection: Binding(
+                get: { selection },
+                set: { selection = $0 }
+            ),
+            onActivatePane: {},
+            onOpen: { _ in },
+            onSortChange: { _ in },
+            onCompressProtected: { protectedCallbackCount += 1 }
+        )
+        let coordinator = view.makeCoordinator()
+        let scrollView = view.makeScrollView(coordinator: coordinator)
+        let tableView = try #require(scrollView.documentView as? NSTableView)
+        let menu = try #require(tableView.menu)
+
+        coordinator.menuNeedsUpdate(menu)
+
+        let ordinaryIndex = try #require(menu.items.firstIndex { $0.title == "Compress to ZIP" })
+        let protectedIndex = try #require(
+            menu.items.firstIndex { $0.title == "Compress as Password-Protected ZIP…" }
+        )
+        let ordinary = menu.items[ordinaryIndex]
+        let protected = menu.items[protectedIndex]
+
+        #expect(protectedIndex == ordinaryIndex + 1)
+        #expect(protected.isEnabled == ordinary.isEnabled)
+        #expect(protected.submenu == nil)
+        #expect(protected.identifier == NSUserInterfaceItemIdentifier(
+            AccessibilityIdentifiers.fileTableCompressProtectedZIP
+        ))
+        #expect(protected.action == #selector(FileTableView.Coordinator.compressProtectedFromMenu))
+        #expect(protected.target === coordinator)
+        #expect(menu.items.first { $0.submenu?.title == "Compress as…" } != nil)
+
+        #expect(NSApplication.shared.sendAction(
+            protected.action!,
+            to: protected.target,
+            from: protected
+        ))
+        #expect(protectedCallbackCount == 1)
     }
 
     @Test func newFolderCommandCapturesCreatedIdentityInItsOriginalPaneThroughReturn() async throws {
