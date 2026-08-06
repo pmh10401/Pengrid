@@ -177,7 +177,10 @@ final class FileOperationController {
     }
 
     func pauseActiveJob() async {
-        guard let activeControl, let activeJob else { return }
+        guard let activeControl,
+              let activeJob,
+              activeJob.state != .waitingForPassword
+        else { return }
         await activeControl.pause()
         isPaused = false
         self.activeJob = snapshot(
@@ -285,15 +288,17 @@ final class FileOperationController {
     @discardableResult
     func compressSelection(
         _ workspace: WorkspaceState,
-        format: ArchiveFormat = .zip
+        format: ArchiveFormat = .zip,
+        protection: ArchiveProtection = .none
     ) async -> Bool {
         guard let capture = archiveSelectionCapture(in: workspace),
               let plan = ArchiveDestinationPlanner.compression(
                 selectedItems: capture.selectedItems,
                 in: capture.directory,
                 occupiedNames: capture.occupiedNames,
-                format: format
-              )
+                format: format,
+                protection: protection
+            )
         else { return false }
         let identityCapture = await captureArchiveIdentities(for: plan)
         return runArchive(plan, identityCapture: identityCapture, in: workspace)
@@ -369,7 +374,9 @@ final class FileOperationController {
         let initialName = plan.destinations.first?.lastPathComponent ?? ""
         let jobKind: FileOperationJobKind = switch plan.kind {
         case .compress:
-            .compress(plan.formats.first ?? .zip)
+            plan.protection == .none
+                ? .compress(plan.formats.first ?? .zip)
+                : .compressProtectedZIP
         case .extract:
             .extract(plan.formats.first ?? .zip)
         }
@@ -384,7 +391,8 @@ final class FileOperationController {
             )),
             touchedDirectories: Set(plan.destinations.map { $0.deletingLastPathComponent() }),
             workspace: workspace,
-            cancellationSources: sources
+            cancellationSources: sources,
+            archiveProtection: plan.protection
         ) { [weak self, service, materializer, archiveService] in
             guard let self else {
                 return FileOperationResult(outcomes: sources.map {
@@ -1081,6 +1089,7 @@ final class FileOperationController {
         cancellationSources: [URL] = [],
         allowsRetry: Bool = true,
         requiresExclusiveQueue: Bool = false,
+        archiveProtection: ArchiveProtection? = nil,
         onCompletion: (@MainActor (FileOperationResult) -> Void)? = nil,
         operation: @escaping @MainActor () async -> FileOperationResult
     ) -> Bool {
@@ -1094,6 +1103,7 @@ final class FileOperationController {
             cancellationSources: cancellationSources,
             allowsRetry: allowsRetry,
             requiresExclusiveQueue: requiresExclusiveQueue,
+            archiveProtection: archiveProtection,
             onCompletion: onCompletion,
             operation: operation
         ))
@@ -1200,9 +1210,22 @@ final class FileOperationController {
         }
         stage = newStage
         guard let activeJob else { return }
+        let state: FileOperationJobState
+        if case let .archiving(progress) = newStage {
+            switch progress.phase {
+            case .waitingForPassword:
+                state = .waitingForPassword
+            case .processingBytes:
+                state = .running
+            default:
+                state = activeJob.state
+            }
+        } else {
+            state = activeJob.state
+        }
         self.activeJob = snapshot(
             for: activeJob,
-            state: activeJob.state,
+            state: state,
             progress: jobProgress(for: newStage),
             canUndo: false
         )
@@ -1211,13 +1234,13 @@ final class FileOperationController {
     private func jobProgress(for stage: FileOperationStage) -> FileOperationJobProgress? {
         switch stage {
         case let .preparing(progress):
-            FileOperationJobProgress(
+            return FileOperationJobProgress(
                 completedCount: progress.completedCount,
                 totalCount: progress.totalCount,
                 detail: "Preparing download"
             )
         case let .operating(progress):
-            FileOperationJobProgress(
+            return FileOperationJobProgress(
                 completedCount: progress.completedCount,
                 totalCount: progress.totalCount,
                 detail: "Processing files"
@@ -1225,31 +1248,38 @@ final class FileOperationController {
         case let .archiving(progress):
             switch progress.phase {
             case let .preparingSources(completedCount, totalCount):
-                FileOperationJobProgress(
+                return FileOperationJobProgress(
                     completedCount: completedCount,
                     totalCount: totalCount,
                     detail: "Preparing files"
                 )
             case let .processingBytes(completedByteCount, totalByteCount):
-                FileOperationJobProgress(
-                    completedCount: Int(clamping: completedByteCount),
-                    totalCount: totalByteCount.map(Int.init(clamping:)) ?? 0,
+                let boundedTotal = totalByteCount.map {
+                    Int(clamping: max($0, 0))
+                } ?? 0
+                let boundedCompleted = min(
+                    max(Int(clamping: completedByteCount), 0),
+                    boundedTotal
+                )
+                return FileOperationJobProgress(
+                    completedCount: boundedCompleted,
+                    totalCount: boundedTotal,
                     detail: "Processing archive"
                 )
             case .encoding:
-                FileOperationJobProgress(
+                return FileOperationJobProgress(
                     completedCount: 0,
                     totalCount: 0,
                     detail: "Encoding archive"
                 )
             case .waitingForPassword:
-                FileOperationJobProgress(
+                return FileOperationJobProgress(
                     completedCount: 0,
                     totalCount: 0,
                     detail: "Waiting for password"
                 )
             case .publishing:
-                FileOperationJobProgress(
+                return FileOperationJobProgress(
                     completedCount: 0,
                     totalCount: 0,
                     detail: "Finishing archive"
@@ -1445,6 +1475,7 @@ private struct PendingFileOperation {
     let cancellationSources: [URL]
     let allowsRetry: Bool
     let requiresExclusiveQueue: Bool
+    let archiveProtection: ArchiveProtection?
     let onCompletion: (@MainActor (FileOperationResult) -> Void)?
     let operation: @MainActor () async -> FileOperationResult
 
@@ -1459,6 +1490,7 @@ private struct PendingFileOperation {
         cancellationSources: [URL],
         allowsRetry: Bool,
         requiresExclusiveQueue: Bool,
+        archiveProtection: ArchiveProtection?,
         onCompletion: (@MainActor (FileOperationResult) -> Void)?,
         operation: @escaping @MainActor () async -> FileOperationResult
     ) {
@@ -1471,6 +1503,7 @@ private struct PendingFileOperation {
         self.cancellationSources = cancellationSources
         self.allowsRetry = allowsRetry
         self.requiresExclusiveQueue = requiresExclusiveQueue
+        self.archiveProtection = archiveProtection
         self.onCompletion = onCompletion
         self.operation = operation
         self.itemDisplayName = FileOperationJobSnapshot(
@@ -1518,6 +1551,7 @@ private struct PendingFileOperation {
             cancellationSources: cancellationSources,
             allowsRetry: allowsRetry,
             requiresExclusiveQueue: requiresExclusiveQueue,
+            archiveProtection: archiveProtection,
             onCompletion: onCompletion,
             operation: operation
         )

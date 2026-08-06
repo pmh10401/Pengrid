@@ -123,6 +123,9 @@ actor FileOperationUndoService {
                 }
                 return entries.isEmpty ? nil : .removeCreated(entries)
 
+            case .compressProtectedZIP:
+                return nil
+
             case .undo:
                 return nil
             }
