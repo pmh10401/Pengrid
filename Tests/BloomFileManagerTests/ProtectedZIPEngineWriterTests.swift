@@ -41,12 +41,20 @@ private func testMZZipReaderEntryClose(_ handle: UnsafeMutableRawPointer?) -> In
 private func testMZStreamDelete(_ stream: UnsafeMutablePointer<UnsafeMutableRawPointer?>)
 
 private typealias WriterSizeOverrideHook = @convention(c) (UInt64) -> Void
+private typealias WriterAppendEntryCountHook = @convention(c) (UInt64) -> Int32
 
 private func writerSizeOverrideHook() -> WriterSizeOverrideHook? {
     guard let symbol = Darwin.dlsym(UnsafeMutableRawPointer(bitPattern: -2), "pengrid_zip_test_override_next_regular_size") else {
         return nil
     }
     return unsafeBitCast(symbol, to: WriterSizeOverrideHook.self)
+}
+
+private func writerAppendEntryCountHook() -> WriterAppendEntryCountHook? {
+    guard let symbol = Darwin.dlsym(UnsafeMutableRawPointer(bitPattern: -2), "pengrid_zip_test_append_entry_count") else {
+        return nil
+    }
+    return unsafeBitCast(symbol, to: WriterAppendEntryCountHook.self)
 }
 
 private enum ProtectedZIPReaderTestError: Error {
@@ -528,6 +536,16 @@ struct ProtectedZIPEngineWriterTests {
             }
         }
         #expect(status == PENGRID_ZIP_STATUS_OVERFLOW)
+    }
+
+    @Test func writerHardEntryLimitAllowsExactly100000AndRejects100001ThroughAppendPath() throws {
+        guard let appendEntryCount = writerAppendEntryCountHook() else {
+            #expect(Bool(false), "entry-count append test seam is not exported")
+            return
+        }
+
+        #expect(appendEntryCount(100_000) == PENGRID_ZIP_STATUS_OK)
+        #expect(appendEntryCount(100_001) == PENGRID_ZIP_STATUS_OVERFLOW)
     }
 
     @Test func writerKeepsSlowProgressDeliveryBoundedAndCallerDescriptorsOwned() async throws {

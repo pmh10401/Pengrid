@@ -45,6 +45,48 @@ struct ProtectedZIPOperationServiceTests {
         #expect(FileManager.default.fileExists(atPath: destination.path))
     }
 
+    @Test @MainActor func entryCountOverflowDuringCompressionNeverPublishesOrLeavesStaging() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let source = root.url.appending(path: "Source.txt")
+        let destination = root.url.appending(path: "Archive.zip")
+        try Data("source".utf8).write(to: source)
+        let fileSystem = LiveFileSystemAccess()
+        let parentIdentity = try #require(await fileSystem.identity(of: root.url))
+        let request = try #require(ArchiveRequest(
+            kind: .compress,
+            verifiedSources: identifiedArchiveTestSources([source]),
+            finalDestination: destination,
+            destinationParentIdentity: parentIdentity,
+            format: .zip,
+            protection: .aes256
+        ))
+        let service = ProtectedZIPOperationService(
+            fileSystem: fileSystem,
+            sourcePreparer: Task8RecordingArchiveSourcePreparer(
+                fileSystem: fileSystem,
+                root: root.url
+            ),
+            passwordProvider: Task8RecordingPasswordProvider(
+                root: root.url,
+                passwords: ["entry-count-overflow-passphrase"]
+            ),
+            engine: Task8EntryCountOverflowEngine(),
+            logger: RecordingProtectedZIPLogger()
+        )
+
+        let result = await service.perform([request]) { _ in }
+
+        #expect(result.outcomes == [
+            .failed(
+                source: source,
+                message: ProtectedZIPError.entryCountOverflow.errorDescription!
+            )
+        ])
+        #expect(FileManager.default.fileExists(atPath: destination.path) == false)
+        try task8ExpectNoStagingDirectories(in: root.url)
+    }
+
     @Test @MainActor func preparationEventOrderIsBeforeWaitingPhaseAndProvider() async throws {
         let root = try TemporaryDirectory()
         defer { root.remove() }
@@ -1140,6 +1182,46 @@ actor RecordingProtectedZIPEngine: ProtectedZIPEngine {
         progress: @escaping @Sendable (ProtectedZIPProgress) async -> Void
     ) async throws {
         await progress(ProtectedZIPProgress(completedByteCount: 0, totalByteCount: 0))
+    }
+}
+
+private actor Task8EntryCountOverflowEngine: ProtectedZIPEngine {
+    private var remainingFailures = 1
+
+    func inspect(archive: OpenedFileSystemItem) async throws -> ProtectedZIPInspection {
+        ProtectedZIPInspection()
+    }
+
+    func preflight(
+        archive: OpenedFileSystemItem,
+        destinationProbeRoot: OpenedEmptyFileSystemItem,
+        limits: ProtectedZIPLimits
+    ) async throws -> ProtectedZIPInspection {
+        ProtectedZIPInspection()
+    }
+
+    func createAES256(
+        sourceRoot: OpenedFileSystemItem,
+        destination: OpenedEmptyFileSystemItem,
+        password: ArchiveSecret,
+        progress: @escaping @Sendable (ProtectedZIPProgress) async -> Void
+    ) async throws {
+        guard remainingFailures > 0 else {
+            await progress(ProtectedZIPProgress(completedByteCount: 0, totalByteCount: 0))
+            return
+        }
+        remainingFailures -= 1
+        throw ProtectedZIPError.entryCountOverflow
+    }
+
+    func extract(
+        archive: OpenedFileSystemItem,
+        destinationRoot: OpenedEmptyFileSystemItem,
+        password: ArchiveSecret,
+        limits: ProtectedZIPLimits,
+        progress: @escaping @Sendable (ProtectedZIPProgress) async -> Void
+    ) async throws {
+        throw ProtectedZIPError.entryCountOverflow
     }
 }
 

@@ -20,6 +20,7 @@
 #include <unistd.h>
 
 #define PENGRID_ZIP_MAX_PASSWORD_LENGTH (256u)
+#define PENGRID_ZIP_MAX_ENTRY_COUNT (100000u)
 #define PENGRID_ZIP_WRITE_BUFFER_SIZE (64u * 1024u)
 
 static volatile int32_t pengrid_zip_override_regular_size_count;
@@ -538,6 +539,11 @@ static int32_t pengrid_zip_append_entry(
 
     if (!list || !relative_path || !information)
         return PENGRID_ZIP_STATUS_INVALID_ARGUMENT;
+    /* This is a hard creation ceiling, not a caller-controlled limit.  Keep
+     * the check before any size arithmetic, capacity growth, or ownership
+     * transfer so the 100,001st candidate cannot allocate or retain state. */
+    if (list->count >= (size_t)PENGRID_ZIP_MAX_ENTRY_COUNT)
+        return PENGRID_ZIP_STATUS_OVERFLOW;
     if (kind == PENGRID_ZIP_ENTRY_REGULAR) {
         if (information->st_size < 0)
             return PENGRID_ZIP_STATUS_OVERFLOW;
@@ -603,6 +609,13 @@ static int32_t pengrid_zip_collect_directory(
 
         if (strcmp(item->d_name, ".") == 0 || strcmp(item->d_name, "..") == 0)
             continue;
+        /* Reject before fstat/path/link allocations for the first candidate
+         * beyond the production ceiling.  The append guard below remains a
+         * defense for every caller of the ownership-transferring primitive. */
+        if (list->count >= (size_t)PENGRID_ZIP_MAX_ENTRY_COUNT) {
+            status = PENGRID_ZIP_STATUS_OVERFLOW;
+            break;
+        }
         if (fstatat(dirfd(directory), item->d_name, &information, AT_SYMLINK_NOFOLLOW) != 0) {
             status = PENGRID_ZIP_STATUS_IO_ERROR;
             break;
@@ -675,6 +688,36 @@ static int32_t pengrid_zip_collect_directory(
         }
     }
     closedir(directory);
+    return status;
+}
+
+/* Test-only dlsym seam.  It drives the same append primitive used by
+ * production enumeration while keeping the boundary test in-memory (no
+ * 100,000 filesystem entries are needed).  This symbol is intentionally not
+ * declared in the public header. */
+int32_t pengrid_zip_test_append_entry_count(uint64_t count) {
+    pengrid_zip_entry_list list;
+    struct stat information;
+    uint64_t index;
+    int32_t status = PENGRID_ZIP_STATUS_OK;
+
+    memset(&list, 0, sizeof(list));
+    memset(&information, 0, sizeof(information));
+    information.st_mode = S_IFREG | 0600;
+    information.st_size = 0;
+    for (index = 0; index < count; index++) {
+        status = pengrid_zip_append_entry(
+            &list,
+            "test-entry",
+            &information,
+            PENGRID_ZIP_ENTRY_REGULAR,
+            NULL,
+            0
+        );
+        if (status != PENGRID_ZIP_STATUS_OK)
+            break;
+    }
+    pengrid_zip_entry_list_destroy(&list);
     return status;
 }
 
