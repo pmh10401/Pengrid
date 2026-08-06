@@ -123,6 +123,19 @@ func encryptedZIPCoreReportsEachWinZipAESStrength(_ strength: UInt8) throws {
     #expect(pengrid_zip_inspect_fd(descriptor, &inspection) == -2002)
 }
 
+@Test func encryptedZIPCoreReturnsOverflowForZIP64Aggregate() throws {
+    let root = try TemporaryDirectory()
+    defer { root.remove() }
+    let archive = root.url.appending(path: "zip64-overflow.zip")
+    try makeZIP64OverflowArchive().write(to: archive)
+
+    let descriptor = try requireOpenedDescriptor(at: archive)
+    defer { Darwin.close(descriptor) }
+    var inspection = pengrid_zip_inspection_t()
+
+    #expect(pengrid_zip_inspect_fd(descriptor, &inspection) == PENGRID_ZIP_STATUS_OVERFLOW)
+}
+
 private struct InspectionZIPEntry {
     let name: String
     let method: UInt16
@@ -194,6 +207,74 @@ private func makeInspectionZIP(entries: [InspectionZIPEntry]) -> Data {
     return Data(bytes)
 }
 
+private func makeZIP64OverflowArchive() -> Data {
+    let names = ["one", "two", "three"].map { Array($0.utf8) }
+    let declaredSize = UInt64.max / 2
+    var bytes: [UInt8] = []
+    var localOffsets: [UInt32] = []
+    let zip64Extra = zip64SizeExtra(uncompressedSize: declaredSize, compressedSize: 0)
+
+    for name in names {
+        localOffsets.append(UInt32(bytes.count))
+        appendUInt32(0x0403_4b50, to: &bytes)
+        appendUInt16(45, to: &bytes)
+        appendUInt16(0, to: &bytes)
+        appendUInt16(0, to: &bytes)
+        appendUInt16(0, to: &bytes)
+        appendUInt16(0, to: &bytes)
+        appendUInt32(0, to: &bytes)
+        appendUInt32(UInt32.max, to: &bytes)
+        appendUInt32(UInt32.max, to: &bytes)
+        appendUInt16(UInt16(name.count), to: &bytes)
+        appendUInt16(UInt16(zip64Extra.count), to: &bytes)
+        bytes.append(contentsOf: name)
+        bytes.append(contentsOf: zip64Extra)
+    }
+
+    let centralOffset = UInt32(bytes.count)
+    for (index, name) in names.enumerated() {
+        appendUInt32(0x0201_4b50, to: &bytes)
+        appendUInt16(45, to: &bytes)
+        appendUInt16(45, to: &bytes)
+        appendUInt16(0, to: &bytes)
+        appendUInt16(0, to: &bytes)
+        appendUInt16(0, to: &bytes)
+        appendUInt16(0, to: &bytes)
+        appendUInt32(0, to: &bytes)
+        appendUInt32(UInt32.max, to: &bytes)
+        appendUInt32(UInt32.max, to: &bytes)
+        appendUInt16(UInt16(name.count), to: &bytes)
+        appendUInt16(UInt16(zip64Extra.count), to: &bytes)
+        appendUInt16(0, to: &bytes)
+        appendUInt16(0, to: &bytes)
+        appendUInt16(0, to: &bytes)
+        appendUInt32(0, to: &bytes)
+        appendUInt32(localOffsets[index], to: &bytes)
+        bytes.append(contentsOf: name)
+        bytes.append(contentsOf: zip64Extra)
+    }
+
+    let centralSize = UInt32(bytes.count) - centralOffset
+    appendUInt32(0x0605_4b50, to: &bytes)
+    appendUInt16(0, to: &bytes)
+    appendUInt16(0, to: &bytes)
+    appendUInt16(UInt16(names.count), to: &bytes)
+    appendUInt16(UInt16(names.count), to: &bytes)
+    appendUInt32(centralSize, to: &bytes)
+    appendUInt32(centralOffset, to: &bytes)
+    appendUInt16(0, to: &bytes)
+    return Data(bytes)
+}
+
+private func zip64SizeExtra(uncompressedSize: UInt64, compressedSize: UInt64) -> [UInt8] {
+    var bytes: [UInt8] = []
+    appendUInt16(0x0001, to: &bytes)
+    appendUInt16(16, to: &bytes)
+    appendUInt64(uncompressedSize, to: &bytes)
+    appendUInt64(compressedSize, to: &bytes)
+    return bytes
+}
+
 private func appendUInt16(_ value: UInt16, to bytes: inout [UInt8]) {
     bytes.append(UInt8(truncatingIfNeeded: value))
     bytes.append(UInt8(truncatingIfNeeded: value >> 8))
@@ -202,6 +283,11 @@ private func appendUInt16(_ value: UInt16, to bytes: inout [UInt8]) {
 private func appendUInt32(_ value: UInt32, to bytes: inout [UInt8]) {
     appendUInt16(UInt16(truncatingIfNeeded: value), to: &bytes)
     appendUInt16(UInt16(truncatingIfNeeded: value >> 16), to: &bytes)
+}
+
+private func appendUInt64(_ value: UInt64, to bytes: inout [UInt8]) {
+    appendUInt32(UInt32(truncatingIfNeeded: value), to: &bytes)
+    appendUInt32(UInt32(truncatingIfNeeded: value >> 32), to: &bytes)
 }
 
 private func requireOpenedDescriptor(at url: URL) throws -> Int32 {

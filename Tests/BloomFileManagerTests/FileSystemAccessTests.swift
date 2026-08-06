@@ -608,6 +608,49 @@ struct FileSystemAccessTests {
             try item.withUnsafeDescriptor { $0 }
         }
     }
+
+    @Test func openItemSecondCloseWaitsForBlockedDescriptorClose() throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let source = root.url.appending(path: "archive.zip")
+        try Data("archive".utf8).write(to: source)
+        let descriptor = Darwin.open(source.path, O_RDONLY | O_CLOEXEC)
+        #expect(descriptor >= 0)
+        let closeStarted = DispatchSemaphore(value: 0)
+        let releaseClose = DispatchSemaphore(value: 0)
+        let firstReturned = DispatchSemaphore(value: 0)
+        let secondStarted = DispatchSemaphore(value: 0)
+        let secondReturned = DispatchSemaphore(value: 0)
+        let item = OpenedFileSystemItem(
+            identity: FileIdentity(entryIdentifier: "entry", resolvedIdentifier: "resolved"),
+            descriptor: descriptor,
+            url: source,
+            closeDescriptor: { descriptor in
+                closeStarted.signal()
+                _ = releaseClose.wait(timeout: .now() + 2)
+                _ = Darwin.close(descriptor)
+            }
+        )
+
+        DispatchQueue.global().async {
+            item.close()
+            firstReturned.signal()
+        }
+        #expect(closeStarted.wait(timeout: .now() + 1) == .success)
+
+        DispatchQueue.global().async {
+            secondStarted.signal()
+            item.close()
+            secondReturned.signal()
+        }
+        #expect(secondStarted.wait(timeout: .now() + 1) == .success)
+        #expect(secondReturned.wait(timeout: .now() + .milliseconds(50)) == .timedOut)
+
+        releaseClose.signal()
+        #expect(firstReturned.wait(timeout: .now() + 1) == .success)
+        #expect(secondReturned.wait(timeout: .now() + 1) == .success)
+        #expect(Darwin.fcntl(descriptor, F_GETFD) == -1)
+    }
 }
 
 private actor FileSystemTestLatch {

@@ -23,12 +23,19 @@ enum OpenedFileSystemItemKind: Sendable, Equatable {
 final class OpenedFileSystemItem: @unchecked Sendable {
     let identity: FileIdentity
     private let url: URL
+    private let closeDescriptor: (Int32) -> Void
     private let lock = NSLock()
     private var descriptor: Int32?
 
-    init(identity: FileIdentity, descriptor: Int32, url: URL) {
+    init(
+        identity: FileIdentity,
+        descriptor: Int32,
+        url: URL,
+        closeDescriptor: @escaping (Int32) -> Void = OpenedFileSystemItem.closeDescriptorByClosing
+    ) {
         self.identity = identity
         self.url = url
+        self.closeDescriptor = closeDescriptor
         self.descriptor = descriptor
     }
 
@@ -48,11 +55,15 @@ final class OpenedFileSystemItem: @unchecked Sendable {
             return
         }
         self.descriptor = nil
-        Darwin.close(descriptor)
+        closeDescriptor(descriptor)
     }
 
     deinit {
         close()
+    }
+
+    private static func closeDescriptorByClosing(_ descriptor: Int32) {
+        _ = Darwin.close(descriptor)
     }
 }
 

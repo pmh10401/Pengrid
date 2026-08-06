@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import EncryptedZIPCore
 @testable import BloomFileManager
 
 private actor ArchiveSecretTestLatch {
@@ -100,5 +101,39 @@ struct ArchiveSecretTests {
         #expect(throws: ArchiveSecretError.unavailable) {
             try secret.withUnsafeBytes { $0.count }
         }
+    }
+
+    @Test func archiveSecretSecondInvalidationWaitsForBlockedSecureClear() throws {
+        let clearStarted = DispatchSemaphore(value: 0)
+        let releaseClear = DispatchSemaphore(value: 0)
+        let firstReturned = DispatchSemaphore(value: 0)
+        let secondStarted = DispatchSemaphore(value: 0)
+        let secondReturned = DispatchSemaphore(value: 0)
+        let secret = ArchiveSecret(
+            utf8: Array("synchronization".utf8),
+            cleanup: { bytes, length in
+                clearStarted.signal()
+                _ = releaseClear.wait(timeout: .now() + 2)
+                pengrid_secure_clear(bytes, length)
+            }
+        )
+
+        DispatchQueue.global().async {
+            secret.invalidate()
+            firstReturned.signal()
+        }
+        #expect(clearStarted.wait(timeout: .now() + 1) == .success)
+
+        DispatchQueue.global().async {
+            secondStarted.signal()
+            secret.invalidate()
+            secondReturned.signal()
+        }
+        #expect(secondStarted.wait(timeout: .now() + 1) == .success)
+        #expect(secondReturned.wait(timeout: .now() + .milliseconds(50)) == .timedOut)
+
+        releaseClear.signal()
+        #expect(firstReturned.wait(timeout: .now() + 1) == .success)
+        #expect(secondReturned.wait(timeout: .now() + 1) == .success)
     }
 }

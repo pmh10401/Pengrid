@@ -13,9 +13,15 @@ final class ArchiveSecret: @unchecked Sendable, CustomStringConvertible {
     private let lock = NSLock()
     private let length: Int
     private var bytes: UnsafeMutableRawPointer?
+    private let cleanup: (UnsafeMutableRawPointer, Int) -> Void
 
-    private init(utf8: [UInt8]) {
+    private convenience init(utf8: [UInt8]) {
+        self.init(utf8: utf8, cleanup: ArchiveSecret.clearBytes)
+    }
+
+    init(utf8: [UInt8], cleanup: @escaping (UnsafeMutableRawPointer, Int) -> Void) {
         length = utf8.count
+        self.cleanup = cleanup
         let storage = UnsafeMutableRawPointer.allocate(
             byteCount: utf8.count,
             alignment: MemoryLayout<UInt8>.alignment
@@ -53,7 +59,7 @@ final class ArchiveSecret: @unchecked Sendable, CustomStringConvertible {
             return
         }
         self.bytes = nil
-        pengrid_secure_clear(bytes, length)
+        cleanup(bytes, length)
         bytes.deallocate()
     }
 
@@ -61,6 +67,10 @@ final class ArchiveSecret: @unchecked Sendable, CustomStringConvertible {
 
     deinit {
         invalidate()
+    }
+
+    private static func clearBytes(_ bytes: UnsafeMutableRawPointer, _ length: Int) {
+        pengrid_secure_clear(bytes, length)
     }
 
     private static func validatedBytes(_ password: String, range: ClosedRange<Int>) throws -> [UInt8] {
