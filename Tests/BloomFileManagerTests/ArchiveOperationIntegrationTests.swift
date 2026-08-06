@@ -4,6 +4,78 @@ import Testing
 
 @Suite("ArchiveOperationIntegrationTests")
 struct ArchiveOperationIntegrationTests {
+    @Test(arguments: [ArchiveFormat.zip, ArchiveFormat.tar])
+    @MainActor
+    func controllerOrdinaryArchiveRoundTripsRemainUnprotected(format: ArchiveFormat) async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let source = root.url.appending(path: "ordinary.txt")
+        let archive = root.url.appending(path: "ordinary.txt\(format.canonicalSuffix)")
+        let extraction = root.url.appending(
+            path: "ordinary.txt",
+            directoryHint: .isDirectory
+        )
+        let bytes = Data("ordinary archive regression".utf8)
+        try bytes.write(to: source)
+
+        let service = FileOperationService(fileSystem: LiveFileSystemAccess())
+        let controller = FileOperationController(
+            service: service,
+            materializer: InMemoryCloudMaterializer()
+        )
+        let workspace = WorkspaceState(
+            leftURL: root.url,
+            rightURL: root.url,
+            listingService: StubDirectoryListingService(values: [
+                root.url: [FileItem(
+                    url: source,
+                    name: source.lastPathComponent,
+                    isDirectory: false,
+                    isPackage: false,
+                    modifiedAt: nil,
+                    byteSize: nil,
+                    typeDescription: "File"
+                )]
+            ])
+        )
+        await workspace.loadInitialDirectories()
+        workspace.left.selection = [source]
+
+        #expect(await controller.compressSelection(workspace, format: format))
+        await waitForArchiveControllerIdle(controller)
+        #expect(controller.lastResult?.outcomes == [
+            .succeeded(source: source, destination: archive)
+        ])
+        #expect(FileManager.default.fileExists(atPath: archive.path))
+        try FileManager.default.removeItem(at: source)
+
+        let extractionWorkspace = WorkspaceState(
+            leftURL: root.url,
+            rightURL: root.url,
+            listingService: StubDirectoryListingService(values: [
+                root.url: [FileItem(
+                    url: archive,
+                    name: archive.lastPathComponent,
+                    isDirectory: false,
+                    isPackage: false,
+                    modifiedAt: nil,
+                    byteSize: nil,
+                    typeDescription: "Archive"
+                )]
+            ])
+        )
+        await extractionWorkspace.loadInitialDirectories()
+        extractionWorkspace.left.selection = [archive]
+        #expect(await controller.extractSelection(extractionWorkspace))
+        await waitForArchiveControllerIdle(controller)
+
+        #expect(controller.lastResult?.outcomes == [
+            .succeeded(source: archive, destination: extraction)
+        ])
+        #expect(try Data(contentsOf: extraction.appending(path: source.lastPathComponent)) == bytes)
+        try expectNoStagingDirectories(in: root.url)
+    }
+
     @Test func compressionRefusesReplacementAfterOwnedOutputCreation() async throws {
         let root = try TemporaryDirectory()
         defer { root.remove() }
@@ -495,6 +567,16 @@ struct ArchiveOperationIntegrationTests {
         #expect(FileManager.default.fileExists(atPath: destination.path) == false)
         try expectNoStagingDirectories(in: root.url)
     }
+}
+
+@MainActor
+private func waitForArchiveControllerIdle(_ controller: FileOperationController) async {
+    let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+    while ContinuousClock.now < deadline {
+        if !controller.isRunning { return }
+        await Task.yield()
+    }
+    Issue.record("Timed out waiting for file operation controller")
 }
 
 private actor ArchivePhaseCollector {

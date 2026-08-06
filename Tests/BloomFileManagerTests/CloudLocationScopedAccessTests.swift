@@ -339,6 +339,75 @@ struct CloudLocationScopedAccessTests {
     }
 
     @MainActor
+    @Test func cloudMaterializationCompletesBeforeProtectedPasswordPrompt() async throws {
+        let directory = try TemporaryDirectory()
+        defer { directory.remove() }
+        let source = directory.url.appending(path: "Cloud.txt")
+        let archive = directory.url.appending(path: "Cloud.txt.zip")
+        try Data("cloud ordering bytes".utf8).write(to: source)
+
+        let events = ArchiveTestEventRecorder()
+        let provider = E2ERecordingArchivePasswordProvider(
+            passwords: ["cloud-ordering-passphrase"],
+            events: events
+        )
+        let accessCoordinator = CloudLocationScopedAccessCoordinator()
+        accessCoordinator.replaceManualRoots([directory.url])
+        let service = FileOperationService(
+            fileSystem: LiveFileSystemAccess(),
+            accessCoordinator: accessCoordinator
+        )
+        let materializer = E2ERecordingCloudMaterializer(
+            inner: LiveCloudMaterializationService(accessCoordinator: accessCoordinator),
+            events: events
+        )
+        let archiveService = service.makeRoutingArchiveOperationService(
+            passwordProvider: provider,
+            protectedEngine: LiveProtectedZIPEngine(),
+            protectedLogger: RecordingProtectedZIPLogger()
+        )
+        let controller = FileOperationController(
+            service: service,
+            materializer: materializer,
+            archiveService: archiveService
+        )
+        let workspace = WorkspaceState(
+            leftURL: directory.url,
+            rightURL: directory.url,
+            listingService: StubDirectoryListingService(values: [
+                directory.url: [
+                    FileItem(
+                        url: source,
+                        name: source.lastPathComponent,
+                        isDirectory: false,
+                        isPackage: false,
+                        modifiedAt: nil,
+                        byteSize: nil,
+                        typeDescription: "File"
+                    )
+                ]
+            ])
+        )
+        await workspace.loadInitialDirectories()
+        workspace.left.selection = [source]
+
+        #expect(await controller.compressSelection(
+            workspace,
+            format: .zip,
+            protection: .aes256
+        ))
+        await cloudLocationWaitForControllerIdle(controller)
+
+        #expect(await events.values == ["materialization-finished", "prompt-1"])
+        #expect(provider.requests.count == 1)
+        #expect(controller.lastResult?.outcomes == [
+            .succeeded(source: source, destination: archive)
+        ])
+        #expect(FileManager.default.fileExists(atPath: archive.path))
+        try archiveTestExpectNoStagingDirectories(in: directory.url)
+    }
+
+    @MainActor
     @Test func workspaceOpenAndRequestCaptureHoldAccessBeforeMaterialization() async throws {
         let directory = try TemporaryDirectory()
         defer { directory.remove() }
@@ -513,6 +582,16 @@ struct CloudLocationScopedAccessTests {
         #expect(await scopedAccessWait { driver.stoppedURLs.count == 3 })
         #expect(driver.stoppedURLs.sorted { $0.path < $1.path } == [left, left, right])
     }
+}
+
+@MainActor
+private func cloudLocationWaitForControllerIdle(_ controller: FileOperationController) async {
+    let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+    while ContinuousClock.now < deadline {
+        if !controller.isRunning { return }
+        await Task.yield()
+    }
+    Issue.record("Timed out waiting for cloud archive controller")
 }
 
 private func storageQuickLookEntry(
