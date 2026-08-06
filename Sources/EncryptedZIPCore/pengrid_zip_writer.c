@@ -294,8 +294,12 @@ static int32_t pengrid_zip_output_get_prop(void *stream, int32_t prop, int64_t *
         return MZ_OK;
     case MZ_STREAM_PROP_TOTAL_IN_MAX:
     case MZ_STREAM_PROP_TOTAL_OUT_MAX:
-    case MZ_STREAM_PROP_DISK_SIZE:
         *value = output->size;
+        return MZ_OK;
+    case MZ_STREAM_PROP_DISK_SIZE:
+        /* A single output fd is never a split archive.  A positive value
+         * would make minizip synthesize a second disk in the EOCD records. */
+        *value = 0;
         return MZ_OK;
     case MZ_STREAM_PROP_DISK_NUMBER:
         *value = output->disk_number;
@@ -578,7 +582,9 @@ static int32_t pengrid_zip_open_relative_regular(int32_t root_fd, const char *re
                 return -1;
             }
         } else {
-            next_fd = openat(current_fd, component, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+            /* O_NONBLOCK prevents a path swapped to a FIFO/device between
+             * enumeration and open from blocking the worker indefinitely. */
+            next_fd = openat(current_fd, component, O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC);
             close(current_fd);
             free(path);
             return next_fd;
@@ -588,6 +594,24 @@ static int32_t pengrid_zip_open_relative_regular(int32_t root_fd, const char *re
     close(current_fd);
     free(path);
     return -1;
+}
+
+static int pengrid_zip_stat_matches(const struct stat *expected, const struct stat *actual) {
+    if (!expected || !actual)
+        return 0;
+    if ((expected->st_mode & S_IFMT) != (actual->st_mode & S_IFMT))
+        return 0;
+    if (expected->st_dev != actual->st_dev || expected->st_ino != actual->st_ino)
+        return 0;
+    if (expected->st_size != actual->st_size)
+        return 0;
+    if (expected->st_mtimespec.tv_sec != actual->st_mtimespec.tv_sec ||
+        expected->st_mtimespec.tv_nsec != actual->st_mtimespec.tv_nsec)
+        return 0;
+    if (expected->st_ctimespec.tv_sec != actual->st_ctimespec.tv_sec ||
+        expected->st_ctimespec.tv_nsec != actual->st_ctimespec.tv_nsec)
+        return 0;
+    return 1;
 }
 
 static int32_t pengrid_zip_progress(
@@ -646,26 +670,35 @@ static int32_t pengrid_zip_write_regular(
     int32_t fd = -1;
     struct stat current_information;
     int32_t status = PENGRID_ZIP_STATUS_OK;
+    uint64_t remaining;
 
     fd = pengrid_zip_open_relative_regular(root_fd, entry->relative_path);
     if (fd < 0)
         return PENGRID_ZIP_STATUS_IO_ERROR;
     if (fstat(fd, &current_information) != 0 || !S_ISREG(current_information.st_mode) ||
-        current_information.st_size < 0 || (uint64_t)current_information.st_size != (uint64_t)entry->information.st_size) {
+        current_information.st_size < 0 || !pengrid_zip_stat_matches(&entry->information, &current_information)) {
         close(fd);
         return PENGRID_ZIP_STATUS_IO_ERROR;
     }
-    for (;;) {
+    remaining = (uint64_t)entry->information.st_size;
+    while (remaining > 0) {
         ssize_t count;
+        size_t requested = remaining > PENGRID_ZIP_WRITE_BUFFER_SIZE
+            ? PENGRID_ZIP_WRITE_BUFFER_SIZE
+            : (size_t)remaining;
         do {
-            count = read(fd, buffer, PENGRID_ZIP_WRITE_BUFFER_SIZE);
+            count = read(fd, buffer, requested);
         } while (count < 0 && errno == EINTR);
         if (count < 0) {
             status = PENGRID_ZIP_STATUS_IO_ERROR;
             break;
         }
-        if (count == 0)
+        if (count == 0) {
+            /* A short read is never accepted for an enumerated regular
+             * file.  This keeps EOF and concurrent truncation distinct. */
+            status = PENGRID_ZIP_STATUS_IO_ERROR;
             break;
+        }
         status = pengrid_zip_write_bytes(
             writer,
             buffer,
@@ -678,8 +711,24 @@ static int32_t pengrid_zip_write_regular(
         );
         if (status != PENGRID_ZIP_STATUS_OK)
             break;
+        remaining -= (uint64_t)count;
     }
-    close(fd);
+    if (status == PENGRID_ZIP_STATUS_OK) {
+        uint8_t extra_byte;
+        ssize_t extra_count;
+        do {
+            extra_count = read(fd, &extra_byte, sizeof(extra_byte));
+        } while (extra_count < 0 && errno == EINTR);
+        if (extra_count != 0)
+            status = PENGRID_ZIP_STATUS_IO_ERROR;
+    }
+    if (status == PENGRID_ZIP_STATUS_OK &&
+        (fstat(fd, &current_information) != 0 ||
+         !pengrid_zip_stat_matches(&entry->information, &current_information))) {
+        status = PENGRID_ZIP_STATUS_IO_ERROR;
+    }
+    if (close(fd) != 0 && status == PENGRID_ZIP_STATUS_OK)
+        status = PENGRID_ZIP_STATUS_IO_ERROR;
     return status;
 }
 

@@ -180,16 +180,21 @@ private struct ProtectedZIPProgressEvent: Sendable {
 }
 
 private final class ProtectedZIPProgressBridge: @unchecked Sendable {
-    private let continuation: AsyncStream<ProtectedZIPProgressEvent>.Continuation
-    private let stream: AsyncStream<ProtectedZIPProgressEvent>
+    private let wakeContinuation: AsyncStream<Void>.Continuation
+    private let wakeStream: AsyncStream<Void>
     private let progress: @Sendable (ProtectedZIPProgress) async -> Void
     private let lock = NSLock()
     private var cancelled = false
+    private var finished = false
+    private var initialPending: ProtectedZIPProgressEvent?
+    private var initialDelivered = false
+    private var latestIntermediate: ProtectedZIPProgressEvent?
+    private var finalPending: ProtectedZIPProgressEvent?
 
     init(progress: @escaping @Sendable (ProtectedZIPProgress) async -> Void) {
-        var continuation: AsyncStream<ProtectedZIPProgressEvent>.Continuation?
-        stream = AsyncStream { continuation = $0 }
-        self.continuation = continuation!
+        var wakeContinuation: AsyncStream<Void>.Continuation?
+        wakeStream = AsyncStream(bufferingPolicy: .bufferingNewest(1)) { wakeContinuation = $0 }
+        self.wakeContinuation = wakeContinuation!
         self.progress = progress
     }
 
@@ -197,7 +202,15 @@ private final class ProtectedZIPProgressBridge: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         guard !cancelled else { return 1 }
-        continuation.yield(ProtectedZIPProgressEvent(completed: completed, total: total))
+        let event = ProtectedZIPProgressEvent(completed: completed, total: total)
+        if completed == 0 {
+            if !initialDelivered, initialPending == nil { initialPending = event }
+        } else if total > 0, completed >= total {
+            finalPending = event
+        } else {
+            latestIntermediate = event
+        }
+        wakeContinuation.yield(())
         return 0
     }
 
@@ -208,19 +221,27 @@ private final class ProtectedZIPProgressBridge: @unchecked Sendable {
     }
 
     func finish() {
-        continuation.finish()
+        lock.lock()
+        guard !finished else {
+            lock.unlock()
+            return
+        }
+        finished = true
+        wakeContinuation.yield(())
+        wakeContinuation.finish()
+        lock.unlock()
     }
 
     func consume() async {
         var lastDelivery: ContinuousClock.Instant?
-        for await event in stream {
-            guard event.completed <= UInt64(Int64.max), event.total <= UInt64(Int64.max) else {
+        var wakeIterator = wakeStream.makeAsyncIterator()
+        while true {
+            guard let event = nextEvent(lastDelivery: &lastDelivery) else {
+                if isDone() { return }
+                _ = await wakeIterator.next()
                 continue
             }
-            let isBoundary = event.completed == 0 || event.completed >= event.total
-            if !isBoundary,
-               let lastDelivery,
-               lastDelivery.duration(to: ContinuousClock.now) < .milliseconds(100) {
+            guard event.completed <= UInt64(Int64.max), event.total <= UInt64(Int64.max) else {
                 continue
             }
             await progress(
@@ -231,6 +252,37 @@ private final class ProtectedZIPProgressBridge: @unchecked Sendable {
             )
             lastDelivery = ContinuousClock.now
         }
+    }
+
+    private func nextEvent(lastDelivery: inout ContinuousClock.Instant?) -> ProtectedZIPProgressEvent? {
+        lock.lock()
+        defer { lock.unlock() }
+        if let initialPending {
+            self.initialPending = nil
+            initialDelivered = true
+            return initialPending
+        }
+        if finished {
+            latestIntermediate = nil
+            if let finalPending {
+                self.finalPending = nil
+                return finalPending
+            }
+            return nil
+        }
+        guard let latestIntermediate else { return nil }
+        self.latestIntermediate = nil
+        if let lastDelivery,
+           lastDelivery.duration(to: ContinuousClock.now) < .milliseconds(100) {
+            return nil
+        }
+        return latestIntermediate
+    }
+
+    private func isDone() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return finished && initialPending == nil && finalPending == nil && latestIntermediate == nil
     }
 }
 

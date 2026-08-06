@@ -9,7 +9,11 @@ let package = Package(
         .target(
             name: "EncryptedZIPCore",
             path: "Sources/EncryptedZIPCore",
-            exclude: ["vendor/minizip-ng/LICENSE"],
+            exclude: [
+                "vendor/minizip-ng/LICENSE",
+                "vendor/minizip-ng/mz_crypt.c",
+                "vendor/minizip-ng/mz_strm_wzaes.c"
+            ],
             publicHeadersPath: "include",
             cSettings: [
                 .headerSearchPath("config"),
