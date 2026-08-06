@@ -67,8 +67,10 @@ developer directory above.
 
 The full and build runs emitted the repository's known SwiftPM warning about
 11 committed ProtectedZIP fixture files being unhandled resources; no warning
-originated in the entry-count fix. No release, tag, push, DMG publication,
-Developer ID signing, or notarization action was performed.
+originated in the entry-count fix. At this historical verification checkpoint,
+no release, tag, push, DMG publication, Developer ID signing, or notarization
+action was performed. Preview 4 packaging and publication evidence is recorded
+later in the repository release checklist.
 
 ## Final review — termination-safe Quit (2026-08-06)
 

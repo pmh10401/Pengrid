@@ -2,20 +2,16 @@
 
 [한국어](user-guide.ko.md) · **English** · [README](../README.md)
 
-This guide records the historical user-visible behavior of Pengrid 1.3.0
-Developer Preview 3, including its safety boundaries and deliberately omitted
-features. The protected-ZIP section below describes a newer source-only feature;
-it is not present in that linked Preview 3 DMG.
+This guide describes the user-visible behavior of Pengrid 1.3.0 Developer
+Preview 4, including its safety boundaries and deliberately omitted features.
+Preview 4 is the first published DMG that includes the protected-ZIP feature.
 
 ## Requirements and installation
 
 Pengrid currently supports Apple Silicon Macs running macOS 15 or later.
 Download the DMG from the
-[Developer Preview 3 release](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.3),
+[Developer Preview 4 release](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.4),
 open it, and copy `Pengrid.app` to `Applications`.
-
-That v1.3 preview DMG predates the protected-ZIP source feature and must not be
-represented as containing it; build this source for the behavior in this guide.
 
 The free DMG is ad-hoc signed, not Developer ID signed, and not notarized.
 Gatekeeper may therefore block it. Pengrid does not instruct users to disable
@@ -353,7 +349,7 @@ documents.
 
 ## Current limitations
 
-Developer Preview 3 deliberately does not provide:
+Developer Preview 4 deliberately does not provide:
 
 - Intel Mac or macOS 14-and-earlier support;
 - Developer ID signing or Apple notarization;

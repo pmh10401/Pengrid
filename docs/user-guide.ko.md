@@ -2,19 +2,15 @@
 
 **한국어** · [English](user-guide.md) · [README](../README.ko.md)
 
-이 문서는 Pengrid 1.3.0 Developer Preview 3의 역사적 사용자 관점 동작, 안전
-경계와 의도적으로 제공하지 않는 기능을 기록합니다. 아래 암호 보호 ZIP 절은
-그 프리뷰 DMG에 포함되지 않은 최신 소스 전용 기능을 설명합니다.
+이 문서는 Pengrid 1.3.0 Developer Preview 4의 사용자 관점 동작, 안전 경계와
+의도적으로 제공하지 않는 기능을 설명합니다. Preview 4는 암호 보호 ZIP 기능을
+처음 포함해 배포한 DMG입니다.
 
 ## 요구 사항과 설치
 
 현재 Pengrid는 macOS 15 이상이 설치된 Apple Silicon Mac을 지원합니다.
-[Developer Preview 3 릴리스](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.3)에서
+[Developer Preview 4 릴리스](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.4)에서
 DMG를 다운로드해 열고 `Pengrid.app`을 `Applications` 폴더로 복사하세요.
-
-이 v1.3 프리뷰 DMG는 암호로 보호된 ZIP 소스 기능보다 먼저 만들어졌으며 해당
-기능이 포함된 것으로 표시해서는 안 됩니다. 이 안내서의 동작은 이 소스에서
-빌드해야 합니다.
 
 무료 DMG는 ad-hoc 방식으로 서명되었으며 Developer ID 서명과 Apple 공증을
 받지 않았습니다. 따라서 Gatekeeper가 실행을 차단할 수 있습니다. Pengrid는
@@ -339,7 +335,7 @@ Pengrid는 패널, 검색 컨트롤, 미리보기 상태, 압축 단계, 작업 
 
 ## 현재 제한 사항
 
-Developer Preview 3에서는 다음 기능을 의도적으로 제공하지 않습니다.
+Developer Preview 4에서는 다음 기능을 의도적으로 제공하지 않습니다.
 
 - Intel Mac 또는 macOS 14 이하 지원
 - Developer ID 서명 또는 Apple notarization

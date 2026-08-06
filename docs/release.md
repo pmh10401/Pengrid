@@ -6,23 +6,23 @@ Pengrid is distributed directly for Apple Silicon Macs running macOS 15 or newer
 
 ## Current published Developer Preview
 
-[Pengrid 1.3.0 Developer Preview 3](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.3)
+[Pengrid 1.3.0 Developer Preview 4](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.4)
 is the current free binary release:
 
-- DMG: [Pengrid.dmg](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.3/Pengrid.dmg)
-- Tag: `v1.3.0-developer-preview.3`
-- Candidate commit: `5ec4c8789bf7a101b2fbdfd3cb80ccbf062a3bc6`
-- App version: `1.3.0`, build `5`
+- DMG: [Pengrid.dmg](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.4/Pengrid.dmg)
+- Tag: `v1.3.0-developer-preview.4`
+- Packaged source commit: `9ae22293b498fde487f1f92ff7b05a917125621e`
+- App version: `1.3.0`, build `6`
 - Platform: Apple Silicon, macOS 15 or later
-- Automated result: 851 tests in 66 suites
+- Automated result: 1,059 tests in 77 suites
 - Packaging: release contract tests and arm64 production build passed
 - Artifact checks: app signature, DMG checksum, and mounted app build all passed
 - DMG SHA-256:
-  `1a0498c45ecc13ba57f2a4f8553ef1b0f760cca004cef2d46307780c6b29f0df`
+  `700f4dac87e07b76809d06b3ee5c237a7126550663a087ddc9a9547f9669c585`
 
-The linked v1.3 preview DMG predates the protected-ZIP source feature. It is
-not evidence that the DMG contains that feature; build this source for the
-behavior described below.
+Preview 4 is the first published Pengrid DMG that includes protected-ZIP
+creation and extraction. The exact packaged app was also installed locally as
+`/Applications/Pengrid.app`, verified as build 6, and launched successfully.
 
 This artifact is ad-hoc signed, not Developer ID signed, and not notarized.
 `spctl --assess --type execute` therefore rejects it as a Developer ID
@@ -50,9 +50,9 @@ is current and every physical-manual scenario in
 [`docs/verification/version-1.3-archive-checklist.md`](verification/version-1.3-archive-checklist.md)
 has recorded evidence.
 
-## Protected ZIP source feature boundary
+## Protected ZIP release feature boundary
 
-Source builds create password-protected ZIP files as **AES-256 only**. Reading
+Preview 4 creates password-protected ZIP files as **AES-256 only**. Reading
 accepts AES-128, AES-192, AES-256, and ZipCrypto entries when they use Store or
 Deflate and pass the current safety policy. ZIP filenames, sizes, timestamps,
 and other central-directory metadata remain visible, so encryption is not
@@ -66,8 +66,8 @@ Resource forks, ACLs, and extended attributes are not guaranteed. Finder and
 Archive Utility may not open AES ZIP files; third-party interoperability is
 represented only by automated committed fixtures, not live Finder, Archive
 Utility, Windows, or WinZip checks. 7z, RAR, and password-protected TAR are
-unsupported. Developer ID signing and notarization are unsupported and are not
-performed for this source feature.
+unsupported. Developer ID signing and notarization were not performed for this
+free Developer Preview.
 
 ## Version 1.2 release gates
 

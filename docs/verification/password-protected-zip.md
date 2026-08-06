@@ -148,7 +148,7 @@ These checks remain **NOT RUN** and are not represented as automated passes:
 - Finder/Archive Utility opening and extracting the newly created archive.
 - WinZip/Windows extraction or creation.
 - Live Google Drive or OneDrive materialization with user credentials.
-- DMG/Gatekeeper/signing or notarization behavior.
+- Fresh-download Gatekeeper, Developer ID signing, or notarization behavior.
 - Process-list inspection during password entry.
 - Performance benchmarks or large-archive throughput measurements.
 
@@ -422,8 +422,22 @@ visible ZIP names and metadata; nonpersistent passwords and retry prompts;
 Finder/Archive Utility AES caveat; fixture-only third-party evidence;
 non-guaranteed resource forks, ACLs, and xattrs; fail-closed unsafe/oversized
 input and recovery review; unsupported 7z, RAR, protected TAR, Developer ID,
-and notarization. Each guide labels the linked v1.3 preview DMG as predating
-this source feature.
+and notarization. The guides now identify Developer Preview 4 as the first
+published DMG that contains this feature while preserving Preview 3 as
+historical evidence.
+
+### Developer Preview 4 artifact verification
+
+The feature was packaged from source commit
+`9ae22293b498fde487f1f92ff7b05a917125621e` as Pengrid 1.3.0 build 6. The
+packaging run passed the full serial suite with **1,059 tests in 77 suites**,
+then produced an arm64, ad-hoc-signed app and verified DMG. Read-only mounting,
+mounted-app signature and build checks, notice byte comparison, and local
+installation and launch passed. The DMG SHA-256 is
+`700f4dac87e07b76809d06b3ee5c237a7126550663a087ddc9a9547f9669c585`.
+
+This is package-integrity evidence only. It is not Developer ID, notarization,
+fresh-download Gatekeeper, or live third-party interoperability evidence.
 
 ### Physical or external checks still NOT RUN
 
@@ -434,6 +448,6 @@ source evidence:
 - Windows or WinZip interoperability.
 - Live Google Drive or OneDrive materialization with user credentials.
 - Live VoiceOver readout and keyboard/accessibility observations.
-- DMG/Gatekeeper behavior, Developer ID signing, or notarization.
+- Fresh-download Gatekeeper behavior, Developer ID signing, or notarization.
 - Process-list inspection during password entry.
 - Performance benchmarks or large-archive throughput measurements.

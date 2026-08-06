@@ -107,6 +107,25 @@ VoiceOver checks below.
   artifact without Developer ID signing or Apple notarization. It is not a
   packaging-integrity failure and the release notes identify the limitation.
 
+- [x] **PASS — 2026-08-07 — Developer Preview 4 release candidate:** The
+  packaged source commit
+  `9ae22293b498fde487f1f92ff7b05a917125621e`, version 1.3.0 (build 6),
+  passed the full serial Swift Testing run with **1,059 tests in 77 suites**.
+  The release packaging contract suite passed, and unsigned packaging produced
+  an exactly arm64, ad-hoc-signed app plus a verified DMG.
+
+  Independent checks passed `codesign --verify --deep --strict`, `file`,
+  `lipo -archs`, `hdiutil verify`, read-only DMG mounting, mounted-app signature
+  verification, notice byte comparison, and mounted `CFBundleVersion` value
+  `6`. The 4,566,794-byte DMG SHA-256 is
+  `700f4dac87e07b76809d06b3ee5c237a7126550663a087ddc9a9547f9669c585`.
+
+  The same app was installed at `/Applications/Pengrid.app`, where its version,
+  build, signature, and arm64 executable were rechecked before a successful
+  launch. The previous build 4 install was moved to the user's Trash so it
+  remains recoverable. This local launch is not a fresh-download Gatekeeper or
+  notarization test.
+
 ## Manual verification
 
 - [ ] **NOT RUN — keyboard and menu discovery:** In an active file pane, select

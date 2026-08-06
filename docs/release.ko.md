@@ -9,22 +9,22 @@ App Sandbox entitlement를 사용하지 않습니다. 실행 파일명과 호환
 ## 현재 게시된 Developer Preview
 
 현재 무료 바이너리 릴리스는
-[Pengrid 1.3.0 Developer Preview 3](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.3)입니다.
+[Pengrid 1.3.0 Developer Preview 4](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.4)입니다.
 
-- DMG: [Pengrid.dmg](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.3/Pengrid.dmg)
-- 태그: `v1.3.0-developer-preview.3`
-- 후보 커밋: `5ec4c8789bf7a101b2fbdfd3cb80ccbf062a3bc6`
-- 앱 버전: `1.3.0`, 빌드 `5`
+- DMG: [Pengrid.dmg](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.4/Pengrid.dmg)
+- 태그: `v1.3.0-developer-preview.4`
+- 패키징한 소스 커밋: `9ae22293b498fde487f1f92ff7b05a917125621e`
+- 앱 버전: `1.3.0`, 빌드 `6`
 - 플랫폼: Apple Silicon, macOS 15 이상
-- 자동 검증: 66개 스위트의 테스트 851개 통과
+- 자동 검증: 77개 스위트의 테스트 1,059개 통과
 - 패키징: 릴리스 계약 테스트와 arm64 프로덕션 빌드 통과
 - 파일 검사: 앱 서명, DMG 체크섬 및 마운트된 앱의 빌드 번호 검증 통과
 - DMG SHA-256:
-  `1a0498c45ecc13ba57f2a4f8553ef1b0f760cca004cef2d46307780c6b29f0df`
+  `700f4dac87e07b76809d06b3ee5c237a7126550663a087ddc9a9547f9669c585`
 
-위 링크의 v1.3 프리뷰 DMG는 암호로 보호된 ZIP 소스 기능보다 먼저
-만들어졌습니다. DMG에 이 기능이 포함되었다는 증거로 사용할 수 없으며, 아래
-동작이 필요하면 이 소스에서 빌드해야 합니다.
+Preview 4는 암호 보호 ZIP 생성과 압축 해제를 처음 포함해 게시한 Pengrid
+DMG입니다. 같은 패키징 앱을 `/Applications/Pengrid.app`에 설치하고 빌드 6을
+확인한 뒤 정상적으로 실행했습니다.
 
 이 파일은 ad-hoc 방식으로 서명되었으며 Developer ID 서명과 Apple 공증을
 받지 않았습니다. 따라서 `spctl --assess --type execute`의 Developer ID
@@ -51,9 +51,9 @@ Provider, 이동식 볼륨, 대소문자 구분 볼륨, 키보드 및 접근성 
 [`docs/verification/version-1.3-archive-checklist.md`](verification/version-1.3-archive-checklist.md)에
 기록합니다.
 
-## 암호로 보호된 ZIP 소스 기능 경계
+## 암호로 보호된 ZIP 릴리스 기능 경계
 
-소스 빌드에서 만드는 암호 보호 ZIP은 **AES-256만** 사용합니다. 현재 안전
+Preview 4에서 만드는 암호 보호 ZIP은 **AES-256만** 사용합니다. 현재 안전
 정책을 통과하고 Store 또는 Deflate 방식인 항목은 AES-128, AES-192, AES-256 및
 ZipCrypto를 읽습니다. ZIP 파일명, 크기, 시각 및 중앙 디렉터리 메타데이터는
 그대로 보이므로 암호화는 파일명 개인정보 보호가 아닙니다. 암호는 저장하거나
@@ -65,8 +65,8 @@ closed로 거부합니다. 남은 임시 항목의 소유권을 증명할 수 �
 ACL 및 확장 속성은 보장하지 않습니다. Finder와 Archive Utility는 AES ZIP을
 열지 못할 수 있습니다. 타사 호환성은 커밋된 자동 fixture로만 나타내며 실제
 Finder, Archive Utility, Windows 또는 WinZip 검사를 의미하지 않습니다. 7z,
-RAR 및 암호로 보호된 TAR은 지원하지 않습니다. Developer ID 서명과 공증은 이
-소스 기능에서 지원하지 않으며 수행하지 않습니다.
+RAR 및 암호로 보호된 TAR은 지원하지 않습니다. 이 무료 Developer Preview에는
+Developer ID 서명과 공증을 수행하지 않았습니다.
 
 ## 버전 1.2 릴리스 게이트
 
