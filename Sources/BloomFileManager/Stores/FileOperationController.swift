@@ -81,6 +81,31 @@ final class FileOperationController {
     private(set) var operationHistory: [FileOperationJobSnapshot] = []
     private(set) var isPaused = false
     private(set) var isQueueBlockedByRecovery = false
+    private(set) var isTerminationPreparationActive = false
+
+    /// True only after the active operation has completed its result handling
+    /// and no operation task can still publish a cleanup/recovery outcome.
+    var isSafelyIdleForTermination: Bool {
+        !isRunning
+            && activeOperation == nil
+            && activeControl == nil
+            && operationTask == nil
+    }
+
+    /// Termination must remain blocked when a prior operation reported that
+    /// cleanup requires recovery review.
+    var hasRecoveryRequiredResultForTermination: Bool {
+        isQueueBlockedByRecovery
+            || lastResult?.outcomes.contains(where: {
+                if case .recoveryNeeded = $0 { return true }
+                return false
+            }) == true
+    }
+
+    var requiresTerminationPreparation: Bool {
+        !isSafelyIdleForTermination
+            || !pendingOperations.isEmpty
+    }
 
     var progress: FileOperationProgress? {
         guard case let .operating(progress) = stage else { return nil }
@@ -166,6 +191,26 @@ final class FileOperationController {
             Task { await activeControl.cancel() }
         }
         resolvePendingConflict(.cancel, applyToAll: false)
+    }
+
+    /// Prevents queued work from being started while AppKit is waiting for a
+    /// cancellation to unwind. The operation itself owns its cleanup and is
+    /// allowed to finish before the app receives a termination reply.
+    func beginTerminationPreparation() {
+        guard !isTerminationPreparationActive else { return }
+        isTerminationPreparationActive = true
+        cancelActiveJob()
+    }
+
+    /// Re-enables normal queue dispatch after AppKit rejects termination.
+    /// Successful termination intentionally leaves the gate closed because
+    /// the process is about to exit.
+    func finishTerminationPreparation(restartQueue: Bool) {
+        guard isTerminationPreparationActive else { return }
+        isTerminationPreparationActive = false
+        if restartQueue {
+            startNextOperationIfNeeded()
+        }
     }
 
     @discardableResult
@@ -1123,6 +1168,7 @@ final class FileOperationController {
 
     @discardableResult
     private func enqueue(_ pending: PendingFileOperation) -> Bool {
+        guard !isTerminationPreparationActive else { return false }
         if pending.requiresExclusiveQueue {
             guard activeOperation == nil, pendingOperations.isEmpty else { return false }
         } else if activeOperation?.requiresExclusiveQueue == true
@@ -1137,6 +1183,7 @@ final class FileOperationController {
 
     private func startNextOperationIfNeeded() {
         guard activeOperation == nil,
+              !isTerminationPreparationActive,
               !isQueueBlockedByRecovery,
               !pendingOperations.isEmpty
         else { return }

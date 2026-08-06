@@ -1539,3 +1539,25 @@ descriptor ownership, path normalization, link topology, byte accounting,
 observable redaction, ordinary-archive regressions, license packaging, and the
 verification record before the branch is considered ready for a separate
 release task.
+
+## Final review progress — termination-safe Quit (2026-08-06)
+
+- [x] Register the app's shared operation controller and password prompt
+  coordinator with an AppKit termination coordinator.
+- [x] Gate new work while Quit preparation is active; cancel active work and
+  pending prompts; wait for operation and protected-staging cleanup before
+  replying.
+- [x] Reply `false` exactly once on the bounded timeout or recovery-required
+  result, then clear the gate and resume the queue; keep a successful reply
+  one-shot for the terminating process.
+- [x] Add focused unit coverage for idle, active, prompt, timeout, recovery,
+  cancellation, re-entrant Quit, and a real protected extraction that has
+  already written plaintext to private staging.
+- [x] Capture mutation evidence showing that an immediate reply leaves the
+  controller running and plaintext/staging residue behind; restore the
+  production wait gate before the final green run.
+- [x] Append the command, result count, and mutation details to
+  `docs/verification/2026-08-06-password-protected-zip.md`.
+
+The broad repository test/build matrix and the final independent review remain
+the parent task's integration gates.

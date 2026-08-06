@@ -102,11 +102,12 @@ struct BloomFileManagerApp: App {
         let archiveService = operationService.makeRoutingArchiveOperationService(
             passwordProvider: passwordCoordinator
         )
-        _operationController = State(initialValue: FileOperationController(
+        let operationController = FileOperationController(
             service: operationService,
             materializer: cloudDependencies.materializer,
             archiveService: archiveService
-        ))
+        )
+        _operationController = State(initialValue: operationController)
         _smartSearch = State(initialValue: SmartSearchStore(
             service: LocalSmartSearchService(
                 fileSystem: cloudDependencies.fileSystem,
@@ -182,6 +183,13 @@ struct BloomFileManagerApp: App {
         )
         previewCloseBinding.previewCoordinator = previewCoordinator
         _previewCoordinator = State(initialValue: previewCoordinator)
+
+        // Register the exact controller/coordinator instances before the
+        // SwiftUI scene can dispatch any user work or AppKit Quit requests.
+        appDelegate.configureTermination(
+            operationController: operationController,
+            passwordCoordinator: passwordCoordinator
+        )
     }
 
     var body: some Scene {

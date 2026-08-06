@@ -69,3 +69,49 @@ The full and build runs emitted the repository's known SwiftPM warning about
 11 committed ProtectedZIP fixture files being unhandled resources; no warning
 originated in the entry-count fix. No release, tag, push, DMG publication,
 Developer ID signing, or notarization action was performed.
+
+## Final review — termination-safe Quit (2026-08-06)
+
+The application lifecycle now registers the same `FileOperationController` and
+`ArchivePasswordPromptCoordinator` instances used by the SwiftUI scene with an
+AppKit termination coordinator. A normal Quit request enters a one-shot
+preparation gate, cancels active work and any password prompt, and returns
+`.terminateLater`. The coordinator replies only after the controller is idle,
+private staging cleanup has completed, and no recovery-required result remains;
+it replies `false` on the bounded timeout or recovery path and allows the queue
+to resume. Re-entrant Quit requests do not create duplicate preparation tasks
+or replies.
+
+The focused lifecycle command passed all eight tests:
+
+```text
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+  swift test --disable-sandbox --no-parallel \
+  --scratch-path /tmp/pengrid-termination-green \
+  --filter ApplicationTerminationTests
+```
+
+Result: 8 tests in 1 suite passed. The load-bearing protected-extraction test
+uses the real `FileOperationController`, routing service, protected operation
+service, and live filesystem. Its test engine writes plaintext into the private
+`.bloom-staging-*` destination and then blocks. Quit returned `.terminateLater`
+with no reply while that plaintext was present; releasing the gate allowed
+cancellation and deferred cleanup to finish, after which exactly one `true`
+reply was observed and both staging and public-destination residue were absent.
+
+Mutation evidence was captured and reverted. The coordinator's non-idle wait
+branch was temporarily changed to reply `true` immediately, then the gated
+test was run with:
+
+```text
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+  swift test --disable-sandbox --no-parallel \
+  --scratch-path /tmp/pengrid-termination-mutation2 \
+  --filter 'ApplicationTerminationTests/protectedExtractionQuitWaitsForPlaintextStagingCleanup'
+```
+
+The mutation failed as intended: the test observed an unexpected early
+`[true]` reply and then found the controller still running with archive staging
+and plaintext descendants remaining (four failed expectations at lines 243 and
+251–253 of `ApplicationTerminationTests.swift`). Restoring the wait gate
+returned the focused suite to green.
