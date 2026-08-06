@@ -107,7 +107,8 @@ struct ArchivePasswordSheet: View {
         let passwordIdentifier: String
         let confirmationLabel: String
         let confirmationIdentifier: String
-        let validationLabel: String
+        let priorAttemptMessage: String
+        let currentValidationMessage: String?
         let validationIdentifier: String
         let cancelLabel: String
         let cancelIdentifier: String
@@ -117,7 +118,9 @@ struct ArchivePasswordSheet: View {
 
         init(
             request: ArchivePasswordRequest,
-            presentation: Presentation
+            presentation: Presentation,
+            currentValidationError: ArchivePasswordValidationError? = nil,
+            locale: Locale = .current
         ) {
             containerLabel = presentation.accessibilityLabel
             containerIdentifier = AccessibilityIdentifiers.archivePasswordSheet
@@ -125,9 +128,10 @@ struct ArchivePasswordSheet: View {
             passwordIdentifier = AccessibilityIdentifiers.archivePasswordField
             confirmationLabel = presentation.confirmationLabel
             confirmationIdentifier = AccessibilityIdentifiers.archivePasswordConfirmationField
-            validationLabel = request.previousAttemptFailed
-                ? presentation.genericDamageError
-                : "Validation"
+            priorAttemptMessage = presentation.genericDamageError
+            currentValidationMessage = currentValidationError.map {
+                ProtectedZIPStrings.passwordValidationMessage(for: $0, locale: locale)
+            }
             validationIdentifier = AccessibilityIdentifiers.archivePasswordValidation
             cancelLabel = presentation.cancelLabel
             cancelIdentifier = AccessibilityIdentifiers.archivePasswordCancel
@@ -215,7 +219,12 @@ struct ArchivePasswordSheet: View {
 
     var body: some View {
         let copy = Self.presentation(for: request)
-        let accessibility = AccessibilityProjection(request: request, presentation: copy)
+        let currentValidationError = coordinator.validationError
+        let accessibility = AccessibilityProjection(
+            request: request,
+            presentation: copy,
+            currentValidationError: currentValidationError
+        )
 
         VStack(alignment: .leading, spacing: 14) {
             Text(copy.title)
@@ -259,15 +268,16 @@ struct ArchivePasswordSheet: View {
                 Text(copy.genericDamageError)
                     .font(.callout)
                     .foregroundStyle(.red)
-                    .accessibilityLabel(accessibility.validationLabel)
+                    .accessibilityLabel(accessibility.priorAttemptMessage)
                     .accessibilityIdentifier(accessibility.validationIdentifier)
             }
 
-            if let validationError = coordinator.validationError {
-                Text(ProtectedZIPStrings.passwordValidationMessage(for: validationError))
+            if currentValidationError != nil,
+               let currentValidationMessage = accessibility.currentValidationMessage {
+                Text(currentValidationMessage)
                     .font(.callout)
                     .foregroundStyle(.red)
-                    .accessibilityLabel(accessibility.validationLabel)
+                    .accessibilityLabel(currentValidationMessage)
                     .accessibilityIdentifier(accessibility.validationIdentifier)
             }
 

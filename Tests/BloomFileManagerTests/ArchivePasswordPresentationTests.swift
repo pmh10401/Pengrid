@@ -234,6 +234,41 @@ struct ArchivePasswordPresentationTests {
         #expect(projection.cancelIdentifier == AccessibilityIdentifiers.archivePasswordCancel)
     }
 
+    @Test func accessibilityProjectionSeparatesPriorAndCurrentValidationInEnglishAndKorean() {
+        let errors: [ArchivePasswordValidationError] = [
+            .tooShort,
+            .containsNull,
+            .confirmationMismatch
+        ]
+        for locale in [Locale(identifier: "en"), Locale(identifier: "ko")] {
+            let request = ArchivePasswordRequest(
+                id: UUID(),
+                purpose: .createAES256,
+                archiveBasename: "Archive.zip",
+                previousAttemptFailed: true
+            )
+            let presentation = ArchivePasswordSheet.presentation(for: request, locale: locale)
+            let priorMessage = presentation.genericDamageError
+            for error in errors {
+                let projection = ArchivePasswordSheet.AccessibilityProjection(
+                    request: request,
+                    presentation: presentation,
+                    currentValidationError: error,
+                    locale: locale
+                )
+                let currentMessage = ProtectedZIPStrings.passwordValidationMessage(
+                    for: error,
+                    locale: locale
+                )
+                #expect(projection.priorAttemptMessage == priorMessage)
+                #expect(projection.currentValidationMessage == currentMessage)
+                #expect(projection.priorAttemptMessage != projection.currentValidationMessage)
+                #expect(projection.currentValidationMessage?.contains("Validation") == false)
+                #expect(projection.validationIdentifier == AccessibilityIdentifiers.archivePasswordValidation)
+            }
+        }
+    }
+
     @Test func presentationAndAccessibilityNeverReflectFormSentinel() {
         let request = ArchivePasswordRequest(
             id: UUID(),
@@ -270,7 +305,9 @@ struct ArchivePasswordPresentationTests {
         #expect(source.contains("confirmation = \"\""))
         #expect(source.contains("requestID: request.id"))
         #expect(source.contains("if let aesWarning = copy.aesWarning"))
-        #expect(source.contains("AccessibilityProjection(request: request, presentation: copy)"))
+        #expect(source.contains("AccessibilityProjection("))
+        #expect(source.contains("priorAttemptMessage"))
+        #expect(source.contains("currentValidationMessage"))
         #expect(source.contains("submitFromKeyboard()"))
         #expect(source.contains("submit(using:"))
         #expect(source.contains("cancel(using:"))
