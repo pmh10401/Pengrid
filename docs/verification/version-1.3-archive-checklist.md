@@ -221,6 +221,20 @@ VoiceOver checks below.
   `v1.3.0-developer-preview.3` prerelease with its trust warning and verified
   SHA-256 digest.
 
+- [x] **PASS — 2026-08-07 — Developer Preview 4 publication:** GitHub
+  published `v1.3.0-developer-preview.4` from merge commit
+  `8ff90a12f492b84c8be52628a75f636c343c3ca1` as a non-draft prerelease. Its
+  `Pengrid.dmg` asset is 4,566,794 bytes and GitHub reports digest
+  `sha256:700f4dac87e07b76809d06b3ee5c237a7126550663a087ddc9a9547f9669c585`,
+  matching the packaged candidate. A separate unauthenticated download from
+  the public release URL matched the local DMG byte-for-byte and passed
+  `hdiutil verify`.
+
+  The release title and bilingual notes explicitly identify the app as an
+  ad-hoc-signed, non-notarized Developer Preview and preserve the remaining
+  manual interoperability, File Provider, accessibility, Gatekeeper, signing,
+  notarization, and performance checks as not run.
+
 - [ ] **NOT RUN — physical-manual and signed-distribution gates:** Record dated
   `PASS`/`FAIL` evidence for every manual item above against the exact
   candidate before treating all ZIP and TAR-family behavior as physically

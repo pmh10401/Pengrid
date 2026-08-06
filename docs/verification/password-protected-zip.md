@@ -439,6 +439,13 @@ installation and launch passed. The DMG SHA-256 is
 This is package-integrity evidence only. It is not Developer ID, notarization,
 fresh-download Gatekeeper, or live third-party interoperability evidence.
 
+GitHub subsequently published the same bytes as the non-draft prerelease
+`v1.3.0-developer-preview.4` from merge commit
+`8ff90a12f492b84c8be52628a75f636c343c3ca1`. GitHub's asset digest matched the
+local SHA-256, and an unauthenticated public download compared byte-for-byte
+equal and passed `hdiutil verify`. This publication check does not change the
+manual and signed-distribution limits below.
+
 ### Physical or external checks still NOT RUN
 
 These checks remain **NOT RUN** and are not implied by the package fixture or

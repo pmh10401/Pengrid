@@ -16,7 +16,8 @@ is the current free binary release:
 - Platform: Apple Silicon, macOS 15 or later
 - Automated result: 1,059 tests in 77 suites
 - Packaging: release contract tests and arm64 production build passed
-- Artifact checks: app signature, DMG checksum, and mounted app build all passed
+- Artifact checks: app signature, DMG checksum, mounted app build, GitHub asset
+  digest, and byte-for-byte public redownload all passed
 - DMG SHA-256:
   `700f4dac87e07b76809d06b3ee5c237a7126550663a087ddc9a9547f9669c585`
 
