@@ -29,6 +29,13 @@ typedef struct {
 #define PENGRID_ZIP_STATUS_INTERNAL_ERROR     (-2004)
 #define PENGRID_ZIP_STATUS_CANCELLED          (-2005)
 #define PENGRID_ZIP_STATUS_UNSUPPORTED_ENTRY  (-2006)
+#define PENGRID_ZIP_STATUS_UNSUPPORTED_COMPRESSION (-2007)
+#define PENGRID_ZIP_STATUS_WRONG_PASSWORD_OR_DAMAGE (-2008)
+#define PENGRID_ZIP_STATUS_CAPACITY           (-2009)
+#define PENGRID_ZIP_STATUS_OUTPUT_BUDGET      (-2010)
+#define PENGRID_ZIP_STATUS_IDENTITY_CHANGED   (-2011)
+#define PENGRID_ZIP_STATUS_UNSUPPORTED_ENCRYPTION (-2012)
+#define PENGRID_ZIP_STATUS_RECOVERY_REQUIRED  (-2013)
 
 /* Short aliases are retained for C clients that prefer unqualified statuses. */
 #define PENGRID_ZIP_OK                  PENGRID_ZIP_STATUS_OK
@@ -40,6 +47,12 @@ typedef struct {
 
 int32_t pengrid_zip_inspect_fd(int archive_fd, pengrid_zip_inspection_t *result);
 
+typedef struct {
+    uint64_t maximum_entry_count;
+    uint64_t maximum_output_bytes;
+    uint64_t capacity_reserve_bytes;
+} pengrid_zip_limits_t;
+
 typedef int32_t (*pengrid_zip_progress_callback)(
     uint64_t completed,
     uint64_t total,
@@ -50,6 +63,21 @@ int32_t pengrid_zip_create_aes256(
     int destination_fd,
     const uint8_t *password,
     size_t password_length,
+    pengrid_zip_progress_callback progress,
+    void *progress_context);
+
+int32_t pengrid_zip_preflight_fd(
+    int archive_fd,
+    int destination_probe_root_fd,
+    pengrid_zip_limits_t limits,
+    pengrid_zip_inspection_t *inspection);
+
+int32_t pengrid_zip_extract(
+    int archive_fd,
+    int destination_root_fd,
+    const uint8_t *password,
+    size_t password_length,
+    pengrid_zip_limits_t limits,
     pengrid_zip_progress_callback progress,
     void *progress_context);
 

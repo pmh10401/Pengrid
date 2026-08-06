@@ -67,10 +67,30 @@ actor LiveProtectedZIPEngine: ProtectedZIPEngine {
         destinationProbeRoot: OpenedEmptyFileSystemItem,
         limits: ProtectedZIPLimits
     ) async throws -> ProtectedZIPInspection {
-        MZUnused(archive)
-        MZUnused(destinationProbeRoot)
-        MZUnused(limits)
-        throw ProtectedZIPError.unsupportedEncryption
+        try Task.checkCancellation()
+        let nativeLimits = try Self.nativeLimits(from: limits)
+        let task = Task.detached(priority: .utility) { () throws -> ProtectedZIPInspection in
+            try archive.withUnsafeDescriptor { archiveDescriptor in
+                var inspection = pengrid_zip_inspection_t()
+                let status = pengrid_zip_preflight_fd(
+                    archiveDescriptor,
+                    destinationProbeRoot.descriptor,
+                    nativeLimits,
+                    &inspection
+                )
+                guard status == PENGRID_ZIP_STATUS_OK else {
+                    throw LiveProtectedZIPEngine.error(for: status)
+                }
+                return try LiveProtectedZIPEngine.inspection(from: inspection)
+            }
+        }
+        let result = try await withTaskCancellationHandler(operation: {
+            try await task.value
+        }, onCancel: {
+            task.cancel()
+        })
+        try Task.checkCancellation()
+        return result
     }
 
     func createAES256(
@@ -116,13 +136,21 @@ actor LiveProtectedZIPEngine: ProtectedZIPEngine {
                 bridge.cancel()
                 task.cancel()
             })
+        } catch is CancellationError {
+            bridge.finish()
+            _ = await deliveryTask.value
+            throw ProtectedZIPError.cancelled
         } catch {
             bridge.finish()
             _ = await deliveryTask.value
             throw error
         }
         _ = await deliveryTask.value
-        try Task.checkCancellation()
+        do {
+            try Task.checkCancellation()
+        } catch {
+            throw ProtectedZIPError.cancelled
+        }
     }
 
     func extract(
@@ -132,13 +160,90 @@ actor LiveProtectedZIPEngine: ProtectedZIPEngine {
         limits: ProtectedZIPLimits,
         progress: @escaping @Sendable (ProtectedZIPProgress) async -> Void
     ) async throws {
-        MZUnused(archive)
-        MZUnused(destinationRoot)
-        MZUnused(limits)
-        MZUnused(progress)
         defer { password.invalidate() }
         try Task.checkCancellation()
-        throw ProtectedZIPError.unsupportedEncryption
+        let nativeLimits = try Self.nativeLimits(from: limits)
+        let bridge = ProtectedZIPProgressBridge(progress: progress)
+        let deliveryTask = Task {
+            await bridge.consume()
+        }
+        let task = Task.detached(priority: .utility) { () throws -> Void in
+            defer { bridge.finish() }
+            try archive.withUnsafeDescriptor { archiveDescriptor in
+                try password.withUnsafeBytes { secretBytes in
+                    guard let baseAddress = secretBytes.baseAddress else {
+                        throw ProtectedZIPError.invalidPasswordInput
+                    }
+                    let status = pengrid_zip_extract(
+                        archiveDescriptor,
+                        destinationRoot.descriptor,
+                        baseAddress.assumingMemoryBound(to: UInt8.self),
+                        secretBytes.count,
+                        nativeLimits,
+                        protectedZIPProgressCallback,
+                        Unmanaged.passUnretained(bridge).toOpaque()
+                    )
+                    guard status == PENGRID_ZIP_STATUS_OK else {
+                        throw LiveProtectedZIPEngine.error(for: status)
+                    }
+                }
+            }
+        }
+        do {
+            try await withTaskCancellationHandler(operation: {
+                try await task.value
+            }, onCancel: {
+                bridge.cancel()
+                task.cancel()
+            })
+        } catch is CancellationError {
+            bridge.finish()
+            _ = await deliveryTask.value
+            throw ProtectedZIPError.cancelled
+        } catch {
+            bridge.finish()
+            _ = await deliveryTask.value
+            throw error
+        }
+        _ = await deliveryTask.value
+        do {
+            try Task.checkCancellation()
+        } catch {
+            throw ProtectedZIPError.cancelled
+        }
+    }
+
+    private static func nativeLimits(from limits: ProtectedZIPLimits) throws -> pengrid_zip_limits_t {
+        guard limits.maximumOutputByteCount >= 0 else {
+            throw ProtectedZIPError.outputBudgetOverflow
+        }
+        guard limits.capacityReserveByteCount >= 0 else {
+            throw ProtectedZIPError.insufficientCapacity
+        }
+        guard let maximumOutput = UInt64(exactly: limits.maximumOutputByteCount),
+              let capacityReserve = UInt64(exactly: limits.capacityReserveByteCount) else {
+            throw ProtectedZIPError.outputBudgetOverflow
+        }
+        return pengrid_zip_limits_t(
+            maximum_entry_count: UInt64(ProtectedZIPLimits.maximumEntryCount),
+            maximum_output_bytes: maximumOutput,
+            capacity_reserve_bytes: capacityReserve
+        )
+    }
+
+    private static func inspection(from native: pengrid_zip_inspection_t) throws -> ProtectedZIPInspection {
+        guard native.entry_count <= UInt64(Int.max),
+              native.total_uncompressed_bytes <= UInt64(Int64.max) else {
+            throw ProtectedZIPError.entryCountOverflow
+        }
+        return ProtectedZIPInspection(
+            entryCount: Int(native.entry_count),
+            totalUncompressedByteCount: Int64(native.total_uncompressed_bytes),
+            hasEncryptedEntries: native.has_encrypted_entries != 0,
+            hasUnsupportedEncryption: native.has_unsupported_encryption != 0,
+            hasUnsupportedCompression: native.has_unsupported_compression != 0,
+            strongestAESStrength: LiveProtectedZIPEngine.aesBits(native.strongest_aes_strength)
+        )
     }
 
     private static func aesBits(_ strength: UInt8) -> Int {
@@ -164,6 +269,20 @@ actor LiveProtectedZIPEngine: ProtectedZIPEngine {
             return .cancelled
         case PENGRID_ZIP_STATUS_UNSUPPORTED_ENTRY:
             return .unsafeEntry
+        case PENGRID_ZIP_STATUS_UNSUPPORTED_COMPRESSION:
+            return .unsupportedCompression
+        case PENGRID_ZIP_STATUS_WRONG_PASSWORD_OR_DAMAGE:
+            return .incorrectPasswordOrDamagedData
+        case PENGRID_ZIP_STATUS_CAPACITY:
+            return .insufficientCapacity
+        case PENGRID_ZIP_STATUS_OUTPUT_BUDGET:
+            return .outputBudgetOverflow
+        case PENGRID_ZIP_STATUS_IDENTITY_CHANGED:
+            return .identityChanged
+        case PENGRID_ZIP_STATUS_UNSUPPORTED_ENCRYPTION:
+            return .unsupportedEncryption
+        case PENGRID_ZIP_STATUS_RECOVERY_REQUIRED:
+            return .recoveryRequired
         default:
             return .engineSetupFailed
         }

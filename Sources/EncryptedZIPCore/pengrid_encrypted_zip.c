@@ -4,6 +4,7 @@
 #include "mz_strm.h"
 #include "mz_zip.h"
 #include "pengrid_fd_stream.h"
+#include "pengrid_zip_reader.h"
 
 #include <limits.h>
 #include <string.h>
