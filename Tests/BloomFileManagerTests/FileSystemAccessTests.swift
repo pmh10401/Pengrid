@@ -502,4 +502,70 @@ struct FileSystemAccessTests {
         try await fileSystem.move(resultingURL, identifiedBy: identity, to: source)
         #expect(try await fileSystem.identity(of: source) == identity)
     }
+
+    @Test func openItemRetainsAnIdentityMatchedDescriptorUntilExplicitClose() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let source = root.url.appending(path: "archive.zip")
+        try Data("archive".utf8).write(to: source)
+
+        let fileSystem = LiveFileSystemAccess()
+        let identity = try #require(await fileSystem.identity(of: source))
+        let item = try await fileSystem.openItem(
+            source,
+            kind: .regularFile,
+            identifiedBy: identity
+        )
+        let descriptor = try item.withUnsafeDescriptor { descriptor in
+            #expect(Darwin.fcntl(descriptor, F_GETFD) >= 0)
+            return descriptor
+        }
+        #expect(Darwin.fcntl(descriptor, F_GETFD) >= 0)
+
+        item.close()
+        #expect(Darwin.fcntl(descriptor, F_GETFD) == -1)
+        item.close()
+    }
+
+    @Test func openItemClosesItsDescriptorWhenTheOwnerIsReleased() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let source = root.url.appending(path: "archive.zip")
+        try Data("archive".utf8).write(to: source)
+
+        let fileSystem = LiveFileSystemAccess()
+        let identity = try #require(await fileSystem.identity(of: source))
+        var descriptor: Int32?
+        do {
+            let item = try await fileSystem.openItem(
+                source,
+                kind: .regularFile,
+                identifiedBy: identity
+            )
+            descriptor = try item.withUnsafeDescriptor { $0 }
+            #expect(Darwin.fcntl(try #require(descriptor), F_GETFD) >= 0)
+        }
+
+        #expect(Darwin.fcntl(try #require(descriptor), F_GETFD) == -1)
+    }
+
+    @Test func openItemRejectsAReplacementWithADifferentIdentity() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let original = root.url.appending(path: "original.zip")
+        let replacement = root.url.appending(path: "replacement.zip")
+        try Data("original".utf8).write(to: original)
+        try Data("replacement".utf8).write(to: replacement)
+
+        let fileSystem = LiveFileSystemAccess()
+        let expectedIdentity = try #require(await fileSystem.identity(of: original))
+
+        await #expect(throws: FileSystemAccessError.identityMismatch(replacement)) {
+            _ = try await fileSystem.openItem(
+                replacement,
+                kind: .regularFile,
+                identifiedBy: expectedIdentity
+            )
+        }
+    }
 }
