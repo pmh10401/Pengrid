@@ -16,6 +16,8 @@ enum RawZIPFixtureBuilder {
         var declaredCompressedSize: UInt64?
         var declaredUncompressedSize: UInt64?
         var extraField: [UInt8] = []
+        var dosTime: UInt16 = 0
+        var dosDate: UInt16 = 0
 
         init(
             nameBytes: [UInt8],
@@ -27,7 +29,9 @@ enum RawZIPFixtureBuilder {
             externalAttributes: UInt32 = 0,
             declaredCompressedSize: UInt64? = nil,
             declaredUncompressedSize: UInt64? = nil,
-            extraField: [UInt8] = []
+            extraField: [UInt8] = [],
+            dosTime: UInt16 = 0,
+            dosDate: UInt16 = 0
         ) {
             self.nameBytes = nameBytes
             self.bytes = bytes
@@ -39,6 +43,8 @@ enum RawZIPFixtureBuilder {
             self.declaredCompressedSize = declaredCompressedSize
             self.declaredUncompressedSize = declaredUncompressedSize
             self.extraField = extraField
+            self.dosTime = dosTime
+            self.dosDate = dosDate
         }
 
         static func regular(
@@ -71,17 +77,21 @@ enum RawZIPFixtureBuilder {
         }
 
         static func symlink(name: String, target: String) -> Self {
+            return symlink(name: name, targetBytes: Array(target.utf8))
+        }
+
+        static func symlink(name: String, targetBytes: [UInt8]) -> Self {
             var unixExtra: [UInt8] = []
             appendUInt16(&unixExtra, 0x000D)
-            appendUInt16(&unixExtra, UInt16(clamping: 12 + target.utf8.count))
+            appendUInt16(&unixExtra, UInt16(clamping: 12 + targetBytes.count))
             appendUInt32(&unixExtra, 0)
             appendUInt32(&unixExtra, 0)
             appendUInt16(&unixExtra, 0)
             appendUInt16(&unixExtra, 0)
-            unixExtra.append(contentsOf: target.utf8)
+            unixExtra.append(contentsOf: targetBytes)
             return Self(
                 nameBytes: Array(name.utf8),
-                bytes: Array(target.utf8),
+                bytes: targetBytes,
                 externalAttributes: (UInt32(S_IFLNK | 0o777) << 16),
                 extraField: unixExtra
             )
@@ -94,10 +104,38 @@ enum RawZIPFixtureBuilder {
                 externalAttributes: (UInt32(S_IFIFO | 0o600) << 16)
             )
         }
+
+        static func blockDevice(name: String) -> Self {
+            Self(
+                nameBytes: Array(name.utf8),
+                bytes: [],
+                externalAttributes: (UInt32(S_IFBLK | 0o600) << 16)
+            )
+        }
+
+        static func socket(name: String) -> Self {
+            Self(
+                nameBytes: Array(name.utf8),
+                bytes: [],
+                externalAttributes: (UInt32(S_IFSOCK | 0o600) << 16)
+            )
+        }
     }
 
     static func entry(name: String, bytes: [UInt8]) throws -> Data {
         archive(entries: [.regular(name: name, bytes: bytes)])
+    }
+
+    static func unixSymlinkExtra(targetBytes: [UInt8]) -> [UInt8] {
+        var unixExtra: [UInt8] = []
+        appendUInt16(&unixExtra, 0x000D)
+        appendUInt16(&unixExtra, UInt16(clamping: 12 + targetBytes.count))
+        appendUInt32(&unixExtra, 0)
+        appendUInt32(&unixExtra, 0)
+        appendUInt16(&unixExtra, 0)
+        appendUInt16(&unixExtra, 0)
+        unixExtra.append(contentsOf: targetBytes)
+        return unixExtra
     }
 
     static func archive(entries: [Entry]) -> Data {
@@ -126,8 +164,8 @@ enum RawZIPFixtureBuilder {
             appendUInt16(&localAndCentral, entry.versionNeeded)
             appendUInt16(&localAndCentral, entry.flags)
             appendUInt16(&localAndCentral, entry.compressionMethod)
-            appendUInt16(&localAndCentral, 0)
-            appendUInt16(&localAndCentral, 0)
+            appendUInt16(&localAndCentral, entry.dosTime)
+            appendUInt16(&localAndCentral, entry.dosDate)
             appendUInt32(&localAndCentral, crc32(entry.bytes))
             appendUInt32(&localAndCentral, localCompressed32)
             appendUInt32(&localAndCentral, localUncompressed32)
@@ -150,8 +188,8 @@ enum RawZIPFixtureBuilder {
             appendUInt16(&centralDirectory, entry.versionNeeded)
             appendUInt16(&centralDirectory, entry.flags)
             appendUInt16(&centralDirectory, entry.compressionMethod)
-            appendUInt16(&centralDirectory, 0)
-            appendUInt16(&centralDirectory, 0)
+            appendUInt16(&centralDirectory, entry.dosTime)
+            appendUInt16(&centralDirectory, entry.dosDate)
             appendUInt32(&centralDirectory, crc32(entry.bytes))
             appendUInt32(&centralDirectory, centralCompressed32)
             appendUInt32(&centralDirectory, centralUncompressed32)

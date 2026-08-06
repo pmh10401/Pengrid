@@ -35,6 +35,9 @@ typedef struct pengrid_reader_entry_s {
     uint8_t is_directory;
     uint8_t is_symlink;
     uint8_t is_encrypted;
+    uint8_t has_mode;
+    mode_t mode;
+    time_t modified_date;
 } pengrid_reader_entry;
 
 typedef struct pengrid_reader_entry_list_s {
@@ -107,7 +110,10 @@ static int32_t pengrid_reader_entry_list_append(
     uint64_t compressed_size,
     uint8_t is_directory,
     uint8_t is_symlink,
-    uint8_t is_encrypted) {
+    uint8_t is_encrypted,
+    uint8_t has_mode,
+    mode_t mode,
+    time_t modified_date) {
     pengrid_reader_entry *grown;
     if (list->count == list->capacity) {
         size_t next = list->capacity == 0 ? 32 : list->capacity * 2;
@@ -136,6 +142,9 @@ static int32_t pengrid_reader_entry_list_append(
     list->entries[list->count].is_directory = is_directory;
     list->entries[list->count].is_symlink = is_symlink;
     list->entries[list->count].is_encrypted = is_encrypted;
+    list->entries[list->count].has_mode = has_mode;
+    list->entries[list->count].mode = mode;
+    list->entries[list->count].modified_date = modified_date;
     list->count += 1;
     return PENGRID_ZIP_STATUS_OK;
 }
@@ -219,6 +228,7 @@ static int32_t pengrid_reader_copy_link_payload(
     void *zip,
     const mz_zip_file *info,
     char **target_out,
+    uint64_t *payload_length_out,
     uint8_t extracting,
     const char *password) {
     uint8_t buffer[PENGRID_ZIP_MAX_LINK_TARGET + 1];
@@ -226,16 +236,12 @@ static int32_t pengrid_reader_copy_link_payload(
     int32_t read_count;
     size_t total = 0;
 
+    if (!target_out || !payload_length_out)
+        return PENGRID_ZIP_STATUS_INVALID_ARGUMENT;
     *target_out = NULL;
-    if (!extracting && info->linkname && info->linkname[0] != '\0') {
-        *target_out = strdup(info->linkname);
-        return *target_out ? PENGRID_ZIP_STATUS_OK : PENGRID_ZIP_STATUS_INTERNAL_ERROR;
-    }
-    if (!extracting && (info->flag & MZ_ZIP_FLAG_ENCRYPTED)) {
-        /* Encrypted symlink payloads are authenticated during extraction; the
-           writer's UNIX1 extra field normally gives preflight the target. */
-        return PENGRID_ZIP_STATUS_OK;
-    }
+    *payload_length_out = 0;
+    if (!extracting)
+        return PENGRID_ZIP_STATUS_UNSUPPORTED_ENTRY;
     status = mz_zip_entry_read_open(zip, 0, password);
     if (status != MZ_OK)
         return pengrid_reader_map_status(status, extracting);
@@ -263,6 +269,7 @@ static int32_t pengrid_reader_copy_link_payload(
                           : PENGRID_ZIP_STATUS_MALFORMED_ARCHIVE;
     buffer[total] = '\0';
     *target_out = strdup((const char *)buffer);
+    *payload_length_out = (uint64_t)total;
     return *target_out ? PENGRID_ZIP_STATUS_OK : PENGRID_ZIP_STATUS_INTERNAL_ERROR;
 }
 
@@ -329,6 +336,8 @@ static int32_t pengrid_reader_collect_entries(
         uint8_t is_symlink;
         uint8_t encrypted;
         uint32_t posix_attributes = 0;
+        mode_t sanitized_mode = 0;
+        uint8_t has_mode = 0;
         int32_t limit_status;
 
         if (list->count >= pengrid_reader_max_entries(limits))
@@ -341,7 +350,9 @@ static int32_t pengrid_reader_collect_entries(
             return PENGRID_ZIP_STATUS_MALFORMED_ARCHIVE;
         uncompressed_size = (uint64_t)info->uncompressed_size;
         compressed_size = (uint64_t)info->compressed_size;
-        if (list->total_uncompressed > UINT64_MAX - uncompressed_size)
+        if (uncompressed_size > (uint64_t)INT64_MAX ||
+            list->total_uncompressed > UINT64_MAX - uncompressed_size ||
+            list->total_uncompressed > (uint64_t)INT64_MAX - uncompressed_size)
             return PENGRID_ZIP_STATUS_OVERFLOW;
         if (list->total_uncompressed + uncompressed_size > limits.maximum_output_bytes)
             return PENGRID_ZIP_STATUS_OUTPUT_BUDGET;
@@ -391,6 +402,10 @@ static int32_t pengrid_reader_collect_entries(
                 free(normalized);
                 return PENGRID_ZIP_STATUS_UNSUPPORTED_ENTRY;
             }
+            if (posix_attributes != 0) {
+                sanitized_mode = (mode_t)(posix_attributes & 0777);
+                has_mode = 1;
+            }
         }
         if (is_symlink) {
             limit_status = pengrid_reader_validate_metadata_link(info);
@@ -398,11 +413,17 @@ static int32_t pengrid_reader_collect_entries(
                 free(normalized);
                 return limit_status;
             }
-            limit_status = pengrid_reader_copy_link_payload(zip, info, &linkname, extracting, NULL);
-            if (limit_status != PENGRID_ZIP_STATUS_OK) {
+            /* The central directory must carry the target. Preflight is a
+               metadata-only gate and never opens the entry payload, including
+               encrypted entries. */
+            if (!info->linkname || info->linkname[0] == '\0') {
                 free(normalized);
-                free(linkname);
-                return limit_status;
+                return PENGRID_ZIP_STATUS_UNSUPPORTED_ENTRY;
+            }
+            linkname = strdup(info->linkname);
+            if (!linkname) {
+                free(normalized);
+                return PENGRID_ZIP_STATUS_INTERNAL_ERROR;
             }
             if (linkname) {
                 char *parent_path = pengrid_reader_link_parent(normalized);
@@ -432,7 +453,10 @@ static int32_t pengrid_reader_collect_entries(
             compressed_size,
             is_directory,
             is_symlink,
-            encrypted
+            encrypted,
+            has_mode,
+            sanitized_mode,
+            info->modified_date
         );
         free(normalized);
         free(linkname);
@@ -461,7 +485,9 @@ static int32_t pengrid_reader_collect_entries(
 static int32_t pengrid_reader_probe_entries(
     int root_fd,
     const pengrid_reader_entry_list *list,
-    pengrid_root_created_list *created) {
+    pengrid_root_created_list *created,
+    dev_t root_device,
+    ino_t root_inode) {
     pengrid_reader_entry **sorted;
     int32_t status = PENGRID_ZIP_STATUS_OK;
     if (list->count == 0)
@@ -473,6 +499,9 @@ static int32_t pengrid_reader_probe_entries(
         sorted[index] = &list->entries[index];
     qsort(sorted, list->count, sizeof(*sorted), pengrid_reader_entry_compare);
     for (size_t index = 0; index < list->count; index++) {
+        status = pengrid_root_verify_identity(root_fd, root_device, root_inode);
+        if (status != PENGRID_ZIP_STATUS_OK)
+            break;
         status = pengrid_root_probe_path(
             root_fd,
             sorted[index]->path,
@@ -565,6 +594,7 @@ static int32_t pengrid_reader_extract_entries(
     int root_fd,
     const char *password,
     pengrid_zip_limits_t limits,
+    const pengrid_reader_entry_list *validated_entries,
     uint64_t total,
     pengrid_zip_progress_callback progress,
     void *progress_context,
@@ -573,6 +603,7 @@ static int32_t pengrid_reader_extract_entries(
     ino_t root_inode) {
     uint8_t *buffer = NULL;
     uint64_t completed = 0;
+    size_t entry_index = 0;
     int32_t status = PENGRID_ZIP_STATUS_OK;
 
     buffer = (uint8_t *)malloc(PENGRID_ZIP_READ_BUFFER_SIZE);
@@ -602,17 +633,28 @@ static int32_t pengrid_reader_extract_entries(
         uint8_t is_symlink;
         uint64_t expected;
         uint64_t actual = 0;
+        uint64_t link_payload_length = 0;
         int descriptor = -1;
         int32_t read_count;
+        const pengrid_reader_entry *validated_entry;
 
         if (mz_zip_entry_get_info(zip, &info) != MZ_OK || !info) {
             status = PENGRID_ZIP_STATUS_MALFORMED_ARCHIVE;
             goto cleanup;
         }
+        if (!validated_entries || entry_index >= validated_entries->count) {
+            status = PENGRID_ZIP_STATUS_MALFORMED_ARCHIVE;
+            goto cleanup;
+        }
+        validated_entry = &validated_entries->entries[entry_index];
         status = pengrid_root_validate_path(root_fd, info->filename,
                                             info->filename_size, &normalized);
         if (status != PENGRID_ZIP_STATUS_OK)
             goto entry_cleanup;
+        if (strcmp(normalized, validated_entry->path) != 0) {
+            status = PENGRID_ZIP_STATUS_MALFORMED_ARCHIVE;
+            goto entry_cleanup;
+        }
         is_directory = mz_zip_attrib_is_dir(info->external_fa, info->version_madeby) == MZ_OK;
         if (!is_directory) {
             size_t filename_length = strlen(info->filename);
@@ -627,15 +669,38 @@ static int32_t pengrid_reader_extract_entries(
             goto entry_cleanup;
         }
         if (is_directory) {
+            status = pengrid_reader_check_root_identity(root_fd, root_device, root_inode);
+            if (status != PENGRID_ZIP_STATUS_OK)
+                goto entry_cleanup;
             status = pengrid_root_create_directory(root_fd, normalized, created);
             goto entry_cleanup;
         }
         if (is_symlink) {
-            status = pengrid_reader_copy_link_payload(zip, info, &linkname, 1, password);
+            status = pengrid_reader_copy_link_payload(
+                zip, info, &linkname, &link_payload_length, 1, password
+            );
             if (status != PENGRID_ZIP_STATUS_OK)
                 goto entry_cleanup;
             if (!linkname) {
                 status = PENGRID_ZIP_STATUS_UNSUPPORTED_ENTRY;
+                goto entry_cleanup;
+            }
+            if (!validated_entry->linkname || strcmp(linkname, validated_entry->linkname) != 0) {
+                status = (info->flag & MZ_ZIP_FLAG_ENCRYPTED)
+                    ? PENGRID_ZIP_STATUS_WRONG_PASSWORD_OR_DAMAGE
+                    : PENGRID_ZIP_STATUS_MALFORMED_ARCHIVE;
+                goto entry_cleanup;
+            }
+            if (link_payload_length > total || completed > total - link_payload_length) {
+                status = PENGRID_ZIP_STATUS_WRONG_PASSWORD_OR_DAMAGE;
+                goto entry_cleanup;
+            }
+            status = pengrid_reader_check_root_identity(root_fd, root_device, root_inode);
+            if (status != PENGRID_ZIP_STATUS_OK)
+                goto entry_cleanup;
+            completed += link_payload_length;
+            if (progress && progress(completed, total, progress_context) != 0) {
+                status = PENGRID_ZIP_STATUS_CANCELLED;
                 goto entry_cleanup;
             }
             char *parent_path = pengrid_reader_link_parent(normalized);
@@ -647,10 +712,16 @@ static int32_t pengrid_reader_extract_entries(
             free(parent_path);
             if (status != PENGRID_ZIP_STATUS_OK)
                 goto entry_cleanup;
+            status = pengrid_reader_check_root_identity(root_fd, root_device, root_inode);
+            if (status != PENGRID_ZIP_STATUS_OK)
+                goto entry_cleanup;
             status = pengrid_root_create_symlink(root_fd, normalized, linkname, strlen(linkname), created);
             goto entry_cleanup;
         }
 
+        status = pengrid_reader_check_root_identity(root_fd, root_device, root_inode);
+        if (status != PENGRID_ZIP_STATUS_OK)
+            goto entry_cleanup;
         status = pengrid_root_create_file(root_fd, normalized, created, &descriptor);
         if (status != PENGRID_ZIP_STATUS_OK)
             goto entry_cleanup;
@@ -691,6 +762,13 @@ static int32_t pengrid_reader_extract_entries(
                 ? PENGRID_ZIP_STATUS_WRONG_PASSWORD_OR_DAMAGE
                 : PENGRID_ZIP_STATUS_MALFORMED_ARCHIVE;
         }
+        if (status == PENGRID_ZIP_STATUS_OK && validated_entry->has_mode) {
+            status = pengrid_reader_check_root_identity(root_fd, root_device, root_inode);
+            if (status == PENGRID_ZIP_STATUS_OK)
+                status = pengrid_root_apply_file_metadata(
+                    descriptor, validated_entry->mode, validated_entry->modified_date
+                );
+        }
 entry_read_cleanup:
         if (descriptor >= 0) {
             if (close(descriptor) != 0 && status == PENGRID_ZIP_STATUS_OK)
@@ -701,6 +779,7 @@ entry_cleanup:
         free(linkname);
         if (status != PENGRID_ZIP_STATUS_OK)
             goto cleanup;
+        entry_index += 1;
         int32_t next_status = mz_zip_goto_next_entry(zip);
         if (next_status == MZ_END_OF_LIST)
             break;
@@ -710,6 +789,23 @@ entry_cleanup:
     }
     if (completed != total)
         status = PENGRID_ZIP_STATUS_WRONG_PASSWORD_OR_DAMAGE;
+    if (status == PENGRID_ZIP_STATUS_OK && validated_entries) {
+        /* Apply directory metadata after all children so the final directory
+           mtime is not changed by later child creation. */
+        for (size_t index = validated_entries->count; index > 0; index--) {
+            const pengrid_reader_entry *entry = &validated_entries->entries[index - 1];
+            if (!entry->is_directory || !entry->has_mode)
+                continue;
+            status = pengrid_reader_check_root_identity(root_fd, root_device, root_inode);
+            if (status != PENGRID_ZIP_STATUS_OK)
+                break;
+            status = pengrid_root_apply_directory_metadata(
+                root_fd, entry->path, entry->mode, entry->modified_date
+            );
+            if (status != PENGRID_ZIP_STATUS_OK)
+                break;
+        }
+    }
     if (status == PENGRID_ZIP_STATUS_OK && progress && progress(total, total, progress_context) != 0)
         status = PENGRID_ZIP_STATUS_CANCELLED;
 cleanup:
@@ -720,11 +816,13 @@ cleanup:
     return status;
 }
 
-int32_t pengrid_zip_preflight_fd(
+static int32_t pengrid_reader_preflight_owned(
     int archive_fd,
     int destination_probe_root_fd,
     pengrid_zip_limits_t limits,
-    pengrid_zip_inspection_t *inspection) {
+    pengrid_zip_inspection_t *inspection,
+    dev_t root_device,
+    ino_t root_inode) {
     void *stream = NULL;
     void *zip = NULL;
     int32_t status;
@@ -735,13 +833,12 @@ int32_t pengrid_zip_preflight_fd(
     memset(&created, 0, sizeof(created));
     if (archive_fd < 0 || destination_probe_root_fd < 0 || !inspection)
         return PENGRID_ZIP_STATUS_INVALID_ARGUMENT;
-    status = pengrid_reader_validate_limits(limits);
-    if (status != PENGRID_ZIP_STATUS_OK)
-        return status;
     memset(inspection, 0, sizeof(*inspection));
-    status = pengrid_root_is_empty(destination_probe_root_fd);
+    status = pengrid_root_verify_identity(destination_probe_root_fd, root_device, root_inode);
+    if (status == PENGRID_ZIP_STATUS_OK)
+        status = pengrid_root_is_empty(destination_probe_root_fd);
     if (status != PENGRID_ZIP_STATUS_OK)
-        return status;
+        goto cleanup;
     status = pengrid_reader_open_zip(archive_fd, &stream, &zip);
     if (status != PENGRID_ZIP_STATUS_OK)
         goto cleanup;
@@ -755,18 +852,73 @@ int32_t pengrid_zip_preflight_fd(
     );
     if (status != PENGRID_ZIP_STATUS_OK)
         goto cleanup;
-    status = pengrid_reader_probe_entries(destination_probe_root_fd, &list, &created);
+    status = pengrid_reader_probe_entries(
+        destination_probe_root_fd, &list, &created, root_device, root_inode
+    );
+    if (status != PENGRID_ZIP_STATUS_OK)
+        goto cleanup;
+    status = pengrid_root_verify_identity(destination_probe_root_fd, root_device, root_inode);
     if (status != PENGRID_ZIP_STATUS_OK)
         goto cleanup;
     status = pengrid_root_cleanup(destination_probe_root_fd, &created);
     if (status != PENGRID_ZIP_STATUS_OK)
         goto cleanup;
-    status = pengrid_root_is_empty(destination_probe_root_fd);
+    status = pengrid_root_verify_identity(destination_probe_root_fd, root_device, root_inode);
+    if (status == PENGRID_ZIP_STATUS_OK)
+        status = pengrid_root_is_empty(destination_probe_root_fd);
 cleanup:
-    if (status != PENGRID_ZIP_STATUS_OK)
-        pengrid_root_cleanup(destination_probe_root_fd, &created);
+    if (status != PENGRID_ZIP_STATUS_OK) {
+        int32_t identity_status = pengrid_root_verify_identity(
+            destination_probe_root_fd, root_device, root_inode
+        );
+        int32_t cleanup_status = identity_status == PENGRID_ZIP_STATUS_OK
+            ? pengrid_root_cleanup(destination_probe_root_fd, &created)
+            : PENGRID_ZIP_STATUS_RECOVERY_REQUIRED;
+        if (cleanup_status != PENGRID_ZIP_STATUS_OK)
+            status = PENGRID_ZIP_STATUS_RECOVERY_REQUIRED;
+    }
     pengrid_reader_entry_list_destroy(&list);
     pengrid_reader_close_zip(&stream, &zip);
+    return status;
+}
+
+int32_t pengrid_zip_preflight_fd(
+    int archive_fd,
+    int destination_probe_root_fd,
+    pengrid_zip_limits_t limits,
+    pengrid_zip_inspection_t *inspection) {
+    int owned_archive = -1;
+    int owned_root = -1;
+    struct stat root_information;
+    int32_t status;
+
+    if (archive_fd < 0 || destination_probe_root_fd < 0 || !inspection)
+        return PENGRID_ZIP_STATUS_INVALID_ARGUMENT;
+    status = pengrid_reader_validate_limits(limits);
+    if (status != PENGRID_ZIP_STATUS_OK)
+        return status;
+    owned_archive = pengrid_root_duplicate_fd(archive_fd);
+    owned_root = pengrid_root_duplicate_fd(destination_probe_root_fd);
+    if (owned_archive < 0 || owned_root < 0) {
+        if (owned_archive >= 0) close(owned_archive);
+        if (owned_root >= 0) close(owned_root);
+        return PENGRID_ZIP_STATUS_IO_ERROR;
+    }
+    if (fstat(owned_root, &root_information) != 0 || !S_ISDIR(root_information.st_mode)) {
+        close(owned_archive);
+        close(owned_root);
+        return PENGRID_ZIP_STATUS_INVALID_ARGUMENT;
+    }
+    status = pengrid_reader_preflight_owned(
+        owned_archive,
+        owned_root,
+        limits,
+        inspection,
+        root_information.st_dev,
+        root_information.st_ino
+    );
+    if (owned_archive >= 0) close(owned_archive);
+    if (owned_root >= 0) close(owned_root);
     return status;
 }
 
@@ -780,13 +932,18 @@ int32_t pengrid_zip_extract(
     void *progress_context) {
     pengrid_zip_inspection_t inspection;
     pengrid_root_created_list created;
+    pengrid_reader_entry_list validated_entries;
     void *stream = NULL;
     void *zip = NULL;
     uint8_t *password_copy = NULL;
     struct stat root_information;
+    int owned_archive = -1;
+    int owned_root = -1;
     int32_t status;
 
     memset(&created, 0, sizeof(created));
+    memset(&validated_entries, 0, sizeof(validated_entries));
+    memset(&root_information, 0, sizeof(root_information));
     if (archive_fd < 0 || destination_root_fd < 0 || !password || password_length < 1 || password_length > 1024)
         return PENGRID_ZIP_STATUS_INVALID_ARGUMENT;
     for (size_t index = 0; index < password_length; index++) {
@@ -796,17 +953,38 @@ int32_t pengrid_zip_extract(
     status = pengrid_reader_validate_limits(limits);
     if (status != PENGRID_ZIP_STATUS_OK)
         return status;
-    if (fstat(destination_root_fd, &root_information) != 0 || !S_ISDIR(root_information.st_mode))
-        return PENGRID_ZIP_STATUS_INVALID_ARGUMENT;
-    status = pengrid_root_is_empty(destination_root_fd);
+    owned_archive = pengrid_root_duplicate_fd(archive_fd);
+    owned_root = pengrid_root_duplicate_fd(destination_root_fd);
+    if (owned_archive < 0 || owned_root < 0) {
+        if (owned_archive >= 0) close(owned_archive);
+        if (owned_root >= 0) close(owned_root);
+        return PENGRID_ZIP_STATUS_IO_ERROR;
+    }
+    if (fstat(owned_root, &root_information) != 0 || !S_ISDIR(root_information.st_mode)) {
+        status = PENGRID_ZIP_STATUS_INVALID_ARGUMENT;
+        goto cleanup;
+    }
+    status = pengrid_root_verify_identity(owned_root, root_information.st_dev, root_information.st_ino);
+    if (status == PENGRID_ZIP_STATUS_OK)
+        status = pengrid_root_is_empty(owned_root);
     if (status != PENGRID_ZIP_STATUS_OK)
-        return status;
-    status = pengrid_zip_preflight_fd(archive_fd, destination_root_fd, limits, &inspection);
+        goto cleanup;
+    status = pengrid_reader_preflight_owned(
+        owned_archive,
+        owned_root,
+        limits,
+        &inspection,
+        root_information.st_dev,
+        root_information.st_ino
+    );
     if (status != PENGRID_ZIP_STATUS_OK)
-        return status;
-    status = pengrid_root_is_empty(destination_root_fd);
+        goto cleanup;
+    status = pengrid_root_verify_identity(owned_root, root_information.st_dev, root_information.st_ino);
     if (status != PENGRID_ZIP_STATUS_OK)
-        return status;
+        goto cleanup;
+    status = pengrid_root_is_empty(owned_root);
+    if (status != PENGRID_ZIP_STATUS_OK)
+        goto cleanup;
     password_copy = (uint8_t *)malloc(password_length + 1);
     if (!password_copy) {
         status = PENGRID_ZIP_STATUS_INTERNAL_ERROR;
@@ -814,14 +992,24 @@ int32_t pengrid_zip_extract(
     }
     memcpy(password_copy, password, password_length);
     password_copy[password_length] = '\0';
-    status = pengrid_reader_open_zip(archive_fd, &stream, &zip);
+    status = pengrid_reader_open_zip(owned_archive, &stream, &zip);
     if (status != PENGRID_ZIP_STATUS_OK)
         goto cleanup;
+    status = pengrid_reader_collect_entries(
+        zip, owned_root, limits, NULL, &validated_entries, 1
+    );
+    if (status != PENGRID_ZIP_STATUS_OK)
+        goto cleanup;
+    if (validated_entries.total_uncompressed != inspection.total_uncompressed_bytes) {
+        status = PENGRID_ZIP_STATUS_MALFORMED_ARCHIVE;
+        goto cleanup;
+    }
     status = pengrid_reader_extract_entries(
         zip,
-        destination_root_fd,
+        owned_root,
         (const char *)password_copy,
         limits,
+        &validated_entries,
         inspection.total_uncompressed_bytes,
         progress,
         progress_context,
@@ -832,7 +1020,12 @@ int32_t pengrid_zip_extract(
 cleanup:
     pengrid_reader_close_zip(&stream, &zip);
     if (status != PENGRID_ZIP_STATUS_OK) {
-        int32_t cleanup_status = pengrid_root_cleanup(destination_root_fd, &created);
+        int32_t identity_status = pengrid_root_verify_identity(
+            owned_root, root_information.st_dev, root_information.st_ino
+        );
+        int32_t cleanup_status = identity_status == PENGRID_ZIP_STATUS_OK
+            ? pengrid_root_cleanup(owned_root, &created)
+            : PENGRID_ZIP_STATUS_RECOVERY_REQUIRED;
         if (cleanup_status != PENGRID_ZIP_STATUS_OK)
             status = PENGRID_ZIP_STATUS_RECOVERY_REQUIRED;
     } else {
@@ -842,5 +1035,8 @@ cleanup:
         pengrid_secure_clear(password_copy, password_length + 1);
         free(password_copy);
     }
+    pengrid_reader_entry_list_destroy(&validated_entries);
+    if (owned_archive >= 0) close(owned_archive);
+    if (owned_root >= 0) close(owned_root);
     return status;
 }

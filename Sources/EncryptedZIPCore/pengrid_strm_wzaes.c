@@ -1,7 +1,7 @@
 /* pengrid_strm_wzaes.c -- Audited Pengrid WinZip AES stream replacement.
  *
  * The implementation follows minizip-ng's stream ABI and wire format while
- * extending the password bound to 256 bytes and clearing transient and
+ * extending the password bound to 1,024 bytes and clearing transient and
  * persistent key material on every exit path.
  */
 
@@ -17,7 +17,7 @@
 #define MZ_AES_KEYING_ITERATIONS     (1000)
 #define MZ_AES_SALT_LENGTH(STRENGTH) (4 * (STRENGTH & 3) + 4)
 #define MZ_AES_SALT_LENGTH_MAX       (16)
-#define MZ_AES_PW_LENGTH_MAX         (256)
+#define MZ_AES_PW_LENGTH_MAX         (1024)
 #define MZ_AES_PW_VERIFY_SIZE        (2)
 #define MZ_AES_AUTHCODE_SIZE         (10)
 

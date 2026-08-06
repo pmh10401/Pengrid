@@ -42,6 +42,15 @@ log them.
   minizip-aes192.zip infozip-zipcrypto.zip
 ```
 
+The boundary fixtures below were generated independently with the same pinned
+minizip-ng AES implementation in a temporary copy whose password-bound guard
+was raised only for fixture generation (the committed Pengrid-owned AES stream
+contains the corresponding 1,024-byte read bound). Passwords are public,
+deterministic test data: `String(repeating: "p", count: 1)`, `257`, or `1_024`.
+The encrypted symlink fixture uses the public password
+`fixture-aes-symlink-passphrase`; its central UNIX1 metadata and authenticated
+payload both name `target.txt`.
+
 ## Contents and hashes
 
 | Fixture | Encryption | Public password | Expected entry and UTF-8 bytes | SHA-256 |
@@ -50,3 +59,7 @@ log them.
 | `minizip-aes128.zip` | WinZip AES-128 | `fixture-aes128-passphrase` | `Strength.txt` — `AES compatibility fixture\n` (26 bytes) | `b02a342fd9c6694155d7ee87c9e1eff12c2bdd69ac8dd23979db2085943efb75` |
 | `minizip-aes192.zip` | WinZip AES-192 | `fixture-aes192-passphrase` | `Strength.txt` — `AES compatibility fixture\n` (26 bytes) | `6e501670d5e2259400b28f0f126ae257f17af125841fc08010e9112d5084c91e` |
 | `infozip-zipcrypto.zip` | legacy ZipCrypto | `fixture-zipcrypto-password` | `Legacy.txt` — `Info-ZIP ZipCrypto compatibility fixture\n` (41 bytes) | `e9bcc8168d54002f0c8b0176db37b456e79864e6ebe3a89e259ad462c9a5ff0c` |
+| `aes-password-1.zip` | WinZip AES-256 | `String(repeating: "p", count: 1)` | `Strength.txt` — `AES compatibility fixture\n` (26 bytes) | `0d6dca4bc5923cdeb23c6a3120c304376879826c6f7c831bb40fe18983c8ff6e` |
+| `aes-password-257.zip` | WinZip AES-256 | `String(repeating: "p", count: 257)` | `Strength.txt` — `AES compatibility fixture\n` (26 bytes) | `d3c81a181b198de65bd64e7e58b7de4022c69572af8b57a53ef070979ce7930e` |
+| `aes-password-1024.zip` | WinZip AES-256 | `String(repeating: "p", count: 1_024)` | `Strength.txt` — `AES compatibility fixture\n` (26 bytes) | `95f64f040e506e695e9e94074827bf2a793b1595dac1ea6e0576d17e9409eb87` |
+| `minizip-aes256-symlink.zip` | WinZip AES-256 | `fixture-aes-symlink-passphrase` | `link` → `target.txt` (10 authenticated payload bytes) | `04179e98fd60abf9f91d10ed8efcd9a9a721b2ec1a6c305abb4bbc435064a3f7` |

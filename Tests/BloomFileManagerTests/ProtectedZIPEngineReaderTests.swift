@@ -4,6 +4,40 @@ import Foundation
 import Testing
 @testable import BloomFileManager
 
+@_silgen_name("pengrid_root_test_fail_next_tracking")
+private func pengrid_root_test_fail_next_tracking()
+
+@_silgen_name("pengrid_root_test_fail_next_cleanup")
+private func pengrid_root_test_fail_next_cleanup()
+
+@_silgen_name("pengrid_root_test_substitute_next_cleanup_object")
+private func pengrid_root_test_substitute_next_cleanup_object()
+
+@_cdecl("pengrid_test_reanchor_progress")
+func pengrid_test_reanchor_progress(
+    _ completed: UInt64,
+    _ total: UInt64,
+    _ context: UnsafeMutableRawPointer?
+) -> Int32 {
+    guard let context else { return 1 }
+    let state = Unmanaged<NativeReanchorState>.fromOpaque(context).takeUnretainedValue()
+    state.reanchorIfNeeded()
+    return 0
+}
+
+@_cdecl("pengrid_test_cancel_during_native_read")
+func pengrid_test_cancel_during_native_read(
+    _ completed: UInt64,
+    _ total: UInt64,
+    _ context: UnsafeMutableRawPointer?
+) -> Int32 {
+    guard completed > 0 else { return 0 }
+    guard let context else { return 1 }
+    let state = Unmanaged<NativeCancellationState>.fromOpaque(context).takeUnretainedValue()
+    state.didRead = true
+    return 1
+}
+
 @Suite("ProtectedZIPEngineReaderTests", .serialized)
 struct ProtectedZIPEngineReaderTests {
     @Test func readerExtractsIndependentAESAndLegacyFixtures() async throws {
@@ -46,12 +80,72 @@ struct ProtectedZIPEngineReaderTests {
     }
 
     @Test func readerAcceptsTaskFiveExtractionPasswordBoundaries() async throws {
-        let fixture = RawZIPFixtureBuilder.archive(entries: [
-            .regular(name: "payload.txt", bytes: Array("payload".utf8))
-        ])
-        for password in [String(repeating: "x", count: 1), String(repeating: "x", count: 1_024)] {
+        let cases = [
+            ("aes-password-1.zip", String(repeating: "p", count: 1)),
+            ("aes-password-257.zip", String(repeating: "p", count: 257)),
+            ("aes-password-1024.zip", String(repeating: "p", count: 1_024))
+        ]
+        for (filename, password) in cases {
+            let fixture = try Data(contentsOf: protectedZIPFixtureURL(filename))
             let root = try await extract(fixture, password: password)
-            #expect(try String(contentsOf: root.appending(path: "payload.txt"), encoding: .utf8) == "payload")
+            #expect(try String(contentsOf: root.appending(path: "Strength.txt"), encoding: .utf8) == "AES compatibility fixture\n")
+        }
+    }
+
+    @Test func encryptedSymlinkAdvancesAuthenticatedProgressAndPublishesExactTarget() async throws {
+        let fixture = try Data(contentsOf: protectedZIPFixtureURL("minizip-aes256-symlink.zip"))
+        let progress = ReaderProgressRecorder()
+        let root = try await extract(
+            fixture,
+            password: "fixture-aes-symlink-passphrase",
+            progress: { event in await progress.record(event) }
+        )
+        let link = root.appending(path: "link")
+        let target = try FileManager.default.destinationOfSymbolicLink(atPath: link.path)
+        #expect(target == "target.txt")
+        let final = await progress.last
+        #expect(final?.completedByteCount == final?.totalByteCount)
+        #expect(final?.totalByteCount == Int64("target.txt".utf8.count))
+    }
+
+    @Test func symlinkPreflightRequiresCentralMetadataWithoutReadingPayload() async throws {
+        let missingMetadata = RawZIPFixtureBuilder.Entry(
+            nameBytes: Array("link".utf8),
+            bytes: Array("target.txt".utf8),
+            externalAttributes: UInt32(S_IFLNK | 0o777) << 16
+        )
+        await #expect(throws: ProtectedZIPError.unsafeEntry) {
+            try await preflight(RawZIPFixtureBuilder.archive(entries: [missingMetadata]))
+        }
+
+        let nulMetadata = RawZIPFixtureBuilder.Entry.symlink(
+            name: "link",
+            targetBytes: Array("target\0evil".utf8)
+        )
+        await #expect(throws: ProtectedZIPError.unsafeEntry) {
+            try await preflight(RawZIPFixtureBuilder.archive(entries: [nulMetadata]))
+        }
+    }
+
+    @Test func authenticatedSymlinkPayloadMustMatchCentralMetadataAndContainNoNUL() async throws {
+        let mismatch = RawZIPFixtureBuilder.Entry(
+            nameBytes: Array("link".utf8),
+            bytes: Array("other.txt".utf8),
+            externalAttributes: UInt32(S_IFLNK | 0o777) << 16,
+            extraField: RawZIPFixtureBuilder.unixSymlinkExtra(targetBytes: Array("target.txt".utf8))
+        )
+        await #expect(throws: ProtectedZIPError.malformedArchive) {
+            try await extract(RawZIPFixtureBuilder.archive(entries: [mismatch]), password: "fixture-password")
+        }
+
+        let nulPayload = RawZIPFixtureBuilder.Entry(
+            nameBytes: Array("link".utf8),
+            bytes: Array("target\0evil".utf8),
+            externalAttributes: UInt32(S_IFLNK | 0o777) << 16,
+            extraField: RawZIPFixtureBuilder.unixSymlinkExtra(targetBytes: Array("target\0evil".utf8))
+        )
+        await #expect(throws: ProtectedZIPError.unsafeEntry) {
+            try await extract(RawZIPFixtureBuilder.archive(entries: [nulPayload]), password: "fixture-password")
         }
     }
 
@@ -134,9 +228,32 @@ struct ProtectedZIPEngineReaderTests {
     }
 
     @Test func readerRejectsSpecialFileModes() async throws {
-        let fifo = RawZIPFixtureBuilder.archive(entries: [.fifo(name: "named-pipe")])
+        for entry in [
+            RawZIPFixtureBuilder.Entry.fifo(name: "named-pipe"),
+            RawZIPFixtureBuilder.Entry.blockDevice(name: "block-device"),
+            RawZIPFixtureBuilder.Entry.socket(name: "socket")
+        ] {
+            await #expect(throws: ProtectedZIPError.unsafeEntry) {
+                try await extract(RawZIPFixtureBuilder.archive(entries: [entry]), password: "fixture-password")
+            }
+        }
+    }
+
+    @Test func readerRejectsCaseAndUnicodeNormalizationCollisionsOnTheActualVolume() async throws {
+        let caseCollision = RawZIPFixtureBuilder.archive(entries: [
+            .regular(name: "Collision.txt", bytes: [1]),
+            .regular(name: "collision.txt", bytes: [2])
+        ])
         await #expect(throws: ProtectedZIPError.unsafeEntry) {
-            try await extract(fifo, password: "fixture-password")
+            try await preflight(caseCollision)
+        }
+
+        let unicodeCollision = RawZIPFixtureBuilder.archive(entries: [
+            .regular(name: "Café.txt", bytes: [1]),
+            .regular(name: "Cafe\u{301}.txt", bytes: [2])
+        ])
+        await #expect(throws: ProtectedZIPError.unsafeEntry) {
+            try await preflight(unicodeCollision)
         }
     }
 
@@ -195,6 +312,53 @@ struct ProtectedZIPEngineReaderTests {
         await #expect(throws: ProtectedZIPError.malformedArchive) {
             try await preflight(malformedDirectory)
         }
+
+        let aggregateOverflow = RawZIPFixtureBuilder.archive(entries: [
+            .regular(name: "huge-a.bin", bytes: [], declaredUncompressedSize: UInt64(Int64.max) - 100),
+            .regular(name: "huge-b.bin", bytes: [], declaredUncompressedSize: 200)
+        ])
+        let wideLimits = ProtectedZIPLimits(
+            maximumOutputByteCount: Int64.max,
+            capacityReserveByteCount: ProtectedZIPLimits.minimumCapacityReserve
+        )
+        await #expect(throws: ProtectedZIPError.entryCountOverflow) {
+            try await preflight(aggregateOverflow, limits: wideLimits)
+        }
+        await #expect(throws: ProtectedZIPError.entryCountOverflow) {
+            try await extract(aggregateOverflow, password: "fixture-password", limits: wideLimits)
+        }
+    }
+
+    @Test func metadataRoundTripPreservesSanitizedModeAndDOSMTime() async throws {
+        // 2024-01-02 03:04:06 in DOS date/time representation.
+        let dosDate = UInt16((2024 - 1980) << 9 | 1 << 5 | 2)
+        let dosTime = UInt16(3 << 11 | 4 << 5 | 3)
+        let fixture = RawZIPFixtureBuilder.archive(entries: [
+            RawZIPFixtureBuilder.Entry(
+                nameBytes: Array("folder/file.txt".utf8),
+                bytes: [7],
+                externalAttributes: UInt32(S_IFREG | 0o640) << 16,
+                dosTime: dosTime,
+                dosDate: dosDate
+            ),
+            RawZIPFixtureBuilder.Entry(
+                nameBytes: Array("folder/".utf8),
+                bytes: [],
+                externalAttributes: UInt32(S_IFDIR | 0o750) << 16,
+                dosTime: dosTime,
+                dosDate: dosDate
+            )
+        ])
+        let root = try await extract(fixture, password: "fixture-password")
+        let file = root.appending(path: "folder/file.txt")
+        let folder = root.appending(path: "folder", directoryHint: .isDirectory)
+        let fileAttributes = try FileManager.default.attributesOfItem(atPath: file.path)
+        let folderAttributes = try FileManager.default.attributesOfItem(atPath: folder.path)
+        #expect((fileAttributes[.posixPermissions] as? NSNumber)?.intValue == 0o640)
+        #expect((folderAttributes[.posixPermissions] as? NSNumber)?.intValue == 0o750)
+        let expected = DateComponents(calendar: Calendar.current, timeZone: TimeZone.current, year: 2024, month: 1, day: 2, hour: 3, minute: 4, second: 6).date!
+        let actual = fileAttributes[.modificationDate] as! Date
+        #expect(abs(actual.timeIntervalSince(expected)) <= 2)
     }
 
     @Test func readerRejectsTruncatedAuthenticationAndWrongPasswordAsRedactedDamage() async throws {
@@ -256,6 +420,157 @@ struct ProtectedZIPEngineReaderTests {
         await #expect(throws: ProtectedZIPError.cancelled) { try await task.value }
     }
 
+    @Test func cleanupTrackingFailureRollsBackNestedImplicitDirectories() async throws {
+        pengrid_root_test_fail_next_tracking()
+        let fixture = RawZIPFixtureBuilder.archive(entries: [
+            .regular(name: "nested/implicit/payload.txt", bytes: [1, 2, 3])
+        ])
+        await #expect(throws: ProtectedZIPError.engineSetupFailed) {
+            try await extract(fixture, password: "fixture-password")
+        }
+    }
+
+    @Test func cleanupIdentitySubstitutionAndDeletionFailureEscalateRecoveryRequired() async throws {
+        let fixture = RawZIPFixtureBuilder.archive(entries: [
+            .regular(name: "payload.txt", bytes: [1, 2, 3])
+        ])
+        let limits = ProtectedZIPLimits(
+            maximumOutputByteCount: 3,
+            capacityReserveByteCount: Int64.max
+        )
+        pengrid_root_test_substitute_next_cleanup_object()
+        await #expect(throws: ProtectedZIPError.recoveryRequired) {
+            try await extract(fixture, password: "fixture-password", limits: limits)
+        }
+        pengrid_root_test_fail_next_cleanup()
+        await #expect(throws: ProtectedZIPError.recoveryRequired) {
+            try await extract(fixture, password: "fixture-password", limits: limits)
+        }
+    }
+
+    @Test func nativeEntryReadCancellationLeavesOutputRootEmpty() throws {
+        let temporary = try TemporaryDirectory()
+        defer { temporary.remove() }
+        let archiveURL = temporary.url.appending(path: "archive.zip")
+        let fixture = RawZIPFixtureBuilder.archive(entries: [
+            .regular(name: "payload.bin", bytes: [UInt8](repeating: 0xA5, count: 128 * 1024))
+        ])
+        try fixture.write(to: archiveURL)
+        let outputURL = temporary.url.appending(path: "output", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: outputURL, withIntermediateDirectories: false)
+        let archiveDescriptor = try openedDescriptorForTest(archiveURL, flags: O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+        let outputDescriptor = try openedDescriptorForTest(outputURL, flags: O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        defer { Darwin.close(archiveDescriptor); Darwin.close(outputDescriptor) }
+        let state = NativeCancellationState()
+        let password = Array("fixture-password".utf8)
+        let limits = pengrid_zip_limits_t(
+            maximum_entry_count: 100_000,
+            maximum_output_bytes: 16 * 1024 * 1024,
+            capacity_reserve_bytes: 0
+        )
+        let status = password.withUnsafeBytes { bytes in
+            pengrid_zip_extract(
+                archiveDescriptor,
+                outputDescriptor,
+                bytes.baseAddress?.assumingMemoryBound(to: UInt8.self),
+                bytes.count,
+                limits,
+                pengrid_test_cancel_during_native_read,
+                Unmanaged.passUnretained(state).toOpaque()
+            )
+        }
+        #expect(status == PENGRID_ZIP_STATUS_CANCELLED)
+        #expect(state.didRead)
+        #expect(try FileManager.default.contentsOfDirectory(at: outputURL, includingPropertiesForKeys: nil).isEmpty)
+    }
+
+    @Test func publicReaderAnchorsOwnedDescriptorsWhenCallerFdsAreClosedAndReused() throws {
+        let temporary = try TemporaryDirectory()
+        defer { temporary.remove() }
+        let archiveURL = temporary.url.appending(path: "archive.zip")
+        let replacementArchiveURL = temporary.url.appending(path: "replacement.zip")
+        let outputURL = temporary.url.appending(path: "output", directoryHint: .isDirectory)
+        let replacementOutputURL = temporary.url.appending(path: "replacement-output", directoryHint: .isDirectory)
+        try RawZIPFixtureBuilder.archive(entries: [
+            .regular(name: "payload.txt", bytes: Array("anchored".utf8))
+        ]).write(to: archiveURL)
+        try Data([0x50, 0x4B, 0x05, 0x06, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]).write(to: replacementArchiveURL)
+        try FileManager.default.createDirectory(at: outputURL, withIntermediateDirectories: false)
+        try FileManager.default.createDirectory(at: replacementOutputURL, withIntermediateDirectories: false)
+        let archiveDescriptor = try openedDescriptorForTest(archiveURL, flags: O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+        let outputDescriptor = try openedDescriptorForTest(outputURL, flags: O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        defer { Darwin.close(archiveDescriptor); Darwin.close(outputDescriptor) }
+        let state = NativeReanchorState(
+            archiveDescriptor: archiveDescriptor,
+            destinationDescriptor: outputDescriptor,
+            replacementArchive: replacementArchiveURL,
+            replacementDestination: replacementOutputURL
+        )
+        let limits = pengrid_zip_limits_t(
+            maximum_entry_count: 100_000,
+            maximum_output_bytes: 16 * 1024 * 1024,
+            capacity_reserve_bytes: 0
+        )
+        let password = Array("fixture-password".utf8)
+        let status = password.withUnsafeBytes { bytes in
+            pengrid_zip_extract(
+                archiveDescriptor,
+                outputDescriptor,
+                bytes.baseAddress?.assumingMemoryBound(to: UInt8.self),
+                bytes.count,
+                limits,
+                pengrid_test_reanchor_progress,
+                Unmanaged.passUnretained(state).toOpaque()
+            )
+        }
+        #expect(status == PENGRID_ZIP_STATUS_OK)
+        #expect(try String(contentsOf: outputURL.appending(path: "payload.txt"), encoding: .utf8) == "anchored")
+        #expect(try FileManager.default.contentsOfDirectory(at: replacementOutputURL, includingPropertiesForKeys: nil).isEmpty)
+        #expect(Darwin.fcntl(archiveDescriptor, F_GETFD) >= 0)
+        #expect(Darwin.fcntl(outputDescriptor, F_GETFD) >= 0)
+    }
+
+    @Test func extractionSecretIsInvalidatedOnSuccessFailureAndCancellation() async throws {
+        let successProbe = SecretCleanupProbe()
+        _ = try await extract(
+            RawZIPFixtureBuilder.archive(entries: [.regular(name: "ok.txt", bytes: [1])]),
+            password: "fixture-password",
+            secretCleanup: successProbe.cleanup
+        )
+        #expect(successProbe.didCleanup)
+
+        let failureProbe = SecretCleanupProbe()
+        await #expect(throws: ProtectedZIPError.incorrectPasswordOrDamagedData) {
+            try await extract(
+                try Data(contentsOf: protectedZIPFixtureURL("7zip-aes256.zip")),
+                password: "wrong-password",
+                secretCleanup: failureProbe.cleanup
+            )
+        }
+        #expect(failureProbe.didCleanup)
+
+        let cancellationProbe = SecretCleanupProbe()
+        let payload = [UInt8](repeating: 0x5A, count: 1 * 1024 * 1024)
+        let started = ReaderStartSignal()
+        let task = Task {
+            try await extract(
+                RawZIPFixtureBuilder.archive(entries: [.regular(name: "cancel.bin", bytes: payload)]),
+                password: "fixture-password",
+                secretCleanup: cancellationProbe.cleanup,
+                progress: { progress in
+                    if progress.completedByteCount == 0 {
+                        await started.signal()
+                        try? await Task.sleep(for: .milliseconds(20))
+                    }
+                }
+            )
+        }
+        #expect(await started.wait(timeout: .seconds(5)))
+        task.cancel()
+        await #expect(throws: ProtectedZIPError.cancelled) { try await task.value }
+        #expect(cancellationProbe.didCleanup)
+    }
+
     private func expectFixture(
         _ filename: String,
         password: String,
@@ -287,11 +602,18 @@ struct ProtectedZIPEngineReaderTests {
         try FileManager.default.createDirectory(at: probeURL, withIntermediateDirectories: false)
         let probe = try openedDirectoryRoot(probeURL)
         defer { Darwin.close(probe.descriptor) }
-        return try await LiveProtectedZIPEngine().preflight(
-            archive: archive,
-            destinationProbeRoot: probe,
-            limits: limits
-        )
+        do {
+            let result = try await LiveProtectedZIPEngine().preflight(
+                archive: archive,
+                destinationProbeRoot: probe,
+                limits: limits
+            )
+            #expect(try FileManager.default.contentsOfDirectory(at: probeURL, includingPropertiesForKeys: nil).isEmpty)
+            return result
+        } catch {
+            #expect(try FileManager.default.contentsOfDirectory(at: probeURL, includingPropertiesForKeys: nil).isEmpty)
+            throw error
+        }
     }
 
     private func extract(
@@ -301,6 +623,7 @@ struct ProtectedZIPEngineReaderTests {
             maximumOutputByteCount: 16 * 1024 * 1024,
             capacityReserveByteCount: ProtectedZIPLimits.minimumCapacityReserve
         ),
+        secretCleanup: ((UnsafeMutableRawPointer, Int) -> Void)? = nil,
         progress: @escaping @Sendable (ProtectedZIPProgress) async -> Void = { _ in }
     ) async throws -> URL {
         let temporary = try TemporaryDirectory()
@@ -311,7 +634,12 @@ struct ProtectedZIPEngineReaderTests {
         try FileManager.default.createDirectory(at: destinationURL, withIntermediateDirectories: false)
         let destination = try openedDirectoryRoot(destinationURL)
         do {
-            let secret = try ArchiveSecret.extraction(password: password)
+            let secret: ArchiveSecret
+            if let secretCleanup {
+                secret = ArchiveSecret(utf8: Array(password.utf8), cleanup: secretCleanup)
+            } else {
+                secret = try ArchiveSecret.extraction(password: password)
+            }
             try await LiveProtectedZIPEngine().extract(
                 archive: archive,
                 destinationRoot: destination,
@@ -320,6 +648,10 @@ struct ProtectedZIPEngineReaderTests {
                 progress: progress
             )
         } catch {
+            if (error as? ProtectedZIPError) != .recoveryRequired {
+                let leftovers = try FileManager.default.contentsOfDirectory(at: destinationURL, includingPropertiesForKeys: nil)
+                #expect(leftovers.isEmpty)
+            }
             archive.close()
             Darwin.close(destination.descriptor)
             let snapshot = temporary.url
@@ -376,6 +708,14 @@ private actor ReaderStartSignal {
     }
 }
 
+private actor ReaderProgressRecorder {
+    private(set) var last: ProtectedZIPProgress?
+
+    func record(_ progress: ProtectedZIPProgress) {
+        last = progress
+    }
+}
+
 private final class ReaderCancellationHandle: @unchecked Sendable {
     private let lock = NSLock()
     private var action: (() -> Void)?
@@ -391,5 +731,83 @@ private final class ReaderCancellationHandle: @unchecked Sendable {
         let action = self.action
         lock.unlock()
         action?()
+    }
+}
+
+private final class NativeReanchorState: @unchecked Sendable {
+    let archiveDescriptor: Int32
+    let destinationDescriptor: Int32
+    let replacementArchive: URL
+    let replacementDestination: URL
+    private let lock = NSLock()
+    private var didReanchor = false
+
+    init(
+        archiveDescriptor: Int32,
+        destinationDescriptor: Int32,
+        replacementArchive: URL,
+        replacementDestination: URL
+    ) {
+        self.archiveDescriptor = archiveDescriptor
+        self.destinationDescriptor = destinationDescriptor
+        self.replacementArchive = replacementArchive
+        self.replacementDestination = replacementDestination
+    }
+
+    func reanchorIfNeeded() {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !didReanchor else { return }
+        didReanchor = true
+        Darwin.close(archiveDescriptor)
+        let replacementArchiveDescriptor = replacementArchive.path.withCString {
+            Darwin.open($0, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+        }
+        if replacementArchiveDescriptor >= 0 {
+            if replacementArchiveDescriptor != archiveDescriptor {
+                _ = Darwin.dup2(replacementArchiveDescriptor, archiveDescriptor)
+                Darwin.close(replacementArchiveDescriptor)
+            }
+        }
+        Darwin.close(destinationDescriptor)
+        let replacementDestinationDescriptor = replacementDestination.path.withCString {
+            Darwin.open($0, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        }
+        if replacementDestinationDescriptor >= 0 {
+            if replacementDestinationDescriptor != destinationDescriptor {
+                _ = Darwin.dup2(replacementDestinationDescriptor, destinationDescriptor)
+                Darwin.close(replacementDestinationDescriptor)
+            }
+        }
+    }
+}
+
+private final class NativeCancellationState: @unchecked Sendable {
+    var didRead = false
+}
+
+private func openedDescriptorForTest(_ url: URL, flags: Int32) throws -> Int32 {
+    let descriptor = url.path.withCString { Darwin.open($0, flags) }
+    guard descriptor >= 0 else {
+        throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+    }
+    return descriptor
+}
+
+private final class SecretCleanupProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cleaned = false
+
+    var didCleanup: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return cleaned
+    }
+
+    func cleanup(_ bytes: UnsafeMutableRawPointer, _ length: Int) {
+        pengrid_secure_clear(bytes, length)
+        lock.lock()
+        cleaned = true
+        lock.unlock()
     }
 }

@@ -106,50 +106,48 @@ actor LiveProtectedZIPEngine: ProtectedZIPEngine {
         let deliveryTask = Task {
             await bridge.consume()
         }
-        let task = Task.detached(priority: .utility) { () throws -> Void in
+        let task = Task.detached(priority: .utility) { () -> ProtectedZIPNativeOutcome in
             defer { bridge.finish() }
-            try sourceRoot.withUnsafeDescriptor { sourceDescriptor in
-                try password.withUnsafeBytes { secretBytes in
-                    guard let baseAddress = secretBytes.baseAddress else {
-                        throw ProtectedZIPError.invalidPasswordInput
-                    }
-                    let context = Unmanaged.passUnretained(bridge).toOpaque()
-                    let status = pengrid_zip_create_aes256(
-                        sourceDescriptor,
-                        destination.descriptor,
-                        baseAddress.assumingMemoryBound(to: UInt8.self),
-                        secretBytes.count,
-                        protectedZIPProgressCallback,
-                        context
-                    )
-                    guard status == PENGRID_ZIP_STATUS_OK else {
-                        throw LiveProtectedZIPEngine.error(for: status)
+            do {
+                try sourceRoot.withUnsafeDescriptor { sourceDescriptor in
+                    try password.withUnsafeBytes { secretBytes in
+                        guard let baseAddress = secretBytes.baseAddress else {
+                            throw ProtectedZIPError.invalidPasswordInput
+                        }
+                        let context = Unmanaged.passUnretained(bridge).toOpaque()
+                        let status = pengrid_zip_create_aes256(
+                            sourceDescriptor,
+                            destination.descriptor,
+                            baseAddress.assumingMemoryBound(to: UInt8.self),
+                            secretBytes.count,
+                            protectedZIPProgressCallback,
+                            context
+                        )
+                        guard status == PENGRID_ZIP_STATUS_OK else {
+                            throw LiveProtectedZIPEngine.error(for: status)
+                        }
                     }
                 }
+                return .success
+            } catch let error as ProtectedZIPError {
+                return .failure(error)
+            } catch {
+                return .failure(.engineSetupFailed)
             }
         }
 
-        do {
-            try await withTaskCancellationHandler(operation: {
-                try await task.value
-            }, onCancel: {
-                bridge.cancel()
-                task.cancel()
-            })
-        } catch is CancellationError {
-            bridge.finish()
-            _ = await deliveryTask.value
-            throw ProtectedZIPError.cancelled
-        } catch {
-            bridge.finish()
-            _ = await deliveryTask.value
-            throw error
-        }
+        let outcome = await withTaskCancellationHandler(operation: {
+            await task.value
+        }, onCancel: {
+            bridge.cancel()
+            task.cancel()
+        })
         _ = await deliveryTask.value
-        do {
-            try Task.checkCancellation()
-        } catch {
-            throw ProtectedZIPError.cancelled
+        switch outcome {
+        case .success:
+            break
+        case .failure(let error):
+            throw error
         }
     }
 
@@ -167,49 +165,47 @@ actor LiveProtectedZIPEngine: ProtectedZIPEngine {
         let deliveryTask = Task {
             await bridge.consume()
         }
-        let task = Task.detached(priority: .utility) { () throws -> Void in
+        let task = Task.detached(priority: .utility) { () -> ProtectedZIPNativeOutcome in
             defer { bridge.finish() }
-            try archive.withUnsafeDescriptor { archiveDescriptor in
-                try password.withUnsafeBytes { secretBytes in
-                    guard let baseAddress = secretBytes.baseAddress else {
-                        throw ProtectedZIPError.invalidPasswordInput
-                    }
-                    let status = pengrid_zip_extract(
-                        archiveDescriptor,
-                        destinationRoot.descriptor,
-                        baseAddress.assumingMemoryBound(to: UInt8.self),
-                        secretBytes.count,
-                        nativeLimits,
-                        protectedZIPProgressCallback,
-                        Unmanaged.passUnretained(bridge).toOpaque()
-                    )
-                    guard status == PENGRID_ZIP_STATUS_OK else {
-                        throw LiveProtectedZIPEngine.error(for: status)
+            do {
+                try archive.withUnsafeDescriptor { archiveDescriptor in
+                    try password.withUnsafeBytes { secretBytes in
+                        guard let baseAddress = secretBytes.baseAddress else {
+                            throw ProtectedZIPError.invalidPasswordInput
+                        }
+                        let status = pengrid_zip_extract(
+                            archiveDescriptor,
+                            destinationRoot.descriptor,
+                            baseAddress.assumingMemoryBound(to: UInt8.self),
+                            secretBytes.count,
+                            nativeLimits,
+                            protectedZIPProgressCallback,
+                            Unmanaged.passUnretained(bridge).toOpaque()
+                        )
+                        guard status == PENGRID_ZIP_STATUS_OK else {
+                            throw LiveProtectedZIPEngine.error(for: status)
+                        }
                     }
                 }
+                return .success
+            } catch let error as ProtectedZIPError {
+                return .failure(error)
+            } catch {
+                return .failure(.engineSetupFailed)
             }
         }
-        do {
-            try await withTaskCancellationHandler(operation: {
-                try await task.value
-            }, onCancel: {
-                bridge.cancel()
-                task.cancel()
-            })
-        } catch is CancellationError {
-            bridge.finish()
-            _ = await deliveryTask.value
-            throw ProtectedZIPError.cancelled
-        } catch {
-            bridge.finish()
-            _ = await deliveryTask.value
-            throw error
-        }
+        let outcome = await withTaskCancellationHandler(operation: {
+            await task.value
+        }, onCancel: {
+            bridge.cancel()
+            task.cancel()
+        })
         _ = await deliveryTask.value
-        do {
-            try Task.checkCancellation()
-        } catch {
-            throw ProtectedZIPError.cancelled
+        switch outcome {
+        case .success:
+            break
+        case .failure(let error):
+            throw error
         }
     }
 
@@ -293,6 +289,11 @@ private func MZUnused<T>(_ value: T) {
     _ = value
 }
 
+private enum ProtectedZIPNativeOutcome: Sendable {
+    case success
+    case failure(ProtectedZIPError)
+}
+
 private struct ProtectedZIPProgressEvent: Sendable {
     let completed: UInt64
     let total: UInt64
@@ -303,6 +304,7 @@ private final class ProtectedZIPProgressBridge: @unchecked Sendable {
     private let wakeStream: AsyncStream<Void>
     private let progress: @Sendable (ProtectedZIPProgress) async -> Void
     private let lock = NSLock()
+    private let initialDeliveryGate = DispatchSemaphore(value: 0)
     private var cancelled = false
     private var finished = false
     private var initialPending: ProtectedZIPProgressEvent?
@@ -318,18 +320,32 @@ private final class ProtectedZIPProgressBridge: @unchecked Sendable {
     }
 
     func callback(completed: UInt64, total: UInt64) -> Int32 {
+        var shouldAwaitInitial = false
         lock.lock()
-        defer { lock.unlock() }
-        guard !cancelled else { return 1 }
-        let event = ProtectedZIPProgressEvent(completed: completed, total: total)
-        if completed == 0 {
-            if !initialDelivered, initialPending == nil { initialPending = event }
-        } else if total > 0, completed >= total {
-            finalPending = event
-        } else {
-            latestIntermediate = event
+        if !cancelled {
+            let event = ProtectedZIPProgressEvent(completed: completed, total: total)
+            if completed == 0 {
+                if !initialDelivered, initialPending == nil {
+                    initialPending = event
+                    shouldAwaitInitial = true
+                }
+            } else if total > 0, completed >= total {
+                finalPending = event
+            } else {
+                latestIntermediate = event
+            }
         }
+        let cancelled = self.cancelled
+        lock.unlock()
+        guard !cancelled else { return 1 }
         wakeContinuation.yield(())
+        if shouldAwaitInitial {
+            initialDeliveryGate.wait()
+            lock.lock()
+            let cancelledAfterDelivery = self.cancelled
+            lock.unlock()
+            return cancelledAfterDelivery ? 1 : 0
+        }
         return 0
     }
 
@@ -337,6 +353,7 @@ private final class ProtectedZIPProgressBridge: @unchecked Sendable {
         lock.lock()
         cancelled = true
         lock.unlock()
+        initialDeliveryGate.signal()
     }
 
     func finish() {
@@ -374,6 +391,9 @@ private final class ProtectedZIPProgressBridge: @unchecked Sendable {
                     totalByteCount: Int64(event.total)
                 )
             )
+            if event.completed == 0 {
+                initialDeliveryGate.signal()
+            }
             lastDelivery = ContinuousClock.now
             lastDeliveredEvent = event
         }
