@@ -37,6 +37,30 @@ private func rootIdentityTestHook(_ name: String) -> RootIdentityTestHook? {
     }
 }
 
+private final class ProtectedZIPSecretCleanupAllocator: ArchiveSecretMemoryAllocator {
+    private let cleanup: (UnsafeMutableRawPointer, Int) -> Void
+
+    init(cleanup: @escaping (UnsafeMutableRawPointer, Int) -> Void) {
+        self.cleanup = cleanup
+    }
+
+    func allocate(byteCount: Int, alignment: Int) -> UnsafeMutableRawPointer {
+        UnsafeMutableRawPointer.allocate(byteCount: byteCount, alignment: alignment)
+    }
+
+    func clear(_ bytes: UnsafeMutableRawPointer, length: Int) {
+        cleanup(bytes, length)
+    }
+
+    func deallocate(
+        _ bytes: UnsafeMutableRawPointer,
+        byteCount _: Int,
+        alignment _: Int
+    ) {
+        bytes.deallocate()
+    }
+}
+
 @_cdecl("pengrid_test_reanchor_progress")
 func pengrid_test_reanchor_progress(
     _ completed: UInt64,
@@ -995,7 +1019,10 @@ struct ProtectedZIPEngineReaderTests {
         do {
             let secret: ArchiveSecret
             if let secretCleanup {
-                secret = ArchiveSecret(utf8: Array(password.utf8), cleanup: secretCleanup)
+                secret = try ArchiveSecret.extraction(
+                    password: password,
+                    allocator: ProtectedZIPSecretCleanupAllocator(cleanup: secretCleanup)
+                )
             } else {
                 secret = try ArchiveSecret.extraction(password: password)
             }

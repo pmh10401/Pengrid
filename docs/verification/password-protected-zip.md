@@ -152,6 +152,81 @@ These checks remain **NOT RUN** and are not represented as automated passes:
 - Process-list inspection during password entry.
 - Performance benchmarks or large-archive throughput measurements.
 
+## Final review fix A2 — controlled ArchiveSecret temporary storage
+
+Fix A2 is based on the approved whole-feature review head `80565fb` and is
+limited to the Important finding that password construction created
+non-zeroized `Array(password.utf8)` and `Array(confirmation.utf8)` temporaries.
+The protected-ZIP prompt, engine, operation, routing, and controller contracts
+are unchanged.
+
+`ArchiveSecret` now validates NUL and UTF-8 byte boundaries from the String
+views before any allocation, allocates one controlled raw buffer through its
+narrow internal `ArchiveSecretMemoryAllocator`, and copies the password view
+directly into that buffer. Creation compares the confirmation view directly
+against the owned bytes. A `defer` transfers ownership only after copy and
+confirmation succeed; every construction failure clears the full allocation
+before deallocation. `invalidate()` and `deinit` retain the existing lock and
+active-borrow semantics and clear exactly once before deallocation. Tests use
+only the injected allocator seam; no raw-byte or array-taking initializer
+remains.
+No SecureField/String storage zeroization claim is made here; this fix covers
+avoidable temporary byte arrays and controlled ArchiveSecret storage only.
+
+The allocator recorder assigns allocation identities, fills each allocation
+with a non-zero marker, observes the copied UTF-8 bytes, and records clear and
+deallocate order. Focused tests cover successful extraction plus invalidate,
+confirmation mismatch, NUL/too-short/too-long prevalidation with zero
+allocations, extraction deinit, concurrent invalidate, and cancellation that
+invalidates a constructed secret. Assertions require one allocation, one
+clear, one deallocation, no leaks or double teardown, and zero bytes at
+deallocation. The source assertion rejects `Array(password.utf8)`,
+`Array(confirmation.utf8)`, and the removed `init(utf8: [UInt8])` construction
+API. The protected reader cleanup helper now injects the allocator seam rather
+than constructing an Array.
+
+TDD and mutation evidence:
+
+- RED — the allocator-recorder tests were added first; the focused build
+  failed because `ArchiveSecretMemoryAllocator` and allocator-aware
+  construction did not exist.
+- GREEN — the restored focused ArchiveSecret suite passed all 11 tests.
+- Mutation RED — disconnecting the construction failure-path clear made the
+  mismatch recorder assertion fail (`clearCount == 0`, non-zero bytes at
+  deallocation); disconnecting the success invalidate clear made the success
+  recorder assertion fail with the same evidence. Both clear calls were
+  restored before regression verification.
+
+The exact commands and final counts for this fix are recorded below. Known
+unrelated SwiftPM fixture and pre-concurrency warnings, when printed on a cold
+plan, are retained as environment inventory and do not indicate ArchiveSecret
+source warnings.
+
+Fix A2 verification commands and results (macOS arm64, serial SwiftPM):
+
+- Focused RED: `env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+  /usr/bin/xcrun swift test --disable-sandbox --no-parallel --filter
+  ArchiveSecretTests` failed at compile before the allocator API existed.
+- Focused GREEN: the same command passed **11 tests in 1 suite** after the
+  implementation and restoration of both clear paths.
+- Protected regressions: `env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+  /usr/bin/xcrun swift test --disable-sandbox --no-parallel --filter
+  'ArchiveSecretTests|ProtectedZIPEngineReaderTests|ProtectedZIPEngineWriterTests|ProtectedZIPOperationServiceTests|RoutingArchiveOperationServiceTests|ArchivePasswordPromptCoordinatorTests|FileOperationControllerTests|FileOperationCenterViewTests|WorkspaceCommandTests|WorkspaceCommandPolicyTests|OperationStatusViewTests|AccessibilityPresentationTests'`
+  passed **223 tests in 9 suites** (9.036 seconds).
+- Final full suite: `env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+  /usr/bin/xcrun swift test --disable-sandbox --no-parallel` passed **1,046
+  tests in 76 suites** (49.292 seconds).
+- Reflection/source/sentinel checks: all ArchiveSecret tests passed; the
+  source scan found no `Array(password.utf8)`, `Array(confirmation.utf8)`, or
+  `init(utf8: [UInt8])`. `git diff --check` passed. No ArchiveSecret source
+  path contains password reconstruction, read-back String conversion, or
+  password logging. Existing test-only fixture sentinels remain outside
+  production sources.
+
+The controlled allocator seam is internal and does not change the public
+package API. The final commit is frozen only after the
+working tree, owned-file scope, and the report above are rechecked.
+
 ## Final review fix A — ZipCrypto derived-state cleanup
 
 Fix A is based on the approved whole-feature review base `e0e5e00` and is
