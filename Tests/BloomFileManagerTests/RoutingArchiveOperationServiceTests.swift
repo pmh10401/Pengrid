@@ -207,6 +207,8 @@ struct RoutingArchiveOperationServiceTests {
         let secondSource = root.url.appending(path: "Second.txt")
         let firstDestination = root.url.appending(path: "First.zip")
         let secondDestination = root.url.appending(path: "Second.zip")
+        let firstSafePath = try! ComparisonRelativePath(components: ["ordinary", "First.txt"])
+        let secondSafePath = try! ComparisonRelativePath(components: ["protected", "Second.txt"])
         try Data("first".utf8).write(to: firstSource)
         try Data("second".utf8).write(to: secondSource)
         let fileSystem = LiveFileSystemAccess()
@@ -226,11 +228,15 @@ struct RoutingArchiveOperationServiceTests {
             format: .zip,
             protection: .aes256
         ))
-        let ordinary = ArchiveOperationService(
+        let ordinaryService = ArchiveOperationService(
             fileSystem: fileSystem,
             commandRunner: Task8WritingArchiveCommandRunner(fileSystem: fileSystem)
         )
-        let protected = ProtectedZIPOperationService(
+        let ordinary = Task8SafePathArchiveService(
+            base: ordinaryService,
+            safePaths: [firstSource: firstSafePath]
+        )
+        let protectedService = ProtectedZIPOperationService(
             fileSystem: fileSystem,
             sourcePreparer: LiveArchiveSourcePreparationService(fileSystem: fileSystem),
             passwordProvider: RecordingArchivePasswordProvider(
@@ -238,6 +244,10 @@ struct RoutingArchiveOperationServiceTests {
             ),
             engine: RoutingFactoryEngine(),
             logger: RecordingProtectedZIPLogger()
+        )
+        let protected = Task8SafePathProtectedService(
+            base: protectedService,
+            safePaths: [secondSource: secondSafePath]
         )
         let router = RoutingArchiveOperationService(ordinary: ordinary, protected: protected)
 
@@ -252,6 +262,8 @@ struct RoutingArchiveOperationServiceTests {
         #expect(result.undoDestinationIdentity(for: secondDestination) != nil)
         #expect(result.undoDestinationFingerprint(for: firstDestination) != nil)
         #expect(result.undoDestinationFingerprint(for: secondDestination) != nil)
+        #expect(result.safeRelativePath(for: firstSource) == firstSafePath)
+        #expect(result.safeRelativePath(for: secondSource) == secondSafePath)
         #expect(FileManager.default.fileExists(atPath: firstDestination.path))
         #expect(FileManager.default.fileExists(atPath: secondDestination.path))
     }
@@ -408,6 +420,36 @@ private struct Task8WritingArchiveCommandRunner: ArchiveCommandRunning {
     ) async throws -> FileIdentity {
         try Data("ordinary archive output".utf8).write(to: destination)
         return try #require(await fileSystem.identity(of: destination))
+    }
+}
+
+private struct Task8SafePathArchiveService: ArchiveOperating {
+    let base: any ArchiveOperating
+    let safePaths: [URL: ComparisonRelativePath]
+
+    func perform(
+        _ requests: [ArchiveRequest],
+        progress: @escaping ArchiveProgressHandler
+    ) async -> FileOperationResult {
+        await base.perform(requests, progress: progress)
+            .addingSafeRelativePaths(safePaths)
+    }
+}
+
+private struct Task8SafePathProtectedService: ProtectedZIPOperating {
+    let base: any ProtectedZIPOperating
+    let safePaths: [URL: ComparisonRelativePath]
+
+    func classify(_ request: ArchiveRequest) async -> ArchiveOperationRoute {
+        await base.classify(request)
+    }
+
+    func perform(
+        _ requests: [ArchiveRequest],
+        progress: @escaping ArchiveProgressHandler
+    ) async -> FileOperationResult {
+        await base.perform(requests, progress: progress)
+            .addingSafeRelativePaths(safePaths)
     }
 }
 
