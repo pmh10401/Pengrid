@@ -64,6 +64,15 @@ struct ArchiveProgressPublicationGate {
     }
 }
 
+/// Identifies the coordinator that currently owns termination preparation.
+///
+/// Cleanup is asynchronous because an operation must unwind before AppKit can
+/// receive a termination reply. A generation token keeps cleanup from an old
+/// coordinator from releasing a newer coordinator's gate.
+struct TerminationPreparationToken: Sendable, Equatable {
+    fileprivate let generation: UInt64
+}
+
 @MainActor @Observable
 final class FileOperationController {
     private let service: FileOperationService
@@ -81,6 +90,28 @@ final class FileOperationController {
     private(set) var operationHistory: [FileOperationJobSnapshot] = []
     private(set) var isPaused = false
     private(set) var isQueueBlockedByRecovery = false
+    private(set) var isTerminationPreparationActive = false
+
+    /// True only after the active operation has completed its result handling
+    /// and no operation task can still publish a cleanup/recovery outcome.
+    var isSafelyIdleForTermination: Bool {
+        !isRunning
+            && activeOperation == nil
+            && activeControl == nil
+            && operationTask == nil
+    }
+
+    /// Termination must remain blocked until the user acknowledges a prior
+    /// recovery result. `lastResult` remains historical UI state after that
+    /// acknowledgement, so the queue marker is the termination veto.
+    var hasRecoveryRequiredResultForTermination: Bool {
+        isQueueBlockedByRecovery
+    }
+
+    var requiresTerminationPreparation: Bool {
+        !isSafelyIdleForTermination
+            || !pendingOperations.isEmpty
+    }
 
     var progress: FileOperationProgress? {
         guard case let .operating(progress) = stage else { return nil }
@@ -95,6 +126,8 @@ final class FileOperationController {
     @ObservationIgnored private var activeOperation: PendingFileOperation?
     @ObservationIgnored private var activeControl: FileOperationControl?
     @ObservationIgnored private var retryOperations: [UUID: PendingFileOperation] = [:]
+    @ObservationIgnored private var terminationPreparationGeneration: UInt64 = 0
+    @ObservationIgnored private var terminationPreparationToken: TerminationPreparationToken?
     @ObservationIgnored private var undoRecipes: [UUID: FileOperationUndoRecipe] = [:]
     @ObservationIgnored private var undoDirectoryKeys: [UUID: Set<String>] = [:]
     @ObservationIgnored private var activeOperationDidReplace = false
@@ -168,6 +201,40 @@ final class FileOperationController {
         resolvePendingConflict(.cancel, applyToAll: false)
     }
 
+    /// Prevents queued work from being started while AppKit is waiting for a
+    /// cancellation to unwind. The operation itself owns its cleanup and is
+    /// allowed to finish before the app receives a termination reply.
+    @discardableResult
+    func beginTerminationPreparation() -> TerminationPreparationToken {
+        if let terminationPreparationToken {
+            cancelActiveJob()
+            return terminationPreparationToken
+        }
+        terminationPreparationGeneration &+= 1
+        let terminationPreparationToken = TerminationPreparationToken(
+            generation: terminationPreparationGeneration
+        )
+        self.terminationPreparationToken = terminationPreparationToken
+        isTerminationPreparationActive = true
+        cancelActiveJob()
+        return terminationPreparationToken
+    }
+
+    /// Re-enables normal queue dispatch after AppKit rejects termination.
+    /// Successful termination intentionally leaves the gate closed because
+    /// the process is about to exit.
+    func finishTerminationPreparation(
+        _ token: TerminationPreparationToken,
+        restartQueue: Bool
+    ) {
+        guard terminationPreparationToken == token else { return }
+        terminationPreparationToken = nil
+        isTerminationPreparationActive = false
+        if restartQueue {
+            startNextOperationIfNeeded()
+        }
+    }
+
     @discardableResult
     func continueAfterRecovery() -> Bool {
         guard isQueueBlockedByRecovery else { return false }
@@ -177,7 +244,10 @@ final class FileOperationController {
     }
 
     func pauseActiveJob() async {
-        guard let activeControl, let activeJob else { return }
+        guard let activeControl,
+              let activeJob,
+              activeJob.state != .waitingForPassword
+        else { return }
         await activeControl.pause()
         isPaused = false
         self.activeJob = snapshot(
@@ -287,13 +357,27 @@ final class FileOperationController {
         _ workspace: WorkspaceState,
         format: ArchiveFormat = .zip
     ) async -> Bool {
+        await compressSelection(
+            workspace,
+            format: format,
+            protection: .none
+        )
+    }
+
+    @discardableResult
+    func compressSelection(
+        _ workspace: WorkspaceState,
+        format: ArchiveFormat = .zip,
+        protection: ArchiveProtection
+    ) async -> Bool {
         guard let capture = archiveSelectionCapture(in: workspace),
               let plan = ArchiveDestinationPlanner.compression(
                 selectedItems: capture.selectedItems,
                 in: capture.directory,
                 occupiedNames: capture.occupiedNames,
-                format: format
-              )
+                format: format,
+                protection: protection
+            )
         else { return false }
         let identityCapture = await captureArchiveIdentities(for: plan)
         return runArchive(plan, identityCapture: identityCapture, in: workspace)
@@ -369,7 +453,9 @@ final class FileOperationController {
         let initialName = plan.destinations.first?.lastPathComponent ?? ""
         let jobKind: FileOperationJobKind = switch plan.kind {
         case .compress:
-            .compress(plan.formats.first ?? .zip)
+            plan.protection == .none
+                ? .compress(plan.formats.first ?? .zip)
+                : .compressProtectedZIP
         case .extract:
             .extract(plan.formats.first ?? .zip)
         }
@@ -384,7 +470,8 @@ final class FileOperationController {
             )),
             touchedDirectories: Set(plan.destinations.map { $0.deletingLastPathComponent() }),
             workspace: workspace,
-            cancellationSources: sources
+            cancellationSources: sources,
+            archiveProtection: plan.protection
         ) { [weak self, service, materializer, archiveService] in
             guard let self else {
                 return FileOperationResult(outcomes: sources.map {
@@ -1081,6 +1168,7 @@ final class FileOperationController {
         cancellationSources: [URL] = [],
         allowsRetry: Bool = true,
         requiresExclusiveQueue: Bool = false,
+        archiveProtection: ArchiveProtection? = nil,
         onCompletion: (@MainActor (FileOperationResult) -> Void)? = nil,
         operation: @escaping @MainActor () async -> FileOperationResult
     ) -> Bool {
@@ -1094,6 +1182,7 @@ final class FileOperationController {
             cancellationSources: cancellationSources,
             allowsRetry: allowsRetry,
             requiresExclusiveQueue: requiresExclusiveQueue,
+            archiveProtection: archiveProtection,
             onCompletion: onCompletion,
             operation: operation
         ))
@@ -1101,6 +1190,7 @@ final class FileOperationController {
 
     @discardableResult
     private func enqueue(_ pending: PendingFileOperation) -> Bool {
+        guard !isTerminationPreparationActive else { return false }
         if pending.requiresExclusiveQueue {
             guard activeOperation == nil, pendingOperations.isEmpty else { return false }
         } else if activeOperation?.requiresExclusiveQueue == true
@@ -1115,6 +1205,7 @@ final class FileOperationController {
 
     private func startNextOperationIfNeeded() {
         guard activeOperation == nil,
+              !isTerminationPreparationActive,
               !isQueueBlockedByRecovery,
               !pendingOperations.isEmpty
         else { return }
@@ -1200,9 +1291,22 @@ final class FileOperationController {
         }
         stage = newStage
         guard let activeJob else { return }
+        let state: FileOperationJobState
+        if case let .archiving(progress) = newStage {
+            switch progress.phase {
+            case .waitingForPassword:
+                state = .waitingForPassword
+            case .processingBytes:
+                state = .running
+            default:
+                state = activeJob.state
+            }
+        } else {
+            state = activeJob.state
+        }
         self.activeJob = snapshot(
             for: activeJob,
-            state: activeJob.state,
+            state: state,
             progress: jobProgress(for: newStage),
             canUndo: false
         )
@@ -1211,13 +1315,13 @@ final class FileOperationController {
     private func jobProgress(for stage: FileOperationStage) -> FileOperationJobProgress? {
         switch stage {
         case let .preparing(progress):
-            FileOperationJobProgress(
+            return FileOperationJobProgress(
                 completedCount: progress.completedCount,
                 totalCount: progress.totalCount,
                 detail: "Preparing download"
             )
         case let .operating(progress):
-            FileOperationJobProgress(
+            return FileOperationJobProgress(
                 completedCount: progress.completedCount,
                 totalCount: progress.totalCount,
                 detail: "Processing files"
@@ -1225,19 +1329,38 @@ final class FileOperationController {
         case let .archiving(progress):
             switch progress.phase {
             case let .preparingSources(completedCount, totalCount):
-                FileOperationJobProgress(
+                return FileOperationJobProgress(
                     completedCount: completedCount,
                     totalCount: totalCount,
                     detail: "Preparing files"
                 )
+            case let .processingBytes(completedByteCount, totalByteCount):
+                let boundedTotal = totalByteCount.map {
+                    Int(clamping: max($0, 0))
+                } ?? 0
+                let boundedCompleted = min(
+                    max(Int(clamping: completedByteCount), 0),
+                    boundedTotal
+                )
+                return FileOperationJobProgress(
+                    completedCount: boundedCompleted,
+                    totalCount: boundedTotal,
+                    detail: "Processing archive"
+                )
             case .encoding:
-                FileOperationJobProgress(
+                return FileOperationJobProgress(
                     completedCount: 0,
                     totalCount: 0,
                     detail: "Encoding archive"
                 )
+            case .waitingForPassword:
+                return FileOperationJobProgress(
+                    completedCount: 0,
+                    totalCount: 0,
+                    detail: "Waiting for password"
+                )
             case .publishing:
-                FileOperationJobProgress(
+                return FileOperationJobProgress(
                     completedCount: 0,
                     totalCount: 0,
                     detail: "Finishing archive"
@@ -1433,6 +1556,7 @@ private struct PendingFileOperation {
     let cancellationSources: [URL]
     let allowsRetry: Bool
     let requiresExclusiveQueue: Bool
+    let archiveProtection: ArchiveProtection?
     let onCompletion: (@MainActor (FileOperationResult) -> Void)?
     let operation: @MainActor () async -> FileOperationResult
 
@@ -1447,6 +1571,7 @@ private struct PendingFileOperation {
         cancellationSources: [URL],
         allowsRetry: Bool,
         requiresExclusiveQueue: Bool,
+        archiveProtection: ArchiveProtection?,
         onCompletion: (@MainActor (FileOperationResult) -> Void)?,
         operation: @escaping @MainActor () async -> FileOperationResult
     ) {
@@ -1459,6 +1584,7 @@ private struct PendingFileOperation {
         self.cancellationSources = cancellationSources
         self.allowsRetry = allowsRetry
         self.requiresExclusiveQueue = requiresExclusiveQueue
+        self.archiveProtection = archiveProtection
         self.onCompletion = onCompletion
         self.operation = operation
         self.itemDisplayName = FileOperationJobSnapshot(
@@ -1506,6 +1632,7 @@ private struct PendingFileOperation {
             cancellationSources: cancellationSources,
             allowsRetry: allowsRetry,
             requiresExclusiveQueue: requiresExclusiveQueue,
+            archiveProtection: archiveProtection,
             onCompletion: onCompletion,
             operation: operation
         )

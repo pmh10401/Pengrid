@@ -69,7 +69,7 @@ import Testing
     #expect(source.contains("fstatat(resourcesFD"))
     #expect(source.contains("/bin/mv") == false)
     #expect(source.contains("/usr/bin/mktemp") == false)
-    #expect(source.contains("exec 9") == false)
+    #expect(source.contains("exec 9<\"$NOTICE_SOURCE\""))
     let openStage = try #require(source.range(of: "openat(resourcesFD"))
     let readSource = try #require(source.range(of: "read(sourceFD"))
     let writeStage = try #require(source.range(of: "write(stageFD"))
@@ -79,6 +79,40 @@ import Testing
     #expect(readSource.lowerBound < writeStage.lowerBound)
     #expect(writeStage.lowerBound < publish.lowerBound)
     #expect(publish.lowerBound < closeSourceFD.lowerBound)
+}
+
+@Test func buildAndReleaseScriptsVerifyProtectedZipNoticeAndNativeLinkage() throws {
+    let repositoryRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let buildSource = try String(
+        contentsOf: repositoryRoot.appendingPathComponent("script/build_and_run.sh"),
+        encoding: .utf8
+    )
+    let releaseSource = try String(
+        contentsOf: repositoryRoot.appendingPathComponent("script/package_release.sh"),
+        encoding: .utf8
+    )
+
+    let executableBuildSource = buildSource
+        .split(separator: "\n", omittingEmptySubsequences: false)
+        .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("#") }
+        .joined(separator: "\n")
+    #expect(executableBuildSource.contains("THIRD_PARTY_NOTICES.md"))
+    #expect(executableBuildSource.contains("/usr/bin/otool -L \"$binary\""))
+    #expect(executableBuildSource.contains("/usr/bin/grep -Eiq 'libssl|libcrypto'"))
+    #expect(executableBuildSource.contains("verify_native_linkage \"$APP_BINARY\""))
+    #expect(executableBuildSource.contains("--verify|verify) verify_app_bundle"))
+    let buildVerifyPath = try #require(executableBuildSource.range(of: "--verify|verify) verify_app_bundle"))
+    let buildNativeCall = try #require(executableBuildSource.range(of: "verify_native_linkage \"$APP_BINARY\""))
+    let buildNoticeClose = try #require(executableBuildSource.range(of: "exec 9<&-"))
+    #expect(buildNoticeClose.lowerBound < buildVerifyPath.lowerBound)
+    #expect(buildNativeCall.lowerBound < buildVerifyPath.lowerBound)
+    #expect(executableBuildSource[buildVerifyPath.upperBound...].contains("exec 9<&-") == false)
+    #expect(releaseSource.contains("THIRD_PARTY_NOTICES.md"))
+    #expect(releaseSource.contains("otool -L"))
+    #expect(releaseSource.contains("libssl") && releaseSource.contains("libcrypto"))
 }
 
 @Test func buildScriptCreatesPengridBundleWithCanonicalIconAndLegacyIdentity() throws {
@@ -106,6 +140,10 @@ import Testing
     try fileManager.copyItem(
         at: repositoryRoot.appendingPathComponent("script/build_and_run.sh"),
         to: scriptDirectory.appendingPathComponent("build_and_run.sh")
+    )
+    try fileManager.copyItem(
+        at: repositoryRoot.appendingPathComponent("THIRD_PARTY_NOTICES.md"),
+        to: temporaryRoot.appendingPathComponent("THIRD_PARTY_NOTICES.md")
     )
 
     let canonicalIcon = Data("canonical-pengrid-icon".utf8)
@@ -189,7 +227,7 @@ import Testing
         encoding: .utf8
     )
 
-    for declaration in ["APP_VERSION=\"1.3.0\"", "BUILD_VERSION=\"5\""] {
+    for declaration in ["APP_VERSION=\"1.3.0\"", "BUILD_VERSION=\"6\""] {
         #expect(development.contains(declaration))
         #expect(release.contains(declaration))
     }

@@ -61,6 +61,75 @@ struct ArchiveDestinationPlan: Sendable, Equatable {
     let sourceDisplayNames: [String]
     let destinations: [URL]
     let formats: [ArchiveFormat]
+    let protection: ArchiveProtection
+
+    init(
+        kind: ArchiveOperationKind,
+        selectedSources: [URL],
+        sourceDisplayNames: [String],
+        destinations: [URL],
+        formats: [ArchiveFormat]
+    ) {
+        self.init(
+            kind: kind,
+            selectedSources: selectedSources,
+            sourceDisplayNames: sourceDisplayNames,
+            destinations: destinations,
+            formats: formats,
+            protection: .none,
+            validated: ()
+        )
+    }
+
+    init?(
+        kind: ArchiveOperationKind,
+        selectedSources: [URL],
+        sourceDisplayNames: [String],
+        destinations: [URL],
+        formats: [ArchiveFormat],
+        protection: ArchiveProtection
+    ) {
+        guard Self.isAllowed(
+            kind: kind,
+            formats: formats,
+            protection: protection
+        ) else { return nil }
+        self.init(
+            kind: kind,
+            selectedSources: selectedSources,
+            sourceDisplayNames: sourceDisplayNames,
+            destinations: destinations,
+            formats: formats,
+            protection: protection,
+            validated: ()
+        )
+    }
+
+    private init(
+        kind: ArchiveOperationKind,
+        selectedSources: [URL],
+        sourceDisplayNames: [String],
+        destinations: [URL],
+        formats: [ArchiveFormat],
+        protection: ArchiveProtection,
+        validated _: Void
+    ) {
+        self.kind = kind
+        self.selectedSources = selectedSources
+        self.sourceDisplayNames = sourceDisplayNames
+        self.destinations = destinations
+        self.formats = formats
+        self.protection = protection
+    }
+
+    private static func isAllowed(
+        kind: ArchiveOperationKind,
+        formats: [ArchiveFormat],
+        protection: ArchiveProtection
+    ) -> Bool {
+        protection == .none
+            || (kind == .compress && formats.count == 1 && formats.first == .zip)
+    }
 
     func requests(
         for verifiedSources: [IdentifiedFileRequest],
@@ -72,8 +141,9 @@ struct ArchiveDestinationPlan: Sendable, Equatable {
         switch kind {
         case .compress:
             guard destinations.count == 1, formats.count == 1 else { return nil }
-            return [
-                ArchiveRequest(
+            let request: ArchiveRequest?
+            if protection == .none {
+                request = ArchiveRequest(
                     kind: .compress,
                     verifiedSources: verifiedSources,
                     finalDestination: destinations[0],
@@ -81,7 +151,19 @@ struct ArchiveDestinationPlan: Sendable, Equatable {
                     progressDisplayName: destinations[0].lastPathComponent,
                     format: formats[0]
                 )
-            ]
+            } else {
+                request = ArchiveRequest(
+                    kind: .compress,
+                    verifiedSources: verifiedSources,
+                    finalDestination: destinations[0],
+                    destinationParentIdentity: destinationParentIdentity,
+                    progressDisplayName: destinations[0].lastPathComponent,
+                    format: formats[0],
+                    protection: protection
+                )
+            }
+            guard let request else { return nil }
+            return [request]
         case .extract:
             guard destinations.count == verifiedSources.count,
                   formats.count == verifiedSources.count
@@ -105,9 +187,12 @@ enum ArchiveDestinationPlanner {
         selectedItems: [FileItem],
         in directory: URL,
         occupiedNames: Set<String>,
-        format: ArchiveFormat = .zip
+        format: ArchiveFormat = .zip,
+        protection: ArchiveProtection = .none
     ) -> ArchiveDestinationPlan? {
-        guard ArchiveSelectionEligibility.canCompress(selectedItems) else { return nil }
+        guard ArchiveSelectionEligibility.canCompress(selectedItems),
+              protection == .none || (format == .zip && protection == .aes256)
+        else { return nil }
         let proposedName = selectedItems.count == 1
             ? "\(selectedItems[0].name)\(format.canonicalSuffix)"
             : "Archive\(format.canonicalSuffix)"
@@ -120,16 +205,20 @@ enum ArchiveDestinationPlanner {
             selectedSources: selectedItems.map(\.url),
             sourceDisplayNames: selectedItems.map(\.name),
             destinations: [directory.appending(path: destinationName)],
-            formats: [format]
+            formats: [format],
+            protection: protection
         )
     }
 
     static func extraction(
         selectedItems: [FileItem],
         in directory: URL,
-        occupiedNames: Set<String>
+        occupiedNames: Set<String>,
+        protection: ArchiveProtection = .none
     ) -> ArchiveDestinationPlan? {
-        guard ArchiveSelectionEligibility.canExtract(selectedItems) else { return nil }
+        guard ArchiveSelectionEligibility.canExtract(selectedItems),
+              protection == .none
+        else { return nil }
         var occupied = occupiedNames
         var destinations: [URL] = []
         var formats: [ArchiveFormat] = []
@@ -220,11 +309,39 @@ struct FileOperationResult: Sendable, Equatable {
     func addingSafeRelativePaths(
         _ paths: [URL: ComparisonRelativePath]
     ) -> FileOperationResult {
-        FileOperationResult(
+        var mergedPaths = safeRelativePathsBySource
+        for (source, path) in paths {
+            mergedPaths[source.standardizedFileURL] = path
+        }
+        return FileOperationResult(
             outcomes: outcomes,
-            safeRelativePathsBySource: paths,
+            safeRelativePathsBySource: mergedPaths,
             undoDestinationIdentities: undoDestinationIdentities,
             undoDestinationFingerprints: undoDestinationFingerprints
+        )
+    }
+
+    /// Appends an operation result without dropping the safe metadata collected
+    /// by either request. Earlier metadata wins for a repeated key so a later
+    /// request cannot overwrite the identity captured by an earlier publish.
+    func merging(_ other: FileOperationResult) -> FileOperationResult {
+        var paths = safeRelativePathsBySource
+        for (source, path) in other.safeRelativePathsBySource {
+            paths[source] = paths[source] ?? path
+        }
+        var identities = undoDestinationIdentities
+        for (destination, identity) in other.undoDestinationIdentities {
+            identities[destination] = identities[destination] ?? identity
+        }
+        var fingerprints = undoDestinationFingerprints
+        for (destination, fingerprint) in other.undoDestinationFingerprints {
+            fingerprints[destination] = fingerprints[destination] ?? fingerprint
+        }
+        return FileOperationResult(
+            outcomes: outcomes + other.outcomes,
+            safeRelativePathsBySource: paths,
+            undoDestinationIdentities: identities,
+            undoDestinationFingerprints: fingerprints
         )
     }
 

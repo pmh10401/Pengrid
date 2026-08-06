@@ -502,4 +502,177 @@ struct FileSystemAccessTests {
         try await fileSystem.move(resultingURL, identifiedBy: identity, to: source)
         #expect(try await fileSystem.identity(of: source) == identity)
     }
+
+    @Test func openItemRetainsAnIdentityMatchedDescriptorUntilExplicitClose() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let source = root.url.appending(path: "archive.zip")
+        try Data("archive".utf8).write(to: source)
+
+        let fileSystem = LiveFileSystemAccess()
+        let identity = try #require(await fileSystem.identity(of: source))
+        let item = try await fileSystem.openItem(
+            source,
+            kind: .regularFile,
+            identifiedBy: identity
+        )
+        let descriptor = try item.withUnsafeDescriptor { descriptor in
+            #expect(Darwin.fcntl(descriptor, F_GETFD) >= 0)
+            return descriptor
+        }
+        #expect(Darwin.fcntl(descriptor, F_GETFD) >= 0)
+
+        item.close()
+        #expect(Darwin.fcntl(descriptor, F_GETFD) == -1)
+        item.close()
+    }
+
+    @Test func openItemClosesItsDescriptorWhenTheOwnerIsReleased() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let source = root.url.appending(path: "archive.zip")
+        try Data("archive".utf8).write(to: source)
+
+        let fileSystem = LiveFileSystemAccess()
+        let identity = try #require(await fileSystem.identity(of: source))
+        var descriptor: Int32?
+        do {
+            let item = try await fileSystem.openItem(
+                source,
+                kind: .regularFile,
+                identifiedBy: identity
+            )
+            descriptor = try item.withUnsafeDescriptor { $0 }
+            #expect(Darwin.fcntl(try #require(descriptor), F_GETFD) >= 0)
+        }
+
+        #expect(Darwin.fcntl(try #require(descriptor), F_GETFD) == -1)
+    }
+
+    @Test func openItemRejectsAReplacementWithADifferentIdentity() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let original = root.url.appending(path: "original.zip")
+        let replacement = root.url.appending(path: "replacement.zip")
+        try Data("original".utf8).write(to: original)
+        try Data("replacement".utf8).write(to: replacement)
+
+        let fileSystem = LiveFileSystemAccess()
+        let expectedIdentity = try #require(await fileSystem.identity(of: original))
+
+        await #expect(throws: FileSystemAccessError.identityMismatch(replacement)) {
+            _ = try await fileSystem.openItem(
+                replacement,
+                kind: .regularFile,
+                identifiedBy: expectedIdentity
+            )
+        }
+    }
+
+    @Test func openItemCloseWaitsForAnActiveBorrowAndConcurrentCloseCompletes() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let source = root.url.appending(path: "archive.zip")
+        try Data("archive".utf8).write(to: source)
+
+        let fileSystem = LiveFileSystemAccess()
+        let identity = try #require(await fileSystem.identity(of: source))
+        let item = try await fileSystem.openItem(source, kind: .regularFile, identifiedBy: identity)
+        let release = DispatchSemaphore(value: 0)
+        let enteredLatch = FileSystemTestLatch()
+        let borrowFinished = FileSystemTestLatch()
+        DispatchQueue.global().async {
+            _ = try? item.withUnsafeDescriptor { descriptor in
+                Task { await enteredLatch.signal() }
+                _ = release.wait(timeout: .now() + 2)
+                return descriptor
+            }
+            Task { await borrowFinished.signal() }
+        }
+        #expect(await waitForFileSystemSignal(enteredLatch))
+
+        let closeFinished = FileSystemTestLatch()
+        DispatchQueue.global().async {
+            item.close()
+            Task { await closeFinished.signal() }
+        }
+        #expect(!(await waitForFileSystemSignal(closeFinished, timeout: .milliseconds(50))))
+        release.signal()
+        #expect(await waitForFileSystemSignal(closeFinished))
+        #expect(await waitForFileSystemSignal(borrowFinished))
+
+        DispatchQueue.concurrentPerform(iterations: 16) { _ in
+            item.close()
+        }
+        #expect(throws: FileSystemAccessError.descriptorClosed(source)) {
+            try item.withUnsafeDescriptor { $0 }
+        }
+    }
+
+    @Test func openItemSecondCloseWaitsForBlockedDescriptorClose() throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let source = root.url.appending(path: "archive.zip")
+        try Data("archive".utf8).write(to: source)
+        let descriptor = Darwin.open(source.path, O_RDONLY | O_CLOEXEC)
+        #expect(descriptor >= 0)
+        let closeStarted = DispatchSemaphore(value: 0)
+        let releaseClose = DispatchSemaphore(value: 0)
+        let firstReturned = DispatchSemaphore(value: 0)
+        let secondStarted = DispatchSemaphore(value: 0)
+        let secondReturned = DispatchSemaphore(value: 0)
+        let item = OpenedFileSystemItem(
+            identity: FileIdentity(entryIdentifier: "entry", resolvedIdentifier: "resolved"),
+            descriptor: descriptor,
+            url: source,
+            closeDescriptor: { descriptor in
+                closeStarted.signal()
+                _ = releaseClose.wait(timeout: .now() + 2)
+                _ = Darwin.close(descriptor)
+            }
+        )
+
+        DispatchQueue.global().async {
+            item.close()
+            firstReturned.signal()
+        }
+        #expect(closeStarted.wait(timeout: .now() + 1) == .success)
+
+        DispatchQueue.global().async {
+            secondStarted.signal()
+            item.close()
+            secondReturned.signal()
+        }
+        #expect(secondStarted.wait(timeout: .now() + 1) == .success)
+        #expect(secondReturned.wait(timeout: .now() + .milliseconds(50)) == .timedOut)
+
+        releaseClose.signal()
+        #expect(firstReturned.wait(timeout: .now() + 1) == .success)
+        #expect(secondReturned.wait(timeout: .now() + 1) == .success)
+        #expect(Darwin.fcntl(descriptor, F_GETFD) == -1)
+    }
+}
+
+private actor FileSystemTestLatch {
+    private var signaled = false
+
+    func signal() {
+        signaled = true
+    }
+
+    func isSignaled() -> Bool {
+        signaled
+    }
+}
+
+private func waitForFileSystemSignal(
+    _ latch: FileSystemTestLatch,
+    timeout: Duration = .seconds(1)
+) async -> Bool {
+    let start = ContinuousClock.now
+    while !(await latch.isSignaled()) {
+        if start.duration(to: ContinuousClock.now) >= timeout { return false }
+        try? await Task.sleep(for: .milliseconds(1))
+    }
+    return true
 }

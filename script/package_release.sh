@@ -57,14 +57,16 @@ tool_path() {
 APP_DISPLAY_NAME="Pengrid"
 EXECUTABLE_NAME="BloomFileManager"
 ICON_NAME="Pengrid.icns"
+NOTICE_NAME="THIRD_PARTY_NOTICES.md"
 BUNDLE_ID="com.minho.BloomFileManager"
 MIN_SYSTEM_VERSION="15.0"
 APP_VERSION="1.3.0"
-BUILD_VERSION="5"
+BUILD_VERSION="6"
 DMG_FORMAT="UDBZ"
 SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 ROOT_DIR="$(cd -P "$SCRIPT_DIR/.." && pwd -P)"
 ICON_SOURCE="$ROOT_DIR/Assets/Pengrid/$ICON_NAME"
+NOTICE_SOURCE="$ROOT_DIR/$NOTICE_NAME"
 DIST_DIR="$ROOT_DIR/dist"
 RELEASE_DIR="$DIST_DIR/release"
 APP_BUNDLE="$RELEASE_DIR/$APP_DISPLAY_NAME.app"
@@ -91,6 +93,7 @@ SECURITY="$(tool_path /usr/bin/security)"
 FILE_TOOL="$(tool_path /usr/bin/file)"
 LIPO="$(tool_path /usr/bin/lipo)"
 CODESIGN="$(tool_path /usr/bin/codesign)"
+OTOOL="$(tool_path /usr/bin/otool)"
 PLUTIL="$(tool_path /usr/bin/plutil)"
 DITTO="$(tool_path /usr/bin/ditto)"
 ZIPINFO="$(tool_path /usr/bin/zipinfo)"
@@ -264,6 +267,14 @@ assert_no_symlink_components "$ICON_SOURCE"
 if ! exec 8<"$ICON_SOURCE" || ! exec 19<"$ICON_SOURCE" || ! exec 16<"$ICON_SOURCE"; then
   die "unable to open app icon: $ICON_SOURCE"
 fi
+[[ "$NOTICE_SOURCE" == "$ROOT_DIR/$NOTICE_NAME" ]] \
+  || die "unsafe third-party notice path: $NOTICE_SOURCE"
+[[ -f "$NOTICE_SOURCE" && ! -L "$NOTICE_SOURCE" ]] \
+  || die "third-party notice must be a regular file: $NOTICE_SOURCE"
+assert_no_symlink_components "$NOTICE_SOURCE"
+if ! exec 9<"$NOTICE_SOURCE" || ! exec 20<"$NOTICE_SOURCE" || ! exec 21<"$NOTICE_SOURCE"; then
+  die "unable to open third-party notice: $NOTICE_SOURCE"
+fi
 if ! icon_source_path_identity="$("$STAT" -f '%d:%i:%HT:%u:%l:%Lp' "$ICON_SOURCE")"; then
   die "unable to inspect app icon path: $ICON_SOURCE"
 fi
@@ -271,6 +282,14 @@ if ! icon_source_copy_identity="$("$STAT" -f '%d:%i:%HT:%u:%l:%Lp' <&8)" \
     || ! icon_source_staged_cmp_identity="$("$STAT" -f '%d:%i:%HT:%u:%l:%Lp' <&19)" \
     || ! icon_source_archive_cmp_identity="$("$STAT" -f '%d:%i:%HT:%u:%l:%Lp' <&16)"; then
   die "unable to inspect opened app icon: $ICON_SOURCE"
+fi
+if ! notice_source_path_identity="$("$STAT" -f '%d:%i:%HT:%u:%l:%Lp' "$NOTICE_SOURCE")"; then
+  die "unable to inspect third-party notice path: $NOTICE_SOURCE"
+fi
+if ! notice_source_copy_identity="$("$STAT" -f '%d:%i:%HT:%u:%l:%Lp' <&9)" \
+    || ! notice_source_staged_cmp_identity="$("$STAT" -f '%d:%i:%HT:%u:%l:%Lp' <&20)" \
+    || ! notice_source_archive_cmp_identity="$("$STAT" -f '%d:%i:%HT:%u:%l:%Lp' <&21)"; then
+  die "unable to inspect opened third-party notice: $NOTICE_SOURCE"
 fi
 IFS=: read -r icon_source_device icon_source_inode icon_source_type \
   icon_source_uid icon_source_links icon_source_mode <<<"$icon_source_path_identity"
@@ -281,6 +300,15 @@ IFS=: read -r icon_source_device icon_source_inode icon_source_type \
     && "$icon_source_path_identity" == "$icon_source_staged_cmp_identity" \
     && "$icon_source_path_identity" == "$icon_source_archive_cmp_identity" ]] \
   || die "app icon path changed or is not a unique regular file: $ICON_SOURCE"
+IFS=: read -r notice_source_device notice_source_inode notice_source_type \
+  notice_source_uid notice_source_links notice_source_mode <<<"$notice_source_path_identity"
+[[ "$notice_source_type" == "Regular File" \
+    && "$notice_source_links" == 1 \
+    && ! -L "$NOTICE_SOURCE" \
+    && "$notice_source_path_identity" == "$notice_source_copy_identity" \
+    && "$notice_source_path_identity" == "$notice_source_staged_cmp_identity" \
+    && "$notice_source_path_identity" == "$notice_source_archive_cmp_identity" ]] \
+  || die "third-party notice path changed or is not a unique regular file: $NOTICE_SOURCE"
 assert_strict_child "$DIST_DIR" "$ROOT_DIR"
 assert_strict_child "$RELEASE_DIR" "$ROOT_DIR"
 validate_existing_directory_or_absent "$DIST_DIR"
@@ -373,6 +401,7 @@ STAGING_MACOS="$STAGING_CONTENTS/MacOS"
 STAGING_RESOURCES="$STAGING_CONTENTS/Resources"
 STAGING_BINARY="$STAGING_MACOS/$EXECUTABLE_NAME"
 STAGING_ICON="$STAGING_RESOURCES/$ICON_NAME"
+STAGING_NOTICE="$STAGING_RESOURCES/$NOTICE_NAME"
 STAGING_INFO_PLIST="$STAGING_CONTENTS/Info.plist"
 SUBMISSION_ZIP="$STAGING_ROOT/$APP_DISPLAY_NAME-submission.zip"
 FINAL_STAGED_ZIP="$STAGING_ROOT/$APP_DISPLAY_NAME.zip"
@@ -449,13 +478,17 @@ IFS=: read -r resources_device resources_inode resources_type \
 "$CP" "$BUILD_BINARY" "$STAGING_BINARY"
 "$CHMOD" +x "$STAGING_BINARY"
 
-swift_icon_helper_arguments=(-module-cache-path "$ICON_COPY_MODULE_CACHE" - "$ICON_NAME")
-if [[ "$TESTING" == 1 ]]; then
-  export BLOOM_RELEASE_TEST_ICON_HELPER_DEST="$STAGING_ICON"
-else
-  unset BLOOM_RELEASE_TEST_ICON_HELPER_DEST
-fi
-if ! "$SWIFT_BIN" "${swift_icon_helper_arguments[@]}" <<'SWIFT'
+publish_resource() {
+  local resource_name="$1"
+  local destination="$2"
+  local -a swift_resource_helper_arguments
+  swift_resource_helper_arguments=(-module-cache-path "$ICON_COPY_MODULE_CACHE" - "$resource_name")
+  if [[ "$TESTING" == 1 ]]; then
+    export BLOOM_RELEASE_TEST_ICON_HELPER_DEST="$destination"
+  else
+    unset BLOOM_RELEASE_TEST_ICON_HELPER_DEST
+  fi
+  if ! "$SWIFT_BIN" "${swift_resource_helper_arguments[@]}" <<'SWIFT'
 import Darwin
 
 let resourcesFD: Int32 = 17
@@ -638,15 +671,26 @@ stageFD = -1
 stageBasename = ""
 SWIFT
 then
-  die "unable to publish app icon"
-fi
+    return 1
+  fi
+}
+
+publish_resource "$ICON_NAME" "$STAGING_ICON" || die "unable to publish app icon"
+exec 8<&-
+exec 8<&9
+publish_resource "$NOTICE_NAME" "$STAGING_NOTICE" \
+  || die "unable to publish third-party notice"
+exec 9<&-
 unset BLOOM_RELEASE_TEST_ICON_HELPER_DEST
 exec 8<&-
 exec 17<&-
 
 "$CMP" -s /dev/fd/19 "$STAGING_ICON" \
   || die 'staged app icon differs from the canonical icon.'
+"$CMP" -s /dev/fd/20 "$STAGING_NOTICE" \
+  || die 'staged third-party notice differs from the repository notice.'
 exec 19<&-
+exec 20<&-
 
 cat >"$STAGING_INFO_PLIST" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -665,12 +709,24 @@ cat >"$STAGING_INFO_PLIST" <<PLIST
 </dict></plist>
 PLIST
 
+assert_no_openssl_dependency() {
+  local binary="$1"
+  local dependencies
+  # otool -L is required for release protected-ZIP verification.
+  dependencies="$("$OTOOL" -L "$binary")" \
+    || die "unable to inspect native linkage: $binary"
+  if echo "$dependencies" | "$GREP" -Eiq 'libssl|libcrypto'; then
+    die 'unexpected OpenSSL dependency in Pengrid binary'
+  fi
+}
+
 "$PLUTIL" -lint "$STAGING_INFO_PLIST" >/dev/null
 binary_description="$("$FILE_TOOL" "$STAGING_BINARY")"
 echo "$binary_description"
 [[ "$binary_description" == *arm64* ]] || die 'release executable lacks arm64.'
 architectures="$("$LIPO" -archs "$STAGING_BINARY")"
 [[ "$architectures" == arm64 ]] || die "release executable must be exactly arm64; found: $architectures"
+assert_no_openssl_dependency "$STAGING_BINARY"
 
 "$XATTR" -cr "$STAGING_APP"
 if [[ "$MODE" == "--unsigned" ]]; then
@@ -701,6 +757,7 @@ verify_archive() {
   local extracted_app="$verification_root/$APP_DISPLAY_NAME.app"
   local extracted_binary="$extracted_app/Contents/MacOS/$EXECUTABLE_NAME"
   local extracted_icon="$extracted_app/Contents/Resources/$ICON_NAME"
+  local extracted_notice="$extracted_app/Contents/Resources/$NOTICE_NAME"
   "$MKDIR" "$verification_root"
   first_entry="$("$ZIPINFO" -1 "$archive" | /usr/bin/head -1)"
   [[ "$first_entry" == "$APP_DISPLAY_NAME.app/" ]] || die 'archive does not keep the app as its top-level parent.'
@@ -710,11 +767,14 @@ verify_archive() {
   "$DITTO" -x -k "$archive" "$verification_root"
   [[ -d "$extracted_app" && ! -L "$extracted_app" ]] || die 'archive did not extract a real app bundle.'
   "$CODESIGN" --verify --deep --strict --verbose=2 "$extracted_app"
+  assert_no_openssl_dependency "$extracted_binary"
   [[ "$("$LIPO" -archs "$extracted_binary")" == arm64 ]] \
     || die 'extracted archive executable is not exactly arm64.'
   "$PLUTIL" -lint "$extracted_app/Contents/Info.plist" >/dev/null
   "$CMP" -s /dev/fd/16 "$extracted_icon" \
     || die 'extracted archive icon differs from the canonical icon.'
+  "$CMP" -s /dev/fd/21 "$extracted_notice" \
+    || die 'extracted archive notice differs from the repository notice.'
   extracted_entitlements="$("$CODESIGN" -d --entitlements :- "$extracted_app" 2>&1 || true)"
   [[ "$extracted_entitlements" != *com.apple.security.app-sandbox* ]] \
     || die 'extracted archive unexpectedly contains App Sandbox entitlement.'
@@ -846,6 +906,13 @@ NEW_DMG_ID="$(entry_identity "$PUBLIC_NEW_DMG")"
 publication_checkpoint() {
   local checkpoint="$1"
   local failure_mode
+  if [[ "$TESTING" == 1 && -n "${BLOOM_RELEASE_TEST_PUBLICATION_LOG:-}" ]]; then
+    [[ "$BLOOM_RELEASE_TEST_PUBLICATION_LOG" == "$TEST_TEMP_DIR"/* \
+        && ! -L "$BLOOM_RELEASE_TEST_PUBLICATION_LOG" ]] \
+      || die 'publication test log must remain inside the marked temporary fixture'
+    printf 'PUBLICATION_CHECKPOINT %s\n' "$checkpoint" \
+      >>"$BLOOM_RELEASE_TEST_PUBLICATION_LOG"
+  fi
   [[ "$TESTING" == 1 && "${BLOOM_RELEASE_TEST_FAIL_POINT:-}" == "$checkpoint" ]] \
     || return 0
   failure_mode="${BLOOM_RELEASE_TEST_FAIL_MODE:-return}"
@@ -964,6 +1031,8 @@ publish_release() {
   fi
 
   "$CODESIGN" --verify --deep --strict --verbose=2 "$APP_BUNDLE" || return 1
+  "$CMP" -s /dev/fd/21 "$APP_BUNDLE/Contents/Resources/$NOTICE_NAME" || return 1
+  assert_no_openssl_dependency "$APP_BUNDLE/Contents/MacOS/$EXECUTABLE_NAME" || return 1
   "$HDIUTIL" verify "$DMG_PATH" >/dev/null || return 1
   if [[ "$MODE" == "--signed" ]]; then
     "$CMP" -s "$FINAL_STAGED_ZIP" "$ZIP_PATH" || return 1
@@ -973,6 +1042,7 @@ publish_release() {
 
 trap 'exit 130' INT
 trap 'exit 143' TERM
+publication_checkpoint before_publication || die 'release publication preflight checkpoint failed.'
 PUBLICATION_STARTED=true
 if ! publish_release; then
   die 'release publication failed; EXIT cleanup will restore previous artifacts.'

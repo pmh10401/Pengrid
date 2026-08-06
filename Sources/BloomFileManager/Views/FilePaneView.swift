@@ -240,6 +240,7 @@ struct FilePaneView: View {
                 onCopy: copySelection,
                 onPaste: paste,
                 onCompress: compressSelection,
+                onCompressProtected: compressProtectedSelection,
                 onExtract: extractSelection,
                 onRequestTrashConfirmation: requestTrashConfirmation
             )
@@ -423,6 +424,16 @@ struct FilePaneView: View {
         onActivate()
         Task {
             _ = await operationController.compressSelection(workspace, format: format)
+        }
+    }
+
+    private func compressProtectedSelection() {
+        onActivate()
+        Task {
+            _ = await WorkspaceArchiveCommandActions.compressProtectedZIP(
+                workspace,
+                operationController: operationController
+            )
         }
     }
 

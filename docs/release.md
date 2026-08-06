@@ -1,6 +1,35 @@
 # Pengrid direct release
 
+[한국어](release.ko.md) · **English** · [README](../README.md)
+
 Pengrid is distributed directly for Apple Silicon Macs running macOS 15 or newer. The release does not use App Sandbox entitlements. Its executable filename and compatibility-sensitive internal identity remain `BloomFileManager`.
+
+## Current published Developer Preview
+
+[Pengrid 1.3.0 Developer Preview 4](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.4)
+is the current free binary release:
+
+- DMG: [Pengrid.dmg](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.4/Pengrid.dmg)
+- Tag: `v1.3.0-developer-preview.4`
+- Packaged source commit: `9ae22293b498fde487f1f92ff7b05a917125621e`
+- App version: `1.3.0`, build `6`
+- Platform: Apple Silicon, macOS 15 or later
+- Automated result: 1,059 tests in 77 suites
+- Packaging: release contract tests and arm64 production build passed
+- Artifact checks: app signature, DMG checksum, and mounted app build all passed
+- DMG SHA-256:
+  `700f4dac87e07b76809d06b3ee5c237a7126550663a087ddc9a9547f9669c585`
+
+Preview 4 is the first published Pengrid DMG that includes protected-ZIP
+creation and extraction. The exact packaged app was also installed locally as
+`/Applications/Pengrid.app`, verified as build 6, and launched successfully.
+
+This artifact is ad-hoc signed, not Developer ID signed, and not notarized.
+`spctl --assess --type execute` therefore rejects it as a Developer ID
+distribution, as expected. This is a correctly labelled unsigned Developer
+Preview, not a signed public release. Physical File Provider, removable-volume,
+case-sensitive-volume, keyboard, and accessibility checks that remain
+`NOT RUN` are recorded in the repository verification documents.
 
 ## Version 1.3 release gates
 
@@ -14,11 +43,31 @@ cancellation safety, and VoiceOver-aware archive status. During multi-source
 compression, parallelism is limited to staging copies in the private aggregate
 directory, bounded to at most four workers and never beyond available
 processors or sources; archiving and extraction remain single native tool
-operations. Password-protected archives and RAR and 7z archives are excluded.
+operations. Protected ZIP is covered by the source feature boundary below;
+password-protected TAR, RAR, and 7z archives are excluded.
 The feature gate is not passed until every required automated and static check
 is current and every physical-manual scenario in
 [`docs/verification/version-1.3-archive-checklist.md`](verification/version-1.3-archive-checklist.md)
 has recorded evidence.
+
+## Protected ZIP release feature boundary
+
+Preview 4 creates password-protected ZIP files as **AES-256 only**. Reading
+accepts AES-128, AES-192, AES-256, and ZipCrypto entries when they use Store or
+Deflate and pass the current safety policy. ZIP filenames, sizes, timestamps,
+and other central-directory metadata remain visible, so encryption is not
+filename privacy. Passwords are not saved or recoverable; after a failed
+attempt, Pengrid prompts again with a fresh request.
+
+Unsafe, malformed, traversal, or oversized archives fail closed. If cleanup
+cannot prove ownership of a remaining temporary item, it is retained for
+recovery review and queue advancement waits for an explicit continue decision.
+Resource forks, ACLs, and extended attributes are not guaranteed. Finder and
+Archive Utility may not open AES ZIP files; third-party interoperability is
+represented only by automated committed fixtures, not live Finder, Archive
+Utility, Windows, or WinZip checks. 7z, RAR, and password-protected TAR are
+unsupported. Developer ID signing and notarization were not performed for this
+free Developer Preview.
 
 ## Version 1.2 release gates
 
@@ -32,11 +81,11 @@ and case-sensitive volumes; disconnect/reconnect during comparison and transfer;
 files; VoiceOver and Full Keyboard Access; Increased Contrast, Reduce Motion, Light Mode,
 and Dark Mode. Automated fixtures and source inspection do not replace those checks.
 
-The distribution gate also remains open until the exact candidate has been signed with a
-valid Developer ID Application identity, accepted by Apple notarization, stapled and
-validated, and accepted by Gatekeeper. An unsigned package is suitable only for local
-inspection or an explicitly labelled Developer Preview; it must not be described as a
-signed public release.
+The optional signed-distribution gate remains open until an exact candidate has
+been signed with a valid Developer ID Application identity, accepted by Apple
+notarization, stapled and validated, and accepted by Gatekeeper. This does not
+block a free package that is explicitly labelled as an unsigned Developer
+Preview. Such a package must never be described as a signed public release.
 
 ## Local unsigned package and Developer Preview
 
@@ -45,6 +94,9 @@ Command Line Tools are sufficient for local packaging on an Apple Silicon Mac:
 ```bash
 ./script/package_release.sh --unsigned
 codesign --verify --deep --strict --verbose=2 dist/release/Pengrid.app
+otool -L dist/release/Pengrid.app/Contents/MacOS/BloomFileManager
+cmp THIRD_PARTY_NOTICES.md \
+  dist/release/Pengrid.app/Contents/Resources/THIRD_PARTY_NOTICES.md
 file dist/release/Pengrid.app/Contents/MacOS/BloomFileManager
 plutil -p dist/release/Pengrid.app/Contents/Info.plist
 codesign -dvvv --entitlements :- dist/release/Pengrid.app
@@ -137,6 +189,8 @@ After a successful run, ticket validation is:
 ```bash
 xcrun stapler validate dist/release/Pengrid.app
 ```
+
+## File types and physical-volume limitations
 
 The transfer engine supports regular files, directories, and symbolic links. Device nodes,
 sockets, FIFOs, and other special filesystem entries are rejected with a per-item failure;

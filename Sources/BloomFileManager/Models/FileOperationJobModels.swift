@@ -7,6 +7,7 @@ enum FileOperationJobKind: Sendable, Equatable {
     case createFolder
     case rename
     case compress(ArchiveFormat)
+    case compressProtectedZIP
     case extract(ArchiveFormat)
     case undo
 
@@ -18,6 +19,7 @@ enum FileOperationJobKind: Sendable, Equatable {
         case .createFolder: "Create Folder"
         case .rename: "Rename"
         case let .compress(format): "Compress \(format.displayName)"
+        case .compressProtectedZIP: "Compress Encrypted ZIP"
         case let .extract(format): "Extract \(format.displayName)"
         case .undo: "Undo"
         }
@@ -27,6 +29,7 @@ enum FileOperationJobKind: Sendable, Equatable {
 enum FileOperationJobState: Sendable, Equatable {
     case queued
     case running
+    case waitingForPassword
     case pauseRequested
     case paused
     case succeeded
@@ -37,6 +40,7 @@ enum FileOperationJobState: Sendable, Equatable {
         switch self {
         case .queued: "Queued"
         case .running: "Running"
+        case .waitingForPassword: "Waiting for password"
         case .pauseRequested: "Pause requested"
         case .paused: "Paused"
         case .succeeded: "Completed"

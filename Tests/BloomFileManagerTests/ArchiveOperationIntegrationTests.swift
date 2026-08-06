@@ -4,6 +4,78 @@ import Testing
 
 @Suite("ArchiveOperationIntegrationTests")
 struct ArchiveOperationIntegrationTests {
+    @Test(arguments: [ArchiveFormat.zip, ArchiveFormat.tar])
+    @MainActor
+    func controllerOrdinaryArchiveRoundTripsRemainUnprotected(format: ArchiveFormat) async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let source = root.url.appending(path: "ordinary.txt")
+        let archive = root.url.appending(path: "ordinary.txt\(format.canonicalSuffix)")
+        let extraction = root.url.appending(
+            path: "ordinary.txt",
+            directoryHint: .isDirectory
+        )
+        let bytes = Data("ordinary archive regression".utf8)
+        try bytes.write(to: source)
+
+        let service = FileOperationService(fileSystem: LiveFileSystemAccess())
+        let controller = FileOperationController(
+            service: service,
+            materializer: InMemoryCloudMaterializer()
+        )
+        let workspace = WorkspaceState(
+            leftURL: root.url,
+            rightURL: root.url,
+            listingService: StubDirectoryListingService(values: [
+                root.url: [FileItem(
+                    url: source,
+                    name: source.lastPathComponent,
+                    isDirectory: false,
+                    isPackage: false,
+                    modifiedAt: nil,
+                    byteSize: nil,
+                    typeDescription: "File"
+                )]
+            ])
+        )
+        await workspace.loadInitialDirectories()
+        workspace.left.selection = [source]
+
+        #expect(await controller.compressSelection(workspace, format: format))
+        await waitForArchiveControllerIdle(controller)
+        #expect(controller.lastResult?.outcomes == [
+            .succeeded(source: source, destination: archive)
+        ])
+        #expect(FileManager.default.fileExists(atPath: archive.path))
+        try FileManager.default.removeItem(at: source)
+
+        let extractionWorkspace = WorkspaceState(
+            leftURL: root.url,
+            rightURL: root.url,
+            listingService: StubDirectoryListingService(values: [
+                root.url: [FileItem(
+                    url: archive,
+                    name: archive.lastPathComponent,
+                    isDirectory: false,
+                    isPackage: false,
+                    modifiedAt: nil,
+                    byteSize: nil,
+                    typeDescription: "Archive"
+                )]
+            ])
+        )
+        await extractionWorkspace.loadInitialDirectories()
+        extractionWorkspace.left.selection = [archive]
+        #expect(await controller.extractSelection(extractionWorkspace))
+        await waitForArchiveControllerIdle(controller)
+
+        #expect(controller.lastResult?.outcomes == [
+            .succeeded(source: archive, destination: extraction)
+        ])
+        #expect(try Data(contentsOf: extraction.appending(path: source.lastPathComponent)) == bytes)
+        try expectNoStagingDirectories(in: root.url)
+    }
+
     @Test func compressionRefusesReplacementAfterOwnedOutputCreation() async throws {
         let root = try TemporaryDirectory()
         defer { root.remove() }
@@ -104,7 +176,7 @@ struct ArchiveOperationIntegrationTests {
             .encoding
         ])
         #expect(FileManager.default.fileExists(atPath: archive.path))
-        try expectNoAggregateSourceDirectories(in: root.url)
+        try expectNoStagingDirectories(in: root.url)
     }
 
     @Test func extractionReportsOnlyEncodingBeforeLaunchingNativeCommand() async throws {
@@ -184,6 +256,44 @@ struct ArchiveOperationIntegrationTests {
         try expectNoStagingDirectories(in: root.url)
     }
 
+    @Test func extractionRejectsInPlaceArchiveMutationDuringPrivateCopy() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let source = root.url.appending(path: "Source.txt")
+        let archive = root.url.appending(path: "Archive.zip")
+        let destination = root.url.appending(path: "Extracted", directoryHint: .isDirectory)
+        try Data("original archive source".utf8).write(to: source)
+        try await LiveArchiveCommandRunner().run(
+            kind: .compress,
+            format: .zip,
+            sources: [source],
+            destination: archive
+        )
+        let mutation = Data(repeating: 0xA5, count: 32)
+        let fileSystem = LiveFileSystemAccess(onBeforeCopySourceEntryOpen: { opened in
+            guard opened.standardizedFileURL == archive.standardizedFileURL else { return }
+            let handle = try! FileHandle(forWritingTo: archive)
+            try! handle.seek(toOffset: 0)
+            try! handle.write(contentsOf: mutation)
+            try! handle.close()
+        })
+        let parentIdentity = try #require(await fileSystem.identity(of: root.url))
+        let service = ArchiveOperationService(fileSystem: fileSystem)
+        let request = ArchiveRequest(
+            kind: .extract,
+            verifiedSources: identifiedArchiveTestSources([archive]),
+            finalDestination: destination,
+            destinationParentIdentity: parentIdentity,
+            format: .zip
+        )
+
+        let result = await service.perform([request]) { _ in }
+
+        #expect(result.hasFailures)
+        #expect(FileManager.default.fileExists(atPath: destination.path) == false)
+        try expectNoStagingDirectories(in: root.url)
+    }
+
     @Test func dittoCompressionArchivesMultipleSelectedItemsAtTheZIPRoot() async throws {
         let root = try TemporaryDirectory()
         defer { root.remove() }
@@ -201,7 +311,7 @@ struct ArchiveOperationIntegrationTests {
             sources: [firstSource, secondSource],
             destination: archive
         )
-        try expectNoAggregateSourceDirectories(in: root.url)
+        try expectNoStagingDirectories(in: root.url)
         try await runner.run(kind: .extract, format: .zip, sources: [archive], destination: extraction)
 
         #expect(try Data(contentsOf: extraction.appending(path: "First.txt"))
@@ -316,7 +426,7 @@ struct ArchiveOperationIntegrationTests {
             includingPropertiesForKeys: nil
         ).map(\.lastPathComponent)
         #expect(Set(extractedNames) == Set(sources.map(\.0)))
-        try expectNoAggregateSourceDirectories(in: root.url)
+        try expectNoStagingDirectories(in: root.url)
     }
 
     @Test(arguments: [
@@ -459,6 +569,16 @@ struct ArchiveOperationIntegrationTests {
     }
 }
 
+@MainActor
+private func waitForArchiveControllerIdle(_ controller: FileOperationController) async {
+    let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+    while ContinuousClock.now < deadline {
+        if !controller.isRunning { return }
+        await Task.yield()
+    }
+    Issue.record("Timed out waiting for file operation controller")
+}
+
 private actor ArchivePhaseCollector {
     private(set) var values: [ArchiveOperationPhase] = []
 
@@ -473,16 +593,6 @@ private func expectNoStagingDirectories(in directory: URL) throws {
         includingPropertiesForKeys: nil
     )
     #expect(children.contains { $0.lastPathComponent.hasPrefix(".bloom-staging-") } == false)
-}
-
-private func expectNoAggregateSourceDirectories(in directory: URL) throws {
-    let children = try FileManager.default.contentsOfDirectory(
-        at: directory,
-        includingPropertiesForKeys: nil
-    )
-    #expect(children.contains {
-        $0.lastPathComponent.hasPrefix(".archive-source-")
-    } == false)
 }
 
 private func writeHostileTarFixture(to destination: URL) throws {

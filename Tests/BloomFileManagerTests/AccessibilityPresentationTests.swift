@@ -8,6 +8,14 @@ import Testing
     #expect(AccessibilityIdentifiers.leftPane == "leftPane")
     #expect(AccessibilityIdentifiers.rightPane == "rightPane")
     #expect(AccessibilityIdentifiers.operationStatus == "operationStatus")
+    #expect(
+        AccessibilityIdentifiers.workspaceCompressProtectedZIP
+            == "workspace.compressProtectedZIP"
+    )
+    #expect(
+        AccessibilityIdentifiers.fileTableCompressProtectedZIP
+            == "fileTable.compressProtectedZIP"
+    )
     #expect(AccessibilityIdentifiers.operationCenter == "operationCenter")
     #expect(AccessibilityIdentifiers.operationCenterActive == "operationCenter.active")
     #expect(AccessibilityIdentifiers.operationCenterQueue == "operationCenter.queue")
@@ -30,6 +38,122 @@ import Testing
     #expect(AccessibilityIdentifiers.smartSearchSheet == "smartSearch.sheet")
     #expect(AccessibilityIdentifiers.smartSearchQuery == "smartSearch.query")
     #expect(AccessibilityIdentifiers.smartSearchResults == "smartSearch.results")
+    #expect(AccessibilityIdentifiers.archivePasswordSheet == "archivePasswordSheet")
+    #expect(AccessibilityIdentifiers.archivePasswordField == "archivePassword.field")
+    #expect(AccessibilityIdentifiers.archivePasswordCancel == "archivePassword.cancel")
+}
+
+@Test @MainActor
+func passwordSheetIdentityWinsOverDeferredConflictAndSearchWithoutCancellingCoordinator() async throws {
+    let request = makePasswordRequest(
+        id: UUID(uuidString: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")!
+    )
+    let coordinator = ArchivePasswordPromptCoordinator()
+    let task = Task { try await coordinator.requestPassword(for: request) }
+    await Task.yield()
+
+    var state = WorkspaceModalPresentationState()
+    state.passwordSheetDidAppear(requestID: request.id)
+
+    #expect(state.passwordRequestToPresent(
+        pending: request,
+        conflictPresented: true,
+        searchPresented: true
+    ) == request)
+    #expect(!state.allowsOtherModalPresentation)
+    #expect(coordinator.pendingRequest == request)
+
+    coordinator.cancel(requestID: request.id)
+    await #expect(throws: CancellationError.self) { try await task.value }
+}
+
+@Test @MainActor
+func explicitPasswordDismissalReleasesGateForDeferredModal() async throws {
+    let request = makePasswordRequest(
+        id: UUID(uuidString: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")!
+    )
+    let coordinator = ArchivePasswordPromptCoordinator()
+    let task = Task { try await coordinator.requestPassword(for: request) }
+    await Task.yield()
+
+    var state = WorkspaceModalPresentationState()
+    state.passwordSheetDidAppear(requestID: request.id)
+    #expect(!state.allowsOtherModalPresentation)
+
+    let dismissedID = state.passwordSheetDidDisappear(requestID: request.id)
+    #expect(dismissedID == request.id)
+    #expect(state.allowsOtherModalPresentation)
+    #expect(state.passwordRequestToPresent(
+        pending: nil,
+        conflictPresented: true,
+        searchPresented: false
+    ) == nil)
+
+    coordinator.cancel(requestID: request.id)
+    await #expect(throws: CancellationError.self) { try await task.value }
+}
+
+@Test
+func otherModalPresentFirstDefersPasswordRequestWithoutChangingItsIdentity() {
+    let request = makePasswordRequest(
+        id: UUID(uuidString: "cccccccc-cccc-cccc-cccc-cccccccccccc")!
+    )
+    let state = WorkspaceModalPresentationState()
+
+    #expect(state.passwordRequestToPresent(
+        pending: request,
+        conflictPresented: true,
+        searchPresented: false
+    ) == nil)
+    #expect(state.passwordRequestToPresent(
+        pending: request,
+        conflictPresented: false,
+        searchPresented: true
+    ) == nil)
+    #expect(state.passwordRequestToPresent(
+        pending: request,
+        conflictPresented: false,
+        searchPresented: false
+    ) == request)
+}
+
+@Test @MainActor
+func stalePasswordDismissalCannotCancelNewCoordinatorRequest() async throws {
+    let requestA = makePasswordRequest(
+        id: UUID(uuidString: "dddddddd-dddd-dddd-dddd-dddddddddddd")!
+    )
+    let requestB = makePasswordRequest(
+        id: UUID(uuidString: "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee")!
+    )
+    let coordinator = ArchivePasswordPromptCoordinator()
+    let taskA = Task { try await coordinator.requestPassword(for: requestA) }
+    await Task.yield()
+
+    var state = WorkspaceModalPresentationState()
+    state.passwordSheetDidAppear(requestID: requestA.id)
+    let dismissedA = state.passwordSheetDidDisappear(requestID: requestA.id)
+    #expect(dismissedA == requestA.id)
+    coordinator.cancel(requestID: requestA.id)
+    await #expect(throws: CancellationError.self) { try await taskA.value }
+
+    let taskB = Task { try await coordinator.requestPassword(for: requestB) }
+    await Task.yield()
+    state.passwordSheetDidAppear(requestID: requestB.id)
+
+    #expect(state.passwordSheetDidDisappear(requestID: requestA.id) == nil)
+    coordinator.cancel(requestID: requestA.id)
+    #expect(coordinator.pendingRequest == requestB)
+
+    coordinator.cancel(requestID: requestB.id)
+    await #expect(throws: CancellationError.self) { try await taskB.value }
+}
+
+@Test func appWiresOneCoordinatorIdentityAcrossServiceControllerStateAndWorkspace() throws {
+    let app = try source(named: "App/BloomFileManagerApp.swift")
+    #expect(app.occurrences(of: "ArchivePasswordPromptCoordinator()") == 1)
+    #expect(app.contains("_passwordCoordinator = State(initialValue: passwordCoordinator)"))
+    #expect(app.contains("passwordProvider: passwordCoordinator"))
+    #expect(app.contains("passwordCoordinator: passwordCoordinator"))
 }
 
 @Test func folderPreviewAccessibilityIdentifiersAndAnnouncementsRemainStable() throws {
@@ -204,6 +328,9 @@ import Testing
         "AccessibilityIdentifiers.operationCenterContinueAfterRecovery"
     ))
     #expect(operationCenter.contains("controller.continueAfterRecovery()"))
+    #expect(operationCenter.contains("FileOperationCenterActiveActionPresentation(job: job)"))
+    #expect(operationCenter.contains("actions.showsPause"))
+    #expect(operationCenter.contains("actions.showsCancel"))
 
     let conflictSheet = try source(named: "Views/ConflictResolutionSheet.swift")
     #expect(conflictSheet.contains(
@@ -215,6 +342,25 @@ import Testing
     #expect(workspace.contains("AccessibilityMotionPresentation.allowsNonessentialAnimation("))
     #expect(workspace.contains("transaction.animation = nil"))
     #expect(workspace.contains("FileOperationCenterView(controller: operationController)"))
+    #expect(workspace.contains(".sheet(item: pendingPasswordRequest)"))
+    #expect(workspace.contains("ArchivePasswordSheet("))
+    #expect(workspace.contains("request: request"))
+    #expect(workspace.contains("coordinator: passwordCoordinator"))
+    #expect(workspace.contains("passwordSheetDidDisappear"))
+    #expect(workspace.contains("passwordCoordinator.cancel(requestID: requestID)"))
+    #expect(workspace.contains("WorkspaceModalPresentationState"))
+    #expect(workspace.contains("passwordSheetDidAppear"))
+    #expect(workspace.contains("passwordSheetDidDisappear"))
+    #expect(workspace.contains("allowsOtherModalPresentation"))
+
+    let app = try source(named: "App/BloomFileManagerApp.swift")
+    #expect(app.contains(
+        "@State private var passwordCoordinator: ArchivePasswordPromptCoordinator"
+    ))
+    #expect(app.contains("let passwordCoordinator = ArchivePasswordPromptCoordinator()"))
+    #expect(app.contains("makeRoutingArchiveOperationService("))
+    #expect(app.contains("passwordProvider: passwordCoordinator"))
+    #expect(app.contains("passwordCoordinator: passwordCoordinator"))
 
     let storageWorkspace = try source(
         named: "Views/StorageInspector/StorageInspectorView.swift"
@@ -267,6 +413,15 @@ import Testing
     #expect(storageResultsTable.contains(
         "StorageResultsAccessibilityPresentation.label(section: section)"
     ))
+}
+
+private func makePasswordRequest(id: UUID) -> ArchivePasswordRequest {
+    ArchivePasswordRequest(
+        id: id,
+        purpose: .createAES256,
+        archiveBasename: "자료.zip",
+        previousAttemptFailed: false
+    )
 }
 
 private func source(named relativePath: String) throws -> String {

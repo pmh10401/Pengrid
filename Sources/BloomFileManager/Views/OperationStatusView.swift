@@ -151,23 +151,77 @@ struct ArchiveOperationStatusPresentation: Equatable, Sendable {
 
     init(progress: ArchiveOperationProgress) {
         title = "\(progress.kind.title) \(progress.format.accessibilityName)"
-        currentItemName = progress.currentDisplayName
+        currentItemName = Self.safeDisplayName(progress.currentDisplayName)
         progressLabel = switch progress.phase {
         case let .preparingSources(completedCount, totalCount):
             "Preparing files, \(min(max(completedCount, 0), max(totalCount, 0))) of \(max(totalCount, 0))"
+        case let .processingBytes(completedByteCount, totalByteCount):
+            Self.byteProgressLabel(
+                kind: progress.kind,
+                completedByteCount: completedByteCount,
+                totalByteCount: totalByteCount
+            )
         case .encoding:
             "Encoding archive"
+        case .waitingForPassword:
+            "Waiting for password"
         case .publishing:
             "Finishing archive"
         }
         statusAccessibilityLabel = "\(title), \(progressLabel), "
-            + "current item \(progress.currentDisplayName)"
+            + "current item \(currentItemName)"
         cancelAccessibilityLabel = switch progress.kind {
         case .compress:
             "Cancel \(progress.format.displayName) compression"
         case .extract:
             "Cancel \(progress.format.displayName) extraction"
         }
+    }
+
+    private static func byteProgressLabel(
+        kind: ArchiveOperationKind,
+        completedByteCount: Int64,
+        totalByteCount: Int64?
+    ) -> String {
+        let operationLabel = switch kind {
+        case .compress: "Encrypting archive"
+        case .extract: "Extracting archive"
+        }
+        guard let totalByteCount, totalByteCount > 0 else {
+            return operationLabel
+        }
+
+        let safeCompleted = min(max(completedByteCount, 0), totalByteCount)
+        let completedText = ByteCountFormatter.string(
+            fromByteCount: safeCompleted,
+            countStyle: .file
+        )
+        let totalText = ByteCountFormatter.string(
+            fromByteCount: totalByteCount,
+            countStyle: .file
+        )
+
+        // Keep one readable unit after "of" when both values share it (for
+        // example, "25 of 100 bytes"), while retaining full formatter output
+        // when the values cross a unit boundary (for example, "1 KB of 2 MB").
+        let completedParts = completedText.split(separator: " ", maxSplits: 1)
+        let totalParts = totalText.split(separator: " ", maxSplits: 1)
+        if completedParts.count == 2,
+           totalParts.count == 2,
+           completedParts[1] == totalParts[1] {
+            return "\(operationLabel), \(completedParts[0]) of \(totalText)"
+        }
+        return "\(operationLabel), \(completedText) of \(totalText)"
+    }
+
+    private static func safeDisplayName(_ value: String) -> String {
+        let withoutNewlines = value
+            .components(separatedBy: .newlines)
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !withoutNewlines.isEmpty else { return "Item" }
+        let basename = URL(filePath: withoutNewlines).lastPathComponent
+        return basename.isEmpty ? "Item" : basename
     }
 }
 

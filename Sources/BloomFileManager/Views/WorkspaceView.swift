@@ -5,6 +5,41 @@ private struct PreviewSelectionKey: Hashable {
     let items: [FileItem]
 }
 
+/// Retains the identity of the password sheet that SwiftUI actually presented.
+/// Other modal requests are deferred while that identity is active, and a
+/// dismissal can only release the exact request captured by the sheet.
+struct WorkspaceModalPresentationState: Equatable {
+    private(set) var presentedPasswordRequestID: UUID?
+
+    var allowsOtherModalPresentation: Bool {
+        presentedPasswordRequestID == nil
+    }
+
+    mutating func passwordSheetDidAppear(requestID: UUID) {
+        guard presentedPasswordRequestID == nil else { return }
+        presentedPasswordRequestID = requestID
+    }
+
+    mutating func passwordSheetDidDisappear(requestID: UUID) -> UUID? {
+        guard presentedPasswordRequestID == requestID else { return nil }
+        presentedPasswordRequestID = nil
+        return requestID
+    }
+
+    func passwordRequestToPresent(
+        pending: ArchivePasswordRequest?,
+        conflictPresented: Bool,
+        searchPresented: Bool
+    ) -> ArchivePasswordRequest? {
+        guard let pending else { return nil }
+        if let presentedPasswordRequestID {
+            return pending.id == presentedPasswordRequestID ? pending : nil
+        }
+        guard !conflictPresented, !searchPresented else { return nil }
+        return pending
+    }
+}
+
 struct WorkspaceView: View {
     let workspace: WorkspaceState
     let operationController: FileOperationController
@@ -21,8 +56,10 @@ struct WorkspaceView: View {
     let fileSystem: any FileSystemAccess
     let cloudWorkspaceActions: any CloudLocationWorkspaceActions
     let cloudAccessCoordinator: CloudLocationScopedAccessCoordinator
+    let passwordCoordinator: ArchivePasswordPromptCoordinator
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var modalPresentationState = WorkspaceModalPresentationState()
 
     var body: some View {
         let hasOverlay = comparison.isActive || storage.isActive
@@ -97,6 +134,21 @@ struct WorkspaceView: View {
                 quickLookController: quickLookController,
                 materializer: materializer
             )
+        }
+        .sheet(item: pendingPasswordRequest) { request in
+            ArchivePasswordSheet(
+                request: request,
+                coordinator: passwordCoordinator
+            )
+            .onAppear {
+                modalPresentationState.passwordSheetDidAppear(requestID: request.id)
+            }
+            .onDisappear {
+                guard let requestID = modalPresentationState.passwordSheetDidDisappear(
+                    requestID: request.id
+                ) else { return }
+                passwordCoordinator.cancel(requestID: requestID)
+            }
         }
         .alert("Move to Trash?", isPresented: trashConfirmationIsPresented) {
             Button("Cancel", role: .cancel) {
@@ -186,9 +238,12 @@ struct WorkspaceView: View {
 
     private var pendingConflict: Binding<IdentifiedFileConflict?> {
         Binding {
-            operationController.pendingConflict.map(IdentifiedFileConflict.init)
+            guard modalPresentationState.allowsOtherModalPresentation else { return nil }
+            return operationController.pendingConflict.map(IdentifiedFileConflict.init)
         } set: { item in
-            if item == nil, operationController.pendingConflict != nil {
+            if item == nil,
+               modalPresentationState.allowsOtherModalPresentation,
+               operationController.pendingConflict != nil {
                 operationController.resolvePendingConflict(.cancel, applyToAll: false)
             }
         }
@@ -196,11 +251,27 @@ struct WorkspaceView: View {
 
     private var smartSearchPresentation: Binding<Bool> {
         Binding {
-            smartSearch.isPresented
+            modalPresentationState.allowsOtherModalPresentation && smartSearch.isPresented
         } set: { isPresented in
-            if !isPresented {
+            if !isPresented,
+               modalPresentationState.allowsOtherModalPresentation {
                 smartSearch.dismiss()
             }
+        }
+    }
+
+    private var pendingPasswordRequest: Binding<ArchivePasswordRequest?> {
+        Binding {
+            modalPresentationState.passwordRequestToPresent(
+                pending: passwordCoordinator.pendingRequest,
+                conflictPresented: operationController.pendingConflict != nil,
+                searchPresented: smartSearch.isPresented
+            )
+        } set: { request in
+            // The sheet's content captures the request ID and handles its own
+            // dismissal. A binding write has no identity and must not cancel a
+            // newer coordinator request.
+            guard request == nil else { return }
         }
     }
 

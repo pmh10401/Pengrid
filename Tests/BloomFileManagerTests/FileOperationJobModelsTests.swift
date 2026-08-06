@@ -112,4 +112,20 @@ struct FileOperationJobModelsTests {
         #expect(!succeeded.canRetry)
         #expect(succeeded.canUndo)
     }
+
+    @Test func waitingForPasswordIsNonTerminalAndNotRetryable() {
+        let snapshot = FileOperationJobSnapshot(
+            id: UUID(),
+            kind: .extract(.zip),
+            itemDisplayName: "자료.zip",
+            itemCount: 1,
+            state: .waitingForPassword,
+            progress: nil,
+            canUndo: false
+        )
+
+        #expect(snapshot.state.label == "Waiting for password")
+        #expect(snapshot.canRetry == false)
+        #expect(snapshot.canUndo == false)
+    }
 }

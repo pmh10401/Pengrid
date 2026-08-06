@@ -47,6 +47,7 @@ import Testing
         )
 
         #expect(request.format == .zip)
+        #expect(request.protection == .none)
         #expect(progress.format == .zip)
     }
 

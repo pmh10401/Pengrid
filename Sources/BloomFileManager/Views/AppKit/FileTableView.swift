@@ -89,6 +89,7 @@ struct FileTableView: NSViewRepresentable {
     let onCopy: () -> Void
     let onPaste: () -> Void
     let onCompress: (ArchiveFormat) -> Void
+    let onCompressProtected: () -> Void
     let onExtract: () -> Void
     let onRequestTrashConfirmation: () -> Void
 
@@ -123,6 +124,7 @@ struct FileTableView: NSViewRepresentable {
         onCopy: @escaping () -> Void = {},
         onPaste: @escaping () -> Void = {},
         onCompress: @escaping (ArchiveFormat) -> Void = { _ in },
+        onCompressProtected: @escaping () -> Void = {},
         onExtract: @escaping () -> Void = {},
         onRequestTrashConfirmation: @escaping () -> Void = {}
     ) {
@@ -154,6 +156,7 @@ struct FileTableView: NSViewRepresentable {
         self.onCopy = onCopy
         self.onPaste = onPaste
         self.onCompress = onCompress
+        self.onCompressProtected = onCompressProtected
         self.onExtract = onExtract
         self.onRequestTrashConfirmation = onRequestTrashConfirmation
     }
@@ -615,6 +618,13 @@ extension FileTableView {
                 enabled: policy.canCompress,
                 to: menu
             )
+            addMenuItem(
+                "Compress as Password-Protected ZIP…",
+                action: #selector(compressProtectedFromMenu),
+                enabled: policy.canCompressProtectedZIP,
+                to: menu,
+                identifier: AccessibilityIdentifiers.fileTableCompressProtectedZIP
+            )
             addCompressSubmenu(enabled: policy.canCompress, to: menu)
             addMenuItem(
                 "Extract Archive",
@@ -635,6 +645,7 @@ extension FileTableView {
         @objc private func copyFromMenu() { parent.onCopy() }
         @objc private func pasteFromMenu() { parent.onPaste() }
         @objc private func compressFromMenu() { parent.onCompress(.zip) }
+        @objc func compressProtectedFromMenu() { parent.onCompressProtected() }
         @objc private func compressAsFromMenu(_ sender: NSMenuItem) {
             guard ArchiveFormat.allCases.indices.contains(sender.tag) else { return }
             parent.onCompress(ArchiveFormat.allCases[sender.tag])
@@ -772,11 +783,15 @@ extension FileTableView {
             _ title: String,
             action: Selector,
             enabled: Bool,
-            to menu: NSMenu
+            to menu: NSMenu,
+            identifier: String? = nil
         ) {
             let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
             item.target = self
             item.isEnabled = enabled
+            if let identifier {
+                item.identifier = NSUserInterfaceItemIdentifier(identifier)
+            }
             menu.addItem(item)
         }
 

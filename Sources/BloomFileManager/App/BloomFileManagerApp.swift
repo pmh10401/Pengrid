@@ -76,6 +76,7 @@ struct BloomFileManagerApp: App {
     @State private var quickLookController: QuickLookController
     @State private var previewCoordinator: WorkspacePreviewCoordinator
     @State private var operationController: FileOperationController
+    @State private var passwordCoordinator: ArchivePasswordPromptCoordinator
     @State private var smartSearch: SmartSearchStore
     @State private var smartSearchRouter: SmartSearchActionRouter
     @State private var favorites = FavoritesStore()
@@ -95,10 +96,18 @@ struct BloomFileManagerApp: App {
         self.cloudDependencies = cloudDependencies
         let persistence = WorkspacePersistence()
         cloudWorkspaceActions = LiveCloudLocationWorkspaceActions()
-        _operationController = State(initialValue: FileOperationController(
-            service: cloudDependencies.makeFileOperationService(),
-            materializer: cloudDependencies.materializer
-        ))
+        let passwordCoordinator = ArchivePasswordPromptCoordinator()
+        _passwordCoordinator = State(initialValue: passwordCoordinator)
+        let operationService = cloudDependencies.makeFileOperationService()
+        let archiveService = operationService.makeRoutingArchiveOperationService(
+            passwordProvider: passwordCoordinator
+        )
+        let operationController = FileOperationController(
+            service: operationService,
+            materializer: cloudDependencies.materializer,
+            archiveService: archiveService
+        )
+        _operationController = State(initialValue: operationController)
         _smartSearch = State(initialValue: SmartSearchStore(
             service: LocalSmartSearchService(
                 fileSystem: cloudDependencies.fileSystem,
@@ -174,6 +183,13 @@ struct BloomFileManagerApp: App {
         )
         previewCloseBinding.previewCoordinator = previewCoordinator
         _previewCoordinator = State(initialValue: previewCoordinator)
+
+        // Register the exact controller/coordinator instances before the
+        // SwiftUI scene can dispatch any user work or AppKit Quit requests.
+        appDelegate.configureTermination(
+            operationController: operationController,
+            passwordCoordinator: passwordCoordinator
+        )
     }
 
     var body: some Scene {
@@ -193,7 +209,8 @@ struct BloomFileManagerApp: App {
                 materializer: cloudDependencies.materializer,
                 fileSystem: cloudDependencies.fileSystem,
                 cloudWorkspaceActions: cloudWorkspaceActions,
-                cloudAccessCoordinator: cloudDependencies.accessCoordinator
+                cloudAccessCoordinator: cloudDependencies.accessCoordinator,
+                passwordCoordinator: passwordCoordinator
             )
             .task {
                 try? await cloudLocations.scanInitially()

@@ -5,10 +5,11 @@ MODE="${1:-run}"
 APP_DISPLAY_NAME="Pengrid"
 EXECUTABLE_NAME="BloomFileManager"
 ICON_NAME="Pengrid.icns"
+NOTICE_NAME="THIRD_PARTY_NOTICES.md"
 BUNDLE_ID="com.minho.BloomFileManager"
 MIN_SYSTEM_VERSION="15.0"
 APP_VERSION="1.3.0"
-BUILD_VERSION="5"
+BUILD_VERSION="6"
 
 die() { echo "$*" >&2; exit 1; }
 
@@ -57,6 +58,7 @@ APP_MACOS="$APP_CONTENTS/MacOS"
 APP_RESOURCES="$APP_BUNDLE/Contents/Resources"
 APP_BINARY="$APP_MACOS/$EXECUTABLE_NAME"
 ICON_SOURCE="$ROOT_DIR/Assets/Pengrid/$ICON_NAME"
+NOTICE_SOURCE="$ROOT_DIR/$NOTICE_NAME"
 INFO_PLIST="$APP_CONTENTS/Info.plist"
 is_strict_child "$DIST_DIR" "$ROOT_DIR" || die "unsafe dist path"
 assert_no_symlink_components "$ROOT_DIR"
@@ -90,6 +92,23 @@ IFS=: read -r source_device source_inode source_type source_uid source_links sou
 [[ "$source_type" == "Regular File" && "$icon_source_path_identity" == "$icon_source_fd_identity" ]] \
   || die "app icon path changed or is not a regular file: $ICON_SOURCE"
 
+[[ "$NOTICE_SOURCE" == "$ROOT_DIR/$NOTICE_NAME" ]] \
+  || die "unsafe third-party notice path: $NOTICE_SOURCE"
+assert_no_symlink_components "$NOTICE_SOURCE"
+if ! exec 9<"$NOTICE_SOURCE"; then
+  die "unable to open third-party notice: $NOTICE_SOURCE"
+fi
+if ! notice_source_path_identity="$(/usr/bin/stat -f '%d:%i:%HT:%u:%l:%Lp' "$NOTICE_SOURCE")"; then
+  die "unable to inspect third-party notice path: $NOTICE_SOURCE"
+fi
+if ! notice_source_fd_identity="$(/usr/bin/stat -f '%d:%i:%HT:%u:%l:%Lp' <&9)"; then
+  die "unable to inspect opened third-party notice: $NOTICE_SOURCE"
+fi
+IFS=: read -r notice_source_device notice_source_inode notice_source_type notice_source_uid notice_source_links notice_source_mode \
+  <<<"$notice_source_path_identity"
+[[ "$notice_source_type" == "Regular File" && "$notice_source_path_identity" == "$notice_source_fd_identity" ]] \
+  || die "third-party notice path changed or is not a regular file: $NOTICE_SOURCE"
+
 safe_delete_leaf "$APP_BUNDLE" "$DIST_DIR"
 mkdir -p "$APP_MACOS" "$APP_RESOURCES"
 assert_no_symlink_components "$APP_RESOURCES"
@@ -110,7 +129,8 @@ IFS=: read -r resources_device resources_inode resources_type resources_uid reso
 cp "$BUILD_BINARY" "$APP_BINARY"
 chmod +x "$APP_BINARY"
 
-if ! /usr/bin/swift - "$ICON_NAME" <<'SWIFT'
+publish_resource() {
+if ! /usr/bin/swift - "$1" <<'SWIFT'
 import Darwin
 
 let resourcesFD: Int32 = 7
@@ -293,11 +313,22 @@ stageFD = -1
 stageBasename = ""
 SWIFT
 then
-  die "unable to publish app icon"
+  return 1
 fi
+}
+
+publish_resource "$ICON_NAME" || die "unable to publish app icon"
 
 exec 8<&-
+exec 8<&9
+publish_resource "$NOTICE_NAME" || die "unable to publish third-party notice"
+exec 8<&-
 exec 7<&-
+
+if ! /usr/bin/cmp -s /dev/fd/9 "$APP_RESOURCES/$NOTICE_NAME"; then
+  die "bundled third-party notice differs from the repository notice"
+fi
+exec 9<&-
 
 cat >"$INFO_PLIST" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -317,11 +348,29 @@ cat >"$INFO_PLIST" <<PLIST
 PLIST
 
 open_app() { /usr/bin/open -n "$APP_BUNDLE"; }
+verify_native_linkage() {
+  local binary="$1"
+  local dependencies
+  # otool -L is required for local protected-ZIP verification.
+  dependencies="$(/usr/bin/otool -L "$binary")" \
+    || die "unable to inspect native linkage: $binary"
+  if echo "$dependencies" | /usr/bin/grep -Eiq 'libssl|libcrypto'; then
+    die 'unexpected OpenSSL dependency in Pengrid binary'
+  fi
+}
+
+verify_app_bundle() {
+  verify_native_linkage "$APP_BINARY"
+  /usr/bin/codesign --force --deep --sign - "$APP_BUNDLE" \
+    || die "unable to ad-hoc sign verification app: $APP_BUNDLE"
+  /usr/bin/codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE" \
+    || die "app bundle signature verification failed: $APP_BUNDLE"
+}
 case "$MODE" in
   run) open_app ;;
   --debug|debug) lldb -- "$APP_BINARY" ;;
   --logs|logs) open_app; /usr/bin/log stream --info --style compact --predicate "process == \"$EXECUTABLE_NAME\"" ;;
   --telemetry|telemetry) open_app; /usr/bin/log stream --info --style compact --predicate "subsystem == \"$BUNDLE_ID\"" ;;
-  --verify|verify) open_app; sleep 1; pgrep -x "$EXECUTABLE_NAME" >/dev/null ;;
+  --verify|verify) verify_app_bundle ;;
   *) echo "usage: $0 [run|--debug|--logs|--telemetry|--verify]" >&2; exit 2 ;;
 esac

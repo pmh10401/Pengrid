@@ -21,6 +21,8 @@ enum ArchiveOperationKind: Sendable, Equatable {
 
 enum ArchiveOperationPhase: Sendable, Equatable {
     case preparingSources(completedCount: Int, totalCount: Int)
+    case processingBytes(completedByteCount: Int64, totalByteCount: Int64?)
+    case waitingForPassword
     case encoding
     case publishing
 }
@@ -44,13 +46,19 @@ struct ArchiveOperationProgress: Sendable, Equatable {
     }
 
     var fractionCompleted: Double? {
-        guard case let .preparingSources(completedCount, totalCount) = phase else {
+        switch phase {
+        case let .preparingSources(completedCount, totalCount):
+            let safeTotal = max(totalCount, 0)
+            guard safeTotal > 0 else { return 0 }
+            let safeCompleted = min(max(completedCount, 0), safeTotal)
+            return Double(safeCompleted) / Double(safeTotal)
+        case let .processingBytes(completedByteCount, totalByteCount):
+            guard let totalByteCount, totalByteCount > 0 else { return nil }
+            let safeCompleted = min(max(completedByteCount, 0), totalByteCount)
+            return Double(safeCompleted) / Double(totalByteCount)
+        case .waitingForPassword, .encoding, .publishing:
             return nil
         }
-        let safeTotal = max(totalCount, 0)
-        guard safeTotal > 0 else { return 0 }
-        let safeCompleted = min(max(completedCount, 0), safeTotal)
-        return Double(safeCompleted) / Double(safeTotal)
     }
 }
 
@@ -61,6 +69,7 @@ struct ArchiveRequest: Sendable, Equatable {
     let destinationParentIdentity: FileIdentity
     let progressDisplayName: String
     let format: ArchiveFormat
+    let protection: ArchiveProtection
 
     init(
         kind: ArchiveOperationKind,
@@ -75,6 +84,38 @@ struct ArchiveRequest: Sendable, Equatable {
         self.finalDestination = finalDestination
         self.destinationParentIdentity = destinationParentIdentity
         self.format = format
+        self.protection = .none
+        if let progressDisplayName {
+            self.progressDisplayName = progressDisplayName
+        } else {
+            self.progressDisplayName = switch kind {
+            case .compress:
+                finalDestination.lastPathComponent
+            case .extract:
+                verifiedSources.first?.url.lastPathComponent
+                    ?? finalDestination.lastPathComponent
+            }
+        }
+    }
+
+    init?(
+        kind: ArchiveOperationKind,
+        verifiedSources: [IdentifiedFileRequest],
+        finalDestination: URL,
+        destinationParentIdentity: FileIdentity,
+        progressDisplayName: String? = nil,
+        format: ArchiveFormat = .zip,
+        protection: ArchiveProtection
+    ) {
+        guard protection == .none || (kind == .compress && format == .zip) else {
+            return nil
+        }
+        self.kind = kind
+        self.verifiedSources = verifiedSources
+        self.finalDestination = finalDestination
+        self.destinationParentIdentity = destinationParentIdentity
+        self.format = format
+        self.protection = protection
         if let progressDisplayName {
             self.progressDisplayName = progressDisplayName
         } else {

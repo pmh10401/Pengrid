@@ -15,6 +15,58 @@ enum EmptyFileSystemItemKind: Sendable, Equatable {
     case directory
 }
 
+enum OpenedFileSystemItemKind: Sendable, Equatable {
+    case regularFile
+    case directory
+}
+
+final class OpenedFileSystemItem: @unchecked Sendable {
+    let identity: FileIdentity
+    private let url: URL
+    private let closeDescriptor: (Int32) -> Void
+    private let lock = NSLock()
+    private var descriptor: Int32?
+
+    init(
+        identity: FileIdentity,
+        descriptor: Int32,
+        url: URL,
+        closeDescriptor: @escaping (Int32) -> Void = OpenedFileSystemItem.closeDescriptorByClosing
+    ) {
+        self.identity = identity
+        self.url = url
+        self.closeDescriptor = closeDescriptor
+        self.descriptor = descriptor
+    }
+
+    func withUnsafeDescriptor<T>(_ body: (Int32) throws -> T) throws -> T {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let descriptor else {
+            throw FileSystemAccessError.descriptorClosed(url)
+        }
+        return try body(descriptor)
+    }
+
+    func close() {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let descriptor else {
+            return
+        }
+        self.descriptor = nil
+        closeDescriptor(descriptor)
+    }
+
+    deinit {
+        close()
+    }
+
+    private static func closeDescriptorByClosing(_ descriptor: Int32) {
+        _ = Darwin.close(descriptor)
+    }
+}
+
 struct OpenedEmptyFileSystemItem: Sendable {
     let identity: FileIdentity
     let descriptor: Int32
@@ -82,6 +134,11 @@ protocol FileSystemAccess: Sendable {
         kind: EmptyFileSystemItemKind,
         parentIdentifiedBy parentIdentity: FileIdentity
     ) async throws -> OpenedEmptyFileSystemItem
+    func openItem(
+        _ url: URL,
+        kind: OpenedFileSystemItemKind,
+        identifiedBy expectedIdentity: FileIdentity
+    ) async throws -> OpenedFileSystemItem
     func copyAndCaptureIdentity(_ source: URL, to destination: URL) async throws -> FileIdentity
     func copyAndCaptureIdentity(
         _ source: URL,
@@ -157,6 +214,14 @@ protocol FileSystemAccess: Sendable {
 }
 
 extension FileSystemAccess {
+    func openItem(
+        _ url: URL,
+        kind: OpenedFileSystemItemKind,
+        identifiedBy expectedIdentity: FileIdentity
+    ) async throws -> OpenedFileSystemItem {
+        throw FileSystemAccessError.unsupportedOperation(url)
+    }
+
     func captureFolderPreviewRequest(
         paneID: PaneID,
         url: URL
@@ -306,6 +371,8 @@ extension FileSystemAccess {
 enum FileSystemAccessError: Error, Equatable {
     case missingVolumeIdentifier(URL)
     case identityMismatch(URL)
+    case descriptorClosed(URL)
+    case unsupportedOperation(URL)
 }
 
 enum StorageTrashAccessError: LocalizedError, Equatable {
@@ -546,6 +613,62 @@ actor LiveFileSystemAccess: FileSystemAccess {
             identity: createdIdentity,
             descriptor: descriptor
         )
+    }
+
+    func openItem(
+        _ url: URL,
+        kind: OpenedFileSystemItemKind,
+        identifiedBy expectedIdentity: FileIdentity
+    ) async throws -> OpenedFileSystemItem {
+        try Task.checkCancellation()
+        let (parentDescriptor, name) = try openParentDirectory(of: url)
+        defer { Darwin.close(parentDescriptor) }
+
+        guard try identity(named: name, in: parentDescriptor, noFollow: true).entryIdentifier
+            == expectedIdentity.entryIdentifier else {
+            throw FileSystemAccessError.identityMismatch(url)
+        }
+
+        let flags: Int32 = switch kind {
+        case .regularFile:
+            O_RDONLY | O_NOFOLLOW | O_CLOEXEC
+        case .directory:
+            O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+        }
+        let descriptor = name.withCString { Darwin.openat(parentDescriptor, $0, flags) }
+        guard descriptor >= 0 else { throw currentPOSIXError() }
+        var ownsDescriptor = true
+        defer {
+            if ownsDescriptor { Darwin.close(descriptor) }
+        }
+
+        let expectedType: mode_t = switch kind {
+        case .regularFile: S_IFREG
+        case .directory: S_IFDIR
+        }
+        let openedIdentity: FileIdentity
+        do {
+            var information = stat()
+            guard Darwin.fstat(descriptor, &information) == 0 else {
+                throw currentPOSIXError()
+            }
+            guard information.st_mode & S_IFMT == expectedType else {
+                throw FileTransferAccessError.unexpectedOpenedEntryType(url)
+            }
+            openedIdentity = identity(from: information)
+            guard openedIdentity.entryIdentifier == expectedIdentity.entryIdentifier else {
+                throw FileSystemAccessError.identityMismatch(url)
+            }
+            guard try identity(named: name, in: parentDescriptor, noFollow: true)
+                .entryIdentifier == expectedIdentity.entryIdentifier else {
+                throw FileSystemAccessError.identityMismatch(url)
+            }
+        } catch {
+            throw error
+        }
+
+        ownsDescriptor = false
+        return OpenedFileSystemItem(identity: openedIdentity, descriptor: descriptor, url: url)
     }
 
     func copyAndCaptureIdentity(_ source: URL, to destination: URL) throws -> FileIdentity {
@@ -1954,7 +2077,10 @@ actor LiveFileSystemAccess: FileSystemAccess {
 
     private func openParentDirectory(of url: URL) throws -> (Int32, String) {
         let parent = url.deletingLastPathComponent()
-        let descriptor = try openDescriptor(parent, flags: O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+        let descriptor = try openDescriptor(
+            parent,
+            flags: O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+        )
         return (descriptor, url.lastPathComponent)
     }
 

@@ -38,6 +38,40 @@ import Testing
     ).canCompress == false)
 }
 
+@Test func protectedCompressionUsesExactlyTheOrdinaryCompressionPolicy() {
+    let item = commandPolicyItem(named: "Report.pdf")
+
+    for policy in [
+        WorkspaceCommandPolicy(
+            selectionCount: 0,
+            isOperationRunning: false,
+            pasteboardHasFileURLs: false,
+            selectedItems: []
+        ),
+        WorkspaceCommandPolicy(
+            selectionCount: 1,
+            isOperationRunning: false,
+            pasteboardHasFileURLs: false,
+            selectedItems: [item]
+        ),
+        WorkspaceCommandPolicy(
+            selectionCount: 1,
+            isOperationRunning: false,
+            pasteboardHasFileURLs: false,
+            selectedItems: [item],
+            isTextEditing: true
+        ),
+        WorkspaceCommandPolicy(
+            selectionCount: 1,
+            isOperationRunning: true,
+            pasteboardHasFileURLs: false,
+            selectedItems: [item]
+        )
+    ] {
+        #expect(policy.canCompressProtectedZIP == policy.canCompress)
+    }
+}
+
 @Test func extractionRequiresEverySelectedItemToBeARegularZIPAndNoActiveEdit() {
     let firstZIP = commandPolicyItem(named: "First.zip")
     let secondZIP = commandPolicyItem(named: "SECOND.ZIP")
@@ -107,6 +141,35 @@ import Testing
     #expect(commands.contains(".keyboardShortcut(\"f\", modifiers: [.command, .shift])"))
 }
 
+@Test func protectedCompressionCommandIsImmediatelyAfterOrdinaryZIPAndNeverInTARChoices() throws {
+    let commands = try commandSource()
+    let ordinary = try #require(commands.range(of: "Button(\"Compress to ZIP\")"))
+    let protected = try #require(commands.range(of: "Button(\"Compress as Password-Protected ZIP…\")"))
+    #expect(protected.lowerBound > ordinary.upperBound)
+
+    let protectedProjection = String(commands[protected.lowerBound...])
+    #expect(commands.contains("format: .zip"))
+    #expect(commands.contains("protection: .aes256"))
+    #expect(protectedProjection.contains(
+        "AccessibilityIdentifiers.workspaceCompressProtectedZIP"
+    ))
+    #expect(!protectedProjection.prefix(through: protectedProjection.firstIndex(of: "}") ?? protectedProjection.endIndex).contains("ArchiveFormat.allCases"))
+}
+
+@Test func appKitContextMenuUsesTheProtectedControllerRouteAndSharedEnablement() throws {
+    let table = try fileTableSource()
+    let ordinary = try #require(table.range(of: "\"Compress to ZIP\""))
+    let protected = try #require(table.range(of: "\"Compress as Password-Protected ZIP…\""))
+    #expect(protected.lowerBound > ordinary.upperBound)
+    #expect(table.contains("action: #selector(compressProtectedFromMenu)"))
+    #expect(table.contains("onCompressProtected"))
+    #expect(table.contains("AccessibilityIdentifiers.fileTableCompressProtectedZIP"))
+
+    let pane = try filePaneSource()
+    #expect(pane.contains("onCompressProtected: compressProtectedSelection"))
+    #expect(pane.contains("WorkspaceArchiveCommandActions.compressProtectedZIP"))
+}
+
 @Test func extractionAcceptsEverySupportedRegularArchiveSuffix() {
     let suffixes = [
         "zip", "tar", "tar.gz", "tgz", "tar.bz2", "tbz", "tbz2", "tar.xz", "txz"
@@ -162,6 +225,28 @@ private func commandSource() throws -> String {
         .deletingLastPathComponent()
     return try String(
         contentsOf: packageRoot.appending(path: "Sources/BloomFileManager/Support/WorkspaceCommands.swift"),
+        encoding: .utf8
+    )
+}
+
+private func fileTableSource() throws -> String {
+    let packageRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    return try String(
+        contentsOf: packageRoot.appending(path: "Sources/BloomFileManager/Views/AppKit/FileTableView.swift"),
+        encoding: .utf8
+    )
+}
+
+private func filePaneSource() throws -> String {
+    let packageRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    return try String(
+        contentsOf: packageRoot.appending(path: "Sources/BloomFileManager/Views/FilePaneView.swift"),
         encoding: .utf8
     )
 }

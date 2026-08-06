@@ -6,8 +6,40 @@ let package = Package(
     platforms: [.macOS(.v15)],
     products: [.executable(name: "BloomFileManager", targets: ["BloomFileManager"])],
     targets: [
-        .executableTarget(name: "BloomFileManager", path: "Sources/BloomFileManager"),
-        .testTarget(name: "BloomFileManagerTests", dependencies: ["BloomFileManager"])
+        .target(
+            name: "EncryptedZIPCore",
+            path: "Sources/EncryptedZIPCore",
+            exclude: [
+                "vendor/minizip-ng/LICENSE",
+                "vendor/minizip-ng/mz_crypt.c",
+                "vendor/minizip-ng/mz_crypt_apple.c",
+                "vendor/minizip-ng/mz_strm_wzaes.c",
+                "vendor/minizip-ng/mz_strm_pkcrypt.c"
+            ],
+            publicHeadersPath: "include",
+            cSettings: [
+                .headerSearchPath("config"),
+                .headerSearchPath("vendor/minizip-ng"),
+                .define("HAVE_PKCRYPT"),
+                .define("HAVE_WZAES"),
+                .define("HAVE_ZLIB"),
+                .define("_DARWIN_C_SOURCE")
+            ],
+            linkerSettings: [
+                .linkedLibrary("z"),
+                .linkedFramework("CoreFoundation"),
+                .linkedFramework("Security")
+            ]
+        ),
+        .executableTarget(
+            name: "BloomFileManager",
+            dependencies: ["EncryptedZIPCore"],
+            path: "Sources/BloomFileManager"
+        ),
+        .testTarget(
+            name: "BloomFileManagerTests",
+            dependencies: ["BloomFileManager", "EncryptedZIPCore"]
+        )
     ],
     swiftLanguageModes: [.v6]
 )

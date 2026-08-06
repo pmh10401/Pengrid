@@ -4,6 +4,23 @@ import Testing
 
 @MainActor
 struct FileOperationControllerTests {
+    @Test func legacyCompressionMethodValueRemainsTwoArgumentCallable() async throws {
+        let fixture = await makeProtectedWorkspace()
+        let archiveService = RecordingArchiveOperator()
+        let controller = FileOperationController(
+            service: FileOperationService(fileSystem: fixture.fileSystem),
+            materializer: InMemoryCloudMaterializer(),
+            archiveService: archiveService
+        )
+        let legacy: @MainActor (WorkspaceState, ArchiveFormat) async -> Bool =
+            controller.compressSelection
+
+        #expect(await legacy(fixture.workspace, .zip))
+        await waitUntilIdle(controller)
+        #expect(await archiveService.recordedRequests().count == 1)
+        #expect(await archiveService.recordedRequests().first?.protection == ArchiveProtection.none)
+    }
+
     @Test func archivePreparationPublicationIsLimitedToTenHertzExceptBoundaries() {
         var gate = ArchiveProgressPublicationGate()
         let start = ContinuousClock.now
@@ -125,6 +142,176 @@ struct FileOperationControllerTests {
         #expect(requests.first?.finalDestination == directory.appending(path: "Project Notes 2.zip"))
         #expect(requests.first?.format == .zip)
         #expect(requests.first?.progressDisplayName == "Project Notes 2.zip")
+    }
+
+    @Test func protectedCompressionQueuesSafeMetadataAndUsesEncryptedTitle() async throws {
+        let fixture = await makeProtectedWorkspace()
+        let passwordCoordinator = ArchivePasswordPromptCoordinator()
+        let archiveOperator = ControllerProtectedArchiveOperator(
+            passwordProvider: passwordCoordinator,
+            mode: .promptAndWait
+        )
+        let controller = FileOperationController(
+            service: FileOperationService(fileSystem: fixture.fileSystem),
+            materializer: InMemoryCloudMaterializer(),
+            archiveService: archiveOperator
+        )
+
+        #expect(await controller.compressSelection(
+            fixture.workspace,
+            format: .zip,
+            protection: .aes256
+        ))
+        let waiting = await waitUntilBounded {
+            controller.activeJob?.state == .waitingForPassword
+        }
+        #expect(waiting)
+        #expect(controller.activeJob?.kind == .compressProtectedZIP)
+        #expect(controller.activeJob?.title == "Compress Encrypted ZIP")
+        #expect(controller.activeJob?.progress?.detail == "Waiting for password")
+        #expect(await archiveOperator.recordedRequests().first?.protection == .aes256)
+
+        #expect(await controller.compressSelection(
+            fixture.workspace,
+            format: .zip,
+            protection: .aes256
+        ))
+        let queued = try #require(controller.queuedJobs.first)
+        #expect(queued.kind == .compressProtectedZIP)
+        #expect(queued.title == "Compress Encrypted ZIP")
+        let visible = (controller.queuedJobs + controller.operationHistory)
+            .map { "\($0.title)|\($0.itemDisplayName)|\($0.state.label)|\($0.accessibilityLabel)" }
+            .joined(separator: "\n")
+        #expect(!visible.contains(ControllerProtectedArchiveOperator.sentinel))
+
+        controller.cancelActiveJob()
+        #expect(await waitUntilBounded { controller.operationHistory.count == 1 })
+        controller.cancelActiveJob()
+        #expect(await waitUntilBounded { !controller.isRunning && controller.queuedJobs.isEmpty })
+    }
+
+    @Test func protectedAES256CompressionRejectsTARWithoutStartingAnOperation() async {
+        let fixture = await makeProtectedWorkspace()
+        let archiveOperator = RecordingArchiveOperator()
+        let controller = FileOperationController(
+            service: FileOperationService(fileSystem: fixture.fileSystem),
+            materializer: InMemoryCloudMaterializer(),
+            archiveService: archiveOperator
+        )
+
+        let accepted = await controller.compressSelection(
+            fixture.workspace,
+            format: .tarGzip,
+            protection: .aes256
+        )
+        #expect(!accepted)
+        #expect(!controller.isRunning)
+        #expect(controller.activeJob == nil)
+        #expect(controller.queuedJobs.isEmpty)
+        #expect(controller.operationHistory.isEmpty)
+        #expect(await archiveOperator.recordedRequests().isEmpty)
+    }
+
+    @Test func protectedArchiveWaitingDisablesPauseAndBoundsByteProgress() async {
+        let fixture = await makeProtectedWorkspace()
+        let archiveOperator = ControllerProtectedArchiveOperator(mode: .waitingThenBytes)
+        let controller = FileOperationController(
+            service: FileOperationService(fileSystem: fixture.fileSystem),
+            materializer: InMemoryCloudMaterializer(),
+            archiveService: archiveOperator
+        )
+
+        #expect(await controller.compressSelection(
+            fixture.workspace,
+            format: .zip,
+            protection: .aes256
+        ))
+        #expect(await waitUntilBounded {
+            controller.activeJob?.state == .waitingForPassword
+        })
+        await controller.pauseActiveJob()
+        #expect(controller.isPaused == false)
+        #expect(controller.activeJob?.state == .waitingForPassword)
+
+        #expect(await waitUntilBounded { await archiveOperator.didEmitBytes })
+        #expect(await waitUntilBounded {
+            controller.activeJob?.state == .running
+                && controller.activeJob?.progress?.completedCount == 10
+                && controller.activeJob?.progress?.totalCount == 10
+        })
+
+        controller.cancelActiveJob()
+        #expect(await waitUntilBounded { !controller.isRunning })
+        #expect(controller.operationHistory.first?.state == .cancelled)
+    }
+
+    @Test func cancellingProtectedPromptDismissesCoordinatorAndReturnsToHistory() async {
+        let fixture = await makeProtectedWorkspace()
+        let passwordCoordinator = ArchivePasswordPromptCoordinator()
+        let archiveOperator = ControllerProtectedArchiveOperator(
+            passwordProvider: passwordCoordinator,
+            mode: .promptAndWait
+        )
+        let controller = FileOperationController(
+            service: FileOperationService(fileSystem: fixture.fileSystem),
+            materializer: InMemoryCloudMaterializer(),
+            archiveService: archiveOperator
+        )
+
+        #expect(await controller.compressSelection(
+            fixture.workspace,
+            format: .zip,
+            protection: .aes256
+        ))
+        #expect(await waitUntilBounded { passwordCoordinator.pendingRequest != nil })
+        controller.cancelActiveJob()
+        #expect(await waitUntilBounded { !controller.isRunning })
+        #expect(passwordCoordinator.pendingRequest == nil)
+        #expect(controller.operationHistory.first?.state == .cancelled)
+    }
+
+    @Test func failedProtectedAttemptRetriesWithFreshPromptWithoutSecretOrUndo() async throws {
+        let fixture = await makeProtectedWorkspace()
+        let passwordCoordinator = ArchivePasswordPromptCoordinator()
+        let archiveOperator = ControllerProtectedArchiveOperator(
+            passwordProvider: passwordCoordinator,
+            mode: .promptAndFail
+        )
+        let controller = FileOperationController(
+            service: FileOperationService(fileSystem: fixture.fileSystem),
+            materializer: InMemoryCloudMaterializer(),
+            archiveService: archiveOperator
+        )
+
+        #expect(await controller.compressSelection(
+            fixture.workspace,
+            format: .zip,
+            protection: .aes256
+        ))
+        #expect(await waitUntilBounded { passwordCoordinator.pendingRequest != nil })
+        let firstRequestID = try #require(passwordCoordinator.pendingRequest?.id)
+        passwordCoordinator.submit(
+            password: ControllerProtectedArchiveOperator.sentinel,
+            confirmation: ControllerProtectedArchiveOperator.sentinel,
+            requestID: firstRequestID
+        )
+        #expect(await waitUntilBounded { !controller.isRunning })
+        let failed = try #require(controller.operationHistory.first)
+        #expect(failed.state == .failed)
+        #expect(failed.canRetry)
+        #expect(!failed.canUndo)
+
+        #expect(controller.retryJob(failed.id))
+        #expect(await waitUntilBounded { passwordCoordinator.pendingRequest != nil })
+        let secondRequestID = try #require(passwordCoordinator.pendingRequest?.id)
+        #expect(secondRequestID != firstRequestID)
+        let visible = (controller.queuedJobs + controller.operationHistory)
+            .map { "\($0.title)|\($0.itemDisplayName)|\($0.state.label)|\($0.accessibilityLabel)" }
+            .joined(separator: "\n")
+        #expect(!visible.contains(ControllerProtectedArchiveOperator.sentinel))
+
+        controller.cancelActiveJob()
+        #expect(await waitUntilBounded { !controller.isRunning })
     }
 
     @Test func multipleItemsCompressToTheFirstAvailableArchiveName() async {
@@ -1973,6 +2160,16 @@ struct FileOperationControllerTests {
         }
     }
 
+    private func waitUntilBounded(
+        _ condition: @escaping () async -> Bool
+    ) async -> Bool {
+        for _ in 0..<2_000 {
+            if await condition() { return true }
+            await Task.yield()
+        }
+        return false
+    }
+
     private func waitForPendingConflict(_ controller: FileOperationController) async {
         while controller.pendingConflict == nil {
             await Task.yield()
@@ -2004,6 +2201,32 @@ struct FileOperationControllerTests {
             availability: availability
         )
     }
+
+    private func makeProtectedWorkspace() async -> ProtectedWorkspaceFixture {
+        let directory = URL(filePath: "/workspace", directoryHint: .isDirectory)
+        let otherDirectory = URL(filePath: "/other", directoryHint: .isDirectory)
+        let source = directory.appending(path: "Report.txt")
+        let fileSystem = RecordingFileSystem(existingURLs: [directory, otherDirectory, source])
+        let workspace = WorkspaceState(
+            leftURL: directory,
+            rightURL: otherDirectory,
+            listingService: StubDirectoryListingService(values: [
+                directory: [fileItem(at: source)],
+                otherDirectory: []
+            ])
+        )
+        await workspace.loadInitialDirectories()
+        workspace.left.selection = [source]
+        return ProtectedWorkspaceFixture(
+            workspace: workspace,
+            fileSystem: fileSystem
+        )
+    }
+}
+
+private struct ProtectedWorkspaceFixture {
+    let workspace: WorkspaceState
+    let fileSystem: RecordingFileSystem
 }
 
 private actor RecordingArchiveOperator: ArchiveOperating {
@@ -2020,6 +2243,133 @@ private actor RecordingArchiveOperator: ArchiveOperating {
                 destination: request.finalDestination
             )
         })
+    }
+
+    func recordedRequests() -> [ArchiveRequest] {
+        requests
+    }
+}
+
+private actor ControllerProtectedArchiveOperator: ArchiveOperating {
+    enum Mode: Sendable {
+        case promptAndWait
+        case promptAndFail
+        case waitingThenBytes
+    }
+
+    static let sentinel = "secret-sentinel-passphrase"
+
+    private let passwordProvider: (any ArchivePasswordProviding)?
+    private let mode: Mode
+    private var requests: [ArchiveRequest] = []
+    private var release: CheckedContinuation<Void, Never>?
+    private(set) var didEmitBytes = false
+
+    init(
+        passwordProvider: (any ArchivePasswordProviding)? = nil,
+        mode: Mode
+    ) {
+        self.passwordProvider = passwordProvider
+        self.mode = mode
+    }
+
+    func perform(
+        _ inputRequests: [ArchiveRequest],
+        progress: @escaping ArchiveProgressHandler
+    ) async -> FileOperationResult {
+        guard let request = inputRequests.first else {
+            return FileOperationResult(outcomes: [])
+        }
+        requests.append(contentsOf: inputRequests)
+        let source = request.verifiedSources.first?.url ?? request.finalDestination
+        await progress(ArchiveOperationProgress(
+            kind: request.kind,
+            currentDisplayName: request.progressDisplayName,
+            format: request.format,
+            phase: .waitingForPassword
+        ))
+
+        switch mode {
+        case .promptAndWait:
+            guard let passwordProvider else {
+                return await waitForCancellation(
+                    source: source,
+                    destination: request.finalDestination
+                )
+            }
+            do {
+                let secret = try await passwordProvider.requestPassword(for: ArchivePasswordRequest(
+                    id: UUID(),
+                    purpose: .createAES256,
+                    archiveBasename: request.finalDestination.lastPathComponent,
+                    previousAttemptFailed: false
+                ))
+                secret.invalidate()
+                return await waitForCancellation(
+                    source: source,
+                    destination: request.finalDestination
+                )
+            } catch is CancellationError {
+                return FileOperationResult(outcomes: [.cancelled(source: source)])
+            } catch {
+                return FileOperationResult(outcomes: [.failed(source: source, message: "safe failure")])
+            }
+
+        case .promptAndFail:
+            guard let passwordProvider else {
+                return FileOperationResult(outcomes: [.failed(source: source, message: "safe failure")])
+            }
+            do {
+                let secret = try await passwordProvider.requestPassword(for: ArchivePasswordRequest(
+                    id: UUID(),
+                    purpose: .createAES256,
+                    archiveBasename: request.finalDestination.lastPathComponent,
+                    previousAttemptFailed: false
+                ))
+                secret.invalidate()
+                return FileOperationResult(outcomes: [.failed(source: source, message: "safe failure")])
+            } catch is CancellationError {
+                return FileOperationResult(outcomes: [.cancelled(source: source)])
+            } catch {
+                return FileOperationResult(outcomes: [.failed(source: source, message: "safe failure")])
+            }
+
+        case .waitingThenBytes:
+            await progress(ArchiveOperationProgress(
+                kind: request.kind,
+                currentDisplayName: request.progressDisplayName,
+                format: request.format,
+                phase: .processingBytes(completedByteCount: 99, totalByteCount: 10)
+            ))
+            didEmitBytes = true
+            return await waitForCancellation(
+                source: source,
+                destination: request.finalDestination
+            )
+        }
+    }
+
+    private func waitForCancellation(
+        source: URL,
+        destination: URL
+    ) async -> FileOperationResult {
+        await withTaskCancellationHandler(operation: {
+            await withCheckedContinuation { continuation in
+                release = continuation
+            }
+        }, onCancel: {
+            Task { await self.resumeRelease() }
+        })
+        return FileOperationResult(outcomes: [
+            Task.isCancelled
+                ? .cancelled(source: source)
+                : .succeeded(source: source, destination: destination)
+        ])
+    }
+
+    private func resumeRelease() {
+        release?.resume()
+        release = nil
     }
 
     func recordedRequests() -> [ArchiveRequest] {

@@ -1,5 +1,7 @@
+import AppKit
 import Foundation
 import Testing
+import SwiftUI
 @testable import BloomFileManager
 
 private actor EmptySmartSearchService: SmartSearching {
@@ -29,6 +31,127 @@ struct WorkspaceCommandTests {
 
         #expect(store.isPresented)
         #expect(store.roots == [workspace.activePane.currentDirectory])
+    }
+
+    @Test func protectedWorkspaceCommandActionInvokesAES256ZIPControllerRoute() async throws {
+        let directory = URL(filePath: "/workspace", directoryHint: .isDirectory)
+        let source = directory.appending(path: "Report.txt")
+        let item = FileItem(
+            url: source,
+            name: "Report.txt",
+            isDirectory: false,
+            isPackage: false,
+            modifiedAt: nil,
+            byteSize: 8,
+            typeDescription: "Document"
+        )
+        let workspace = WorkspaceState(
+            leftURL: directory,
+            rightURL: URL(filePath: "/other", directoryHint: .isDirectory),
+            listingService: StubDirectoryListingService(values: [directory: [item]])
+        )
+        await workspace.loadInitialDirectories()
+        workspace.left.selection = [source]
+
+        let recorder = CommandArchiveRecorder()
+        let controller = FileOperationController(
+            service: FileOperationService(
+                fileSystem: RecordingFileSystem(existingURLs: [directory, source])
+            ),
+            materializer: InMemoryCloudMaterializer(),
+            archiveService: recorder
+        )
+
+        #expect(await WorkspaceArchiveCommandActions.compressProtectedZIP(
+            workspace,
+            operationController: controller
+        ))
+        while controller.isRunning { await Task.yield() }
+
+        let request = try #require(await recorder.requests().first)
+        #expect(request.kind == .compress)
+        #expect(request.format == .zip)
+        #expect(request.protection == .aes256)
+    }
+
+    @Test func protectedFileTableContextMenuBuildsAndDispatchesRealMenuItem() throws {
+        let directory = URL(filePath: "/workspace", directoryHint: .isDirectory)
+        let source = directory.appending(path: "Report.txt")
+        let item = FileItem(
+            url: source,
+            name: "Report.txt",
+            isDirectory: false,
+            isPackage: false,
+            modifiedAt: nil,
+            byteSize: 8,
+            typeDescription: "Document"
+        )
+        var selection: Set<URL> = [source]
+        var protectedCallbackCount = 0
+        let view = FileTableView(
+            items: [item],
+            selection: Binding(
+                get: { selection },
+                set: { selection = $0 }
+            ),
+            onActivatePane: {},
+            onOpen: { _ in },
+            onSortChange: { _ in },
+            onCompressProtected: { protectedCallbackCount += 1 }
+        )
+        let coordinator = view.makeCoordinator()
+        let scrollView = view.makeScrollView(coordinator: coordinator)
+        let tableView = try #require(scrollView.documentView as? NSTableView)
+        let menu = try #require(tableView.menu)
+
+        coordinator.menuNeedsUpdate(menu)
+
+        let ordinaryIndex = try #require(menu.items.firstIndex { $0.title == "Compress to ZIP" })
+        let protectedIndex = try #require(
+            menu.items.firstIndex { $0.title == "Compress as Password-Protected ZIP…" }
+        )
+        let ordinary = menu.items[ordinaryIndex]
+        let protected = menu.items[protectedIndex]
+
+        #expect(protectedIndex == ordinaryIndex + 1)
+        #expect(protected.isEnabled == ordinary.isEnabled)
+        #expect(protected.submenu == nil)
+        #expect(protected.identifier == NSUserInterfaceItemIdentifier(
+            AccessibilityIdentifiers.fileTableCompressProtectedZIP
+        ))
+        #expect(protected.action == #selector(FileTableView.Coordinator.compressProtectedFromMenu))
+        #expect(protected.target === coordinator)
+        let formatMenuItem = try #require(
+            menu.items.first { $0.title == "Compress as…" && $0.submenu != nil }
+        )
+        let formatMenu = try #require(formatMenuItem.submenu)
+        let nestedFormatItems = menuItemsRecursively(in: formatMenu)
+        #expect(nestedFormatItems.allSatisfy { item in
+            item.title != "Compress as Password-Protected ZIP…"
+                && item.identifier != NSUserInterfaceItemIdentifier(
+                    AccessibilityIdentifiers.fileTableCompressProtectedZIP
+                )
+                && item.action != #selector(FileTableView.Coordinator.compressProtectedFromMenu)
+        })
+
+        #expect(NSApplication.shared.sendAction(
+            protected.action!,
+            to: protected.target,
+            from: protected
+        ))
+        #expect(protectedCallbackCount == 1)
+
+        selection = []
+        coordinator.menuNeedsUpdate(menu)
+
+        let disabledOrdinary = try #require(
+            menu.items.first { $0.title == "Compress to ZIP" }
+        )
+        let disabledProtected = try #require(
+            menu.items.first { $0.title == "Compress as Password-Protected ZIP…" }
+        )
+        #expect(!disabledOrdinary.isEnabled)
+        #expect(!disabledProtected.isEnabled)
     }
 
     @Test func newFolderCommandCapturesCreatedIdentityInItsOriginalPaneThroughReturn() async throws {
@@ -313,4 +436,32 @@ struct WorkspaceCommandTests {
             #expect(policy.canCancel)
         }
     }
+}
+
+private func menuItemsRecursively(in menu: NSMenu) -> [NSMenuItem] {
+    var items = menu.items
+    for item in menu.items {
+        guard let submenu = item.submenu else { continue }
+        items.append(contentsOf: menuItemsRecursively(in: submenu))
+    }
+    return items
+}
+
+private actor CommandArchiveRecorder: ArchiveOperating {
+    private var capturedRequests: [ArchiveRequest] = []
+
+    func perform(
+        _ requests: [ArchiveRequest],
+        progress: @escaping ArchiveProgressHandler
+    ) async -> FileOperationResult {
+        capturedRequests.append(contentsOf: requests)
+        return FileOperationResult(outcomes: requests.map {
+            .succeeded(
+                source: $0.verifiedSources.first?.url ?? $0.finalDestination,
+                destination: $0.finalDestination
+            )
+        })
+    }
+
+    func requests() -> [ArchiveRequest] { capturedRequests }
 }
