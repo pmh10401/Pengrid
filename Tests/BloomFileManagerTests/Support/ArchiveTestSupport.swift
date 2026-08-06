@@ -144,6 +144,7 @@ final class E2ERecordingArchivePasswordProvider: ArchivePasswordProviding {
     private var passwords: [String]
     private(set) var requests: [ArchivePasswordRequest] = []
     private(set) var retainedSecrets: [ArchiveSecret] = []
+    private(set) var retainedSecretObjectIdentifiers: [ObjectIdentifier] = []
     private let events: ArchiveTestEventRecorder?
 
     init(
@@ -168,6 +169,7 @@ final class E2ERecordingArchivePasswordProvider: ArchivePasswordProviding {
             secret = try ArchiveSecret.extraction(password: password)
         }
         retainedSecrets.append(secret)
+        retainedSecretObjectIdentifiers.append(ObjectIdentifier(secret))
         return secret
     }
 
@@ -261,10 +263,14 @@ struct E2ERecordingCloudMaterializer: CloudMaterializing {
 }
 
 actor E2EFaultingArchiveSourcePreparer: ArchiveSourcePreparing {
+    private let fileSystem: any FileSystemAccess
     private let live: LiveArchiveSourcePreparationService
     private var failuresRemaining: Int
+    private(set) var preparedReservations: [E2EPreparedArchiveReservation] = []
+    private(set) var cleanupCalls: [E2EArchiveCleanupCall] = []
 
     init(fileSystem: any FileSystemAccess, failures: Int) {
+        self.fileSystem = fileSystem
         live = LiveArchiveSourcePreparationService(fileSystem: fileSystem)
         failuresRemaining = max(failures, 0)
     }
@@ -275,21 +281,87 @@ actor E2EFaultingArchiveSourcePreparer: ArchiveSourcePreparing {
         parentIdentity: FileIdentity,
         progress: @escaping ArchiveCommandProgressHandler
     ) async throws -> PreparedArchiveSources {
-        try await live.prepare(
+        let prepared = try await live.prepare(
             sources,
             beside: destination,
             parentIdentity: parentIdentity,
             progress: progress
         )
+        preparedReservations.append(E2EPreparedArchiveReservation(
+            root: prepared.root,
+            directory: prepared.reservation.directory,
+            directoryIdentity: prepared.reservation.directoryIdentity,
+            item: prepared.reservation.item,
+            itemIdentity: try? await fileSystem.identity(of: prepared.reservation.item),
+            fingerprint: try? await fileSystem.fingerprint(of: prepared.root),
+            copiedEntries: prepared.copiedEntries.map {
+                E2EPreparedArchiveSourceEntry(url: $0.url, identity: $0.identity)
+            }
+        ))
+        return prepared
     }
 
     func cleanup(_ prepared: PreparedArchiveSources) async throws {
+        let reservation = E2EArchiveCleanupCall(
+            directory: prepared.reservation.directory,
+            directoryIdentity: prepared.reservation.directoryIdentity,
+            item: prepared.reservation.item,
+            itemIdentity: try? await fileSystem.identity(of: prepared.reservation.item),
+            outcome: .succeeded
+        )
         if failuresRemaining > 0 {
             failuresRemaining -= 1
+            cleanupCalls.append(E2EArchiveCleanupCall(
+                directory: reservation.directory,
+                directoryIdentity: reservation.directoryIdentity,
+                item: reservation.item,
+                itemIdentity: reservation.itemIdentity,
+                outcome: .failed
+            ))
             throw E2EArchiveCleanupError.injected
         }
-        try await live.cleanup(prepared)
+        do {
+            try await live.cleanup(prepared)
+            cleanupCalls.append(reservation)
+        } catch {
+            cleanupCalls.append(E2EArchiveCleanupCall(
+                directory: reservation.directory,
+                directoryIdentity: reservation.directoryIdentity,
+                item: reservation.item,
+                itemIdentity: reservation.itemIdentity,
+                outcome: .failed
+            ))
+            throw error
+        }
     }
+}
+
+struct E2EPreparedArchiveSourceEntry: Sendable, Equatable {
+    let url: URL
+    let identity: FileIdentity
+}
+
+struct E2EPreparedArchiveReservation: Sendable, Equatable {
+    let root: URL
+    let directory: URL
+    let directoryIdentity: FileIdentity
+    let item: URL
+    let itemIdentity: FileIdentity?
+    let fingerprint: SourceFingerprint?
+    let copiedEntries: [E2EPreparedArchiveSourceEntry]
+}
+
+enum E2EArchiveCleanupCallOutcome: Sendable, Equatable {
+    case failed
+    case succeeded
+}
+
+struct E2EArchiveCleanupCall: Sendable, Equatable {
+    let directory: URL
+    let directoryIdentity: FileIdentity
+    let item: URL
+    let itemIdentity: FileIdentity?
+    let outcome: E2EArchiveCleanupCallOutcome
 }
 
 enum E2EArchiveCleanupError: Error {

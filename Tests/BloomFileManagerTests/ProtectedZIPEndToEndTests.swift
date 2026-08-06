@@ -1,7 +1,38 @@
 import Foundation
 import CryptoKit
+import Darwin
 import Testing
 @testable import BloomFileManager
+
+private typealias NativeProgressGateVoidHook = @convention(c) () -> Void
+private typealias NativeProgressGateWaitHook = @convention(c) (UInt32) -> Int32
+
+private func nativeProgressGateVoidHook(_ name: String) -> NativeProgressGateVoidHook? {
+    guard let symbol = Darwin.dlsym(
+        UnsafeMutableRawPointer(bitPattern: -2),
+        name
+    ) else {
+        return nil
+    }
+    return unsafeBitCast(symbol, to: NativeProgressGateVoidHook.self)
+}
+
+private func nativeProgressGateWaitHook() -> NativeProgressGateWaitHook? {
+    guard let symbol = Darwin.dlsym(
+        UnsafeMutableRawPointer(bitPattern: -2),
+        "pengrid_zip_test_wait_for_first_positive_progress_checkpoint"
+    ) else {
+        return nil
+    }
+    return unsafeBitCast(symbol, to: NativeProgressGateWaitHook.self)
+}
+
+private func waitForNativeProgressGate(timeoutMilliseconds: UInt32) async -> Bool {
+    await Task.detached(priority: .utility) {
+        guard let wait = nativeProgressGateWaitHook() else { return false }
+        return wait(timeoutMilliseconds) != 0
+    }.value
+}
 
 @Suite("ProtectedZIPEndToEndTests", .serialized)
 struct ProtectedZIPEndToEndTests {
@@ -133,6 +164,11 @@ struct ProtectedZIPEndToEndTests {
         #expect(provider.requests.map(\.previousAttemptFailed) == [false, true])
         #expect(provider.requests.map(\.id).count == 2)
         #expect(provider.requests[0].id != provider.requests[1].id)
+        #expect(provider.retainedSecretObjectIdentifiers.count == 2)
+        if provider.retainedSecretObjectIdentifiers.count == 2 {
+            #expect(provider.retainedSecretObjectIdentifiers[0]
+                != provider.retainedSecretObjectIdentifiers[1])
+        }
         #expect(provider.retainedSecretAvailability() == [false, false])
         #expect(controller.observableTextForTesting.contains("wrong-retry-passphrase") == false)
         #expect(String(reflecting: await logger.events).contains("wrong-retry-passphrase") == false)
@@ -471,10 +507,88 @@ struct ProtectedZIPEndToEndTests {
         #expect(controller.isQueueBlockedByRecovery)
         #expect(controller.operationHistory.first?.state == .failed)
         #expect(controller.operationHistory.first?.canRetry == false)
+        let preparedReservations = await preparer.preparedReservations
+        let firstReservation = try #require(preparedReservations.first)
+        #expect(preparedReservations.count == 1)
+        #expect(firstReservation.root == firstReservation.directory)
+        #expect(firstReservation.directoryIdentity == archiveTestIdentity(for: firstReservation.directory))
+        #expect(firstReservation.itemIdentity == nil)
+        #expect(firstReservation.fingerprint != nil)
+        #expect(firstReservation.copiedEntries.map(\.url) == [
+            firstReservation.root.appending(path: source.lastPathComponent)
+        ])
+        #expect(firstReservation.copiedEntries.first?.identity ==
+            archiveTestIdentity(for: firstReservation.root.appending(path: source.lastPathComponent)))
+        let firstCleanupCalls = await preparer.cleanupCalls
+        #expect(firstCleanupCalls.map(\.outcome) == [.failed, .failed])
+        #expect(firstCleanupCalls.allSatisfy {
+            $0.directory == firstReservation.directory
+                && $0.directoryIdentity == firstReservation.directoryIdentity
+                && $0.item == firstReservation.item
+                && $0.itemIdentity == nil
+        })
         let retainedRecoveryStaging = try archiveTestStagingDirectories(in: root.url)
-        #expect(retainedRecoveryStaging.isEmpty == false)
+        #expect(retainedRecoveryStaging.map { $0.resolvingSymlinksInPath() } == [
+            firstReservation.directory.resolvingSymlinksInPath()
+        ])
+        #expect(try FileManager.default.contentsOfDirectory(
+            at: firstReservation.directory,
+            includingPropertiesForKeys: nil
+        ).map { $0.resolvingSymlinksInPath() } == [
+            firstReservation.root
+                .appending(path: source.lastPathComponent)
+                .resolvingSymlinksInPath()
+        ])
+        #expect(try await fileSystem.identity(of: firstReservation.directory)
+            == firstReservation.directoryIdentity)
+        #expect(try await fileSystem.fingerprint(of: firstReservation.root)
+            == firstReservation.fingerprint)
+
+        let queuedSource = root.url.appending(path: "Queued.txt")
+        let queuedArchive = root.url.appending(path: "Queued.txt.zip")
+        let queuedExtraction = root.url.appending(path: "Queued Extracted", directoryHint: .isDirectory)
+        let queuedBytes = Data("queued ordinary bytes".utf8)
+        try queuedBytes.write(to: queuedSource)
+        let queuedWorkspace = Self.workspace(
+            directory: root.url,
+            items: [Self.fileItem(at: queuedSource)]
+        )
+        await queuedWorkspace.loadInitialDirectories()
+        queuedWorkspace.left.selection = [queuedSource]
+        #expect(await controller.compressSelection(queuedWorkspace, format: .zip))
+        #expect(controller.isQueueBlockedByRecovery)
+        #expect(controller.isRunning == false)
+        #expect(controller.activeJob == nil)
+        #expect(controller.queuedJobs.count == 1)
+        #expect(controller.queuedJobs.first?.state == .queued)
+        #expect(FileManager.default.fileExists(atPath: queuedArchive.path) == false)
+
         #expect(controller.continueAfterRecovery())
         #expect(controller.isQueueBlockedByRecovery == false)
+        await waitForControllerIdle(controller)
+        #expect(controller.lastResult?.outcomes == [
+            .succeeded(source: queuedSource, destination: queuedArchive)
+        ])
+        #expect(FileManager.default.fileExists(atPath: queuedArchive.path))
+        try await LiveArchiveCommandRunner(fileSystem: fileSystem).run(
+            kind: .extract,
+            format: .zip,
+            sources: [queuedArchive],
+            destination: queuedExtraction
+        )
+        #expect(try Data(contentsOf: queuedExtraction.appending(path: queuedSource.lastPathComponent))
+            == queuedBytes)
+        let allPreparedReservations = await preparer.preparedReservations
+        #expect(allPreparedReservations.count == 2)
+        let allCleanupCalls = await preparer.cleanupCalls
+        #expect(allCleanupCalls.map(\.outcome) == [.failed, .failed, .succeeded])
+        if allCleanupCalls.count == 3, allPreparedReservations.count == 2 {
+            #expect(allCleanupCalls[2].directory == allPreparedReservations[1].directory)
+            #expect(allCleanupCalls[2].directory != firstReservation.directory)
+        }
+        #expect(try archiveTestStagingDirectories(in: root.url).map { $0.resolvingSymlinksInPath() } == [
+            firstReservation.directory.resolvingSymlinksInPath()
+        ])
         #expect(provider.requestCount == 1)
         // The injected failure models an unrecoverable cleanup boundary. The
         // published archive and recovery metadata remain available while the
@@ -586,17 +700,28 @@ struct ProtectedZIPEndToEndTests {
         let archive = root.url.appending(path: "MidEntry.txt.zip")
         try Data(repeating: 0x41, count: 64 * 1_024 * 1_024).write(to: source)
 
-        let progressGate = MidEntryProgressGate()
-        let engine = MidEntryCancellationEngine(
-            inner: LiveProtectedZIPEngine(),
-            gate: progressGate
-        )
+        guard let armNativeProgressGate = nativeProgressGateVoidHook(
+            "pengrid_zip_test_arm_first_positive_progress_checkpoint"
+        ),
+        let releaseNativeProgressGate = nativeProgressGateVoidHook(
+            "pengrid_zip_test_release_first_positive_progress_checkpoint"
+        ),
+        let clearNativeProgressGate = nativeProgressGateVoidHook(
+            "pengrid_zip_test_clear_first_positive_progress_checkpoint"
+        ),
+        nativeProgressGateWaitHook() != nil else {
+            Issue.record("native writer progress checkpoint gate is not exported")
+            return
+        }
+        clearNativeProgressGate()
+        defer { clearNativeProgressGate() }
+        armNativeProgressGate()
         let provider = E2ERecordingArchivePasswordProvider(passwords: ["mid-entry-passphrase"])
         let controller = Self.makeController(
             service: FileOperationService(fileSystem: LiveFileSystemAccess()),
             passwordProvider: provider,
             logger: RecordingProtectedZIPLogger(),
-            protectedEngine: engine
+            protectedEngine: LiveProtectedZIPEngine()
         )
         let workspace = Self.workspace(
             directory: root.url,
@@ -609,15 +734,87 @@ struct ProtectedZIPEndToEndTests {
             format: .zip,
             protection: .aes256
         ))
-        await progressGate.waitUntilEntered()
+        #expect(await waitForNativeProgressGate(timeoutMilliseconds: 5_000))
         controller.cancelActiveJob()
-        await progressGate.release()
+        releaseNativeProgressGate()
         await waitForControllerIdle(controller)
 
         #expect(controller.lastResult?.outcomes == [.cancelled(source: source)])
         #expect(controller.operationHistory.first?.state == .cancelled)
         #expect(FileManager.default.fileExists(atPath: archive.path) == false)
         #expect(provider.requestCount == 1)
+        try archiveTestExpectNoStagingDirectories(in: root.url)
+    }
+
+    @Test @MainActor func nativeProgressGateIsOneShotAndSafeWhenCleared() async throws {
+        guard let armNativeProgressGate = nativeProgressGateVoidHook(
+            "pengrid_zip_test_arm_first_positive_progress_checkpoint"
+        ),
+        let releaseNativeProgressGate = nativeProgressGateVoidHook(
+            "pengrid_zip_test_release_first_positive_progress_checkpoint"
+        ),
+        let clearNativeProgressGate = nativeProgressGateVoidHook(
+            "pengrid_zip_test_clear_first_positive_progress_checkpoint"
+        ),
+        nativeProgressGateWaitHook() != nil else {
+            Issue.record("native writer progress checkpoint gate is not exported")
+            return
+        }
+        clearNativeProgressGate()
+        releaseNativeProgressGate()
+        defer {
+            clearNativeProgressGate()
+            releaseNativeProgressGate()
+        }
+
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let payload = Data(repeating: 0x42, count: 2 * 1_024 * 1_024)
+        let provider = E2ERecordingArchivePasswordProvider(
+            passwords: [
+                "native-gate-passphrase",
+                "native-gate-passphrase",
+                "native-gate-passphrase"
+            ]
+        )
+        let controller = Self.makeController(
+            service: FileOperationService(fileSystem: LiveFileSystemAccess()),
+            passwordProvider: provider,
+            logger: RecordingProtectedZIPLogger()
+        )
+
+        for index in 1...3 {
+            let source = root.url.appending(path: "Native Gate \(index).txt")
+            let archive = root.url.appending(path: "Native Gate \(index).txt.zip")
+            try payload.write(to: source)
+            let workspace = Self.workspace(
+                directory: root.url,
+                items: [Self.fileItem(at: source)]
+            )
+            await workspace.loadInitialDirectories()
+            workspace.left.selection = [source]
+
+            if index <= 2 {
+                armNativeProgressGate()
+            }
+            #expect(await controller.compressSelection(
+                workspace,
+                format: .zip,
+                protection: .aes256
+            ))
+            if index <= 2 {
+                #expect(await waitForNativeProgressGate(timeoutMilliseconds: 5_000))
+                releaseNativeProgressGate()
+                clearNativeProgressGate()
+                releaseNativeProgressGate()
+            }
+            await waitForControllerIdle(controller)
+            #expect(controller.lastResult?.outcomes == [
+                .succeeded(source: source, destination: archive)
+            ])
+            #expect(FileManager.default.fileExists(atPath: archive.path))
+        }
+        #expect(provider.requestCount == 3)
         try archiveTestExpectNoStagingDirectories(in: root.url)
     }
 
@@ -723,93 +920,6 @@ struct IdentityChangingArchiveMaterializer: CloudMaterializing {
             preparedRequests: requests,
             failures: [],
             wasCancelled: false
-        )
-    }
-}
-
-actor MidEntryProgressGate {
-    private var entered = false
-    private var released = false
-    private var continuation: CheckedContinuation<Void, Never>?
-    private var enteredContinuation: CheckedContinuation<Void, Never>?
-
-    func holdOnFirstProcessingUpdate() async {
-        guard !entered else { return }
-        entered = true
-        enteredContinuation?.resume()
-        enteredContinuation = nil
-        guard !released else { return }
-        await withCheckedContinuation { continuation in
-            self.continuation = continuation
-        }
-    }
-
-    func waitUntilEntered() async {
-        if entered { return }
-        await withCheckedContinuation { continuation in
-            enteredContinuation = continuation
-        }
-    }
-
-    func release() {
-        released = true
-        continuation?.resume()
-        continuation = nil
-    }
-}
-
-struct MidEntryCancellationEngine: ProtectedZIPEngine {
-    let inner: LiveProtectedZIPEngine
-    let gate: MidEntryProgressGate
-
-    func inspect(archive: OpenedFileSystemItem) async throws -> ProtectedZIPInspection {
-        try await inner.inspect(archive: archive)
-    }
-
-    func preflight(
-        archive: OpenedFileSystemItem,
-        destinationProbeRoot: OpenedEmptyFileSystemItem,
-        limits: ProtectedZIPLimits
-    ) async throws -> ProtectedZIPInspection {
-        try await inner.preflight(
-            archive: archive,
-            destinationProbeRoot: destinationProbeRoot,
-            limits: limits
-        )
-    }
-
-    func createAES256(
-        sourceRoot: OpenedFileSystemItem,
-        destination: OpenedEmptyFileSystemItem,
-        password: ArchiveSecret,
-        progress: @escaping @Sendable (ProtectedZIPProgress) async -> Void
-    ) async throws {
-        try await inner.createAES256(
-            sourceRoot: sourceRoot,
-            destination: destination,
-            password: password,
-            progress: { update in
-                if update.completedByteCount > 0 {
-                    await self.gate.holdOnFirstProcessingUpdate()
-                }
-                await progress(update)
-            }
-        )
-    }
-
-    func extract(
-        archive: OpenedFileSystemItem,
-        destinationRoot: OpenedEmptyFileSystemItem,
-        password: ArchiveSecret,
-        limits: ProtectedZIPLimits,
-        progress: @escaping @Sendable (ProtectedZIPProgress) async -> Void
-    ) async throws {
-        try await inner.extract(
-            archive: archive,
-            destinationRoot: destinationRoot,
-            password: password,
-            limits: limits,
-            progress: progress
         )
     }
 }

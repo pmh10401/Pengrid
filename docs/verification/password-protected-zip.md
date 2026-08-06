@@ -8,9 +8,13 @@ third-party interoperability observations.
 
 - Date: 2026-08-06 (Asia/Seoul)
 - Base commit: `33e5500fa988e800ab6474f68e7c25f8d10ad34e` (approved Task 10 head)
-- Candidate: Task 11 working tree derived from that base; the final commit hash
-  is intentionally omitted because the next task records final `HEAD`.
-- Host: macOS arm64e; `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`
+- Initial verified Task 11 candidate tree (non-self-referential):
+  `86aa3d7f0ca6b9e3debfc1bd4693582b7d861400`.
+- Fix-round base: `e9c9416` (`test: verify protected zip workflows`).
+- Candidate: fix-round working tree; the final commit hash is intentionally
+  omitted from this record.
+- Host: macOS arm64; test target reports `arm64e-apple-macos14.0`;
+  `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`
 - Tests were serial (`--no-parallel`) and used temporary directories only.
 
 ## Automated evidence
@@ -19,9 +23,15 @@ All commands below exited 0.
 
 | Status | Exact command | Result |
 | --- | --- | --- |
-| PASS — focused Task 11 | `env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --disable-sandbox --no-parallel --filter 'ProtectedZIPEndToEndTests\|ArchiveOperationIntegrationTests\|CloudLocationScopedAccessTests'` | **45 tests in 3 suites**, 3.030 seconds. The incremental compile emitted only the existing no-effect `@preconcurrency` warnings in `FavoriteDropTests.swift` and `FileTableViewLifecycleTests.swift`; none originated in Task 11 files. |
-| PASS — Task 7–10 regression | `env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --disable-sandbox --no-parallel --filter 'ArchivePasswordPromptCoordinatorTests\|ArchivePasswordPresentationTests\|ProtectedZIPOperationServiceTests\|RoutingArchiveOperationServiceTests\|FileOperationControllerTests\|FileOperationCenterViewTests\|WorkspaceCommandTests\|WorkspaceCommandPolicyTests\|OperationStatusViewTests\|AccessibilityPresentationTests'` | **173 tests in 7 suites**, 0.473 seconds; no warning or error lines. |
-| PASS — final full suite | `env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --disable-sandbox --no-parallel` | **1031 tests in 76 suites**, 49.910 seconds; no warning or error lines. |
+| PASS — focused Task 11 | `env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --disable-sandbox --no-parallel --filter 'ProtectedZIPEndToEndTests\|ArchiveOperationIntegrationTests\|CloudLocationScopedAccessTests'` | **46 tests in 3 suites**, 3.237 seconds; target `arm64e-apple-macos14.0`; no warning or error lines in this cached invocation. |
+| PASS — Task 5 writer/native cancellation regression | `env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --disable-sandbox --no-parallel --filter 'ProtectedZIPEngineWriterTests\|ProtectedZIPOperationServiceTests/progressCallbackCancellationIsObservedByEngineAndDoesNotPublish'` | **15 tests in 2 suites**, 1.238 seconds; target `arm64e-apple-macos14.0`; no warning or error lines. |
+| PASS — Task 7–10 regression | `env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --disable-sandbox --no-parallel --filter 'ArchivePasswordPromptCoordinatorTests\|ArchivePasswordPresentationTests\|ProtectedZIPOperationServiceTests\|RoutingArchiveOperationServiceTests\|FileOperationControllerTests\|FileOperationCenterViewTests\|WorkspaceCommandTests\|WorkspaceCommandPolicyTests\|OperationStatusViewTests\|AccessibilityPresentationTests'` | **173 tests in 7 suites**, 0.468 seconds; target `arm64e-apple-macos14.0`; no warning or error lines. |
+| PASS — final full suite | `env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --disable-sandbox --no-parallel` | **1032 tests in 76 suites**, 49.550 seconds; target `arm64e-apple-macos14.0`; no warning or error lines. |
+
+SwiftPM planning is cache-sensitive: a cold focused plan may additionally
+print the known warning that 11 ProtectedZIP fixture files are unhandled. The
+final focused invocation above used the cached plan and printed no such line;
+the warning does not change test results or indicate a Task 11 source warning.
 
 The focused suite drives the real controller → routing service → protected
 service → `LiveProtectedZIPEngine` → exclusive publication path. The support
@@ -62,11 +72,15 @@ are the only independent compatibility evidence recorded here.
   controller, router, protected service, live engine, staging, and exclusive
   publication path. Archive bytes, logger reflection, observable job text, and
   history contain no password sentinel.
-- Wrong password then correct password uses fresh request UUIDs, sets
-  `previousAttemptFailed` to `[false, true]`, invalidates both retained secret
-  buffers, and leaves no staging directory.
+- Wrong password then correct password uses fresh request UUIDs, distinct
+  `ArchiveSecret` object identities, sets `previousAttemptFailed` to
+  `[false, true]`, invalidates both retained secret buffers, and leaves no
+  staging directory.
 - Cancellation while waiting for a password and deterministic mid-entry
-  cancellation both publish no destination and leave no staging directory.
+  cancellation at the native writer's first positive non-final checkpoint both
+  publish no destination and leave no staging directory. The test-only C gate
+  is disabled by default, one-shot, and safely reset between real operations;
+  the old async progress-wrapper gate is not used.
 - Cloud materialization emits its completion event before the protected prompt;
   this is a deterministic scoped-access/materializer seam, not a live Google
   Drive or OneDrive run.
@@ -79,8 +93,12 @@ are the only independent compatibility evidence recorded here.
 - Injected source-preparation cleanup failure reaches the real controller as
   `.recoveryNeeded`, retains undo identity/fingerprint metadata, marks history
   failed/non-retryable, and blocks the queue until `continueAfterRecovery()`.
-  The test explicitly identifies the retained staging reservation as an
-  intentional recovery artifact rather than an orphan.
+  The test records the exact prepared reservation URL, directory identity,
+  retained-root fingerprint, copied-entry identity, and failed→failed cleanup
+  order; staging inventory is exactly that one intentional recovery artifact
+  with no output reservation orphan. A second real ordinary ZIP queued while
+  blocked resumes after `continueAfterRecovery()`, cleans its own reservation,
+  and round-trips output bytes through extraction.
 - Korean public names and selected symbolic links round-trip without leaking
   password text; symlink extraction asserts the exact relative target.
 - A single ZIP containing one plain entry and one ZipCrypto entry follows the

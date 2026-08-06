@@ -10,6 +10,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <pthread.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -24,9 +25,98 @@
 static volatile int32_t pengrid_zip_override_regular_size_count;
 static volatile uint64_t pengrid_zip_override_regular_size;
 
+/* Test-only native cancellation checkpoint.  The fast-path flag keeps the
+ * default (unarmed) writer free of mutex work; the hook is otherwise a
+ * one-shot, process-local gate used by integration tests. */
+static volatile int32_t pengrid_zip_progress_gate_armed;
+static int32_t pengrid_zip_progress_gate_entered;
+static int32_t pengrid_zip_progress_gate_released;
+static int32_t pengrid_zip_progress_gate_consumed;
+static pthread_mutex_t pengrid_zip_progress_gate_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t pengrid_zip_progress_gate_condition = PTHREAD_COND_INITIALIZER;
+
 void pengrid_zip_test_override_next_regular_size(uint64_t size) {
     __sync_lock_test_and_set(&pengrid_zip_override_regular_size, size);
     __sync_fetch_and_add(&pengrid_zip_override_regular_size_count, 1);
+}
+
+void pengrid_zip_test_arm_first_positive_progress_checkpoint(void) {
+    pthread_mutex_lock(&pengrid_zip_progress_gate_mutex);
+    pengrid_zip_progress_gate_entered = 0;
+    pengrid_zip_progress_gate_released = 0;
+    pengrid_zip_progress_gate_consumed = 0;
+    __sync_lock_test_and_set(&pengrid_zip_progress_gate_armed, 1);
+    pthread_cond_broadcast(&pengrid_zip_progress_gate_condition);
+    pthread_mutex_unlock(&pengrid_zip_progress_gate_mutex);
+}
+
+void pengrid_zip_test_release_first_positive_progress_checkpoint(void) {
+    pthread_mutex_lock(&pengrid_zip_progress_gate_mutex);
+    pengrid_zip_progress_gate_released = 1;
+    pthread_cond_broadcast(&pengrid_zip_progress_gate_condition);
+    pthread_mutex_unlock(&pengrid_zip_progress_gate_mutex);
+}
+
+void pengrid_zip_test_clear_first_positive_progress_checkpoint(void) {
+    pthread_mutex_lock(&pengrid_zip_progress_gate_mutex);
+    __sync_lock_test_and_set(&pengrid_zip_progress_gate_armed, 0);
+    pengrid_zip_progress_gate_released = 1;
+    pthread_cond_broadcast(&pengrid_zip_progress_gate_condition);
+    pthread_mutex_unlock(&pengrid_zip_progress_gate_mutex);
+}
+
+int32_t pengrid_zip_test_wait_for_first_positive_progress_checkpoint(uint32_t timeout_milliseconds) {
+    struct timespec deadline;
+    int32_t entered = 0;
+
+    if (clock_gettime(CLOCK_REALTIME, &deadline) != 0)
+        return 0;
+    deadline.tv_sec += (time_t)(timeout_milliseconds / 1000u);
+    deadline.tv_nsec += (long)(timeout_milliseconds % 1000u) * 1000000L;
+    if (deadline.tv_nsec >= 1000000000L) {
+        deadline.tv_sec += 1;
+        deadline.tv_nsec -= 1000000000L;
+    }
+
+    pthread_mutex_lock(&pengrid_zip_progress_gate_mutex);
+    while (!pengrid_zip_progress_gate_entered &&
+           __sync_fetch_and_add(&pengrid_zip_progress_gate_armed, 0) != 0) {
+        int32_t status = pthread_cond_timedwait(
+            &pengrid_zip_progress_gate_condition,
+            &pengrid_zip_progress_gate_mutex,
+            &deadline
+        );
+        if (status == ETIMEDOUT)
+            break;
+    }
+    entered = pengrid_zip_progress_gate_entered;
+    pthread_mutex_unlock(&pengrid_zip_progress_gate_mutex);
+    return entered;
+}
+
+static void pengrid_zip_test_hold_first_positive_progress_checkpoint(
+    uint64_t completed,
+    uint64_t total
+) {
+    if (completed == 0 || total == 0 || completed >= total ||
+        __sync_fetch_and_add(&pengrid_zip_progress_gate_armed, 0) == 0)
+        return;
+
+    pthread_mutex_lock(&pengrid_zip_progress_gate_mutex);
+    if (!pengrid_zip_progress_gate_consumed &&
+        __sync_fetch_and_add(&pengrid_zip_progress_gate_armed, 0) != 0) {
+        pengrid_zip_progress_gate_consumed = 1;
+        pengrid_zip_progress_gate_entered = 1;
+        pthread_cond_broadcast(&pengrid_zip_progress_gate_condition);
+        while (!pengrid_zip_progress_gate_released &&
+               __sync_fetch_and_add(&pengrid_zip_progress_gate_armed, 0) != 0) {
+            pthread_cond_wait(
+                &pengrid_zip_progress_gate_condition,
+                &pengrid_zip_progress_gate_mutex
+            );
+        }
+    }
+    pthread_mutex_unlock(&pengrid_zip_progress_gate_mutex);
 }
 
 typedef enum {
@@ -639,6 +729,7 @@ static int32_t pengrid_zip_progress(
 ) {
     if (!callback)
         return PENGRID_ZIP_STATUS_OK;
+    pengrid_zip_test_hold_first_positive_progress_checkpoint(completed, total);
     return callback(completed, total, context) == 0
         ? PENGRID_ZIP_STATUS_OK
         : PENGRID_ZIP_STATUS_CANCELLED;
