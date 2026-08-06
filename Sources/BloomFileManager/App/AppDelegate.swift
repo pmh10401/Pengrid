@@ -25,6 +25,7 @@ private final class TerminationPreparationContext {
     private let deadline: ContinuousClock.Instant
     private let pollInterval: Duration
     private let sleep: Sleep
+    private let terminationPreparationToken: TerminationPreparationToken?
     private let completion: Completion
     private let invalidation: TerminationPreparationInvalidation
     private var didComplete = false
@@ -35,6 +36,7 @@ private final class TerminationPreparationContext {
         deadline: ContinuousClock.Instant,
         pollInterval: Duration,
         sleep: @escaping Sleep,
+        terminationPreparationToken: TerminationPreparationToken?,
         invalidation: TerminationPreparationInvalidation,
         completion: @escaping Completion
     ) {
@@ -43,6 +45,7 @@ private final class TerminationPreparationContext {
         self.deadline = deadline
         self.pollInterval = pollInterval
         self.sleep = sleep
+        self.terminationPreparationToken = terminationPreparationToken
         self.invalidation = invalidation
         self.completion = completion
     }
@@ -50,7 +53,12 @@ private final class TerminationPreparationContext {
     func run() async {
         defer {
             if !didComplete {
-                operationController?.finishTerminationPreparation(restartQueue: true)
+                if let terminationPreparationToken {
+                    operationController?.finishTerminationPreparation(
+                        terminationPreparationToken,
+                        restartQueue: true
+                    )
+                }
             }
         }
 
@@ -111,6 +119,7 @@ final class ApplicationTerminationCoordinator {
     private let sleep: Sleep
     private let reply: Reply
     private var state: State = .idle
+    private var terminationPreparationToken: TerminationPreparationToken?
     private var preparationInvalidation: TerminationPreparationInvalidation?
     private var preparationContext: TerminationPreparationContext?
     private var preparationTask: Task<Void, Never>?
@@ -134,11 +143,15 @@ final class ApplicationTerminationCoordinator {
     }
 
     deinit {
+        let terminationPreparationToken = self.terminationPreparationToken
         preparationInvalidation?.invalidate()
         preparationTask?.cancel()
-        if let operationController {
+        if let operationController, let terminationPreparationToken {
             Task { @MainActor [weak operationController] in
-                operationController?.finishTerminationPreparation(restartQueue: true)
+                operationController?.finishTerminationPreparation(
+                    terminationPreparationToken,
+                    restartQueue: true
+                )
             }
         }
     }
@@ -146,12 +159,19 @@ final class ApplicationTerminationCoordinator {
     func invalidate() {
         guard state != .invalidated else { return }
         state = .invalidated
+        let terminationPreparationToken = self.terminationPreparationToken
+        self.terminationPreparationToken = nil
         preparationInvalidation?.invalidate()
         preparationInvalidation = nil
         preparationContext = nil
         preparationTask?.cancel()
         preparationTask = nil
-        operationController?.finishTerminationPreparation(restartQueue: true)
+        if let terminationPreparationToken {
+            operationController?.finishTerminationPreparation(
+                terminationPreparationToken,
+                restartQueue: true
+            )
+        }
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
@@ -175,7 +195,8 @@ final class ApplicationTerminationCoordinator {
         }
 
         state = .preparing
-        operationController?.beginTerminationPreparation()
+        let terminationPreparationToken = operationController?.beginTerminationPreparation()
+        self.terminationPreparationToken = terminationPreparationToken
         passwordCoordinator?.cancel()
         let deadline = ContinuousClock.now.advanced(by: timeout)
         let invalidation = TerminationPreparationInvalidation()
@@ -185,6 +206,7 @@ final class ApplicationTerminationCoordinator {
             deadline: deadline,
             pollInterval: pollInterval,
             sleep: sleep,
+            terminationPreparationToken: terminationPreparationToken,
             invalidation: invalidation,
             completion: { [weak self] shouldTerminate in
                 self?.finish(replying: shouldTerminate)
@@ -210,11 +232,18 @@ final class ApplicationTerminationCoordinator {
         preparationInvalidation = nil
         preparationContext = nil
         preparationTask = nil
+        let terminationPreparationToken = self.terminationPreparationToken
+        self.terminationPreparationToken = nil
         if shouldTerminate {
             state = .replied
         } else {
             state = .idle
-            operationController?.finishTerminationPreparation(restartQueue: true)
+            if let terminationPreparationToken {
+                operationController?.finishTerminationPreparation(
+                    terminationPreparationToken,
+                    restartQueue: true
+                )
+            }
         }
         reply(shouldTerminate)
     }

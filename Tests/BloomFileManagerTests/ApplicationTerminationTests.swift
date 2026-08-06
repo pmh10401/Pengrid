@@ -148,6 +148,7 @@ struct ApplicationTerminationTests {
         await waitForTerminationReply(replies)
         #expect(replies.values == [false])
         #expect(controller.continueAfterRecovery())
+        #expect(controller.lastResult?.outcomes == [.recoveryNeeded(source: fixture.source)])
         #expect(coordinator.applicationShouldTerminate() == .terminateNow)
         #expect(replies.values == [false])
     }
@@ -264,12 +265,11 @@ struct ApplicationTerminationTests {
             passwordCoordinator: passwordCoordinator,
             reply: { newReplies.append($0) }
         )
-        await Task.yield()
+        #expect(appDelegate.applicationShouldTerminate(NSApplication.shared) == .terminateLater)
         #expect(oldReplies.values.isEmpty)
         #expect(newReplies.values.isEmpty)
-        #expect(controller.isTerminationPreparationActive == false)
-
-        #expect(appDelegate.applicationShouldTerminate(NSApplication.shared) == .terminateLater)
+        await Task.yield()
+        #expect(controller.isTerminationPreparationActive)
         await waitForTerminationReply(newReplies)
         #expect(oldReplies.values.isEmpty)
         #expect(newReplies.values == [true])

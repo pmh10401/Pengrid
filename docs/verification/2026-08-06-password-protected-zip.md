@@ -170,3 +170,66 @@ The post-fix serial verification matrix is:
 | PASS | `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test --disable-sandbox --no-parallel --scratch-path /tmp/pengrid-full-review-final` | 1,059 tests in 77 suites passed (50.781 seconds). |
 | PASS | `./script/build_and_run.sh --verify` | Debug arm64 build, ad-hoc signing, and artifact verification passed (4.57 seconds); codesign reported valid on disk and satisfied its designated requirement. |
 | PASS | `/bin/bash script/tests/package_release_contract_tests.sh` | `package release contract tests: PASS`. |
+
+## Final review fix — token-scoped termination cleanup (2026-08-07)
+
+The remaining reconfiguration race is closed with an internal,
+`Sendable`/`Equatable` `TerminationPreparationToken`. Each preparation gate
+gets a monotonically increasing generation; `beginTerminationPreparation()`
+returns that token, and every asynchronous or replacement cleanup path supplies
+it back. `FileOperationController` clears or restarts its queue only when the
+token is still current, so delayed cleanup from an invalidated coordinator is a
+no-op after a replacement coordinator acquires a newer gate. A successful
+termination reply drops the coordinator's token without releasing the current
+gate.
+
+The reconfiguration test was updated test-first to request Quit synchronously
+from the replacement `AppDelegate`, then yield only to let the old delayed
+cleanup run. Before the token implementation, the test ran RED:
+
+```text
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+  swift test --disable-sandbox --no-parallel \
+  --scratch-path /tmp/pengrid-termination-red-token \
+  --filter 'ApplicationTerminationTests/appDelegateReconfigurationInvalidatesOldPreparationAndRepliesOnceFromNewCoordinator'
+```
+
+It failed at `ApplicationTerminationTests.swift:272` because the old cleanup
+had reopened the replacement gate (`isTerminationPreparationActive` was
+`false`). The recovery retry test also now asserts that `lastResult` still
+contains its `.recoveryNeeded` outcome after acknowledgement.
+
+Mutation evidence was captured and reverted. Replacing the production token
+equality guard with a bool-only `terminationPreparationToken != nil` guard made
+the same reconfiguration test fail at line 272 with the reopened gate. The
+mutation command and failure log were:
+
+```text
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+  swift test --disable-sandbox --no-parallel \
+  --scratch-path /tmp/pengrid-termination-token-mutation \
+  --filter 'ApplicationTerminationTests/appDelegateReconfigurationInvalidatesOldPreparationAndRepliesOnceFromNewCoordinator'
+```
+
+After restoring token equality, the focused lifecycle suite passed 11 tests in
+one suite (0.123 seconds):
+
+```text
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+  swift test --disable-sandbox --no-parallel \
+  --scratch-path /tmp/pengrid-termination-token-final-focused \
+  --filter ApplicationTerminationTests
+```
+
+The final serial verification matrix is:
+
+| Status | Exact command | Result |
+| --- | --- | --- |
+| PASS | `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test --disable-sandbox --no-parallel --scratch-path /tmp/pengrid-protectedzip-token-final --filter ProtectedZIP` | 104 tests in 5 suites passed (11.606 seconds). |
+| PASS | `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test --disable-sandbox --no-parallel --scratch-path /tmp/pengrid-full-token-final` | 1,059 tests in 77 suites passed (49.998 seconds). |
+| PASS | `./script/build_and_run.sh --verify` | Debug arm64 build, ad-hoc signing, and artifact verification passed (5.16 seconds); codesign reported valid on disk and satisfied its designated requirement. |
+| PASS | `/bin/bash script/tests/package_release_contract_tests.sh` | `package release contract tests: PASS`. |
+
+The SwiftPM runs emitted only the repository's existing unhandled ProtectedZIP
+fixture warning and unrelated test-source diagnostics. No package helper
+process remained after the contract check.

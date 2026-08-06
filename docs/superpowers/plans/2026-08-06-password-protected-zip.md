@@ -1584,3 +1584,19 @@ the parent task's integration gates.
   reverted; focused coverage is 11/11 green.
 - [x] ProtectedZIP (104/5), full serial (1,059/77), build verification, and
   package contract checks all pass after the fixes.
+
+## Final review fix progress — token-scoped termination cleanup (2026-08-07)
+
+- [x] Add an internal `Sendable`/`Equatable` generation token to scope
+  termination-gate ownership and reject delayed cleanup from older
+  coordinators.
+- [x] Pass the token through the coordinator, polling context, replacement
+  invalidation, false reply, cancellation/defer, and deinitialization paths;
+  successful termination leaves the current gate closed.
+- [x] Update AppDelegate reconfiguration coverage to request replacement Quit
+  synchronously and assert the old delayed cleanup cannot reopen the new gate
+  or duplicate a reply.
+- [x] Capture RED and token-equality mutation failures, then restore the
+  equality guard and verify 11/11 focused tests.
+- [x] Re-run ProtectedZIP (104/5), full serial (1,059/77), build verification,
+  and package release contract checks; all pass.

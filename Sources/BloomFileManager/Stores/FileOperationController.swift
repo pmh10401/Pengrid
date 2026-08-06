@@ -64,6 +64,15 @@ struct ArchiveProgressPublicationGate {
     }
 }
 
+/// Identifies the coordinator that currently owns termination preparation.
+///
+/// Cleanup is asynchronous because an operation must unwind before AppKit can
+/// receive a termination reply. A generation token keeps cleanup from an old
+/// coordinator from releasing a newer coordinator's gate.
+struct TerminationPreparationToken: Sendable, Equatable {
+    fileprivate let generation: UInt64
+}
+
 @MainActor @Observable
 final class FileOperationController {
     private let service: FileOperationService
@@ -117,6 +126,8 @@ final class FileOperationController {
     @ObservationIgnored private var activeOperation: PendingFileOperation?
     @ObservationIgnored private var activeControl: FileOperationControl?
     @ObservationIgnored private var retryOperations: [UUID: PendingFileOperation] = [:]
+    @ObservationIgnored private var terminationPreparationGeneration: UInt64 = 0
+    @ObservationIgnored private var terminationPreparationToken: TerminationPreparationToken?
     @ObservationIgnored private var undoRecipes: [UUID: FileOperationUndoRecipe] = [:]
     @ObservationIgnored private var undoDirectoryKeys: [UUID: Set<String>] = [:]
     @ObservationIgnored private var activeOperationDidReplace = false
@@ -193,17 +204,31 @@ final class FileOperationController {
     /// Prevents queued work from being started while AppKit is waiting for a
     /// cancellation to unwind. The operation itself owns its cleanup and is
     /// allowed to finish before the app receives a termination reply.
-    func beginTerminationPreparation() {
-        guard !isTerminationPreparationActive else { return }
+    @discardableResult
+    func beginTerminationPreparation() -> TerminationPreparationToken {
+        if let terminationPreparationToken {
+            cancelActiveJob()
+            return terminationPreparationToken
+        }
+        terminationPreparationGeneration &+= 1
+        let terminationPreparationToken = TerminationPreparationToken(
+            generation: terminationPreparationGeneration
+        )
+        self.terminationPreparationToken = terminationPreparationToken
         isTerminationPreparationActive = true
         cancelActiveJob()
+        return terminationPreparationToken
     }
 
     /// Re-enables normal queue dispatch after AppKit rejects termination.
     /// Successful termination intentionally leaves the gate closed because
     /// the process is about to exit.
-    func finishTerminationPreparation(restartQueue: Bool) {
-        guard isTerminationPreparationActive else { return }
+    func finishTerminationPreparation(
+        _ token: TerminationPreparationToken,
+        restartQueue: Bool
+    ) {
+        guard terminationPreparationToken == token else { return }
+        terminationPreparationToken = nil
         isTerminationPreparationActive = false
         if restartQueue {
             startNextOperationIfNeeded()
