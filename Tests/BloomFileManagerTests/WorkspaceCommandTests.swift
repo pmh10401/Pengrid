@@ -121,7 +121,18 @@ struct WorkspaceCommandTests {
         ))
         #expect(protected.action == #selector(FileTableView.Coordinator.compressProtectedFromMenu))
         #expect(protected.target === coordinator)
-        #expect(menu.items.first { $0.submenu?.title == "Compress as…" } != nil)
+        let formatMenuItem = try #require(
+            menu.items.first { $0.title == "Compress as…" && $0.submenu != nil }
+        )
+        let formatMenu = try #require(formatMenuItem.submenu)
+        let nestedFormatItems = menuItemsRecursively(in: formatMenu)
+        #expect(nestedFormatItems.allSatisfy { item in
+            item.title != "Compress as Password-Protected ZIP…"
+                && item.identifier != NSUserInterfaceItemIdentifier(
+                    AccessibilityIdentifiers.fileTableCompressProtectedZIP
+                )
+                && item.action != #selector(FileTableView.Coordinator.compressProtectedFromMenu)
+        })
 
         #expect(NSApplication.shared.sendAction(
             protected.action!,
@@ -129,6 +140,18 @@ struct WorkspaceCommandTests {
             from: protected
         ))
         #expect(protectedCallbackCount == 1)
+
+        selection = []
+        coordinator.menuNeedsUpdate(menu)
+
+        let disabledOrdinary = try #require(
+            menu.items.first { $0.title == "Compress to ZIP" }
+        )
+        let disabledProtected = try #require(
+            menu.items.first { $0.title == "Compress as Password-Protected ZIP…" }
+        )
+        #expect(!disabledOrdinary.isEnabled)
+        #expect(!disabledProtected.isEnabled)
     }
 
     @Test func newFolderCommandCapturesCreatedIdentityInItsOriginalPaneThroughReturn() async throws {
@@ -413,6 +436,15 @@ struct WorkspaceCommandTests {
             #expect(policy.canCancel)
         }
     }
+}
+
+private func menuItemsRecursively(in menu: NSMenu) -> [NSMenuItem] {
+    var items = menu.items
+    for item in menu.items {
+        guard let submenu = item.submenu else { continue }
+        items.append(contentsOf: menuItemsRecursively(in: submenu))
+    }
+    return items
 }
 
 private actor CommandArchiveRecorder: ArchiveOperating {
