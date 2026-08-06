@@ -27,6 +27,8 @@ typedef struct {
 #define PENGRID_ZIP_STATUS_MALFORMED_ARCHIVE  (-2002)
 #define PENGRID_ZIP_STATUS_OVERFLOW           (-2003)
 #define PENGRID_ZIP_STATUS_INTERNAL_ERROR     (-2004)
+#define PENGRID_ZIP_STATUS_CANCELLED          (-2005)
+#define PENGRID_ZIP_STATUS_UNSUPPORTED_ENTRY  (-2006)
 
 /* Short aliases are retained for C clients that prefer unqualified statuses. */
 #define PENGRID_ZIP_OK                  PENGRID_ZIP_STATUS_OK
@@ -37,6 +39,19 @@ typedef struct {
 #define PENGRID_ZIP_INTERNAL_ERROR     PENGRID_ZIP_STATUS_INTERNAL_ERROR
 
 int32_t pengrid_zip_inspect_fd(int archive_fd, pengrid_zip_inspection_t *result);
+
+typedef int32_t (*pengrid_zip_progress_callback)(
+    uint64_t completed,
+    uint64_t total,
+    void *context);
+
+int32_t pengrid_zip_create_aes256(
+    int source_root_fd,
+    int destination_fd,
+    const uint8_t *password,
+    size_t password_length,
+    pengrid_zip_progress_callback progress,
+    void *progress_context);
 
 #ifdef __cplusplus
 }
