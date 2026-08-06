@@ -8,6 +8,14 @@ import Testing
     #expect(AccessibilityIdentifiers.leftPane == "leftPane")
     #expect(AccessibilityIdentifiers.rightPane == "rightPane")
     #expect(AccessibilityIdentifiers.operationStatus == "operationStatus")
+    #expect(
+        AccessibilityIdentifiers.workspaceCompressProtectedZIP
+            == "workspace.compressProtectedZIP"
+    )
+    #expect(
+        AccessibilityIdentifiers.fileTableCompressProtectedZIP
+            == "fileTable.compressProtectedZIP"
+    )
     #expect(AccessibilityIdentifiers.operationCenter == "operationCenter")
     #expect(AccessibilityIdentifiers.operationCenterActive == "operationCenter.active")
     #expect(AccessibilityIdentifiers.operationCenterQueue == "operationCenter.queue")
@@ -30,6 +38,50 @@ import Testing
     #expect(AccessibilityIdentifiers.smartSearchSheet == "smartSearch.sheet")
     #expect(AccessibilityIdentifiers.smartSearchQuery == "smartSearch.query")
     #expect(AccessibilityIdentifiers.smartSearchResults == "smartSearch.results")
+    #expect(AccessibilityIdentifiers.archivePasswordSheet == "archivePasswordSheet")
+    #expect(AccessibilityIdentifiers.archivePasswordField == "archivePassword.field")
+    #expect(AccessibilityIdentifiers.archivePasswordCancel == "archivePassword.cancel")
+}
+
+@Test func protectedPasswordPresentationWaitsForOtherSheetsWithoutDroppingRequest() {
+    let request = ArchivePasswordRequest(
+        id: UUID(),
+        purpose: .createAES256,
+        archiveBasename: "자료.zip",
+        previousAttemptFailed: false
+    )
+
+    #expect(WorkspacePasswordPromptRouting.requestToPresent(
+        pending: request,
+        conflictPresented: true,
+        searchPresented: false
+    ) == nil)
+    #expect(WorkspacePasswordPromptRouting.requestToPresent(
+        pending: request,
+        conflictPresented: false,
+        searchPresented: true
+    ) == nil)
+    #expect(WorkspacePasswordPromptRouting.requestToPresent(
+        pending: request,
+        conflictPresented: false,
+        searchPresented: false
+    ) == request)
+    #expect(WorkspacePasswordPromptRouting.shouldCancel(
+        dismissedRequestID: request.id,
+        pending: request
+    ))
+    #expect(!WorkspacePasswordPromptRouting.shouldCancel(
+        dismissedRequestID: UUID(),
+        pending: request
+    ))
+}
+
+@Test func appWiresOneCoordinatorIdentityAcrossServiceControllerStateAndWorkspace() throws {
+    let app = try source(named: "App/BloomFileManagerApp.swift")
+    #expect(app.occurrences(of: "ArchivePasswordPromptCoordinator()") == 1)
+    #expect(app.contains("_passwordCoordinator = State(initialValue: passwordCoordinator)"))
+    #expect(app.contains("passwordProvider: passwordCoordinator"))
+    #expect(app.contains("passwordCoordinator: passwordCoordinator"))
 }
 
 @Test func folderPreviewAccessibilityIdentifiersAndAnnouncementsRemainStable() throws {
@@ -204,6 +256,9 @@ import Testing
         "AccessibilityIdentifiers.operationCenterContinueAfterRecovery"
     ))
     #expect(operationCenter.contains("controller.continueAfterRecovery()"))
+    #expect(operationCenter.contains("FileOperationCenterActiveActionPresentation(job: job)"))
+    #expect(operationCenter.contains("actions.showsPause"))
+    #expect(operationCenter.contains("actions.showsCancel"))
 
     let conflictSheet = try source(named: "Views/ConflictResolutionSheet.swift")
     #expect(conflictSheet.contains(
@@ -215,6 +270,21 @@ import Testing
     #expect(workspace.contains("AccessibilityMotionPresentation.allowsNonessentialAnimation("))
     #expect(workspace.contains("transaction.animation = nil"))
     #expect(workspace.contains("FileOperationCenterView(controller: operationController)"))
+    #expect(workspace.contains(".sheet(item: pendingPasswordRequest)"))
+    #expect(workspace.contains("ArchivePasswordSheet("))
+    #expect(workspace.contains("request: request"))
+    #expect(workspace.contains("coordinator: passwordCoordinator"))
+    #expect(workspace.contains("cancel(requestID: request.id)"))
+    #expect(workspace.contains("WorkspacePasswordPromptRouting.requestToPresent"))
+
+    let app = try source(named: "App/BloomFileManagerApp.swift")
+    #expect(app.contains(
+        "@State private var passwordCoordinator: ArchivePasswordPromptCoordinator"
+    ))
+    #expect(app.contains("let passwordCoordinator = ArchivePasswordPromptCoordinator()"))
+    #expect(app.contains("makeRoutingArchiveOperationService("))
+    #expect(app.contains("passwordProvider: passwordCoordinator"))
+    #expect(app.contains("passwordCoordinator: passwordCoordinator"))
 
     let storageWorkspace = try source(
         named: "Views/StorageInspector/StorageInspectorView.swift"

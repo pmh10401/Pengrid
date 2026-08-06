@@ -43,6 +43,21 @@ struct FileOperationCenterPresentation: Equatable, Sendable {
     }
 }
 
+/// Describes which controls are honest for the active operation state. In
+/// particular, waiting for a password cannot be paused because the controller
+/// has no safe pause boundary while the prompt continuation is suspended.
+struct FileOperationCenterActiveActionPresentation: Equatable, Sendable {
+    let showsPause: Bool
+    let showsResume: Bool
+    let showsCancel: Bool
+
+    init(job: FileOperationJobSnapshot) {
+        showsPause = job.state == .running
+        showsResume = job.state == .paused || job.state == .pauseRequested
+        showsCancel = true
+    }
+}
+
 struct FileOperationCenterView: View {
     let controller: FileOperationController
 
@@ -173,16 +188,17 @@ struct FileOperationCenterView: View {
     }
 
     private func activeRow(_ job: FileOperationJobSnapshot) -> some View {
-        jobCard(job) {
+        let actions = FileOperationCenterActiveActionPresentation(job: job)
+        return jobCard(job) {
             HStack(spacing: 8) {
-                if job.state == .paused || job.state == .pauseRequested {
+                if actions.showsResume {
                     Button("Resume", systemImage: "play.fill") {
                         Task { await controller.resumeActiveJob() }
                     }
                     .accessibilityLabel("Resume active file operation")
                     .accessibilityIdentifier(AccessibilityIdentifiers.operationCenterResume)
                     .help("Resume the active file operation")
-                } else {
+                } else if actions.showsPause {
                     Button("Pause", systemImage: "pause.fill") {
                         Task { await controller.pauseActiveJob() }
                     }
@@ -191,12 +207,14 @@ struct FileOperationCenterView: View {
                     .help("Pause at the next safe file boundary")
                 }
 
-                Button("Cancel", systemImage: "xmark") {
-                    controller.cancelActiveJob()
+                if actions.showsCancel {
+                    Button("Cancel", systemImage: "xmark") {
+                        controller.cancelActiveJob()
+                    }
+                    .accessibilityLabel("Cancel active file operation")
+                    .accessibilityIdentifier(AccessibilityIdentifiers.operationCenterCancelActive)
+                    .help("Cancel after safe cleanup")
                 }
-                .accessibilityLabel("Cancel active file operation")
-                .accessibilityIdentifier(AccessibilityIdentifiers.operationCenterCancelActive)
-                .help("Cancel after safe cleanup")
             }
             .controlSize(.small)
         }

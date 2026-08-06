@@ -5,6 +5,27 @@ private struct PreviewSelectionKey: Hashable {
     let items: [FileItem]
 }
 
+/// Keeps a password continuation pending while another modal surface owns the
+/// window. Once the conflict/search surface closes, the same request identity
+/// becomes eligible for the single password sheet.
+enum WorkspacePasswordPromptRouting {
+    static func requestToPresent(
+        pending: ArchivePasswordRequest?,
+        conflictPresented: Bool,
+        searchPresented: Bool
+    ) -> ArchivePasswordRequest? {
+        guard !conflictPresented, !searchPresented else { return nil }
+        return pending
+    }
+
+    static func shouldCancel(
+        dismissedRequestID: UUID,
+        pending: ArchivePasswordRequest?
+    ) -> Bool {
+        pending?.id == dismissedRequestID
+    }
+}
+
 struct WorkspaceView: View {
     let workspace: WorkspaceState
     let operationController: FileOperationController
@@ -21,6 +42,7 @@ struct WorkspaceView: View {
     let fileSystem: any FileSystemAccess
     let cloudWorkspaceActions: any CloudLocationWorkspaceActions
     let cloudAccessCoordinator: CloudLocationScopedAccessCoordinator
+    let passwordCoordinator: ArchivePasswordPromptCoordinator
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -97,6 +119,19 @@ struct WorkspaceView: View {
                 quickLookController: quickLookController,
                 materializer: materializer
             )
+        }
+        .sheet(item: pendingPasswordRequest) { request in
+            ArchivePasswordSheet(
+                request: request,
+                coordinator: passwordCoordinator
+            )
+            .onDisappear {
+                guard WorkspacePasswordPromptRouting.shouldCancel(
+                    dismissedRequestID: request.id,
+                    pending: passwordCoordinator.pendingRequest
+                ) else { return }
+                passwordCoordinator.cancel(requestID: request.id)
+            }
         }
         .alert("Move to Trash?", isPresented: trashConfirmationIsPresented) {
             Button("Cancel", role: .cancel) {
@@ -201,6 +236,25 @@ struct WorkspaceView: View {
             if !isPresented {
                 smartSearch.dismiss()
             }
+        }
+    }
+
+    private var pendingPasswordRequest: Binding<ArchivePasswordRequest?> {
+        Binding {
+            WorkspacePasswordPromptRouting.requestToPresent(
+                pending: passwordCoordinator.pendingRequest,
+                conflictPresented: operationController.pendingConflict != nil,
+                searchPresented: smartSearch.isPresented
+            )
+        } set: { request in
+            guard request == nil,
+                  let pending = passwordCoordinator.pendingRequest,
+                  WorkspacePasswordPromptRouting.shouldCancel(
+                      dismissedRequestID: pending.id,
+                      pending: pending
+                  )
+            else { return }
+            passwordCoordinator.cancel(requestID: pending.id)
         }
     }
 

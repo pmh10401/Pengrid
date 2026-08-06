@@ -36,6 +36,12 @@ struct WorkspaceCommandPolicy: Equatable {
     var canCompress: Bool {
         canRunArchiveOperation && ArchiveSelectionEligibility.canCompress(selectedItems)
     }
+
+    /// Password-protected ZIP uses the same selection and editing policy as
+    /// ordinary compression. Keep this as a named projection so every menu
+    /// route can express that relationship without duplicating policy logic.
+    var canCompressProtectedZIP: Bool { canCompress }
+
     var canExtract: Bool {
         canRunArchiveOperation && ArchiveSelectionEligibility.canExtract(selectedItems)
     }
@@ -78,6 +84,21 @@ enum WorkspaceCommandActions {
             named: name,
             workspace: workspace,
             beginInlineRenameIn: pane
+        )
+    }
+}
+
+@MainActor
+enum WorkspaceArchiveCommandActions {
+    @discardableResult
+    static func compressProtectedZIP(
+        _ workspace: WorkspaceState,
+        operationController: FileOperationController
+    ) async -> Bool {
+        await operationController.compressSelection(
+            workspace,
+            format: .zip,
+            protection: .aes256
         )
     }
 }
@@ -536,6 +557,18 @@ struct WorkspaceCommands: Commands {
                 }
             }
             .disabled(!policy.canCompress)
+
+            Button("Compress as Password-Protected ZIP…") {
+                guard let workspace, policy.canCompressProtectedZIP else { return }
+                Task {
+                    _ = await WorkspaceArchiveCommandActions.compressProtectedZIP(
+                        workspace,
+                        operationController: operationController
+                    )
+                }
+            }
+            .disabled(!policy.canCompressProtectedZIP)
+            .accessibilityIdentifier(AccessibilityIdentifiers.workspaceCompressProtectedZIP)
 
             Menu("Compress as…") {
                 ForEach(ArchiveFormat.allCases, id: \.self) { format in

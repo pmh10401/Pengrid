@@ -112,3 +112,59 @@ import Testing
     #expect(ArchiveOperationStatusPresentation(progress: publishing).progressLabel
         == "Finishing archive")
 }
+
+@Test func protectedCompressionByteProgressUsesEncryptingLabelAndByteCountFormatter() {
+    let progress = ArchiveOperationProgress(
+        kind: .compress,
+        currentDisplayName: "자료.zip",
+        format: .zip,
+        phase: .processingBytes(completedByteCount: 25, totalByteCount: 100)
+    )
+    let presentation = ArchiveOperationStatusPresentation(progress: progress)
+
+    #expect(presentation.progressLabel == "Encrypting archive, 25 of 100 bytes")
+    #expect(presentation.statusAccessibilityLabel.contains("자료.zip"))
+    #expect(presentation.statusAccessibilityLabel.contains("password") == false)
+    #expect(presentation.statusAccessibilityLabel.contains("secret-sentinel-passphrase") == false)
+}
+
+@Test func extractionByteProgressUsesExtractingLabelAndBoundedCounts() {
+    let progress = ArchiveOperationProgress(
+        kind: .extract,
+        currentDisplayName: "Backup.zip",
+        format: .zip,
+        phase: .processingBytes(completedByteCount: 9_999, totalByteCount: 100)
+    )
+    let presentation = ArchiveOperationStatusPresentation(progress: progress)
+
+    #expect(presentation.progressLabel == "Extracting archive, 100 of 100 bytes")
+    #expect(presentation.statusAccessibilityLabel ==
+        "Extracting ZIP archive, Extracting archive, 100 of 100 bytes, current item Backup.zip")
+}
+
+@Test func waitingForPasswordIsIndeterminateAndSecretFree() {
+    let presentation = ArchiveOperationStatusPresentation(progress: ArchiveOperationProgress(
+        kind: .compress,
+        currentDisplayName: "Protected.zip",
+        format: .zip,
+        phase: .waitingForPassword
+    ))
+
+    #expect(presentation.progressLabel == "Waiting for password")
+    #expect(presentation.statusAccessibilityLabel ==
+        "Compressing ZIP archive, Waiting for password, current item Protected.zip")
+    #expect(presentation.statusAccessibilityLabel.contains("secret-sentinel-passphrase") == false)
+}
+
+@Test func unknownOrNonPositiveByteTotalsStayIndeterminate() {
+    for total in [Int64?.none, 0, -1] {
+        let progress = ArchiveOperationProgress(
+            kind: .compress,
+            currentDisplayName: "Protected.zip",
+            phase: .processingBytes(completedByteCount: 50, totalByteCount: total)
+        )
+        let presentation = ArchiveOperationStatusPresentation(progress: progress)
+        #expect(progress.fractionCompleted == nil)
+        #expect(presentation.progressLabel == "Encrypting archive")
+    }
+}

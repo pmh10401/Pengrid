@@ -31,6 +31,47 @@ struct WorkspaceCommandTests {
         #expect(store.roots == [workspace.activePane.currentDirectory])
     }
 
+    @Test func protectedWorkspaceCommandActionInvokesAES256ZIPControllerRoute() async throws {
+        let directory = URL(filePath: "/workspace", directoryHint: .isDirectory)
+        let source = directory.appending(path: "Report.txt")
+        let item = FileItem(
+            url: source,
+            name: "Report.txt",
+            isDirectory: false,
+            isPackage: false,
+            modifiedAt: nil,
+            byteSize: 8,
+            typeDescription: "Document"
+        )
+        let workspace = WorkspaceState(
+            leftURL: directory,
+            rightURL: URL(filePath: "/other", directoryHint: .isDirectory),
+            listingService: StubDirectoryListingService(values: [directory: [item]])
+        )
+        await workspace.loadInitialDirectories()
+        workspace.left.selection = [source]
+
+        let recorder = CommandArchiveRecorder()
+        let controller = FileOperationController(
+            service: FileOperationService(
+                fileSystem: RecordingFileSystem(existingURLs: [directory, source])
+            ),
+            materializer: InMemoryCloudMaterializer(),
+            archiveService: recorder
+        )
+
+        #expect(await WorkspaceArchiveCommandActions.compressProtectedZIP(
+            workspace,
+            operationController: controller
+        ))
+        while controller.isRunning { await Task.yield() }
+
+        let request = try #require(await recorder.requests().first)
+        #expect(request.kind == .compress)
+        #expect(request.format == .zip)
+        #expect(request.protection == .aes256)
+    }
+
     @Test func newFolderCommandCapturesCreatedIdentityInItsOriginalPaneThroughReturn() async throws {
         let root = try TemporaryDirectory()
         defer { root.remove() }
@@ -313,4 +354,23 @@ struct WorkspaceCommandTests {
             #expect(policy.canCancel)
         }
     }
+}
+
+private actor CommandArchiveRecorder: ArchiveOperating {
+    private var capturedRequests: [ArchiveRequest] = []
+
+    func perform(
+        _ requests: [ArchiveRequest],
+        progress: @escaping ArchiveProgressHandler
+    ) async -> FileOperationResult {
+        capturedRequests.append(contentsOf: requests)
+        return FileOperationResult(outcomes: requests.map {
+            .succeeded(
+                source: $0.verifiedSources.first?.url ?? $0.finalDestination,
+                destination: $0.finalDestination
+            )
+        })
+    }
+
+    func requests() -> [ArchiveRequest] { capturedRequests }
 }

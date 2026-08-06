@@ -87,4 +87,42 @@ struct FileOperationCenterViewTests {
         #expect(snapshot.accessibilityLabel ==
             "Compress Encrypted ZIP, Waiting for password, Report.zip, 1 item, 0 of 0, Waiting for password")
     }
+
+    @Test func waitingForPasswordActiveRowOffersCancelButSuppressesPause() {
+        let waiting = FileOperationJobSnapshot(
+            id: UUID(),
+            kind: .compressProtectedZIP,
+            itemDisplayName: "Report.zip",
+            itemCount: 1,
+            state: .waitingForPassword,
+            progress: FileOperationJobProgress(
+                completedCount: 0,
+                totalCount: 0,
+                detail: "Waiting for password"
+            ),
+            canUndo: false
+        )
+
+        let actions = FileOperationCenterActiveActionPresentation(job: waiting)
+        #expect(actions.showsCancel)
+        #expect(!actions.showsPause)
+        #expect(!actions.showsResume)
+    }
+
+    @Test func runningActiveRowOffersPauseAndCancel() {
+        let running = FileOperationJobSnapshot(
+            id: UUID(),
+            kind: .compressProtectedZIP,
+            itemDisplayName: "Report.zip",
+            itemCount: 1,
+            state: .running,
+            progress: nil,
+            canUndo: false
+        )
+
+        let actions = FileOperationCenterActiveActionPresentation(job: running)
+        #expect(actions.showsCancel)
+        #expect(actions.showsPause)
+        #expect(!actions.showsResume)
+    }
 }
