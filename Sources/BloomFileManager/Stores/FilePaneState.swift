@@ -36,6 +36,7 @@ final class FilePaneState {
     private var itemsRevision: UInt64 = 0
     private var projectionGeneration: UInt64 = 0
     private var acceptedProjectionKey: PaneProjectionKey?
+    var projectionAcceptanceHandler: (@MainActor (PaneProjectionKey) -> Void)?
     private var batchBuffer = PaneBatchBuffer()
     private let batchSleeper: any PaneBatchSleeping
     private let batchFlushDelay: Duration
@@ -812,6 +813,7 @@ final class FilePaneState {
         if intersectsSelection {
             selection.formIntersection(visibleIndexByURL.keys)
         }
+        projectionAcceptanceHandler?(projection.key)
     }
 
     private nonisolated static func project(

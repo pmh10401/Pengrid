@@ -4,6 +4,17 @@ import Testing
 
 @MainActor
 struct FilePaneStateTests {
+    @Test func projectionAcceptanceHandlerRunsAfterProjectionStateIsAssigned() async {
+        let directory = URL(filePath: "/acceptance")
+        let item = makeItem(named: "accepted.txt", byteSize: 1, in: directory)
+        let pane = FilePaneState(directory: directory, listingService: StubDirectoryListingService(values: [directory: [item]]))
+        var observed = false
+        pane.projectionAcceptanceHandler = { _ in
+            observed = pane.visibleItems == [item] && pane.visibleIndexByURL[item.url] == 0
+        }
+        await pane.navigate(to: directory, recordHistory: false)
+        #expect(observed)
+    }
     @Test func navigationMaintainsIndependentHistoryAndClearsSelection() async {
         let home = URL(filePath: "/private/test-home")
         let documents = home.appending(path: "Documents")

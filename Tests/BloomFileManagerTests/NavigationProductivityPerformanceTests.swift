@@ -4,7 +4,7 @@ import Testing
 
 struct NavigationProductivityPerformanceTests {
     @Test func filenameFilteringTenThousandLoadedItemsStaysBelowRegressionCeiling() {
-        let items = makeProjectionFixture(count: 10_000)
+        let items = paneSearchFixture(count: 10_000)
         let clock = ContinuousClock()
         let cases: [(query: String, expectedCount: Int)] = [
             ("1", 3_439),
@@ -26,7 +26,7 @@ struct NavigationProductivityPerformanceTests {
     }
 
     @Test func fileSortingTenThousandLoadedItemsMeasuresEachSortKeyIndependently() {
-        let items = makeProjectionFixture(count: 10_000)
+        let items = paneSearchFixture(count: 10_000)
         let directoryCount = items.filter(\.isDirectory).count
         let clock = ContinuousClock()
 
@@ -46,7 +46,7 @@ struct NavigationProductivityPerformanceTests {
     }
 
     @MainActor @Test func tablePopulationTenThousandLoadedItemsMeasuresFirstRenderedNonemptyState() {
-        let items = makeProjectionFixture(count: 10_000)
+        let items = paneSearchFixture(count: 10_000)
         let sample = measureFirstRenderedTableState(firstNonemptyItems: items)
 
         #expect(sample.rowCount == items.count)
@@ -61,7 +61,7 @@ struct NavigationProductivityPerformanceTests {
 
     @MainActor @Test func acceptedPaneProjectionSupportsConstantTimeRepeatedReads() async {
         let directory = URL(filePath: "/scale", directoryHint: .isDirectory)
-        let items = makeProjectionFixture(count: 10_000)
+        let items = paneSearchFixture(count: 10_000)
         let pane = FilePaneState(
             directory: directory,
             listingService: StubDirectoryListingService(values: [directory: items])
@@ -80,22 +80,5 @@ struct NavigationProductivityPerformanceTests {
         #expect(observedRows == 2_000_000)
         #expect(elapsed < .seconds(5), "stored pane projection reads exceeded the hang ceiling")
         print("navigation-pane-projection repeatedReads=100 elapsed=\(elapsed)")
-    }
-}
-
-private func makeProjectionFixture(count: Int) -> [FileItem] {
-    let root = URL(filePath: "/scale", directoryHint: .isDirectory)
-    return (0..<count).map { index in
-        let isDirectory = index.isMultiple(of: 10)
-        let name = index.isMultiple(of: 2) ? "보고서-\(index)" : "report-\(index)"
-        return FileItem(
-            url: root.appending(path: name),
-            name: name,
-            isDirectory: isDirectory,
-            isPackage: false,
-            modifiedAt: Date(timeIntervalSince1970: TimeInterval(index)),
-            byteSize: isDirectory ? nil : Int64(index * 17),
-            typeDescription: isDirectory ? "Folder" : "Text"
-        )
     }
 }
