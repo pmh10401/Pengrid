@@ -64,7 +64,21 @@ struct PaneSearchTraceMeasurement: Sendable {
 @MainActor
 final class PaneSearchTimingEventRecorder {
     private(set) var events: [String] = []
-    func record(_ event: String) { events.append(event) }
+    private(set) var armedMechanismsInstalled: [Bool] = []
+
+    func record(_ event: String) {
+        events.append(event)
+    }
+
+    func recordArmed(handlerInstalled: Bool, observationInstalled: Bool) {
+        events.append("armed")
+        armedMechanismsInstalled.append(handlerInstalled && observationInstalled)
+    }
+
+    func reset() {
+        events.removeAll(keepingCapacity: true)
+        armedMechanismsInstalled.removeAll(keepingCapacity: true)
+    }
 }
 
 func nearestRankStatistics(_ values: [Double]) -> PaneSearchStatistics {
@@ -131,6 +145,31 @@ final class PaneSearchPerformanceProbe {
             endToEndStatistics: nearestRankStatistics(traceDurations),
             traceEndToEndSeconds: traceDurations,
             rapidBurstQueryCount: scenario.trace == .rapidBurst ? 20 : nil
+        )
+    }
+
+    func measureNormalizedEquivalentReuseForTesting() async throws -> PaneSearchTransitionSample {
+        let session = try await makeWarmSession()
+        let fromQuery = "report-1999"
+        let toQuery = " \n report-1999 \t"
+        _ = try await observeVisibleItemsChange(
+            in: session.pane,
+            sampleIndex: 0,
+            boundary: "normalized-reuse setup"
+        ) {
+            session.pane.updateFilterQuery(fromQuery)
+        }
+        try verifyAcceptedItems(
+            session.pane.visibleItems,
+            expected: oracle(items: session.items, query: fromQuery, sort: session.pane.sort)
+        )
+        timingRecorder?.reset()
+        return try await measureQueryTransition(
+            trace: .replacement,
+            sampleIndex: 0,
+            fromQuery: fromQuery,
+            toQuery: toQuery,
+            session: session
         )
     }
 
@@ -270,6 +309,10 @@ final class PaneSearchPerformanceProbe {
             self.timingRecorder?.record("reuse-start")
             self.timingRecorder?.record("reuse-operation")
             session.pane.updateFilterQuery(toQuery)
+            guard session.pane.filterQuery == toQuery else {
+                throw PaneSearchProbeError.filterQuerySetterDidNotTakeEffect
+            }
+            self.timingRecorder?.record("reuse-setter-effect")
             let acceptedAt = clock.now
             self.timingRecorder?.record("reuse-accepted")
             try verifyAcceptedItems(session.pane.visibleItems, expected: expected)
@@ -577,6 +620,7 @@ private enum PaneSearchProbeError: LocalizedError {
     case invalidScenario(String)
     case incorrectProjection
     case missingReusableSession
+    case filterQuerySetterDidNotTakeEffect
     case acceptanceTimedOut(sampleIndex: Int, boundary: String)
 
     var errorDescription: String? {
@@ -584,6 +628,7 @@ private enum PaneSearchProbeError: LocalizedError {
         case .invalidScenario(let scenario): "Invalid pane-search benchmark scenario: \(scenario)"
         case .incorrectProjection: "Accepted pane projection differed from the full filter/sort oracle"
         case .missingReusableSession: "The selected scenario did not receive its reusable pane-search session"
+        case .filterQuerySetterDidNotTakeEffect: "The normalized-reuse setter did not update the pane query"
         case .acceptanceTimedOut(let sampleIndex, let boundary):
             "Pane-search sample \(sampleIndex) timed out waiting for \(boundary)"
         }
@@ -600,7 +645,6 @@ private func observeVisibleItemsChange(
 ) async throws -> ContinuousClock.Instant {
     try await withCheckedThrowingContinuation { continuation in
         let gate = PaneSearchAcceptanceGate()
-        recorder?.record("armed")
         let previousHandler = pane.projectionAcceptanceHandler
         pane.projectionAcceptanceHandler = { _ in
             guard gate.claim() else { return }
@@ -618,6 +662,10 @@ private func observeVisibleItemsChange(
                 continuation.resume(returning: ContinuousClock().now)
             }
         }
+        recorder?.recordArmed(
+            handlerInstalled: pane.projectionAcceptanceHandler != nil,
+            observationInstalled: true
+        )
         operation()
         Task {
             try? await Task.sleep(for: .seconds(2))
@@ -651,7 +699,7 @@ private func queries(for trace: PaneSearchTrace) -> [String] {
     case .english: ["r", "re", "rep", "report", "report-1999"]
     case .korean: ["보", "보고", "보고서", "보고서-1998"]
     case .reverseDeletion: ["1999", "199", "19", "1", ""]
-    case .replacement: ["report-1999", " \n report-1999 \t", "보고서-1998"]
+    case .replacement: ["report-1999", "보고서-1998", " \n report-1999 \t"]
     case .completeLoad, .rapidBurst, .sortChange: preconditionFailure("Trace does not use sequential queries")
     }
 }

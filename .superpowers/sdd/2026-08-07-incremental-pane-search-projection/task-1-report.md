@@ -32,3 +32,19 @@ Status: DONE
 - GREEN output: exit 0; complete-load, rapid-burst, `sort:name:ascending:10000`, and multi-transition whitespace replacement all passed (4 tests, 6.197 seconds).
 - Regression command: `env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --disable-sandbox --no-parallel --filter paneSearchProbeMeasuresTheCurrentSetterAcceptanceAndTableBoundaries`.
 - Regression output: exit 0; one focused pane-search probe passed in 1.942 seconds. Existing protected-ZIP fixture warnings remain unrelated.
+
+## Fix rounds 4 and 5 evidence
+
+- Restored the committed replacement trace order: `report-1999`, `보고서-1998`, then whitespace-normalized `report-1999`; the release aggregate was not regenerated.
+- Added a dedicated test-only normalized-equivalent reuse probe. It warms the session and establishes `report-1999` without recording setup, clears the recorder, then invokes the production transition path for ` \n report-1999 \t`.
+- `armed` is now recorded only after the projection-acceptance handler and observation tracking are installed. The timing recorder records whether both mechanisms were installed; the three async timing tests require `[true]` in addition to their exact six-event sequence.
+- Setter mutation RED command: `env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --disable-sandbox --no-parallel --filter paneSearchTimingOrderWhitespaceReuse` after temporarily removing `session.pane.updateFilterQuery(toQuery)` from the reuse branch.
+- Setter mutation output: exit nonzero; the test failed with `.filterQuerySetterDidNotTakeEffect` after 1.178 seconds.
+- Armed-placement mutation RED command: `env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --disable-sandbox --no-parallel --filter paneSearchTimingOrderCompleteLoad` after temporarily recording `armed` before installing either mechanism.
+- Armed-placement mutation output: exit nonzero; the test observed `armedMechanismsInstalled == [false]` instead of `[true]` after 0.604 seconds.
+- GREEN command: `env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --disable-sandbox --no-parallel --filter paneSearchTimingOrder`.
+- GREEN output: exit 0; all four timing tests passed in 6.016 seconds.
+- Regression command: `env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --disable-sandbox --no-parallel --filter paneSearchProbeMeasuresTheCurrentSetterAcceptanceAndTableBoundaries`.
+- Regression output: exit 0; the focused probe passed in 2.017 seconds.
+- Aggregate-order command: `jq -e '(.reports // .) | map(select(.scenario == "replacement"))[0].rawSamples | group_by(.sampleIndex) | all(.[]; map(.toQuery) == ["report-1999", "보고서-1998", " \n report-1999 \t"])' docs/verification/2026-08-07-incremental-pane-search-baseline.json`.
+- Aggregate-order output: `true`; all committed replacement samples retain the restored source order.

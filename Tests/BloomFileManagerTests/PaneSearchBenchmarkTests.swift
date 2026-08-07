@@ -65,18 +65,15 @@ func paneSearchReleaseBenchmark() async throws {
         sampleCount: 1,
         scenario: "replacement",
         timingRecorder: recorder
-    ).measureSelectedScenario()
-    let expected = [
+    ).measureNormalizedEquivalentReuseForTesting()
+    #expect(recorder.events == [
         "reuse-start",
         "reuse-operation",
+        "reuse-setter-effect",
         "reuse-accepted",
         "reuse-table-begin",
         "reuse-table-finish"
-    ]
-    let starts = recorder.events.indices.filter { recorder.events[$0] == expected[0] }
-    #expect(starts.count == 1)
-    let reuseStart = try #require(starts.first)
-    #expect(Array(recorder.events[reuseStart...].prefix(expected.count)) == expected)
+    ])
 }
 
 @MainActor
@@ -96,4 +93,5 @@ private func assertExactTimingOrder(for scenario: String) async throws {
         "table-begin",
         "table-finish"
     ])
+    #expect(recorder.armedMechanismsInstalled == [true])
 }
