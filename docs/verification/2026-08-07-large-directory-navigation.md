@@ -46,10 +46,60 @@ Environment: macOS 26.5.2 (25F84), MacBook Pro Mac14,6, Apple M2 Max,
 | Table request-to-first-nonempty rows | 0.023634959 s |
 | Table coordinator application | 0.002811750 s |
 
-The first `/usr/bin/time -l` listing run was a cold/build process (12.61 s
-real, 640,761,856 B maximum RSS); warm runs were 3.32–3.33 s real and
-136,380,416–136,773,632 B maximum RSS. These process values are kept separate
-from the in-test monotonic first-batch timings.
+### Focused test-body timings
+
+These are the Swift Testing body durations from the four-test focused run;
+the inner operation timings below remain the comparison values.
+
+| Test | Test body |
+| --- | ---: |
+| `listingPerformanceProbeReportsFirstBatchAndCompletion` | 0.101 s |
+| `filenameFilteringTenThousandLoadedItemsStaysBelowRegressionCeiling` | 0.154 s |
+| `fileSortingTenThousandLoadedItemsMeasuresEachSortKeyIndependently` | 0.312 s |
+| `tablePopulationTenThousandLoadedItemsMeasuresFirstRenderedNonemptyState` | 0.115 s |
+
+### Raw 10,000-item listing process samples
+
+Each row is one complete invocation of the required
+`/usr/bin/time -l ... --filter tenThousandItemsArriveProgressivelyAndCompletely`
+command. The inner first-batch and complete-load values are measured with
+`ContinuousClock`; the remaining columns are the process-level `/usr/bin/time`
+values.
+
+| Run | First batch | Complete | Test body | Real | User | Sys | Maximum RSS |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 (cold/build) | 0.060584166 s | 1.097706083 s | 2.675 s | 12.61 s | 8.38 s | 2.40 s | 640,761,856 B |
+| 2 | 0.059755750 s | 1.093987041 s | 2.671 s | 3.32 s | 1.44 s | 1.87 s | 136,380,416 B |
+| 3 | 0.059255667 s | 1.097459709 s | 2.648 s | 3.33 s | 1.45 s | 1.85 s | 136,773,632 B |
+
+The first process sample includes a cold build/startup; runs 2–3 are the
+steadier warm-process reference. These process values are kept separate from
+the in-test monotonic first-batch timings.
+
+### Raw 10,000-item filtering (each query measured independently)
+
+| Query | Expected/result count | Elapsed |
+| --- | ---: | ---: |
+| `1` | 3,439 | 0.036255542 s |
+| `19` | 299 | 0.028535041 s |
+| `199` | 20 | 0.026707083 s |
+| `1999` | 1 | 0.028111416 s |
+| `report` | 5,000 | 0.015781458 s |
+
+### Raw 10,000-item sorting (each `FileSortKey` measured independently)
+
+| Sort key | Result count | Elapsed |
+| --- | ---: | ---: |
+| `name` | 10,000 | 0.084464042 s |
+| `modifiedAt` | 10,000 | 0.025344375 s |
+| `kind` | 10,000 | 0.142683459 s |
+| `size` | 10,000 | 0.029108166 s |
+
+### Raw 10,000-item AppKit table population
+
+| Rows | Request to first nonempty rows | Coordinator application |
+| ---: | ---: | ---: |
+| 10,000 | 0.023634959 s | 0.002811750 s |
 
 ## Known baseline warnings
 
