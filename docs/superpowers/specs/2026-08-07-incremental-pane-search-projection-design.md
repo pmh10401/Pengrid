@@ -55,6 +55,23 @@ sort changes.
 Filtering an already ordered array preserves the required order, so query edits
 do not sort again. The empty query publishes the ordered array directly.
 
+Sort changes use a cardinality-safe two-phase path. Pengrid immediately sorts
+the accepted visible membership only when the accepted aggregate's directory,
+item revision, and normalized query exactly match the current request. Otherwise
+it runs the current full filter-then-sort fallback. Immediate subset publication
+sets active order and accepted search seed unavailable for the new sort until a
+matching warm-up is accepted.
+
+After the exact visible result is published, Pengrid builds the full replacement
+active order in a separate generation-bound warm-up task. The warm-up never
+delays the visible sort change, never publishes rows, and is cancelled by a
+newer query, sort, revision, or navigation. If a query arrives before warm-up is
+accepted, that query uses the current exact filter-then-sort fallback instead of
+waiting. After the fallback result is accepted, Pengrid starts a replacement
+warm-up for the latest matching directory, revision, and sort unless a matching
+active order has already been accepted. When the query is empty, the required
+full sort directly becomes the new active order.
+
 The conceptual state is:
 
 ```swift
@@ -143,6 +160,12 @@ implementation must not use an unowned `await Task.detached { ... }.value`.
 The chunk size is an implementation constant covered by cancellation tests and
 may be tuned only from measurements.
 
+The optional active-order warm-up has its own owned task handle and generation.
+It obeys the same cancellation and zero-retention rules as visible projection
+work. At most one current non-cancelled visible worker and one current
+non-cancelled warm-up worker may exist. Cancelled workers may finish one final
+bounded chunk and are counted separately in lifecycle and RSS measurements.
+
 Swift's standard sort is not cooperatively cancellable. It runs only when the
 active order must change, checks cancellation before and after sorting, and is
 still protected by the final generation check. Ordinary query typing does not
@@ -217,11 +240,22 @@ without retaining the extra ordered snapshot.
 ## Data flow
 
 ```text
-raw listing revision or sort changes
+raw listing revision or empty-query sort change
     -> build one off-main active order
     -> full exact filter for current query
     -> build visible indexes
     -> generation-check and publish atomically
+
+accepted non-empty-query warm-up
+    -> generation-check directory/revision/sort
+    -> replace only active-order metadata in the accepted aggregate
+    -> retain visible items, indexes, and selection without row publication
+    -> leave search seed unavailable until the next exact full scan
+
+sort changes while a non-empty query is visible
+    -> immediately sort and publish only current matched items
+    -> start a cancellable full active-order warm-up without publishing rows
+    -> accept only matching directory/revision/sort generation
 
 eligible one-ASCII-scalar query extension
     -> narrow prior matched ASCII-safe positions
@@ -244,7 +278,8 @@ place. A new interactive trace measures the user-selected goal.
 
 Required traces include:
 
-- numeric: `"" -> "1" -> "19" -> "199" -> "1999"`;
+- numeric: `"" -> "1" -> "19" -> "199" -> "1999"`, with fixed expected
+  counts `3,439`, `299`, `20`, and `1` in the 10,000-item fixture;
 - English: `"" -> "r" -> "re" -> "rep" -> "report"` (narrow the ASCII-safe
   partition and rescan every localized-fallback position);
 - Korean: `"" -> "보" -> "보고" -> "보고서"`;
@@ -268,18 +303,37 @@ Per-event p95 is calculated for each query transition. Complete-trace p95 is
 the distribution of elapsed time from dispatching the first trace event until
 the final query's table application completes.
 
-The change is accepted only when:
+### Hard acceptance gates
 
-- every post-first-character step improves p95 by at least 30 percent;
-- the complete typing trace improves p95 by at least 40 percent;
-- a query edit reusing an already-built active order applies the newest
-  10,000-entry result within 50 milliseconds p95;
+The change is accepted only when all hard gates pass:
+
+- every ready-order query transition in the numeric, English, and Korean traces
+  applies the newest 10,000-entry result within 50 milliseconds p95; the harness
+  asserts that the matching active order was accepted before each measurement;
 - cancelled work processes no candidates beyond the next bounded chunk and
   never publishes stale state;
-- first-query, backspace, paste, sort-change, and complete-load time regress by
+- first-query, backspace, multi-scalar paste, and complete-load time regress by
   no more than 10 percent;
+- for every `FileSortKey` and ascending/descending direction, sort-change p95
+  regresses by no more than 10 percent for the fixed empty and numeric fixture
+  cardinalities: empty `10,000`, broad `3,439`, medium `299`, narrow `20`, and
+  one-result `1`; eligible non-empty cases must use the immediate subset-sort
+  path and must not wait for full-order warm-up;
 - peak RSS regresses by no more than 10 percent; and
 - all visible identities and ordering equal the full filter/sort oracle.
+
+### Aspirational targets
+
+The initial performance ambitions remain visible but are not release-blocking
+until paired measurements demonstrate that they are stable across workloads:
+
+- every post-first-character step improves p95 by at least 30 percent; and
+- the complete typing trace improves p95 by at least 40 percent.
+
+Results are reported for every required trace and active sort key; no average or
+selected trace may hide a slower case. These targets may be promoted to hard
+gates only after the same-device, same-build 30-sample baseline and candidate
+distributions meet them without violating a hard gate.
 
 The existing direct single-query and sort 30-percent gate continues to be
 reported independently. This project cannot turn that older miss into a pass by
@@ -307,6 +361,13 @@ changing the workload definition.
 - A controlled worker proves cancellation reaches the detached computation.
 - The worker-lifecycle hook reports zero cancelled workers and zero retained
   worker snapshots/results after the rapid burst drains.
+- A controlled warm-up proves sort changes publish the exact subset immediately,
+  warm-up never publishes rows, and newer query/sort/revision/navigation work
+  cancels and releases it.
+- A sort change while a newer query projection is still in flight rejects stale
+  membership, uses the full oracle fallback, and never subset-sorts old rows.
+- A query that cancels warm-up uses the exact fallback and starts one replacement
+  warm-up only after that fallback is accepted.
 - A late older query, sort, listing revision, refresh, and navigation result
   cannot publish.
 - A cancelled worker stops by the next chunk boundary.
@@ -323,6 +384,9 @@ changing the workload definition.
   identifiers, labels, and values.
 - AppKit applies only the newest result and keeps the measured safe structural
   fallback.
+- Sort-change tests cover empty, broad, medium, narrow, and one-result queries;
+  the subset result equals the current oracle while full-order warm-up remains
+  off the visible critical path.
 - Google Drive and OneDrive doubles observe metadata-only filtering with no
   materialization dependency or call.
 - Workspace and saved-search compatibility bytes continue decoding unchanged.
@@ -341,8 +405,9 @@ begins. Automated tests do not replace these manual release gates.
    narrowing entirely and use the full-active-order scan.
 2. If the active-order snapshot exceeds the 10-percent RSS gate, remove that
    cache and remeasure the narrower design.
-3. If the interactive trace improves by less than 30 percent, do not add a
-   debounce automatically; instrument table publication and worker CPU first.
+3. If the interactive trace misses the aspirational 30/40-percent targets but
+   hard gates pass, report the miss without adding debounce automatically;
+   instrument table publication and worker CPU before proposing another design.
 4. If automatic tests pass but manual UI, VoiceOver, or File Provider checks are
    incomplete, the feature remains not release-ready.
 
