@@ -302,10 +302,16 @@ fallback, not a variance revision to the approved completion criterion.
 | PASS | Release build | `env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift build --disable-sandbox -c release`: production build completed after 37.23 s. |
 
 The existing 11 unhandled ProtectedZIP fixture warnings remain. No external
-package dependency or persistent filesystem index is present. Listing and pane
-projection sources reference availability metadata and scoped access, but no
-cloud materializer or content-download API; `directoryListingDoesNotCallTheMaterializer`
-and the scoped-access lifetime tests passed.
+package dependency or persistent filesystem index is present. Static source
+inspection shows that `LiveDirectoryListingService` accepts availability and
+metadata readers, not a `CloudMaterializing` dependency, and its producer only
+collects entries into `DirectoryEntryBatchBuilder`; availability is mapped into
+the resulting `FileItem` projection. `CloudItemAvailabilityTests.
+directoryListingDoesNotCallTheMaterializer` covers that availability mapping and
+the requested URL. Its separately-created `InMemoryCloudMaterializer` is not
+injected into the live listing service, so its empty call record is **not**
+runtime-observable proof of zero materializer calls. This is architectural
+absence evidence only; scoped-access lifetime tests provide separate coverage.
 
 ### Independent system File Provider evidence and GUI blocker
 
@@ -324,29 +330,82 @@ fixture warnings. The existing `dist` application is stale v1.3.0 build 5 and
 was not used. A process under `/Applications` was unrelated/stale. Neither is
 evidence of a Task 8 app launch.
 
-Independent read-only system checks found both configured File Provider roots:
+The following is a sanitized, copy-and-rerun system-level transcript. It
+discovers only the two provider root patterns, reads their mode and
+`com.apple.file-provider-domain-id` xattr, and obtains **metadata only** for
+immediate children. The Swift snippet calls Foundation resource-value APIs for
+download status/flag and the legacy percent key (through `NSURL` because that
+URL resource key is unavailable in current Swift overlays). It does not open,
+preview, hash, enumerate recursively, download, or materialize a file.
 
-| Provider root | Access/domain evidence | Immediate children |
-| --- | --- | ---: |
-| `/Users/mac/Library/CloudStorage/GoogleDrive-pmh10401@gmail.com` | Readable/searchable, mode `0500`, File Provider domain xattr, `NSFileProviderManager.getIdentifierForUserVisibleFile`: `domainPresent=true`, `error=false` | 5 directories |
-| `/Users/mac/Library/CloudStorage/OneDrive-개인` | Readable/searchable, mode `0700`, File Provider domain xattr, `NSFileProviderManager.getIdentifierForUserVisibleFile`: `domainPresent=true`, `error=false` | 21 children |
+```bash
+set -euo pipefail
+CLOUD_ROOT=/Users/mac/Library/CloudStorage
+snapshot() {
+  printf '%s\n' \
+    'import Foundation' \
+    'let root = URL(fileURLWithPath: CommandLine.arguments[1])' \
+    'let keys: Set<URLResourceKey> = [.ubiquitousItemIsDownloadingKey, .ubiquitousItemDownloadingStatusKey]' \
+    'let percentKey = URLResourceKey("NSURLUbiquitousItemPercentDownloadedKey")' \
+    'let urls = try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: Array(keys), options: [])' \
+    'var statuses: [String: Int] = [:]; var downloading = 0; var percentages = 0' \
+    'for url in urls { let value = try url.resourceValues(forKeys: keys); let status = value.ubiquitousItemDownloadingStatus?.rawValue ?? "nil"; statuses[status, default: 0] += 1; if value.ubiquitousItemIsDownloading == true { downloading += 1 }; var raw: AnyObject?; try? (url as NSURL).getResourceValue(&raw, forKey: percentKey); if raw != nil { percentages += 1 } }' \
+    'print("children=\(urls.count) statuses=\(statuses.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: ",")) downloadingFlags=\(downloading) percentValues=\(percentages)")' \
+  | env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift - "$1"
+}
+for root in "$CLOUD_ROOT"/GoogleDrive-* "$CLOUD_ROOT"/OneDrive-*; do
+  [ -d "$root" ] || continue
+  printf 'ROOT=%s ' "${root##*/}"
+  /usr/bin/stat -f 'mode=%Lp' "$root"
+  printf 'DOMAIN='
+  /usr/bin/xattr -p com.apple.file-provider-domain-id "$root" \
+    | /usr/bin/sed -E 's/gdrive-[0-9]+/gdrive-<redacted-domain-id>/'
+done
+for root in "$CLOUD_ROOT"/GoogleDrive-* "$CLOUD_ROOT"/OneDrive-*; do
+  [ -d "$root" ] && { printf 'BEFORE %s ' "${root##*/}"; snapshot "$root"; }
+done
+/bin/sleep 2
+for root in "$CLOUD_ROOT"/GoogleDrive-* "$CLOUD_ROOT"/OneDrive-*; do
+  [ -d "$root" ] && { printf 'AFTER %s ' "${root##*/}"; snapshot "$root"; }
+done
+for root in "$CLOUD_ROOT"/GoogleDrive-* "$CLOUD_ROOT"/OneDrive-*; do
+  [ -d "$root" ] || continue
+  domain=$(/usr/bin/xattr -p com.apple.file-provider-domain-id "$root")
+  printf 'FILEPROVIDERCTL %s\n' "${root##*/}"
+  /usr/bin/fileproviderctl dump "$domain" --limit-dump-size 0 2>&1 \
+    | /usr/bin/sed -n '/== action operation engine ==/,+3p'
+done
+```
 
-Metadata-only Foundation snapshots taken before and after a two-second interval
-were unchanged:
+Raw output from the 2026-08-07 rerun (provider domain IDs are deliberately
+redacted; the pre-existing account-root label is retained):
 
-| Provider | Before | After | Download indicators |
-| --- | --- | --- | --- |
-| Google Drive | 5 `Current` | 5 `Current` | `downloadingFlags=0`, `percentValues=0` in both snapshots |
-| OneDrive | 19 `Current`, 2 `NotDownloaded` | 19 `Current`, 2 `NotDownloaded` | `downloadingFlags=0`, `percentValues=0` in both snapshots |
+```text
+ROOT=GoogleDrive-pmh10401@gmail.com mode=500
+DOMAIN=com.google.drivefs.fpext/gdrive-<redacted-domain-id>
+ROOT=OneDrive-개인 mode=700
+DOMAIN=com.microsoft.OneDrive.FileProvider/OneDrive
+BEFORE GoogleDrive-pmh10401@gmail.com children=5 statuses=NSURLUbiquitousItemDownloadingStatusCurrent=5 downloadingFlags=0 percentValues=0
+BEFORE OneDrive-개인 children=21 statuses=NSURLUbiquitousItemDownloadingStatusCurrent=19,NSURLUbiquitousItemDownloadingStatusNotDownloaded=2 downloadingFlags=0 percentValues=0
+AFTER GoogleDrive-pmh10401@gmail.com children=5 statuses=NSURLUbiquitousItemDownloadingStatusCurrent=5 downloadingFlags=0 percentValues=0
+AFTER OneDrive-개인 children=21 statuses=NSURLUbiquitousItemDownloadingStatusCurrent=19,NSURLUbiquitousItemDownloadingStatusNotDownloaded=2 downloadingFlags=0 percentValues=0
+FILEPROVIDERCTL GoogleDrive-pmh10401@gmail.com
+== action operation engine ==
+=================
+0 operations
+FILEPROVIDERCTL OneDrive-개인
+== action operation engine ==
+=================
+0 operations
+```
 
-`fileproviderctl dump` reported four providers and zero action-engine
-operations. A BloomFileManager unified-log predicate for provider, download,
-and materialization produced no rows. No content read, preview, download, or
-materialization action was triggered by these checks.
-
-This supports **PASS for system-level metadata-only File Provider safety**. It
-does not prove the Pengrid in-app list/filter/sort/navigation flow, so the live
-in-app cloud gate remains **PENDING**.
+The roots, provider-domain xattrs, two-second before/after counts, status
+values, download flags, percent values, and File Provider action-operation
+counts therefore matched the prior observation. No provider action was issued;
+`fileproviderctl dump` is a read-only daemon-state query. This supports **PASS
+for the narrowly-scoped, system-level metadata-only observation**. It does not
+prove Pengrid's in-app list/filter/sort/navigation flow, so the live in-app
+cloud gate remains **PENDING**.
 
 ### Repository-wide cleanup audit input
 
@@ -369,8 +428,8 @@ instead of claiming index evidence.
 
 | Candidate | Declaration and all exact references | Selector/Codable/reflection review | Relevant tests | Classification/next step |
 | --- | --- | --- | --- | --- |
-| `MZUnused` | `Sources/BloomFileManager/Services/ProtectedZIPEngine.swift:288`; exact whole-repository identifier search returns only that declaration. | Private generic free Swift function; not `@objc`, not a selector target, not a `CodingKey`/Codable member, not reflected, and not exported to the C protected-ZIP callback boundary. | Fresh full suite includes protected-ZIP engine, operation, end-to-end, model, routing, archive, cancellation, and recovery coverage; 1,146/1,146 passed. | `proven-unused`; propose isolated deletion plus focused protected-ZIP and full-suite rerun in a separate reviewed cleanup. |
-| `entryExists` | `Sources/BloomFileManager/Services/FileSystemAccess.swift:2123`; exact whole-repository identifier search returns only that declaration. | Private instance Swift method; not `@objc`, not a selector target, not Codable, not reflected, and not protocol witness/dynamic dispatch. | Fresh full suite includes `FileSystemAccessTests`, file mutation/transfer/Undo, archive, quarantine, symlink, and recovery coverage; 1,146/1,146 passed. | `proven-unused`; propose isolated deletion plus focused filesystem/safety and full-suite rerun in a separate reviewed cleanup. |
+| `MZUnused` | `Sources/BloomFileManager/Services/ProtectedZIPEngine.swift:288`; exact **Sources/Tests code-only** identifier search (excluding `docs/` and build output) returns only that declaration. | Private generic free Swift function; not `@objc`, not a selector target, not a `CodingKey`/Codable member, not reflected, and not exported to the C protected-ZIP callback boundary. | Fresh full suite includes protected-ZIP engine, operation, end-to-end, model, routing, archive, cancellation, and recovery coverage; 1,146/1,146 passed. | `proven-unused`; propose isolated deletion plus focused protected-ZIP and full-suite rerun in a separate reviewed cleanup. |
+| `entryExists` | `Sources/BloomFileManager/Services/FileSystemAccess.swift:2123`; exact **Sources/Tests code-only** identifier search (excluding `docs/` and build output) returns only that declaration. | Private instance Swift method; not `@objc`, not a selector target, not Codable, not reflected, and not protocol witness/dynamic dispatch. | Fresh full suite includes `FileSystemAccessTests`, file mutation/transfer/Undo, archive, quarantine, symlink, and recovery coverage; 1,146/1,146 passed. | `proven-unused`; propose isolated deletion plus focused filesystem/safety and full-suite rerun in a separate reviewed cleanup. |
 
 Audit searches also reviewed private declarations with one/two textual
 occurrences, legacy/CodingKeys/selector/reflection sites, resource-value reads,
