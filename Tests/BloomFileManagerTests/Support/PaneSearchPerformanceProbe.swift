@@ -795,14 +795,23 @@ private final class PaneSearchAcceptanceGate: @unchecked Sendable {
 private struct CountingBaselinePaneItemProjector: PaneItemProjecting {
     let tracker: PaneSearchSupersessionTracker
 
-    func project(items: [FileItem], key: PaneProjectionKey) async -> PaneItemProjection {
+    func project(_ input: PaneProjectionInput) async throws -> PaneItemProjection {
         await Task.yield()
-        let query = key.normalizedQuery
-        let filtered = items.filter { item in
+        let query = input.key.normalizedQuery
+        var filtered: [FileItem] = []
+        filtered.reserveCapacity(input.items.count)
+        for (index, item) in input.items.enumerated() {
             tracker.recordCandidateVisit(for: query)
-            return query.isEmpty || item.name.localizedStandardContains(query)
+            if query.isEmpty || item.name.localizedStandardContains(query) {
+                filtered.append(item)
+            }
+            if (index + 1).isMultiple(of: PaneFilenameFilter.cancellationCheckStride) {
+                try Task.checkCancellation()
+            }
         }
-        let projected = key.sort.apply(to: filtered)
+        try Task.checkCancellation()
+        let projected = input.key.sort.apply(to: filtered)
+        try Task.checkCancellation()
         var indexByURL: [URL: Int] = [:]
         var urlByEntryPath: [String: URL] = [:]
         for (index, item) in projected.enumerated() {
@@ -811,11 +820,27 @@ private struct CountingBaselinePaneItemProjector: PaneItemProjecting {
             urlByEntryPath[PaneEntryPath.normalize(url)] = url
         }
         return PaneItemProjection(
-            key: key,
+            key: input.key,
             items: projected,
             indexByURL: indexByURL,
             urlByEntryPath: urlByEntryPath
         )
+    }
+
+    func buildActiveOrder(
+        items: [FileItem],
+        directoryKey: String,
+        key: PaneProjectionKey
+    ) async throws -> ActiveOrderSnapshot? {
+        try await PaneItemProjector().buildActiveOrder(
+            items: items,
+            directoryKey: directoryKey,
+            key: key
+        )
+    }
+
+    func projectSortedSubset(items: [FileItem], key: PaneProjectionKey) async throws -> PaneItemProjection {
+        try await PaneItemProjector().projectSortedSubset(items: items, key: key)
     }
 }
 

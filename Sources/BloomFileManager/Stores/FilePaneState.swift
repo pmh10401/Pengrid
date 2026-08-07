@@ -2,18 +2,56 @@ import Foundation
 import Observation
 
 protocol PaneItemProjecting: Sendable {
-    func project(items: [FileItem], key: PaneProjectionKey) async -> PaneItemProjection
+    func project(_ input: PaneProjectionInput) async throws -> PaneItemProjection
+    func buildActiveOrder(
+        items: [FileItem],
+        directoryKey: String,
+        key: PaneProjectionKey
+    ) async throws -> ActiveOrderSnapshot?
+    func projectSortedSubset(items: [FileItem], key: PaneProjectionKey) async throws -> PaneItemProjection
 }
 
 struct LivePaneItemProjector: PaneItemProjecting {
-    func project(items: [FileItem], key: PaneProjectionKey) async -> PaneItemProjection {
-        PaneItemProjector().project(items: items, key: key)
+    func project(_ input: PaneProjectionInput) async throws -> PaneItemProjection {
+        try await PaneItemProjector().projectFallback(items: input.items, key: input.key)
+    }
+
+    func buildActiveOrder(
+        items: [FileItem],
+        directoryKey: String,
+        key: PaneProjectionKey
+    ) async throws -> ActiveOrderSnapshot? {
+        try await PaneItemProjector().buildActiveOrder(
+            items: items,
+            directoryKey: directoryKey,
+            key: key
+        )
+    }
+
+    func projectSortedSubset(items: [FileItem], key: PaneProjectionKey) async throws -> PaneItemProjection {
+        try await PaneItemProjector().projectSortedSubset(items: items, key: key)
     }
 }
 
 struct PaneProjectionToken: Equatable, Sendable {
     let navigationGeneration: UInt64
     let projectionGeneration: UInt64
+}
+
+struct PaneProjectionRequest: Sendable {
+    let input: PaneProjectionInput
+    let token: PaneProjectionToken
+}
+
+enum PaneProjectionLifecycleEvent: Equatable, Sendable {
+    case workerStarted(PaneProjectionToken)
+    case cancellationRequested(PaneProjectionToken)
+    case workerFinished(PaneProjectionToken, cancelled: Bool)
+    case buffersReleased(PaneProjectionToken)
+}
+
+protocol PaneProjectionLifecycleRecording: Sendable {
+    func record(_ event: PaneProjectionLifecycleEvent) async
 }
 
 struct AcceptedPaneProjectionState: Equatable, Sendable {
@@ -67,7 +105,8 @@ final class FilePaneState {
     private var loadTask: Task<Void, Never>?
     private var refreshTask: Task<Void, Never>?
     private var monitorTask: Task<Void, Never>?
-    private var projectionTask: Task<Void, Never>?
+    private var projectionWork: ProjectionWork?
+    private var warmUpWork: ProjectionWork?
     private var batchFlushTask: Task<Void, Never>?
     private var currentRequestID: UInt64?
     private var nextRequestID: UInt64 = 0
@@ -556,6 +595,7 @@ final class FilePaneState {
         refreshTask = nil
         taskLifecycle.setRefresh(nil)
         currentRefreshID = nil
+        cancelProjectionWorkers()
     }
 
     private func finishRefresh(_ refreshID: UInt64) {
@@ -748,28 +788,49 @@ final class FilePaneState {
         let generation = beginProjectionGeneration()
         let intersectsSelection = projectionChangesMembership(key)
         let projector = projector
-        let task = Task { @MainActor [weak self, projector] in
-            let result = await Self.project(items: snapshot, key: key, projector: projector)
-            guard !Task.isCancelled, let self else { return }
-            if self.canAcceptProjection(
-                navigationGeneration: navigationGeneration,
-                directory: directory,
-                itemsRevision: revision,
-                projectionGeneration: generation
-            ) {
-                self.acceptProjection(
-                    result,
-                    intersectsSelection: intersectsSelection,
-                    token: .init(
-                        navigationGeneration: navigationGeneration,
-                        projectionGeneration: generation
-                    )
-                )
-            }
-            self.finishScheduledProjection(generation: generation)
+        let token = PaneProjectionToken(
+            navigationGeneration: navigationGeneration,
+            projectionGeneration: generation
+        )
+        let request = PaneProjectionRequest(
+            input: projectionInput(items: snapshot, directory: directory, key: key),
+            token: token
+        )
+        let worker = Task.detached(priority: .userInitiated) {
+            try await projector.project(request.input)
         }
-        projectionTask = task
-        taskLifecycle.setProjection(task)
+        let work = ProjectionWork(worker: worker)
+        let publication = Task { @MainActor [weak self, weak work] in
+            defer {
+                if let work {
+                    self?.finishScheduledProjection(work: work, token: token)
+                }
+            }
+            do {
+                let result = try await worker.value
+                guard !Task.isCancelled, let self else { return }
+                if self.canAcceptProjection(
+                    navigationGeneration: navigationGeneration,
+                    directory: directory,
+                    itemsRevision: revision,
+                    projectionGeneration: generation
+                ) {
+                    self.acceptProjection(
+                        result,
+                        intersectsSelection: intersectsSelection,
+                        token: token
+                    )
+                }
+            } catch is CancellationError {
+                // Cancellation is expected when a more current projection replaces this one.
+            } catch {
+                guard !Task.isCancelled else { return }
+                self?.errorMessage = error.localizedDescription
+            }
+        }
+        work.installPublication(publication)
+        projectionWork = work
+        taskLifecycle.setProjectionWork(work)
     }
 
     private func ensureCurrentProjection(
@@ -793,7 +854,23 @@ final class FilePaneState {
         let key = projectionKey(itemsRevision: revision)
         let generation = beginProjectionGeneration()
         let intersectsSelection = projectionChangesMembership(key)
-        let result = await Self.project(items: snapshot, key: key, projector: projector)
+        let token = PaneProjectionToken(
+            navigationGeneration: navigationGeneration,
+            projectionGeneration: generation
+        )
+        let result: PaneItemProjection
+        do {
+            result = try await awaitProjectionWorker(
+                .init(input: projectionInput(items: snapshot, directory: directory, key: key), token: token),
+                projector: projector
+            )
+        } catch is CancellationError {
+            return
+        } catch {
+            guard !Task.isCancelled else { return }
+            errorMessage = error.localizedDescription
+            return
+        }
         guard !Task.isCancelled,
               canAcceptProjection(
                 navigationGeneration: navigationGeneration,
@@ -802,14 +879,7 @@ final class FilePaneState {
                 projectionGeneration: generation
               )
         else { return }
-        acceptProjection(
-            result,
-            intersectsSelection: intersectsSelection,
-            token: .init(
-                navigationGeneration: navigationGeneration,
-                projectionGeneration: generation
-            )
-        )
+        acceptProjection(result, intersectsSelection: intersectsSelection, token: token)
     }
 
     private func stageRefreshProjection(
@@ -829,7 +899,23 @@ final class FilePaneState {
               self.itemsRevision == previousItemsRevision {
             let key = projectionKey(itemsRevision: itemsRevision)
             let generation = beginProjectionGeneration()
-            let result = await Self.project(items: items, key: key, projector: projector)
+            let token = PaneProjectionToken(
+                navigationGeneration: navigationGeneration,
+                projectionGeneration: generation
+            )
+            let result: PaneItemProjection
+            do {
+                result = try await awaitProjectionWorker(
+                    .init(input: projectionInput(items: items, directory: directory, key: key), token: token),
+                    projector: projector
+                )
+            } catch is CancellationError {
+                continue
+            } catch {
+                guard !Task.isCancelled else { return nil }
+                errorMessage = error.localizedDescription
+                return nil
+            }
             guard !Task.isCancelled,
                   isCurrentRefresh(
                     refreshID,
@@ -853,9 +939,7 @@ final class FilePaneState {
     }
 
     private func beginProjectionGeneration() -> UInt64 {
-        projectionTask?.cancel()
-        projectionTask = nil
-        taskLifecycle.setProjection(nil)
+        cancelProjectionWorkers()
         projectionGeneration &+= 1
         return projectionGeneration
     }
@@ -864,10 +948,12 @@ final class FilePaneState {
         _ = beginProjectionGeneration()
     }
 
-    private func finishScheduledProjection(generation: UInt64) {
-        guard projectionGeneration == generation else { return }
-        projectionTask = nil
-        taskLifecycle.setProjection(nil)
+    private func finishScheduledProjection(work: ProjectionWork, token: PaneProjectionToken) {
+        guard projectionGeneration == token.projectionGeneration,
+              projectionWork === work
+        else { return }
+        projectionWork = nil
+        taskLifecycle.setProjectionWork(nil)
     }
 
     private func canAcceptProjection(
@@ -949,14 +1035,45 @@ final class FilePaneState {
         )
     }
 
-    private nonisolated static func project(
+    private func projectionInput(
         items: [FileItem],
-        key: PaneProjectionKey,
+        directory: URL,
+        key: PaneProjectionKey
+    ) -> PaneProjectionInput {
+        PaneProjectionInput(
+            items: items,
+            directoryKey: Self.entryPath(directory),
+            key: key,
+            activeOrder: acceptedProjectionState.activeOrder,
+            previousSearch: acceptedProjectionState.search
+        )
+    }
+
+    private func awaitProjectionWorker(
+        _ request: PaneProjectionRequest,
         projector: any PaneItemProjecting
-    ) async -> PaneItemProjection {
-        await Task.detached(priority: .userInitiated) {
-            await projector.project(items: items, key: key)
-        }.value
+    ) async throws -> PaneItemProjection {
+        let worker = Task.detached(priority: .userInitiated) {
+            try await projector.project(request.input)
+        }
+        let work = ProjectionWork(worker: worker)
+        projectionWork = work
+        taskLifecycle.setProjectionWork(work)
+        defer { finishScheduledProjection(work: work, token: request.token) }
+        return try await withTaskCancellationHandler {
+            try await worker.value
+        } onCancel: {
+            work.cancel()
+        }
+    }
+
+    private func cancelProjectionWorkers() {
+        projectionWork?.cancel()
+        projectionWork = nil
+        warmUpWork?.cancel()
+        warmUpWork = nil
+        taskLifecycle.setProjectionWork(nil)
+        taskLifecycle.setWarmUpWork(nil)
     }
 
     private func failNavigation(_ error: Error, requestID: UInt64) async {
@@ -1130,7 +1247,8 @@ private final class PaneTaskLifecycle: @unchecked Sendable {
     private var loadTask: Task<Void, Never>?
     private var refreshTask: Task<Void, Never>?
     private var monitorTask: Task<Void, Never>?
-    private var projectionTask: Task<Void, Never>?
+    private var projectionWork: ProjectionWork?
+    private var warmUpWork: ProjectionWork?
     private var batchFlushTask: Task<Void, Never>?
 
     func setLoad(_ task: Task<Void, Never>?) {
@@ -1145,8 +1263,12 @@ private final class PaneTaskLifecycle: @unchecked Sendable {
         lock.withLock { monitorTask = task }
     }
 
-    func setProjection(_ task: Task<Void, Never>?) {
-        lock.withLock { projectionTask = task }
+    func setProjectionWork(_ work: ProjectionWork?) {
+        lock.withLock { projectionWork = work }
+    }
+
+    func setWarmUpWork(_ work: ProjectionWork?) {
+        lock.withLock { warmUpWork = work }
     }
 
     func setBatchFlush(_ task: Task<Void, Never>?) {
@@ -1154,16 +1276,19 @@ private final class PaneTaskLifecycle: @unchecked Sendable {
     }
 
     func cancelAll() {
-        let tasks = lock.withLock {
-            let tasks = [loadTask, refreshTask, monitorTask, projectionTask, batchFlushTask]
+        let (tasks, works) = lock.withLock {
+            let tasks = [loadTask, refreshTask, monitorTask, batchFlushTask]
+            let works = [projectionWork, warmUpWork]
             loadTask = nil
             refreshTask = nil
             monitorTask = nil
-            projectionTask = nil
+            projectionWork = nil
+            warmUpWork = nil
             batchFlushTask = nil
-            return tasks
+            return (tasks, works)
         }
         tasks.forEach { $0?.cancel() }
+        works.forEach { $0?.cancel() }
     }
 }
 
