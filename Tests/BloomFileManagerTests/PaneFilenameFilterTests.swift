@@ -32,6 +32,8 @@ struct PaneFilenameFilterTests {
         #expect(PaneFilenameFilter.isPrintableASCII("report-1999.txt"))
         #expect(PaneFilenameFilter.isPrintableASCII(" !~"))
         #expect(!PaneFilenameFilter.isPrintableASCII(""))
+        #expect(!PaneFilenameFilter.isPrintableASCII("\u{001F}"))
+        #expect(!PaneFilenameFilter.isPrintableASCII("\u{007F}"))
         #expect(!PaneFilenameFilter.isPrintableASCII("보고서.txt"))
         #expect(!PaneFilenameFilter.isPrintableASCII("Résumé.pdf"))
     }
