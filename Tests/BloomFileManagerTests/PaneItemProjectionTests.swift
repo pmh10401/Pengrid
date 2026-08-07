@@ -164,7 +164,7 @@ struct PaneItemProjectionTests {
         #expect(duplicateEntryResult.urlByEntryPath["/dupes/folder"] == directoryURL.standardizedFileURL)
     }
 
-    @Test func activeOrderSnapshotSortsOnceAndExclusivelyPartitionsPrintableASCIIFilenames() {
+    @Test func activeOrderSnapshotSortsOnceAndExclusivelyPartitionsPrintableASCIIFilenames() async throws {
         let items = makeActiveOrderCorpus()
         let key = PaneProjectionKey(
             itemsRevision: 42,
@@ -172,7 +172,7 @@ struct PaneItemProjectionTests {
             sort: FileSort(key: .name, direction: .ascending)
         )
 
-        guard let snapshot = PaneItemProjector().buildActiveOrder(
+        guard let snapshot = try await PaneItemProjector().buildActiveOrder(
             items: items,
             directoryKey: "/active",
             key: key
@@ -192,7 +192,7 @@ struct PaneItemProjectionTests {
         #expect(Set(snapshot.asciiLiteralSafePositions).isDisjoint(with: Set(snapshot.localizedFallbackPositions)))
     }
 
-    @Test func activeOrderRejectsDuplicateStandardizedURLAndEntryPathIdentities() {
+    @Test func activeOrderRejectsDuplicateStandardizedURLAndEntryPathIdentities() async throws {
         let duplicateStandardizedURL = [
             makeItem(name: "first.txt", url: URL(filePath: "/active/one/../entry.txt"), isDirectory: false, modifiedAt: nil, byteSize: 1, typeDescription: "Text"),
             makeItem(name: "last.txt", url: URL(filePath: "/active/entry.txt"), isDirectory: false, modifiedAt: nil, byteSize: 2, typeDescription: "Text")
@@ -203,11 +203,11 @@ struct PaneItemProjectionTests {
         ]
         let key = PaneProjectionKey(itemsRevision: 43, normalizedQuery: "", sort: FileSort())
 
-        #expect(PaneItemProjector().buildActiveOrder(items: duplicateStandardizedURL, directoryKey: "/active", key: key) == nil)
-        #expect(PaneItemProjector().buildActiveOrder(items: duplicateEntryPath, directoryKey: "/active", key: key) == nil)
+        #expect(try await PaneItemProjector().buildActiveOrder(items: duplicateStandardizedURL, directoryKey: "/active", key: key) == nil)
+        #expect(try await PaneItemProjector().buildActiveOrder(items: duplicateEntryPath, directoryKey: "/active", key: key) == nil)
     }
 
-    @Test func activeOrderFullFilteringMatchesFilterThenSortForEverySortAndQueryCorpus() {
+    @Test func activeOrderFullFilteringMatchesFilterThenSortForEverySortAndQueryCorpus() async throws {
         let items = makeActiveOrderCorpus()
         let queries = [
             "", "  report  ", "RESUME", "Re\u{301}sume\u{301}", "보고", "보고", "ß", "ss", "s",
@@ -218,7 +218,7 @@ struct PaneItemProjectionTests {
             for direction in [SortDirection.ascending, .descending] {
                 let sort = FileSort(key: sortKey, direction: direction)
                 let key = PaneProjectionKey(itemsRevision: 44, normalizedQuery: "", sort: sort)
-                guard let snapshot = PaneItemProjector().buildActiveOrder(
+                guard let snapshot = try await PaneItemProjector().buildActiveOrder(
                     items: items,
                     directoryKey: "/active",
                     key: key
@@ -249,6 +249,210 @@ struct PaneItemProjectionTests {
         #expect(snapshot.normalizedQuery == "report")
         #expect(snapshot.matchedASCIIPositions == [1])
         #expect(snapshot.matchedLocalizedPositions == [5, 8])
+    }
+
+    @Test func activeOrderNarrowingRechecksEveryLocalizedFallbackPosition() async throws {
+        let items = makeActiveOrderCorpus()
+        let projector = PaneItemProjector()
+        let sort = FileSort(key: .name, direction: .ascending)
+        let activeKey = PaneProjectionKey(itemsRevision: 46, normalizedQuery: "", sort: sort)
+        let activeOrder = try #require(await projector.buildActiveOrder(
+            items: items,
+            directoryKey: "/active",
+            key: activeKey
+        ))
+        let previousKey = PaneProjectionKey(itemsRevision: 46, normalizedQuery: "rep", sort: sort)
+        let previous = try await projector.projectActiveOrder(.init(
+            items: items,
+            directoryKey: "/active",
+            key: previousKey,
+            activeOrder: activeOrder,
+            previousSearch: nil
+        ))
+        let nextKey = PaneProjectionKey(itemsRevision: 46, normalizedQuery: "repo", sort: sort)
+
+        let result = try await projector.projectActiveOrder(.init(
+            items: items,
+            directoryKey: "/active",
+            key: nextKey,
+            activeOrder: activeOrder,
+            previousSearch: previous.search
+        ))
+        let oracle = sort.apply(to: PaneFilenameFilter(query: "repo").apply(to: items))
+
+        #expect(result.diagnostics.path == .activeOrderNarrowedASCII)
+        #expect(result.diagnostics.visitedASCIIPositions == previous.search?.matchedASCIIPositions.count)
+        #expect(result.diagnostics.visitedLocalizedPositions == activeOrder.localizedFallbackPositions.count)
+        #expect(result.items.map(\.url.standardizedFileURL) == oracle.map(\.url.standardizedFileURL))
+        #expect(result.items == oracle)
+    }
+
+    @Test func activeOrderRoutesEveryDisallowedTransitionThroughAFullScan() async throws {
+        let items = makeActiveOrderCorpus()
+        let projector = PaneItemProjector()
+        let sort = FileSort(key: .name, direction: .ascending)
+        let key = PaneProjectionKey(itemsRevision: 47, normalizedQuery: "", sort: sort)
+        let activeOrder = try #require(await projector.buildActiveOrder(
+            items: items,
+            directoryKey: "/active",
+            key: key
+        ))
+        let cases: [(String, String, String, UInt64, FileSort)] = [
+            ("report", "repo", "/active", 47, sort), // replacement
+            ("report", "rep", "/active", 47, sort), // backspace
+            ("rep", "", "/active", 47, sort), // empty query
+            ("r", "repo", "/active", 47, sort), // multi-scalar paste
+            ("rep", "rep!", "/active", 47, sort), // punctuation
+            ("rep", "보고", "/active", 47, sort), // Korean IME text
+            ("rep", "repo", "/other", 47, sort), // directory mismatch
+            ("rep", "repo", "/active", 48, sort), // revision mismatch
+            ("rep", "repo", "/active", 47, FileSort(key: .size, direction: .descending)) // sort mismatch
+        ]
+
+        for (oldQuery, newQuery, previousDirectory, previousRevision, previousSort) in cases {
+            let previous = try await projector.projectActiveOrder(.init(
+                items: items,
+                directoryKey: "/active",
+                key: PaneProjectionKey(itemsRevision: 47, normalizedQuery: oldQuery, sort: sort),
+                activeOrder: activeOrder,
+                previousSearch: nil
+            ))
+            let prior = try #require(previous.search)
+            let mismatchedPrevious = AcceptedSearchSnapshot(
+                directoryKey: previousDirectory,
+                itemsRevision: previousRevision,
+                sort: previousSort,
+                normalizedQuery: prior.normalizedQuery,
+                matchedASCIIPositions: prior.matchedASCIIPositions,
+                matchedLocalizedPositions: prior.matchedLocalizedPositions
+            )
+            let nextKey = PaneProjectionKey(itemsRevision: 47, normalizedQuery: newQuery, sort: sort)
+            let result = try await projector.projectActiveOrder(.init(
+                items: items,
+                directoryKey: "/active",
+                key: nextKey,
+                activeOrder: activeOrder,
+                previousSearch: mismatchedPrevious
+            ))
+            let oracle = sort.apply(to: PaneFilenameFilter(query: newQuery).apply(to: items))
+
+            #expect(result.diagnostics.path == .activeOrderFullScan)
+            #expect(result.diagnostics.visitedASCIIPositions == activeOrder.asciiLiteralSafePositions.count)
+            #expect(result.diagnostics.visitedLocalizedPositions == activeOrder.localizedFallbackPositions.count)
+            #expect(result.items.map(\.url.standardizedFileURL) == oracle.map(\.url.standardizedFileURL))
+            #expect(result.items == oracle)
+        }
+    }
+
+    @Test func activeOrderEmptyQueryAndMissingOrderUseTheirExplicitPaths() async throws {
+        let items = makeActiveOrderCorpus()
+        let projector = PaneItemProjector()
+        let key = PaneProjectionKey(itemsRevision: 48, normalizedQuery: "", sort: FileSort())
+        let activeOrder = try #require(await projector.buildActiveOrder(
+            items: items,
+            directoryKey: "/active",
+            key: key
+        ))
+
+        let empty = try await projector.projectActiveOrder(.init(
+            items: items,
+            directoryKey: "/active",
+            key: key,
+            activeOrder: activeOrder,
+            previousSearch: nil
+        ))
+        let fallback = try await projector.projectActiveOrder(.init(
+            items: items,
+            directoryKey: "/active",
+            key: key,
+            activeOrder: nil,
+            previousSearch: nil
+        ))
+
+        #expect(empty.diagnostics.path == .activeOrderFullScan)
+        #expect(empty.items == activeOrder.orderedItems)
+        #expect(empty.search?.normalizedQuery == "")
+        #expect(fallback.diagnostics.path == .fallbackFilterThenSort)
+        #expect(fallback.items == key.sort.apply(to: items))
+    }
+
+    @Test func emptyActiveOrderUsesTheDedicatedPath() async throws {
+        let projector = PaneItemProjector()
+        let key = PaneProjectionKey(itemsRevision: 49, normalizedQuery: "anything", sort: FileSort())
+        let activeOrder = try #require(await projector.buildActiveOrder(
+            items: [],
+            directoryKey: "/empty",
+            key: key
+        ))
+
+        let result = try await projector.projectActiveOrder(.init(
+            items: [],
+            directoryKey: "/empty",
+            key: key,
+            activeOrder: activeOrder,
+            previousSearch: nil
+        ))
+
+        #expect(result.diagnostics == .init(
+            path: .emptyActiveOrder,
+            visitedASCIIPositions: 0,
+            visitedLocalizedPositions: 0
+        ))
+        #expect(result.items.isEmpty)
+    }
+
+    @Test func sortedSubsetRejectsDuplicateTieBreakIdentitiesAndKeepsFallbackIndexesLastWins() async throws {
+        let items = [
+            makeItem(name: "first.txt", url: URL(filePath: "/subset/one/../entry.txt"), isDirectory: false, modifiedAt: nil, byteSize: 1, typeDescription: "Text"),
+            makeItem(name: "last.txt", url: URL(filePath: "/subset/entry.txt"), isDirectory: false, modifiedAt: nil, byteSize: 2, typeDescription: "Text")
+        ]
+        let key = PaneProjectionKey(itemsRevision: 50, normalizedQuery: "txt", sort: FileSort())
+
+        let result = try await PaneItemProjector().projectSortedSubset(items: items, key: key)
+
+        #expect(result.diagnostics.path == .fallbackFilterThenSort)
+        #expect(result.items == key.sort.apply(to: PaneFilenameFilter(query: "txt").apply(to: items)))
+        #expect(result.indexByURL[URL(filePath: "/subset/entry.txt")] == 1)
+        #expect(result.urlByEntryPath["/subset/entry.txt"] == URL(filePath: "/subset/entry.txt"))
+    }
+
+    @Test func randomizedActiveOrderProjectionMatchesTheFullOracleForOneThousandFilenameQueryCombinations() async throws {
+        var generator = ProjectionTestGenerator(seed: 0xA11CE5EED)
+        let projector = PaneItemProjector()
+
+        for caseNumber in 0..<1_000 {
+            let sort = FileSort(
+                key: FileSortKey.allCases[generator.nextInt(upperBound: FileSortKey.allCases.count)],
+                direction: generator.nextBool() ? .ascending : .descending
+            )
+            let oldQuery = generator.asciiQuery(length: 1 + generator.nextInt(upperBound: 5))
+            let newQuery = oldQuery + generator.asciiQuery(length: 1)
+            let items = generator.items(caseNumber: caseNumber, count: 1 + generator.nextInt(upperBound: 10))
+            let key = PaneProjectionKey(itemsRevision: UInt64(caseNumber), normalizedQuery: "", sort: sort)
+            let activeOrder = try #require(await projector.buildActiveOrder(
+                items: items,
+                directoryKey: "/random/\(caseNumber)",
+                key: key
+            ))
+            let previous = try await projector.projectActiveOrder(.init(
+                items: items,
+                directoryKey: "/random/\(caseNumber)",
+                key: PaneProjectionKey(itemsRevision: UInt64(caseNumber), normalizedQuery: oldQuery, sort: sort),
+                activeOrder: activeOrder,
+                previousSearch: nil
+            ))
+            let result = try await projector.projectActiveOrder(.init(
+                items: items,
+                directoryKey: "/random/\(caseNumber)",
+                key: PaneProjectionKey(itemsRevision: UInt64(caseNumber), normalizedQuery: newQuery, sort: sort),
+                activeOrder: activeOrder,
+                previousSearch: previous.search
+            ))
+            let oracle = sort.apply(to: PaneFilenameFilter(query: newQuery).apply(to: items))
+
+            #expect(result.items.map(\.url.standardizedFileURL) == oracle.map(\.url.standardizedFileURL), "case \(caseNumber)")
+            #expect(result.items == oracle, "case \(caseNumber)")
+        }
     }
 }
 
@@ -314,4 +518,50 @@ private func makeItem(
         byteSize: byteSize,
         typeDescription: typeDescription
     )
+}
+
+private struct ProjectionTestGenerator {
+    private var state: UInt64
+
+    init(seed: UInt64) {
+        state = seed
+    }
+
+    mutating func nextBool() -> Bool {
+        next() & 1 == 0
+    }
+
+    mutating func nextInt(upperBound: Int) -> Int {
+        Int(next() % UInt64(upperBound))
+    }
+
+    mutating func asciiQuery(length: Int) -> String {
+        String((0..<length).map { _ in
+            let alphabet = Array("abcdefghijklmnopqrstuvwxyz0123456789")
+            return alphabet[nextInt(upperBound: alphabet.count)]
+        })
+    }
+
+    mutating func items(caseNumber: Int, count: Int) -> [FileItem] {
+        let unsafePrefixes = ["보고서", "Re\u{301}sume\u{301}", "ß", "⑫", "🎉", "Ｆｕｌｌ"]
+        return (0..<count).map { index in
+            let ascii = asciiQuery(length: 1 + nextInt(upperBound: 12))
+            let name = nextBool()
+                ? "\(ascii).txt"
+                : "\(unsafePrefixes[nextInt(upperBound: unsafePrefixes.count)])-\(ascii).txt"
+            return makeItem(
+                name: name,
+                url: URL(filePath: "/random/\(caseNumber)/\(index)-\(name)"),
+                isDirectory: nextBool(),
+                modifiedAt: Date(timeIntervalSince1970: TimeInterval(nextInt(upperBound: 10_000))),
+                byteSize: Int64(nextInt(upperBound: 1_000)),
+                typeDescription: nextBool() ? "Text" : "Markdown"
+            )
+        }
+    }
+
+    private mutating func next() -> UInt64 {
+        state = state &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+        return state
+    }
 }
