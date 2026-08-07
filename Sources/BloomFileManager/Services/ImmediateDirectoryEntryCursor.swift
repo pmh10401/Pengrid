@@ -12,18 +12,53 @@ protocol ImmediateDirectoryEntryCursorFactory: Sendable {
     ) throws -> any ImmediateDirectoryEntryCursor
 }
 
+protocol ImmediateDirectoryEnumerator: AnyObject {
+    func nextObject() -> Any?
+}
+
+extension FileManager.DirectoryEnumerator: ImmediateDirectoryEnumerator {}
+
 struct LiveImmediateDirectoryEntryCursorFactory: ImmediateDirectoryEntryCursorFactory {
+    private let makeEnumerator: @Sendable (
+        URL,
+        [URLResourceKey],
+        FileManager.DirectoryEnumerationOptions,
+        @escaping @Sendable (URL, Error) -> Bool
+    ) -> (any ImmediateDirectoryEnumerator)?
+
+    init() {
+        makeEnumerator = { directory, keys, options, errorHandler in
+            FileManager.default.enumerator(
+                at: directory,
+                includingPropertiesForKeys: keys,
+                options: options,
+                errorHandler: errorHandler
+            )
+        }
+    }
+
+    init(
+        makeEnumerator: @escaping @Sendable (
+            URL,
+            [URLResourceKey],
+            FileManager.DirectoryEnumerationOptions,
+            @escaping @Sendable (URL, Error) -> Bool
+        ) -> (any ImmediateDirectoryEnumerator)?
+    ) {
+        self.makeEnumerator = makeEnumerator
+    }
+
     func makeCursor(
         in directory: URL,
         includingPropertiesForKeys keys: Set<URLResourceKey>,
         options: FileManager.DirectoryEnumerationOptions
     ) throws -> any ImmediateDirectoryEntryCursor {
         let errorBox = EnumerationErrorBox()
-        guard let enumerator = FileManager.default.enumerator(
-            at: directory,
-            includingPropertiesForKeys: Array(keys),
-            options: options.union(.skipsSubdirectoryDescendants),
-            errorHandler: { _, error in
+        guard let enumerator = makeEnumerator(
+            directory,
+            Array(keys),
+            options.union(.skipsSubdirectoryDescendants),
+            { _, error in
                 errorBox.capture(error)
                 return false
             }
@@ -35,10 +70,10 @@ struct LiveImmediateDirectoryEntryCursorFactory: ImmediateDirectoryEntryCursorFa
 }
 
 private final class LiveImmediateDirectoryEntryCursor: ImmediateDirectoryEntryCursor {
-    private let enumerator: FileManager.DirectoryEnumerator
+    private let enumerator: any ImmediateDirectoryEnumerator
     private let errorBox: EnumerationErrorBox
 
-    init(enumerator: FileManager.DirectoryEnumerator, errorBox: EnumerationErrorBox) {
+    init(enumerator: any ImmediateDirectoryEnumerator, errorBox: EnumerationErrorBox) {
         self.enumerator = enumerator
         self.errorBox = errorBox
     }

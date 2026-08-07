@@ -83,6 +83,25 @@ import Testing
     }
 }
 
+@Test func listingSurfacesEnumeratorErrorCapturedAfterCursorCreation() async throws {
+    let sentinel = SentinelEnumerationError()
+    let enumerator = ErrorInjectingImmediateDirectoryEnumerator(error: sentinel)
+    let factory = LiveImmediateDirectoryEntryCursorFactory { _, _, _, errorHandler in
+        enumerator.install(errorHandler)
+        return enumerator
+    }
+    let service = LiveDirectoryListingService(
+        batchSize: 8,
+        cursorFactory: factory
+    )
+    var iterator = service.batches(in: URL(filePath: "/virtual")).makeAsyncIterator()
+
+    await #expect(throws: SentinelEnumerationError.self) {
+        _ = try await iterator.next()
+    }
+    #expect(enumerator.nextCallCount == 1)
+}
+
 @Test func cancelledAvailabilityDoesNotReturnStaleBatchAndFinishesScopedAccessOnce() async throws {
     let directory = try TemporaryDirectory()
     defer { directory.remove() }
@@ -153,6 +172,35 @@ private final class CountingImmediateDirectoryEntryCursor: ImmediateDirectoryEnt
             defer { index += 1; onURL() }
             return urls[index]
         }
+    }
+}
+
+private struct SentinelEnumerationError: Error {}
+
+private final class ErrorInjectingImmediateDirectoryEnumerator:
+    ImmediateDirectoryEnumerator, @unchecked Sendable {
+    private let lock = NSLock()
+    private let error: Error
+    private var errorHandler: (@Sendable (URL, Error) -> Bool)?
+    private var calls = 0
+
+    init(error: Error) {
+        self.error = error
+    }
+
+    var nextCallCount: Int { lock.withLock { calls } }
+
+    func install(_ errorHandler: @escaping @Sendable (URL, Error) -> Bool) {
+        lock.withLock { self.errorHandler = errorHandler }
+    }
+
+    func nextObject() -> Any? {
+        let handler = lock.withLock { () -> (@Sendable (URL, Error) -> Bool)? in
+            calls += 1
+            return errorHandler
+        }
+        _ = handler?(URL(filePath: "/virtual"), error)
+        return nil
     }
 }
 
