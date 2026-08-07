@@ -58,6 +58,29 @@ struct NavigationProductivityPerformanceTests {
                 + "coordinatorApplication=\(sample.coordinatorApplication)"
         )
     }
+
+    @MainActor @Test func acceptedPaneProjectionSupportsConstantTimeRepeatedReads() async {
+        let directory = URL(filePath: "/scale", directoryHint: .isDirectory)
+        let items = makeProjectionFixture(count: 10_000)
+        let pane = FilePaneState(
+            directory: directory,
+            listingService: StubDirectoryListingService(values: [directory: items])
+        )
+        await pane.navigate(to: directory, recordHistory: false)
+        let clock = ContinuousClock()
+        var observedRows = 0
+
+        let elapsed = clock.measure {
+            for _ in 0..<100 {
+                observedRows += pane.visibleItems.count
+                observedRows += pane.visibleIndexByURL.count
+            }
+        }
+
+        #expect(observedRows == 2_000_000)
+        #expect(elapsed < .seconds(5), "stored pane projection reads exceeded the hang ceiling")
+        print("navigation-pane-projection repeatedReads=100 elapsed=\(elapsed)")
+    }
 }
 
 private func makeProjectionFixture(count: Int) -> [FileItem] {

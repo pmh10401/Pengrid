@@ -3,12 +3,16 @@ import Observation
 
 @MainActor @Observable
 final class FilePaneState {
+    private static let sameTurnProjectionLimit = 256
+
     private let listingService: any DirectoryListingService
     private let monitor: any DirectoryMonitor
     private nonisolated let taskLifecycle = PaneTaskLifecycle()
     private var loadTask: Task<Void, Never>?
     private var refreshTask: Task<Void, Never>?
     private var monitorTask: Task<Void, Never>?
+    private var projectionTask: Task<Void, Never>?
+    private var batchFlushTask: Task<Void, Never>?
     private var currentRequestID: UInt64?
     private var nextRequestID: UInt64 = 0
     private var currentRefreshID: UInt64?
@@ -21,9 +25,18 @@ final class FilePaneState {
     private var navigationHistory = PaneNavigationHistory(capacity: 100)
     private var viewStateCache = PaneViewStateCache(capacity: 100)
     private var firstVisibleItem: URL?
+    private var itemsRevision: UInt64 = 0
+    private var projectionGeneration: UInt64 = 0
+    private var acceptedProjectionKey: PaneProjectionKey?
+    private var batchBuffer = PaneBatchBuffer()
+    private let batchSleeper: any PaneBatchSleeping
+    private let batchFlushDelay: Duration
+    private var visibleURLByEntryPath: [String: URL] = [:]
 
     private(set) var currentDirectory: URL
     private(set) var items: [FileItem] = []
+    private(set) var visibleItems: [FileItem] = []
+    private(set) var visibleIndexByURL: [URL: Int] = [:]
     var backHistory: [URL] { navigationHistory.backward }
     var forwardHistory: [URL] { navigationHistory.forward }
     var selection: Set<URL> = [] {
@@ -42,6 +55,7 @@ final class FilePaneState {
         didSet {
             guard sort != oldValue else { return }
             persistenceChangeHandler?()
+            scheduleProjection()
         }
     }
     var isEditingPath = false
@@ -58,9 +72,6 @@ final class FilePaneState {
     var canGoBack: Bool { !backHistory.isEmpty }
     var canGoForward: Bool { !forwardHistory.isEmpty }
     var filterResultCount: Int { visibleItems.count }
-    var visibleItems: [FileItem] {
-        sort.apply(to: PaneFilenameFilter(query: filterQuery).apply(to: items))
-    }
     var committedDirectoryForPersistence: URL { committedState.directory }
 
     func requestTableFocus() {
@@ -80,9 +91,9 @@ final class FilePaneState {
     }
 
     func updateFilterQuery(_ query: String) {
+        guard query != filterQuery else { return }
         filterQuery = query
-        let visibleURLs = Set(visibleItems.map(\.url))
-        selection.formIntersection(visibleURLs)
+        scheduleProjection()
     }
 
     func dismissFiltering() {
@@ -92,6 +103,7 @@ final class FilePaneState {
         selectionBeforeFiltering.removeAll()
         let loadedURLs = Set(items.map(\.url))
         selection = captured.intersection(loadedURLs)
+        scheduleProjection()
     }
 
     @discardableResult
@@ -172,15 +184,30 @@ final class FilePaneState {
         directory: URL,
         sort: FileSort = FileSort(),
         listingService: any DirectoryListingService,
-        monitor: any DirectoryMonitor = LiveDirectoryMonitor()
+        monitor: any DirectoryMonitor = LiveDirectoryMonitor(),
+        batchSleeper: any PaneBatchSleeping = LivePaneBatchSleeper(),
+        batchFlushDelay: Duration = .milliseconds(60)
     ) {
+        let initialProjectionKey = PaneProjectionKey(
+            itemsRevision: 0,
+            normalizedQuery: "",
+            sort: sort
+        )
         currentDirectory = directory
         self.sort = sort
         self.listingService = listingService
         self.monitor = monitor
+        self.batchSleeper = batchSleeper
+        self.batchFlushDelay = batchFlushDelay
+        acceptedProjectionKey = initialProjectionKey
         committedState = PaneSnapshot(
             directory: directory,
             items: [],
+            visibleItems: [],
+            visibleIndexByURL: [:],
+            visibleURLByEntryPath: [:],
+            acceptedProjectionKey: initialProjectionKey,
+            itemsRevision: 0,
             selection: [],
             firstVisibleItem: nil,
             navigationHistory: PaneNavigationHistory(capacity: 100)
@@ -223,6 +250,7 @@ final class FilePaneState {
         isFilterPresented = false
         filterQuery = ""
         selectionBeforeFiltering.removeAll()
+        scheduleProjection()
     }
 
     func cancelLoading() {
@@ -233,11 +261,14 @@ final class FilePaneState {
         guard isLoading else { return }
         loadTask?.cancel()
         taskLifecycle.setLoad(nil)
+        discardPendingBatchWork()
+        invalidateProjectionWork()
         restore(committedState)
         currentRequestID = nil
         currentNavigationIntent = nil
         loadTask = nil
         isLoading = false
+        scheduleProjection()
         if recoverDirtyMonitor {
             reconcilePendingMonitorRefreshIfNeeded()
         }
@@ -255,6 +286,12 @@ final class FilePaneState {
         scrollRestoreRequest = nil
         clearPendingRename()
         items.removeAll(keepingCapacity: true)
+        visibleItems.removeAll(keepingCapacity: true)
+        visibleIndexByURL.removeAll(keepingCapacity: true)
+        visibleURLByEntryPath.removeAll(keepingCapacity: true)
+        acceptedProjectionKey = nil
+        itemsRevision &+= 1
+        batchBuffer = PaneBatchBuffer()
         errorMessage = nil
         isLoading = true
 
@@ -267,25 +304,37 @@ final class FilePaneState {
             do {
                 for try await batch in listingService.batches(in: directory) {
                     guard !Task.isCancelled else {
-                        self?.cancelLoading(requestID: requestID)
+                        await self?.cancelLoading(requestID: requestID)
                         return
                     }
-                    guard self?.appendNavigationBatch(batch, requestID: requestID) == true else {
+                    guard await self?.receiveNavigationBatch(
+                        batch,
+                        requestID: requestID,
+                        directory: directory
+                    ) == true else {
                         return
                     }
                 }
             } catch is CancellationError {
-                self?.cancelLoading(requestID: requestID)
+                await self?.cancelLoading(requestID: requestID)
                 return
             } catch {
-                self?.failNavigation(error, requestID: requestID)
+                await self?.failNavigation(error, requestID: requestID)
                 return
             }
 
             guard !Task.isCancelled else {
-                self?.cancelLoading(requestID: requestID)
+                await self?.cancelLoading(requestID: requestID)
                 return
             }
+            guard await self?.flushPendingNavigationBatches(
+                requestID: requestID,
+                directory: directory
+            ) == true else { return }
+            await self?.ensureCurrentProjection(
+                navigationGeneration: requestID,
+                directory: directory
+            )
             self?.completeNavigation(to: directory, requestID: requestID)
         }
         loadTask = task
@@ -379,7 +428,7 @@ final class FilePaneState {
                 self?.finishRefresh(refreshID)
                 return
             }
-            self?.completeRefresh(
+            await self?.completeRefresh(
                 refreshedItems,
                 refreshID: refreshID,
                 directory: directory,
@@ -464,17 +513,36 @@ final class FilePaneState {
         directory: URL,
         navigationGeneration: UInt64,
         preservedErrorMessage: String?
-    ) {
+    ) async {
         guard isCurrentRefresh(
             refreshID,
             directory: directory,
             navigationGeneration: navigationGeneration
         ) else { return }
         let selectedPaths = Set(selection.map(Self.entryPath))
+        let previousRevision = itemsRevision
+        let replacementRevision = previousRevision &+ 1
+        let projection = await stageRefreshProjection(
+            items: refreshedItems,
+            itemsRevision: replacementRevision,
+            refreshID: refreshID,
+            directory: directory,
+            navigationGeneration: navigationGeneration,
+            previousItemsRevision: previousRevision
+        )
+        guard let projection else {
+            finishRefresh(refreshID)
+            return
+        }
+        guard isCurrentRefresh(
+            refreshID,
+            directory: directory,
+            navigationGeneration: navigationGeneration
+        ), itemsRevision == previousRevision else { return }
         items = refreshedItems
-        selection = Set(refreshedItems.lazy
-            .filter { selectedPaths.contains(Self.entryPath($0.url)) }
-            .map(\.url))
+        itemsRevision = replacementRevision
+        selection = Set(selectedPaths.compactMap { projection.urlByEntryPath[$0] })
+        acceptProjection(projection)
         errorMessage = preservedErrorMessage
         committedState = snapshot()
         finishRefresh(refreshID)
@@ -484,21 +552,285 @@ final class FilePaneState {
         currentRequestID == requestID
     }
 
-    private func cancelLoading(requestID: UInt64) {
+    private func cancelLoading(requestID: UInt64) async {
         guard isCurrentRequest(requestID) else { return }
         cancelLoading()
+        await ensureCurrentProjection(
+            navigationGeneration: requestID,
+            directory: currentDirectory
+        )
     }
 
-    private func appendNavigationBatch(_ batch: [FileItem], requestID: UInt64) -> Bool {
-        guard isCurrentRequest(requestID) else { return false }
-        items.append(contentsOf: batch)
-        return true
+    private func receiveNavigationBatch(
+        _ batch: [FileItem],
+        requestID: UInt64,
+        directory: URL
+    ) async -> Bool {
+        guard isCurrentRequest(requestID),
+              Self.entryPath(currentDirectory) == Self.entryPath(directory)
+        else { return false }
+
+        switch batchBuffer.receive(batch) {
+        case let .publish(firstBatch):
+            items.reserveCapacity(items.count + firstBatch.count)
+            items.append(contentsOf: firstBatch)
+            itemsRevision &+= 1
+            await rebuildProjection(
+                navigationGeneration: requestID,
+                directory: directory
+            )
+        case .scheduleFlush:
+            scheduleBatchFlush(requestID: requestID, directory: directory)
+        case .none:
+            break
+        }
+        return isCurrentRequest(requestID)
+            && Self.entryPath(currentDirectory) == Self.entryPath(directory)
     }
 
-    private func failNavigation(_ error: Error, requestID: UInt64) {
+    private func scheduleBatchFlush(requestID: UInt64, directory: URL) {
+        let sleeper = batchSleeper
+        let delay = batchFlushDelay
+        let task = Task { @MainActor [weak self, sleeper] in
+            do {
+                try await sleeper.sleep(for: delay)
+            } catch {
+                return
+            }
+            guard !Task.isCancelled, let self else { return }
+            self.finishBatchFlushTimer(requestID: requestID, directory: directory)
+            _ = await self.drainPendingNavigationBatches(
+                requestID: requestID,
+                directory: directory
+            )
+        }
+        batchFlushTask = task
+        taskLifecycle.setBatchFlush(task)
+    }
+
+    private func finishBatchFlushTimer(requestID: UInt64, directory: URL) {
+        guard isCurrentRequest(requestID),
+              Self.entryPath(currentDirectory) == Self.entryPath(directory)
+        else { return }
+        batchFlushTask = nil
+        taskLifecycle.setBatchFlush(nil)
+    }
+
+    private func flushPendingNavigationBatches(
+        requestID: UInt64,
+        directory: URL
+    ) async -> Bool {
+        cancelBatchFlushTimer()
+        return await drainPendingNavigationBatches(
+            requestID: requestID,
+            directory: directory
+        )
+    }
+
+    private func drainPendingNavigationBatches(
+        requestID: UInt64,
+        directory: URL
+    ) async -> Bool {
+        guard isCurrentRequest(requestID),
+              Self.entryPath(currentDirectory) == Self.entryPath(directory)
+        else { return false }
+        let pending = batchBuffer.drain()
+        guard !pending.isEmpty else { return true }
+        items.reserveCapacity(items.count + pending.count)
+        items.append(contentsOf: pending)
+        itemsRevision &+= 1
+        await rebuildProjection(
+            navigationGeneration: requestID,
+            directory: directory
+        )
+        return isCurrentRequest(requestID)
+            && Self.entryPath(currentDirectory) == Self.entryPath(directory)
+    }
+
+    private func cancelBatchFlushTimer() {
+        batchFlushTask?.cancel()
+        batchFlushTask = nil
+        taskLifecycle.setBatchFlush(nil)
+    }
+
+    private func discardPendingBatchWork() {
+        cancelBatchFlushTimer()
+        batchBuffer = PaneBatchBuffer()
+    }
+
+    private func scheduleProjection() {
+        let revision = itemsRevision
+        let key = projectionKey(itemsRevision: revision)
+        guard acceptedProjectionKey != key else { return }
+        let snapshot = items
+        let directory = currentDirectory
+        let navigationGeneration = nextRequestID
+        let generation = beginProjectionGeneration()
+        let intersectsSelection = projectionChangesMembership(key)
+        // Existing command and table routes read the result in the same main-actor
+        // turn for a single listing batch. Keep that bounded compatibility path
+        // synchronous; large-directory work always uses the detached path below.
+        if snapshot.count <= Self.sameTurnProjectionLimit {
+            let result = PaneItemProjector().project(items: snapshot, key: key)
+            if canAcceptProjection(
+                navigationGeneration: navigationGeneration,
+                directory: directory,
+                itemsRevision: revision,
+                projectionGeneration: generation
+            ) {
+                acceptProjection(result, intersectsSelection: intersectsSelection)
+            }
+            return
+        }
+        let task = Task { @MainActor [weak self] in
+            let result = await Self.project(items: snapshot, key: key)
+            guard !Task.isCancelled, let self else { return }
+            if self.canAcceptProjection(
+                navigationGeneration: navigationGeneration,
+                directory: directory,
+                itemsRevision: revision,
+                projectionGeneration: generation
+            ) {
+                self.acceptProjection(result, intersectsSelection: intersectsSelection)
+            }
+            self.finishScheduledProjection(generation: generation)
+        }
+        projectionTask = task
+        taskLifecycle.setProjection(task)
+    }
+
+    private func ensureCurrentProjection(
+        navigationGeneration: UInt64,
+        directory: URL
+    ) async {
+        let key = projectionKey(itemsRevision: itemsRevision)
+        guard acceptedProjectionKey != key else { return }
+        await rebuildProjection(
+            navigationGeneration: navigationGeneration,
+            directory: directory
+        )
+    }
+
+    private func rebuildProjection(
+        navigationGeneration: UInt64,
+        directory: URL
+    ) async {
+        let snapshot = items
+        let revision = itemsRevision
+        let key = projectionKey(itemsRevision: revision)
+        let generation = beginProjectionGeneration()
+        let intersectsSelection = projectionChangesMembership(key)
+        let result = await Self.project(items: snapshot, key: key)
+        guard !Task.isCancelled,
+              canAcceptProjection(
+                navigationGeneration: navigationGeneration,
+                directory: directory,
+                itemsRevision: revision,
+                projectionGeneration: generation
+              )
+        else { return }
+        acceptProjection(result, intersectsSelection: intersectsSelection)
+    }
+
+    private func stageRefreshProjection(
+        items: [FileItem],
+        itemsRevision: UInt64,
+        refreshID: UInt64,
+        directory: URL,
+        navigationGeneration: UInt64,
+        previousItemsRevision: UInt64
+    ) async -> PaneItemProjection? {
+        let key = projectionKey(itemsRevision: itemsRevision)
+        let generation = beginProjectionGeneration()
+        let result = await Self.project(items: items, key: key)
+        guard !Task.isCancelled,
+              isCurrentRefresh(
+                refreshID,
+                directory: directory,
+                navigationGeneration: navigationGeneration
+              ),
+              self.itemsRevision == previousItemsRevision,
+              projectionGeneration == generation
+        else { return nil }
+        return result
+    }
+
+    private func projectionKey(itemsRevision: UInt64) -> PaneProjectionKey {
+        PaneProjectionKey(
+            itemsRevision: itemsRevision,
+            normalizedQuery: PaneFilenameFilter.normalize(filterQuery),
+            sort: sort
+        )
+    }
+
+    private func beginProjectionGeneration() -> UInt64 {
+        projectionTask?.cancel()
+        projectionTask = nil
+        taskLifecycle.setProjection(nil)
+        projectionGeneration &+= 1
+        return projectionGeneration
+    }
+
+    private func invalidateProjectionWork() {
+        _ = beginProjectionGeneration()
+    }
+
+    private func finishScheduledProjection(generation: UInt64) {
+        guard projectionGeneration == generation else { return }
+        projectionTask = nil
+        taskLifecycle.setProjection(nil)
+    }
+
+    private func canAcceptProjection(
+        navigationGeneration: UInt64,
+        directory: URL,
+        itemsRevision: UInt64,
+        projectionGeneration: UInt64
+    ) -> Bool {
+        nextRequestID == navigationGeneration
+            && Self.entryPath(currentDirectory) == Self.entryPath(directory)
+            && self.itemsRevision == itemsRevision
+            && self.projectionGeneration == projectionGeneration
+    }
+
+    private func projectionChangesMembership(_ key: PaneProjectionKey) -> Bool {
+        guard let acceptedProjectionKey else { return true }
+        return acceptedProjectionKey.itemsRevision != key.itemsRevision
+            || acceptedProjectionKey.normalizedQuery != key.normalizedQuery
+    }
+
+    private func acceptProjection(
+        _ projection: PaneItemProjection,
+        intersectsSelection: Bool = true
+    ) {
+        visibleItems = projection.items
+        visibleIndexByURL = projection.indexByURL
+        visibleURLByEntryPath = projection.urlByEntryPath
+        acceptedProjectionKey = projection.key
+        if intersectsSelection {
+            selection.formIntersection(projection.indexByURL.keys)
+        }
+    }
+
+    private nonisolated static func project(
+        items: [FileItem],
+        key: PaneProjectionKey
+    ) async -> PaneItemProjection {
+        await Task.detached(priority: .userInitiated) {
+            PaneItemProjector().project(items: items, key: key)
+        }.value
+    }
+
+    private func failNavigation(_ error: Error, requestID: UInt64) async {
         guard isCurrentRequest(requestID) else { return }
         let intent = currentNavigationIntent
+        discardPendingBatchWork()
+        invalidateProjectionWork()
         restore(committedState)
+        await ensureCurrentProjection(
+            navigationGeneration: requestID,
+            directory: committedState.directory
+        )
         discardFailedHistoryDestination(for: intent)
         committedState = snapshot()
         let navigationErrorMessage = error.localizedDescription
@@ -509,6 +841,7 @@ final class FilePaneState {
 
     private func completeNavigation(to directory: URL, requestID: UInt64) {
         guard isCurrentRequest(requestID) else { return }
+        discardPendingBatchWork()
         commitNavigationHistory(for: currentNavigationIntent, destination: directory)
         restoreDirectoryViewState(for: directory)
         committedState = snapshot()
@@ -586,6 +919,11 @@ final class FilePaneState {
         PaneSnapshot(
             directory: currentDirectory,
             items: items,
+            visibleItems: visibleItems,
+            visibleIndexByURL: visibleIndexByURL,
+            visibleURLByEntryPath: visibleURLByEntryPath,
+            acceptedProjectionKey: acceptedProjectionKey,
+            itemsRevision: itemsRevision,
             selection: selection,
             firstVisibleItem: firstVisibleItem,
             navigationHistory: navigationHistory
@@ -595,6 +933,11 @@ final class FilePaneState {
     private func restore(_ snapshot: PaneSnapshot) {
         currentDirectory = snapshot.directory
         items = snapshot.items
+        visibleItems = snapshot.visibleItems
+        visibleIndexByURL = snapshot.visibleIndexByURL
+        visibleURLByEntryPath = snapshot.visibleURLByEntryPath
+        acceptedProjectionKey = snapshot.acceptedProjectionKey
+        itemsRevision = snapshot.itemsRevision
         selection = snapshot.selection
         firstVisibleItem = snapshot.firstVisibleItem.flatMap { anchor in
             snapshot.items.first {
@@ -656,6 +999,8 @@ private final class PaneTaskLifecycle: @unchecked Sendable {
     private var loadTask: Task<Void, Never>?
     private var refreshTask: Task<Void, Never>?
     private var monitorTask: Task<Void, Never>?
+    private var projectionTask: Task<Void, Never>?
+    private var batchFlushTask: Task<Void, Never>?
 
     func setLoad(_ task: Task<Void, Never>?) {
         lock.withLock { loadTask = task }
@@ -669,12 +1014,22 @@ private final class PaneTaskLifecycle: @unchecked Sendable {
         lock.withLock { monitorTask = task }
     }
 
+    func setProjection(_ task: Task<Void, Never>?) {
+        lock.withLock { projectionTask = task }
+    }
+
+    func setBatchFlush(_ task: Task<Void, Never>?) {
+        lock.withLock { batchFlushTask = task }
+    }
+
     func cancelAll() {
         let tasks = lock.withLock {
-            let tasks = [loadTask, refreshTask, monitorTask]
+            let tasks = [loadTask, refreshTask, monitorTask, projectionTask, batchFlushTask]
             loadTask = nil
             refreshTask = nil
             monitorTask = nil
+            projectionTask = nil
+            batchFlushTask = nil
             return tasks
         }
         tasks.forEach { $0?.cancel() }
@@ -684,6 +1039,11 @@ private final class PaneTaskLifecycle: @unchecked Sendable {
 private struct PaneSnapshot {
     let directory: URL
     let items: [FileItem]
+    let visibleItems: [FileItem]
+    let visibleIndexByURL: [URL: Int]
+    let visibleURLByEntryPath: [String: URL]
+    let acceptedProjectionKey: PaneProjectionKey?
+    let itemsRevision: UInt64
     let selection: Set<URL>
     let firstVisibleItem: URL?
     let navigationHistory: PaneNavigationHistory

@@ -316,6 +316,210 @@ struct FilePaneStateTests {
         #expect(!pane.isLoading)
     }
 
+    @Test func firstNavigationBatchPublishesBeforeTheListingCompletes() async {
+        let home = URL(filePath: "/first-batch-home", directoryHint: .isDirectory)
+        let destination = URL(filePath: "/first-batch", directoryHint: .isDirectory)
+        let first = makeItem(named: "first.txt", in: destination)
+        let control = ControlledListingControl()
+        let pane = FilePaneState(
+            directory: home,
+            listingService: ControlledDirectoryListingService(control: control)
+        )
+
+        let load = Task { await pane.navigate(to: destination) }
+        await control.waitForStart(in: destination, count: 1)
+        await control.yield([first], in: destination, request: 0)
+
+        #expect(await waitForPaneCondition { pane.visibleItems == [first] })
+        #expect(pane.isLoading)
+        #expect(pane.visibleIndexByURL == [first.url.standardizedFileURL: 0])
+
+        await control.finish(in: destination, request: 0)
+        await load.value
+    }
+
+    @Test func laterNavigationBatchesCoalesceUntilTheControlledFlushAdvances() async {
+        let home = URL(filePath: "/coalescing-home", directoryHint: .isDirectory)
+        let destination = URL(filePath: "/coalescing", directoryHint: .isDirectory)
+        let first = makeItem(named: "first.txt", in: destination)
+        let second = makeItem(named: "second.txt", in: destination)
+        let third = makeItem(named: "third.txt", in: destination)
+        let control = ControlledListingControl()
+        let sleeper = ControlledPaneBatchSleeper()
+        let pane = FilePaneState(
+            directory: home,
+            listingService: ControlledDirectoryListingService(control: control),
+            batchSleeper: sleeper
+        )
+
+        let load = Task { await pane.navigate(to: destination) }
+        await control.waitForStart(in: destination, count: 1)
+        await control.yield([first], in: destination, request: 0)
+        #expect(await waitForPaneCondition { pane.visibleItems == [first] })
+
+        await control.yield([second], in: destination, request: 0)
+        await control.yield([third], in: destination, request: 0)
+        await sleeper.waitForSleepCount(1)
+        #expect(await sleeper.sleepCount == 1)
+        #expect(await sleeper.requestedDurations == [.milliseconds(60)])
+        #expect(pane.visibleItems == [first])
+
+        await sleeper.advance()
+        #expect(await waitForPaneCondition {
+            pane.visibleItems.map(\.name) == ["first.txt", "second.txt", "third.txt"]
+        })
+
+        await control.finish(in: destination, request: 0)
+        await load.value
+    }
+
+    @Test func navigationCompletionFlushesPendingBatchesBeforeReturning() async {
+        let home = URL(filePath: "/completion-home", directoryHint: .isDirectory)
+        let destination = URL(filePath: "/completion", directoryHint: .isDirectory)
+        let first = makeItem(named: "first.txt", in: destination)
+        let second = makeItem(named: "second.txt", in: destination)
+        let control = ControlledListingControl()
+        let sleeper = ControlledPaneBatchSleeper()
+        let pane = FilePaneState(
+            directory: home,
+            listingService: ControlledDirectoryListingService(control: control),
+            batchSleeper: sleeper
+        )
+
+        let load = Task { await pane.navigate(to: destination) }
+        await control.waitForStart(in: destination, count: 1)
+        await control.yield([first], in: destination, request: 0)
+        #expect(await waitForPaneCondition { pane.visibleItems == [first] })
+        await control.yield([second], in: destination, request: 0)
+        await sleeper.waitForSleepCount(1)
+
+        await control.finish(in: destination, request: 0)
+        await load.value
+
+        #expect(pane.items.map(\.name) == ["first.txt", "second.txt"])
+        #expect(pane.visibleItems.map(\.name) == ["first.txt", "second.txt"])
+        await sleeper.advance()
+    }
+
+    @Test func rapidQueryAndSortChangesPublishOnlyTheNewestProjection() async {
+        let directory = URL(filePath: "/projection-generation", directoryHint: .isDirectory)
+        let filler = (0..<1_000).map {
+            makeItem(named: "item-\($0).txt", byteSize: Int64($0), in: directory)
+        }
+        let beta = makeItem(named: "beta.txt", byteSize: 30, in: directory)
+        let pane = FilePaneState(
+            directory: directory,
+            listingService: StubDirectoryListingService(values: [directory: filler + [beta]])
+        )
+        await pane.navigate(to: directory, recordHistory: false)
+
+        pane.updateFilterQuery("item")
+        pane.sort = FileSort(key: .size, direction: .descending)
+        pane.updateFilterQuery("beta")
+        pane.sort = FileSort(key: .name, direction: .ascending)
+
+        #expect(await waitForPaneCondition { pane.visibleItems == [beta] })
+        for _ in 0..<100 { await Task.yield() }
+        #expect(pane.visibleItems == [beta])
+        #expect(pane.visibleIndexByURL == [beta.url.standardizedFileURL: 0])
+    }
+
+    @Test func cancelledLoadRejectsItsPendingBatchFlush() async {
+        let home = URL(filePath: "/cancelled-flush-home", directoryHint: .isDirectory)
+        let destination = URL(filePath: "/cancelled-flush", directoryHint: .isDirectory)
+        let committed = makeItem(named: "committed.txt", in: home)
+        let first = makeItem(named: "first.txt", in: destination)
+        let late = makeItem(named: "late.txt", in: destination)
+        let control = ControlledListingControl()
+        let sleeper = ControlledPaneBatchSleeper()
+        let pane = FilePaneState(
+            directory: home,
+            listingService: ControlledDirectoryListingService(control: control),
+            batchSleeper: sleeper
+        )
+
+        let initialLoad = Task { await pane.navigate(to: home, recordHistory: false) }
+        await control.waitForStart(in: home, count: 1)
+        await control.yield([committed], in: home, request: 0)
+        await control.finish(in: home, request: 0)
+        await initialLoad.value
+
+        let cancelledLoad = Task { await pane.navigate(to: destination) }
+        await control.waitForStart(in: destination, count: 1)
+        await control.yield([first], in: destination, request: 0)
+        #expect(await waitForPaneCondition { pane.visibleItems == [first] })
+        await control.yield([late], in: destination, request: 0)
+        await sleeper.waitForSleepCount(1)
+
+        cancelledLoad.cancel()
+        await control.finish(in: destination, request: 0)
+        await cancelledLoad.value
+        await sleeper.advance()
+        for _ in 0..<100 { await Task.yield() }
+
+        #expect(pane.currentDirectory == home)
+        #expect(pane.items == [committed])
+        #expect(pane.visibleItems == [committed])
+        #expect(pane.visibleIndexByURL == [committed.url.standardizedFileURL: 0])
+    }
+
+    @Test func failedRefreshPreservesRawAndAcceptedVisibleStateAtomically() async {
+        let directory = URL(filePath: "/atomic-refresh", directoryHint: .isDirectory)
+        let old = makeItem(named: "old.txt", in: directory)
+        let replacement = makeItem(named: "replacement.txt", in: directory)
+        let control = ControlledListingControl()
+        let pane = FilePaneState(
+            directory: directory,
+            listingService: ControlledDirectoryListingService(control: control)
+        )
+
+        let initialLoad = Task { await pane.navigate(to: directory, recordHistory: false) }
+        await control.waitForStart(in: directory, count: 1)
+        await control.yield([old], in: directory, request: 0)
+        await control.finish(in: directory, request: 0)
+        await initialLoad.value
+        pane.selection = [old.url]
+
+        let refresh = Task { await pane.refresh() }
+        await control.waitForStart(in: directory, count: 2)
+        await control.yield([replacement], in: directory, request: 1)
+        await Task.yield()
+        #expect(pane.items == [old])
+        #expect(pane.visibleItems == [old])
+
+        await control.fail(in: directory, request: 1)
+        await refresh.value
+
+        #expect(pane.items == [old])
+        #expect(pane.visibleItems == [old])
+        #expect(pane.visibleIndexByURL == [old.url.standardizedFileURL: 0])
+        #expect(pane.selection == [old.url])
+        #expect(pane.errorMessage != nil)
+    }
+
+    @Test func acceptedProjectionIntersectsSelectionAndPublishesItsIndexTogether() async {
+        let directory = URL(filePath: "/selection-projection", directoryHint: .isDirectory)
+        let alpha = makeItem(named: "alpha.txt", in: directory)
+        let beta = makeItem(named: "beta.txt", in: directory)
+        let filler = (0..<300).map {
+            makeItem(named: "filler-\($0).txt", in: directory)
+        }
+        let pane = FilePaneState(
+            directory: directory,
+            listingService: StubDirectoryListingService(values: [directory: [alpha, beta] + filler])
+        )
+        await pane.navigate(to: directory, recordHistory: false)
+        pane.selection = [alpha.url, beta.url]
+
+        pane.updateFilterQuery("beta")
+
+        #expect(await waitForPaneCondition {
+            pane.visibleItems == [beta]
+                && pane.visibleIndexByURL == [beta.url.standardizedFileURL: 0]
+                && pane.selection == [beta.url]
+        })
+    }
+
     @Test func cancelledCallerCannotCleanUpReplacementNavigation() async {
         let home = URL(filePath: "/private/test-home")
         let cancelledDirectory = home.appending(path: "Cancelled")
@@ -661,14 +865,69 @@ private actor ControlledListingControl {
     }
 }
 
+private actor ControlledPaneBatchSleeper: PaneBatchSleeping {
+    private var continuations: [CheckedContinuation<Void, any Error>] = []
+    private var sleepWaiters: [(count: Int, continuation: CheckedContinuation<Void, Never>)] = []
+    private(set) var requestedDurations: [Duration] = []
+
+    var sleepCount: Int { continuations.count }
+
+    func sleep(for duration: Duration) async throws {
+        try await withCheckedThrowingContinuation { continuation in
+            requestedDurations.append(duration)
+            continuations.append(continuation)
+            resumeSatisfiedWaiters()
+        }
+    }
+
+    func waitForSleepCount(_ count: Int) async {
+        guard continuations.count < count else { return }
+        await withCheckedContinuation { continuation in
+            sleepWaiters.append((count, continuation))
+        }
+    }
+
+    func advance() {
+        guard !continuations.isEmpty else { return }
+        continuations.removeFirst().resume()
+    }
+
+    private func resumeSatisfiedWaiters() {
+        var pending: [(count: Int, continuation: CheckedContinuation<Void, Never>)] = []
+        for waiter in sleepWaiters {
+            if continuations.count >= waiter.count {
+                waiter.continuation.resume()
+            } else {
+                pending.append(waiter)
+            }
+        }
+        sleepWaiters = pending
+    }
+}
+
+@MainActor
+private func waitForPaneCondition(
+    _ condition: @escaping @MainActor () -> Bool
+) async -> Bool {
+    for _ in 0..<10_000 {
+        if condition() { return true }
+        await Task.yield()
+    }
+    return condition()
+}
+
 private func makeItem(named name: String, in directory: URL) -> FileItem {
+    makeItem(named: name, byteSize: 1, in: directory)
+}
+
+private func makeItem(named name: String, byteSize: Int64, in directory: URL) -> FileItem {
     FileItem(
         url: directory.appending(path: name),
         name: name,
         isDirectory: false,
         isPackage: false,
         modifiedAt: nil,
-        byteSize: 1,
+        byteSize: byteSize,
         typeDescription: "Text"
     )
 }
