@@ -83,6 +83,36 @@ import Testing
     }
 }
 
+@Test func cancelledAvailabilityDoesNotReturnStaleBatchAndFinishesScopedAccessOnce() async throws {
+    let directory = try TemporaryDirectory()
+    defer { directory.remove() }
+    try Data("listed".utf8).write(to: directory.url.appending(path: "file.txt"))
+    let driver = RecordingDirectoryListingScopeDriver()
+    let coordinator = CloudLocationScopedAccessCoordinator(driver: driver)
+    coordinator.replaceManualRoots([directory.url])
+    let availability = BlockingAvailabilityReader()
+    let service = LiveDirectoryListingService(
+        batchSize: 1,
+        availabilityReader: availability,
+        accessCoordinator: coordinator
+    )
+    let stream = service.batches(in: directory.url)
+    let listing = Task { () throws -> [FileItem]? in
+        var iterator = stream.makeAsyncIterator()
+        return try await iterator.next()
+    }
+    await availability.waitUntilEntered()
+
+    listing.cancel()
+    await availability.release()
+
+    await #expect(throws: CancellationError.self) {
+        _ = try await listing.value
+    }
+    #expect(driver.startedURLs == [directory.url])
+    #expect(driver.stoppedURLs == [directory.url])
+}
+
 private actor ConstantAvailabilityReader: CloudItemAvailabilityReading {
     let value: CloudItemAvailability
     init(_ value: CloudItemAvailability) { self.value = value }
@@ -123,5 +153,51 @@ private final class CountingImmediateDirectoryEntryCursor: ImmediateDirectoryEnt
             defer { index += 1; onURL() }
             return urls[index]
         }
+    }
+}
+
+private actor BlockingAvailabilityReader: CloudItemAvailabilityReading {
+    private var didEnter = false
+    private var entryWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseContinuation: CheckedContinuation<Void, Never>?
+
+    func availability(of url: URL) async -> CloudItemAvailability {
+        await withCheckedContinuation { continuation in
+            releaseContinuation = continuation
+            didEnter = true
+            let waiters = entryWaiters
+            entryWaiters.removeAll()
+            waiters.forEach { $0.resume() }
+        }
+        return .availableLocally
+    }
+
+    func waitUntilEntered() async {
+        if didEnter { return }
+        await withCheckedContinuation { entryWaiters.append($0) }
+    }
+
+    func release() {
+        releaseContinuation?.resume()
+        releaseContinuation = nil
+    }
+}
+
+private final class RecordingDirectoryListingScopeDriver:
+    SecurityScopedResourceAccessing, @unchecked Sendable {
+    private let lock = NSLock()
+    private var started: [URL] = []
+    private var stopped: [URL] = []
+
+    var startedURLs: [URL] { lock.withLock { started } }
+    var stoppedURLs: [URL] { lock.withLock { stopped } }
+
+    func startAccessing(_ url: URL) -> Bool {
+        lock.withLock { started.append(url) }
+        return true
+    }
+
+    func stopAccessing(_ url: URL) {
+        lock.withLock { stopped.append(url) }
     }
 }

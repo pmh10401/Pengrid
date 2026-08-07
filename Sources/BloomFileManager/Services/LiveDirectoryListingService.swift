@@ -105,6 +105,7 @@ private actor DirectoryListingBatchProducer {
             ).localizedTypeDescription
             let standardizedURL = url.standardizedFileURL
             let availability = await availabilityReader.availability(of: standardizedURL)
+            try Task.checkCancellation()
             batch.append(FileItem(
                 url: standardizedURL,
                 name: url.lastPathComponent,
@@ -116,6 +117,7 @@ private actor DirectoryListingBatchProducer {
                 availability: availability
             ))
         }
+        try Task.checkCancellation()
         return batch
     }
 
