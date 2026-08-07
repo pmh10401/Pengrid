@@ -61,6 +61,12 @@ struct PaneSearchTraceMeasurement: Sendable {
     let transitions: [PaneSearchTransitionSample]
 }
 
+@MainActor
+final class PaneSearchTimingEventRecorder {
+    private(set) var events: [String] = []
+    func record(_ event: String) { events.append(event) }
+}
+
 func nearestRankStatistics(_ values: [Double]) -> PaneSearchStatistics {
     precondition(!values.isEmpty, "A benchmark scenario must have at least one recorded sample")
     let ordered = values.sorted()
@@ -91,13 +97,15 @@ final class PaneSearchPerformanceProbe {
     private let warmupCount: Int
     private let sampleCount: Int
     private let scenario: PaneSearchScenario
+    private let timingRecorder: PaneSearchTimingEventRecorder?
 
-    init(warmupCount: Int, sampleCount: Int, scenario: String) throws {
+    init(warmupCount: Int, sampleCount: Int, scenario: String, timingRecorder: PaneSearchTimingEventRecorder? = nil) throws {
         precondition(warmupCount >= 0)
         precondition(sampleCount > 0)
         self.warmupCount = warmupCount
         self.sampleCount = sampleCount
         self.scenario = try PaneSearchScenario(rawValue: scenario)
+        self.timingRecorder = timingRecorder
     }
 
     func measureSelectedScenario() async throws -> PaneSearchScenarioReport {
@@ -183,9 +191,12 @@ final class PaneSearchPerformanceProbe {
         let acceptedAt = try await observeVisibleItemsChange(
             in: session.pane,
             sampleIndex: sampleIndex,
-            boundary: "complete-load acceptance"
+            boundary: "complete-load acceptance",
+            recorder: timingRecorder,
         ) {
             start = clock.now
+            self.timingRecorder?.record("start")
+            self.timingRecorder?.record("operation")
             session.navigationTask = session.pane.beginNavigation(to: session.directory, recordHistory: false)
         }
         await session.navigationTask?.value
@@ -193,8 +204,10 @@ final class PaneSearchPerformanceProbe {
         try verifyAcceptedItems(session.pane.visibleItems, expected: expected)
         let acceptedSeconds = seconds(from: start!, to: acceptedAt)
         let tableStart = clock.now
+        self.timingRecorder?.record("table-begin")
         session.coordinator.apply(items: session.pane.visibleItems, selection: [], to: session.table)
         session.table.layoutSubtreeIfNeeded()
+        self.timingRecorder?.record("table-finish")
         let finish = clock.now
         let sample = PaneSearchTransitionSample(
             sampleIndex: sampleIndex,
@@ -254,27 +267,37 @@ final class PaneSearchPerformanceProbe {
         var start: ContinuousClock.Instant?
         if PaneFilenameFilter.normalize(fromQuery) == PaneFilenameFilter.normalize(toQuery) {
             start = clock.now
+            self.timingRecorder?.record("reuse-start")
+            self.timingRecorder?.record("reuse-operation")
             session.pane.updateFilterQuery(toQuery)
             let acceptedAt = clock.now
+            self.timingRecorder?.record("reuse-accepted")
             try verifyAcceptedItems(session.pane.visibleItems, expected: expected)
             let tableStart = clock.now
+            self.timingRecorder?.record("reuse-table-begin")
             session.coordinator.apply(items: session.pane.visibleItems, selection: [], to: session.table)
             session.table.layoutSubtreeIfNeeded()
+            self.timingRecorder?.record("reuse-table-finish")
             let finish = clock.now
             return PaneSearchTransitionSample(sampleIndex: sampleIndex, trace: trace.rawValue, fromQuery: fromQuery, toQuery: toQuery, expectedCount: expected.count, sortKey: session.pane.sort.key.rawValue, sortDirection: session.pane.sort.direction.rawValue, cardinality: expected.count, projectionPath: "accepted-projection-reuse", setterToAcceptanceSeconds: seconds(from: start!, to: acceptedAt), acceptanceToTableSeconds: seconds(from: tableStart, to: finish), endToEndSeconds: seconds(from: start!, to: finish), peakResidentBytes: residentBytes(), cancelledWorkerCandidateVisits: 0)
         }
         let acceptedAt = try await observeVisibleItemsChange(
             in: session.pane,
             sampleIndex: sampleIndex,
-            boundary: "\(trace.rawValue) query acceptance"
+            boundary: "\(trace.rawValue) query acceptance",
+            recorder: timingRecorder,
         ) {
             start = clock.now
+            self.timingRecorder?.record("start")
+            self.timingRecorder?.record("operation")
             session.pane.updateFilterQuery(toQuery)
         }
         try verifyAcceptedItems(session.pane.visibleItems, expected: expected)
         let tableStart = clock.now
+        self.timingRecorder?.record("table-begin")
         session.coordinator.apply(items: session.pane.visibleItems, selection: [], to: session.table)
         session.table.layoutSubtreeIfNeeded()
+        self.timingRecorder?.record("table-finish")
         let finish = clock.now
         return PaneSearchTransitionSample(
             sampleIndex: sampleIndex,
@@ -311,9 +334,12 @@ final class PaneSearchPerformanceProbe {
         let acceptedAt = try await observeVisibleItemsChange(
             in: session.pane,
             sampleIndex: sampleIndex,
-            boundary: "rapid-burst final-query acceptance"
+            boundary: "rapid-burst final-query acceptance",
+            recorder: timingRecorder,
         ) {
             start = clock.now
+            self.timingRecorder?.record("start")
+            self.timingRecorder?.record("operation")
             for query in queries {
                 tracker.publish(query)
                 session.pane.updateFilterQuery(query)
@@ -321,8 +347,10 @@ final class PaneSearchPerformanceProbe {
         }
         try verifyAcceptedItems(session.pane.visibleItems, expected: expected)
         let tableStart = clock.now
+        self.timingRecorder?.record("table-begin")
         session.coordinator.apply(items: session.pane.visibleItems, selection: [], to: session.table)
         session.table.layoutSubtreeIfNeeded()
+        self.timingRecorder?.record("table-finish")
         let finish = clock.now
         let sample = PaneSearchTransitionSample(
             sampleIndex: sampleIndex,
@@ -359,15 +387,20 @@ final class PaneSearchPerformanceProbe {
         let acceptedAt = try await observeVisibleItemsChange(
             in: session.pane,
             sampleIndex: sampleIndex,
-            boundary: "sort acceptance"
+            boundary: "sort acceptance",
+            recorder: timingRecorder,
         ) {
             start = clock.now
+            self.timingRecorder?.record("start")
+            self.timingRecorder?.record("operation")
             session.pane.sort = target
         }
         try verifyAcceptedItems(session.pane.visibleItems, expected: expected)
         let tableStart = clock.now
+        self.timingRecorder?.record("table-begin")
         session.coordinator.apply(items: session.pane.visibleItems, selection: [], to: session.table)
         session.table.layoutSubtreeIfNeeded()
+        self.timingRecorder?.record("table-finish")
         let finish = clock.now
         let sample = PaneSearchTransitionSample(
             sampleIndex: sampleIndex,
@@ -562,14 +595,17 @@ private func observeVisibleItemsChange(
     in pane: FilePaneState,
     sampleIndex: Int,
     boundary: String,
+    recorder: PaneSearchTimingEventRecorder? = nil,
     perform operation: @escaping @MainActor () -> Void
 ) async throws -> ContinuousClock.Instant {
     try await withCheckedThrowingContinuation { continuation in
         let gate = PaneSearchAcceptanceGate()
+        recorder?.record("armed")
         let previousHandler = pane.projectionAcceptanceHandler
         pane.projectionAcceptanceHandler = { _ in
             guard gate.claim() else { return }
             pane.projectionAcceptanceHandler = previousHandler
+            recorder?.record("accepted")
             continuation.resume(returning: ContinuousClock().now)
         }
         withObservationTracking {
@@ -578,6 +614,7 @@ private func observeVisibleItemsChange(
             Task { @MainActor in
                 guard gate.claim() else { return }
                 pane.projectionAcceptanceHandler = previousHandler
+                recorder?.record("accepted")
                 continuation.resume(returning: ContinuousClock().now)
             }
         }
@@ -614,7 +651,7 @@ private func queries(for trace: PaneSearchTrace) -> [String] {
     case .english: ["r", "re", "rep", "report", "report-1999"]
     case .korean: ["보", "보고", "보고서", "보고서-1998"]
     case .reverseDeletion: ["1999", "199", "19", "1", ""]
-    case .replacement: ["report-1999", "보고서-1998", " \n report-1999 \t"]
+    case .replacement: ["report-1999", " \n report-1999 \t", "보고서-1998"]
     case .completeLoad, .rapidBurst, .sortChange: preconditionFailure("Trace does not use sequential queries")
     }
 }

@@ -41,3 +41,59 @@ func paneSearchReleaseBenchmark() async throws {
         ProcessInfo.processInfo.environment["PENGRID_PANE_SEARCH_REPORT"]
     ))
 }
+
+@MainActor
+@Test func paneSearchTimingOrderCompleteLoad() async throws {
+    try await assertExactTimingOrder(for: "completeLoad")
+}
+
+@MainActor
+@Test func paneSearchTimingOrderRapidBurst() async throws {
+    try await assertExactTimingOrder(for: "rapidBurst")
+}
+
+@MainActor
+@Test func paneSearchTimingOrderSort() async throws {
+    try await assertExactTimingOrder(for: "sort:name:ascending:10000")
+}
+
+@MainActor
+@Test func paneSearchTimingOrderWhitespaceReuse() async throws {
+    let recorder = PaneSearchTimingEventRecorder()
+    _ = try await PaneSearchPerformanceProbe(
+        warmupCount: 0,
+        sampleCount: 1,
+        scenario: "replacement",
+        timingRecorder: recorder
+    ).measureSelectedScenario()
+    let expected = [
+        "reuse-start",
+        "reuse-operation",
+        "reuse-accepted",
+        "reuse-table-begin",
+        "reuse-table-finish"
+    ]
+    let starts = recorder.events.indices.filter { recorder.events[$0] == expected[0] }
+    #expect(starts.count == 1)
+    let reuseStart = try #require(starts.first)
+    #expect(Array(recorder.events[reuseStart...].prefix(expected.count)) == expected)
+}
+
+@MainActor
+private func assertExactTimingOrder(for scenario: String) async throws {
+    let recorder = PaneSearchTimingEventRecorder()
+    _ = try await PaneSearchPerformanceProbe(
+        warmupCount: 0,
+        sampleCount: 1,
+        scenario: scenario,
+        timingRecorder: recorder
+    ).measureSelectedScenario()
+    #expect(recorder.events == [
+        "armed",
+        "start",
+        "operation",
+        "accepted",
+        "table-begin",
+        "table-finish"
+    ])
+}

@@ -22,3 +22,13 @@ Status: DONE
 - Output: exit 0; one focused Swift Testing probe passed in 1.937 seconds.
 - Command: `script/benchmark_pane_search.sh --output docs/verification/2026-08-07-incremental-pane-search-baseline.json --replace`.
 - Output: regenerated aggregate contains `scenarioCount=48`, 48 reports, 30 recorded samples for every report, and 1,920 raw transitions.
+
+## Fix round 3 evidence
+
+- Added a test-only, default-nil timing event recorder to the pane-search probe. Setup and reset operations are intentionally excluded from recorded timing boundaries.
+- Initial RED command: `env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --disable-sandbox --no-parallel --filter paneSearchTimingOrder`.
+- Initial output: the four timing-order tests compiled and ran; complete-load and rapid-burst stopped after the armed event, while sort and replacement stopped before the required acceptance/table sequence.
+- GREEN command: `env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --disable-sandbox --no-parallel --filter paneSearchTimingOrder`.
+- GREEN output: exit 0; complete-load, rapid-burst, `sort:name:ascending:10000`, and multi-transition whitespace replacement all passed (4 tests, 6.197 seconds).
+- Regression command: `env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --disable-sandbox --no-parallel --filter paneSearchProbeMeasuresTheCurrentSetterAcceptanceAndTableBoundaries`.
+- Regression output: exit 0; one focused pane-search probe passed in 1.942 seconds. Existing protected-ZIP fixture warnings remain unrelated.
