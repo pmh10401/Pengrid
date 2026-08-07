@@ -181,8 +181,8 @@ struct PaneItemProjector: Sendable {
             search: nil,
             diagnostics: .init(
                 path: .fallbackFilterThenSort,
-                visitedASCIIPositions: filtered.visited,
-                visitedLocalizedPositions: 0
+                visitedASCIIPositions: filtered.visitedASCII,
+                visitedLocalizedPositions: filtered.visitedLocalized
             )
         )
     }
@@ -308,22 +308,30 @@ struct PaneItemProjector: Sendable {
         return (matches, visited)
     }
 
-    private func filterItems(_ items: [FileItem], query: String) async throws -> (items: [FileItem], visited: Int) {
+    private func filterItems(
+        _ items: [FileItem],
+        query: String
+    ) async throws -> (items: [FileItem], visitedASCII: Int, visitedLocalized: Int) {
         try Task.checkCancellation()
         var matches: [FileItem] = []
         matches.reserveCapacity(items.count)
-        var visited = 0
-        for item in items {
+        var visitedASCII = 0
+        var visitedLocalized = 0
+        for (index, item) in items.enumerated() {
             if query.isEmpty || item.name.localizedStandardContains(query) {
                 matches.append(item)
             }
-            visited += 1
-            if visited.isMultiple(of: PaneFilenameFilter.cancellationCheckStride) {
+            if PaneFilenameFilter.isPrintableASCII(item.url.lastPathComponent) {
+                visitedASCII += 1
+            } else {
+                visitedLocalized += 1
+            }
+            if (index + 1).isMultiple(of: PaneFilenameFilter.cancellationCheckStride) {
                 try Task.checkCancellation()
             }
         }
         try Task.checkCancellation()
-        return (matches, visited)
+        return (matches, visitedASCII, visitedLocalized)
     }
 
     private func makeProjection(

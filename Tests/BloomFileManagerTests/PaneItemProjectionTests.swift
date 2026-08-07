@@ -416,6 +416,27 @@ struct PaneItemProjectionTests {
         #expect(result.urlByEntryPath["/subset/entry.txt"] == URL(filePath: "/subset/entry.txt"))
     }
 
+    @Test func fallbackDiagnosticsSplitRawVisitsByURLLastPathComponentForEmptyAndNonemptyQueries() async throws {
+        let items = [
+            makeItem(name: "보고서.txt", url: URL(filePath: "/fallback/alpha.txt"), isDirectory: false, modifiedAt: nil, byteSize: 1, typeDescription: "Text"),
+            makeItem(name: "ascii.txt", url: URL(filePath: "/fallback/보고서.txt"), isDirectory: false, modifiedAt: nil, byteSize: 2, typeDescription: "Text"),
+            makeItem(name: "노트.txt", url: URL(filePath: "/fallback/beta.txt"), isDirectory: false, modifiedAt: nil, byteSize: 3, typeDescription: "Text"),
+            makeItem(name: "plain.txt", url: URL(filePath: "/fallback/Résumé.txt"), isDirectory: false, modifiedAt: nil, byteSize: 4, typeDescription: "Text")
+        ]
+        let projector = PaneItemProjector()
+
+        for query in ["", "txt"] {
+            let key = PaneProjectionKey(itemsRevision: 51, normalizedQuery: query, sort: FileSort())
+            let result = try await projector.projectFallback(items: items, key: key)
+            let oracle = key.sort.apply(to: PaneFilenameFilter(query: query).apply(to: items))
+
+            #expect(result.diagnostics.path == .fallbackFilterThenSort)
+            #expect(result.diagnostics.visitedASCIIPositions == 2)
+            #expect(result.diagnostics.visitedLocalizedPositions == 2)
+            #expect(result.items == oracle)
+        }
+    }
+
     @Test func randomizedActiveOrderProjectionMatchesTheFullOracleForOneThousandFilenameQueryCombinations() async throws {
         var generator = ProjectionTestGenerator(seed: 0xA11CE5EED)
         let projector = PaneItemProjector()
@@ -427,7 +448,11 @@ struct PaneItemProjectionTests {
             )
             let oldQuery = generator.asciiQuery(length: 1 + generator.nextInt(upperBound: 5))
             let newQuery = oldQuery + generator.asciiQuery(length: 1)
-            let items = generator.items(caseNumber: caseNumber, count: 1 + generator.nextInt(upperBound: 10))
+            let items = generator.interleavedNarrowingItems(
+                caseNumber: caseNumber,
+                oldQuery: oldQuery,
+                newQuery: newQuery
+            )
             let key = PaneProjectionKey(itemsRevision: UInt64(caseNumber), normalizedQuery: "", sort: sort)
             let activeOrder = try #require(await projector.buildActiveOrder(
                 items: items,
@@ -441,15 +466,20 @@ struct PaneItemProjectionTests {
                 activeOrder: activeOrder,
                 previousSearch: nil
             ))
+            let previousSearch = try #require(previous.search)
             let result = try await projector.projectActiveOrder(.init(
                 items: items,
                 directoryKey: "/random/\(caseNumber)",
                 key: PaneProjectionKey(itemsRevision: UInt64(caseNumber), normalizedQuery: newQuery, sort: sort),
                 activeOrder: activeOrder,
-                previousSearch: previous.search
+                previousSearch: previousSearch
             ))
             let oracle = sort.apply(to: PaneFilenameFilter(query: newQuery).apply(to: items))
 
+            #expect(previousSearch.matchedASCIIPositions.count == 4, "case \(caseNumber)")
+            #expect(result.diagnostics.path == .activeOrderNarrowedASCII, "case \(caseNumber)")
+            #expect(result.diagnostics.visitedASCIIPositions == previousSearch.matchedASCIIPositions.count, "case \(caseNumber)")
+            #expect(result.diagnostics.visitedLocalizedPositions == activeOrder.localizedFallbackPositions.count, "case \(caseNumber)")
             #expect(result.items.map(\.url.standardizedFileURL) == oracle.map(\.url.standardizedFileURL), "case \(caseNumber)")
             #expect(result.items == oracle, "case \(caseNumber)")
         }
@@ -542,20 +572,23 @@ private struct ProjectionTestGenerator {
         })
     }
 
-    mutating func items(caseNumber: Int, count: Int) -> [FileItem] {
-        let unsafePrefixes = ["보고서", "Re\u{301}sume\u{301}", "ß", "⑫", "🎉", "Ｆｕｌｌ"]
-        return (0..<count).map { index in
-            let ascii = asciiQuery(length: 1 + nextInt(upperBound: 12))
-            let name = nextBool()
-                ? "\(ascii).txt"
-                : "\(unsafePrefixes[nextInt(upperBound: unsafePrefixes.count)])-\(ascii).txt"
-            return makeItem(
+    func interleavedNarrowingItems(caseNumber: Int, oldQuery: String, newQuery: String) -> [FileItem] {
+        let names = [
+            "\(oldQuery)-old-only-a.txt",
+            "보고서-\(newQuery).txt",
+            "\(newQuery)-new-match-a.txt",
+            "Résumé-\(oldQuery).txt",
+            "\(oldQuery)-old-only-b.txt",
+            "\(newQuery)-new-match-b.txt"
+        ]
+        return names.enumerated().map { index, name in
+            makeItem(
                 name: name,
-                url: URL(filePath: "/random/\(caseNumber)/\(index)-\(name)"),
-                isDirectory: nextBool(),
-                modifiedAt: Date(timeIntervalSince1970: TimeInterval(nextInt(upperBound: 10_000))),
-                byteSize: Int64(nextInt(upperBound: 1_000)),
-                typeDescription: nextBool() ? "Text" : "Markdown"
+                url: URL(filePath: "/random/\(caseNumber)/\(index)"),
+                isDirectory: index.isMultiple(of: 2),
+                modifiedAt: Date(timeIntervalSince1970: TimeInterval(index)),
+                byteSize: Int64(index),
+                typeDescription: index.isMultiple(of: 2) ? "Folder" : "Text"
             )
         }
     }
