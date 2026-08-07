@@ -663,6 +663,23 @@ struct FilePaneStateTests {
         #expect(!pane.isFilterPresented)
     }
 
+    @Test func inlineRenameSelectionUsesVisibleEntryPathIndex() async {
+        let root = URL(filePath: "/rename-root", directoryHint: .isDirectory)
+        let listedURL = root.appending(path: "Report.txt")
+        let pane = FilePaneState(
+            directory: root,
+            listingService: StubDirectoryListingService(values: [
+                root: [makeItem(named: listedURL.lastPathComponent, in: root)]
+            ])
+        )
+        await pane.navigate(to: root, recordHistory: false)
+
+        let equivalentURL = URL(filePath: "\(root.path)/./Report.txt")
+        #expect(pane.selectForInlineRename(equivalentURL))
+        #expect(pane.selection == [listedURL])
+        #expect(pane.renameRequestID != nil)
+    }
+
     @Test func navigationClearsPaneFilterWithoutRestoringOldDirectorySelection() async {
         let root = URL(filePath: "/filter-root", directoryHint: .isDirectory)
         let next = root.appending(path: "Next", directoryHint: .isDirectory)

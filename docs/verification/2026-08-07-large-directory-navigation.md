@@ -110,3 +110,51 @@ new warning or test failure originated from this harness.
 For the complete raw samples, TDD RED/GREEN transcript, self-review, and
 concerns, see
 `.superpowers/sdd/2026-08-07-large-directory-navigation-optimization/task-1-report.md`.
+
+## Task 7 touched-path cleanup — 2026-08-07
+
+Task 7 preserved the app-facing listing, pane, and table APIs while removing
+only the named duplicated paths and moving table support declarations to their
+responsibility-focused source file. No compatibility, safety, selector,
+Codable, command-routing, archive, or task-lifecycle path was broadened or
+deleted.
+
+### Focused pre-refactor GREEN
+
+At baseline commit `e3b73ba03f3169fd8be53aad10619d6110df98e4`, before the Task 7
+edits, this required command passed:
+
+```text
+env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --disable-sandbox --no-parallel --filter 'FileTableSelectionTests|DropIntentTests|FileTableViewLifecycleTests|FilePaneStateTests|DirectoryListingServiceTests'
+```
+
+Result: 114 tests in 2 suites passed. SwiftPM emitted the existing 11
+unhandled ProtectedZIP fixture warnings and existing test warnings only.
+
+### Cleanup Evidence
+
+| Named path | Task 7 action and replacement | Covering evidence |
+| --- | --- | --- |
+| `FileTableSelection`, `InlineRenameSelection`, `FileTableDropRouting`, `InlineTextEditingEvent`, `PaneActivatingTableView` in `FileTableView.swift` | Moved verbatim to `Sources/BloomFileManager/Views/AppKit/FileTableSupport.swift`; private `Column` and all coordinator callbacks remain in `FileTableView.swift`. | `FileTableSelectionTests`, `DropIntentTests`, and `FileTableViewLifecycleTests` pass after extraction. |
+| Old computed `FilePaneState.visibleItems` | Already absent at Task 7 start: Task 5 replaced it with the stored accepted projection snapshot and `visibleIndexByURL`/`visibleURLByEntryPath`. No live compatibility path was deleted. | `PaneItemProjectionTests`, `FilePaneStateTests`, `PaneBatchBufferTests`, and repeated-read performance coverage. |
+| Second localized-type resource read | Already absent at Task 7 start: Task 3's one-pass `DirectoryEntryBatchBuilder`/`LiveDirectoryEntryMetadataReader` is the only metadata path. | `DirectoryListingServiceTests`, `CloudItemAvailabilityTests`, and full-suite listing coverage. |
+| Task 2 temporary serial builder | Already absent at Task 7 start: `LiveDirectoryListingService` delegates each collected batch to `batchBuilder.build(urls:)`. | `DirectoryListingServiceTests`, `LargeDirectoryTests`, and `CloudLocationScopedAccessTests`. |
+| Unconditional table reload branch | Already absent at Task 7 start: Task 6's planner selects explicit `reloadAll` only for its measured safe fallback; bounded plans and value reloads remain. | `FileTableUpdatePlannerTests` and `FileTableViewLifecycleTests`, including measured-threshold and real-`NSTableView` cases. |
+| Repeated visible URL/index scans | `FilePaneState` rename selection now resolves through the existing `visibleURLByEntryPath` projection index; accepted-selection intersection uses the stored `visibleIndexByURL` map. Coordinator rename completion uses its existing standardized identity index instead of scanning `items`. | `FilePaneStateTests.inlineRenameSelectionUsesVisibleEntryPathIndex`, `WorkspaceCommandTests`, `FileTableSelectionTests`, and `FileTableViewLifecycleTests`. |
+
+The following named paths were inspected and required no further deletion after
+Tasks 1–6: `LiveDirectoryListingService.swift` and
+`PaneItemProjection.swift`. Their optimized cursor/batch-builder and immutable
+projection/index implementations are live and were retained.
+
+### Task 7 post-refactor verification
+
+| Status | Command | Result |
+| --- | --- | --- |
+| PASS | `env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --disable-sandbox --no-parallel --filter 'FileTableSelectionTests\|DropIntentTests\|FileTableViewLifecycleTests\|FilePaneStateTests\|DirectoryListingServiceTests'` | 115 tests in 2 suites passed after 5.986 s. |
+| PASS | `env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --disable-sandbox --no-parallel --filter 'FileTableSelectionTests\|DropIntentTests\|FileTableViewLifecycleTests\|FilePaneStateTests\|DirectoryListingServiceTests\|PaneItemProjectionTests\|PaneBatchBufferTests\|FileTableUpdatePlannerTests'` | 135 tests in 5 suites passed after 5.993 s. |
+| PASS | `env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift build --disable-sandbox` | Build completed successfully. |
+| PASS | `env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --disable-sandbox --no-parallel` | 1,146 tests in 80 suites passed after 59.220 s. |
+
+The existing SwiftPM warning set (11 unhandled ProtectedZIP fixtures and
+pre-existing test warnings) remained unchanged.

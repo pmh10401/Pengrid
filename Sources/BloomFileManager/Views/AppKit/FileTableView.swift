@@ -1,65 +1,6 @@
 import AppKit
 import SwiftUI
 
-enum FileTableSelection {
-    static func urls(for indexes: IndexSet, items: [URL]) -> Set<URL> {
-        Set(indexes.compactMap { items.indices.contains($0) ? items[$0] : nil })
-    }
-}
-
-enum InlineRenameSelection {
-    static func range(for name: String, isDirectory: Bool) -> NSRange {
-        let fullRange = NSRange(name.startIndex..<name.endIndex, in: name)
-        guard !isDirectory,
-              let dot = name.lastIndex(of: "."),
-              dot != name.startIndex
-        else { return fullRange }
-        return NSRange(name.startIndex..<dot, in: name)
-    }
-}
-
-enum FileTableDropRouting {
-    static func destination(for row: Int, items: [FileItem], paneDirectory: URL) -> URL? {
-        if items.indices.contains(row) {
-            let item = items[row]
-            return item.isDirectory && !item.isPackage ? item.url : nil
-        }
-        return paneDirectory
-    }
-}
-
-enum InlineTextEditingEvent: Equatable {
-    case began(UUID)
-    case ended(UUID)
-}
-
-final class PaneActivatingTableView: NSTableView {
-    var onBecomeFirstResponder: (() -> Void)?
-    var onCancel: (() -> Bool)?
-
-    override func becomeFirstResponder() -> Bool {
-        let accepted = super.becomeFirstResponder()
-        if accepted { onBecomeFirstResponder?() }
-        return accepted
-    }
-
-    override func keyDown(with event: NSEvent) {
-        let commandModifiers: NSEvent.ModifierFlags = [.command, .control, .option, .shift]
-        if event.keyCode == 53,
-           event.modifierFlags.intersection(commandModifiers).isEmpty,
-           onCancel?() == true {
-            return
-        }
-        if event.charactersIgnoringModifiers == " ",
-           event.modifierFlags.intersection(commandModifiers).isEmpty,
-           NSApp.mainMenu?.performKeyEquivalent(with: event) == true {
-            return
-        }
-        super.keyDown(with: event)
-    }
-
-}
-
 struct FileTableView: NSViewRepresentable {
     let items: [FileItem]
     @Binding var selection: Set<URL>
@@ -591,17 +532,19 @@ extension FileTableView {
 
             let movement = (notification.userInfo?["NSTextMovement"] as? NSNumber)?.intValue
             if movement == NSTextMovement.cancel.rawValue {
-                if let item = items.first(where: { $0.url == source }) {
+                if let row = itemIndex(for: source), items.indices.contains(row) {
+                    let item = items[row]
                     textField.stringValue = item.name
                 }
                 parent.onDiscardRename()
                 return
             }
             let newName = textField.stringValue
-            guard let item = items.first(where: { $0.url == source }) else {
+            guard let row = itemIndex(for: source), items.indices.contains(row) else {
                 parent.onDiscardRename()
                 return
             }
+            let item = items[row]
             guard newName != item.name else {
                 parent.onDiscardRename()
                 return

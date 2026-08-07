@@ -151,18 +151,14 @@ final class FilePaneState {
 
     @discardableResult
     func selectForInlineRename(_ url: URL) -> Bool {
-        guard let listedURL = visibleItems.first(where: {
-            Self.entryPath($0.url) == Self.entryPath(url)
-        })?.url else { return false }
+        guard let listedURL = visibleURLByEntryPath[PaneEntryPath.normalize(url)] else { return false }
         selection = [listedURL]
         return requestInlineRename()
     }
 
     @discardableResult
     func selectForInlineRename(_ target: IdentifiedFileRequest) -> Bool {
-        guard let listedURL = visibleItems.first(where: {
-            Self.entryPath($0.url) == Self.entryPath(target.url)
-        })?.url else { return false }
+        guard let listedURL = visibleURLByEntryPath[PaneEntryPath.normalize(target.url)] else { return false }
         selection = [listedURL]
         return requestInlineRename(IdentifiedFileRequest(
             url: listedURL,
@@ -814,7 +810,7 @@ final class FilePaneState {
         visibleURLByEntryPath = projection.urlByEntryPath
         acceptedProjectionKey = projection.key
         if intersectsSelection {
-            selection.formIntersection(projection.indexByURL.keys)
+            selection.formIntersection(visibleIndexByURL.keys)
         }
     }
 
