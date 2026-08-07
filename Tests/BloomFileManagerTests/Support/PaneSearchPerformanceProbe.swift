@@ -645,6 +645,7 @@ private func observeVisibleItemsChange(
 ) async throws -> ContinuousClock.Instant {
     try await withCheckedThrowingContinuation { continuation in
         let gate = PaneSearchAcceptanceGate()
+        var observationInstalled = false
         let previousHandler = pane.projectionAcceptanceHandler
         pane.projectionAcceptanceHandler = { _ in
             guard gate.claim() else { return }
@@ -662,9 +663,10 @@ private func observeVisibleItemsChange(
                 continuation.resume(returning: ContinuousClock().now)
             }
         }
+        observationInstalled = true
         recorder?.recordArmed(
             handlerInstalled: pane.projectionAcceptanceHandler != nil,
-            observationInstalled: true
+            observationInstalled: observationInstalled
         )
         operation()
         Task {
