@@ -1,8 +1,11 @@
-# Large-directory navigation baseline verification — 2026-08-07
+# Large-directory navigation verification — 2026-08-07
 
-This is the measurement-only baseline for the large-directory navigation
-optimization plan. It does not claim a production optimization; later tasks
-must rerun the same probes after each behavior change.
+This document preserves the measurement-only Task 1 baseline, the Task 8
+automated after-samples, and the independent system-level File Provider
+evidence. Real in-app UI, accessibility, and spoken VoiceOver checks remain
+pending because the required GUI automation tool was unavailable. Automated or
+system-level passes below do not convert a measured performance miss or a
+pending in-app gate into a pass.
 
 ## Scope and production boundary
 
@@ -158,3 +161,235 @@ projection/index implementations are live and were retained.
 
 The existing SwiftPM warning set (11 unhandled ProtectedZIP fixtures and
 pre-existing test warnings) remained unchanged.
+
+## Task 8 final verification evidence — 2026-08-07
+
+### Measurement method and environment
+
+The after measurements use the exact Task 1 fixtures and test filters. Each
+command had a separate unrecorded warm-up, followed by three recorded process
+invocations. The 10,000-entry listing and the focused filter/sort/AppKit group
+remain separate processes, just as in Task 1; their resident-set peaks are not
+combined.
+
+Environment: macOS 26.5.2 (25F84), MacBook Pro Mac14,6, Apple M2 Max,
+12 cores, 32 GB RAM. SwiftPM used the full Xcode developer directory,
+`--disable-sandbox`, and `--no-parallel`.
+
+```text
+/usr/bin/time -l env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --disable-sandbox --no-parallel --filter tenThousandItemsArriveProgressivelyAndCompletely
+
+/usr/bin/time -l env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --disable-sandbox --no-parallel --filter 'listingPerformanceProbeReportsFirstBatchAndCompletion|filenameFilteringTenThousandLoadedItemsStaysBelowRegressionCeiling|fileSortingTenThousandLoadedItemsMeasuresEachSortKeyIndependently|tablePopulationTenThousandLoadedItemsMeasuresFirstRenderedNonemptyState'
+```
+
+Three samples are sufficient to show every raw value and a median, but not a
+statistically useful p95. Nearest-rank p95 would merely equal the maximum for
+three observations. The warm Task 1 listing reference has two process samples,
+and the Task 1 filter, sort, and table references have one observation each.
+Therefore no Task 8 p95 percentage or p95 acceptance claim is supported. The
+maximums are retained as raw observations, not relabelled as p95.
+
+### Raw optimized listing samples
+
+The inner values use `ContinuousClock`; process values use `/usr/bin/time -l`.
+
+| Run | First 256-entry batch | Complete 10,000-entry load | Test body | Process real | User | Sys | Maximum RSS |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 0.022753791 s | 0.541241125 s | 2.226 s | 3.02 s | 1.94 s | 2.42 s | 88,227,840 B |
+| 2 | 0.022794208 s | 0.553369750 s | 2.390 s | 3.10 s | 1.94 s | 2.55 s | 88,784,896 B |
+| 3 | 0.023412167 s | 0.567652292 s | 2.437 s | 3.23 s | 2.05 s | 2.64 s | 88,244,224 B |
+| Median | 0.022794208 s | 0.553369750 s | 2.390 s | 3.10 s | 1.94 s | 2.55 s | 88,244,224 B |
+| Maximum (not p95) | 0.023412167 s | 0.567652292 s | 2.437 s | 3.23 s | 2.05 s | 2.64 s | 88,784,896 B |
+
+The exact same 300-entry Task 1 probe also produced:
+
+| Run | First batch | Complete |
+| ---: | ---: | ---: |
+| 1 | 0.021602417 s | 0.023552209 s |
+| 2 | 0.021583500 s | 0.023547583 s |
+| 3 | 0.020959875 s | 0.022774500 s |
+| Median | 0.021583500 s | 0.023547583 s |
+| Maximum (not p95) | 0.021602417 s | 0.023552209 s |
+
+### Raw optimized filter and sort samples
+
+Every row preserved its Task 1 correctness count. These measurements time the
+same direct filter or sort operation as the baseline; they do not use cached
+repeated reads to hide recomputation cost.
+
+| Filter query | Result count | Run 1 | Run 2 | Run 3 | Median | Maximum (not p95) |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `1` | 3,439 | 0.034608042 s | 0.034430667 s | 0.034165917 s | 0.034430667 s | 0.034608042 s |
+| `19` | 299 | 0.025827625 s | 0.025633916 s | 0.025263708 s | 0.025633916 s | 0.025827625 s |
+| `199` | 20 | 0.025653791 s | 0.025446709 s | 0.025454875 s | 0.025454875 s | 0.025653791 s |
+| `1999` | 1 | 0.025097625 s | 0.025511000 s | 0.025484708 s | 0.025484708 s | 0.025511000 s |
+| `report` | 5,000 | 0.015067375 s | 0.014490833 s | 0.015103417 s | 0.015067375 s | 0.015103417 s |
+
+| Sort key | Result count | Run 1 | Run 2 | Run 3 | Median | Maximum (not p95) |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `name` | 10,000 | 0.084028792 s | 0.081897958 s | 0.083538292 s | 0.083538292 s | 0.084028792 s |
+| `modifiedAt` | 10,000 | 0.026454625 s | 0.025439416 s | 0.025293250 s | 0.025439416 s | 0.026454625 s |
+| `kind` | 10,000 | 0.140013459 s | 0.138132708 s | 0.139869292 s | 0.139869292 s | 0.140013459 s |
+| `size` | 10,000 | 0.028427125 s | 0.027822333 s | 0.027361292 s | 0.027822333 s | 0.028427125 s |
+
+### Raw optimized AppKit samples
+
+The Task 1 table probe is `@MainActor`. `Coordinator application` is therefore
+the measured main-actor application interval. The longest observed interval is
+0.000119250 seconds (0.119250 ms). No broader event-loop stall metric was added
+after the baseline, so this report does not claim one.
+
+| Run | First nonempty 10,000-row table state | Coordinator/main-actor application | Focused-process maximum RSS |
+| ---: | ---: | ---: | ---: |
+| 1 | 0.015323417 s | 0.000089625 s | 112,607,232 B |
+| 2 | 0.015487375 s | 0.000090833 s | 112,164,864 B |
+| 3 | 0.017147666 s | 0.000119250 s | 111,968,256 B |
+| Median | 0.015487375 s | 0.000090833 s | 112,164,864 B |
+| Maximum (not p95) | 0.017147666 s | 0.000119250 s | 112,607,232 B |
+
+No directly comparable Task 1 focused-process RSS was recorded, so the focused
+RSS rows have no percentage claim. The listing-process RSS comparison below
+uses only the matching Task 1 and Task 8 listing commands.
+
+### Median comparison and performance decision
+
+Negative delta is improvement. The Task 1 10,000-entry time reference uses the
+median of warm runs 2 and 3; the listing RSS reference is the median of those
+same two warm process values. Task 1 filter/sort/table values are explicitly
+single-observation references.
+
+| Metric | Task 1 reference | Task 8 median | Change | Gate |
+| --- | ---: | ---: | ---: | --- |
+| 10,000-entry first 256-entry batch | 0.059505709 s | 0.022794208 s | -61.69% | PASS: at least 30% faster |
+| 10,000-entry complete load | 1.095723375 s | 0.553369750 s | -49.50% | PASS: no greater than 10% regression |
+| 10,000-entry listing maximum RSS | 136,577,024 B | 88,244,224 B | -35.39% | PASS: no greater than 10% regression |
+| First nonempty AppKit table state | 0.023634959 s | 0.015487375 s | -34.47% | PASS against the single baseline observation |
+| Coordinator/main-actor application | 0.002811750 s | 0.000090833 s | -96.77% | PASS against the single baseline observation |
+| 300-entry first batch | 0.038616541 s | 0.021583500 s | -44.11% | Supporting evidence only |
+| 300-entry complete | 0.044044541 s | 0.023547583 s | -46.54% | Supporting evidence only |
+
+| Direct projection case | Task 1 reference | Task 8 median | Change | 30% target |
+| --- | ---: | ---: | ---: | --- |
+| Filter `1` | 0.036255542 s | 0.034430667 s | -5.03% | FAIL |
+| Filter `19` | 0.028535041 s | 0.025633916 s | -10.17% | FAIL |
+| Filter `199` | 0.026707083 s | 0.025454875 s | -4.69% | FAIL |
+| Filter `1999` | 0.028111416 s | 0.025484708 s | -9.34% | FAIL |
+| Filter `report` | 0.015781458 s | 0.015067375 s | -4.52% | FAIL |
+| Sort `name` | 0.084464042 s | 0.083538292 s | -1.10% | FAIL |
+| Sort `modifiedAt` | 0.025344375 s | 0.025439416 s | +0.37% regression | FAIL |
+| Sort `kind` | 0.142683459 s | 0.139869292 s | -1.97% | FAIL |
+| Sort `size` | 0.029108166 s | 0.027822333 s | -4.42% | FAIL |
+
+**Performance: FAIL overall.** First-batch, first-table, complete-load, and
+matching listing-memory gates pass. The approved 30 percent direct filter/sort
+target is missed by every case, and no variance revision is proposed from only
+three after samples and one baseline observation per case.
+
+The ordinary sorted-insert/no-reload completion gate also remains **FAIL**.
+`FileTableUpdatePlanner` has a measured production default of
+`maximumIncrementalChanges = 0`, so structural insertions choose `reloadAll`.
+Tests for `insertRows` inject a non-production threshold; the production-default
+test explicitly verifies full reload. Earlier 30-sample Task 6 threshold data
+showed positive thresholds were materially slower, but that justified the safe
+fallback, not a variance revision to the approved completion criterion.
+
+### Automated verification gates
+
+| Status | Area | Command and result |
+| --- | --- | --- |
+| PASS | Focused safety/navigation gate | Exact required filter: 189 tests in 9 reported suites passed after 8.830 s. |
+| PASS | Full suite | `env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --disable-sandbox --no-parallel`: 1,146 tests in 80 suites passed after 55.014 s. |
+| PASS | Release build | `env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift build --disable-sandbox -c release`: production build completed after 37.23 s. |
+
+The existing 11 unhandled ProtectedZIP fixture warnings remain. No external
+package dependency or persistent filesystem index is present. Listing and pane
+projection sources reference availability metadata and scoped access, but no
+cloud materializer or content-download API; `directoryListingDoesNotCallTheMaterializer`
+and the scoped-access lifetime tests passed.
+
+### Independent system File Provider evidence and GUI blocker
+
+The requested GUI automation surface (`node_repl` with
+`@oai/sky/computer-use`) was not callable for either the root agent or the
+independent verifier. Therefore no real Pengrid launch, in-app provider flow,
+accessibility-tree inspection, or spoken VoiceOver result is claimed. Both-pane
+loading, scrolling, Korean/English filter, every sort, navigation cancellation,
+refresh, selection, scroll restoration, focus, rename, and VoiceOver remain
+**PENDING/BLOCKED** on that unavailable tool.
+
+A full-Xcode debug build at source HEAD
+`80b48ab52abb3019a4ae144d84ceb47b354a57dd` succeeded and produced
+`.build/arm64-apple-macosx/debug/BloomFileManager`, with only the existing 11
+fixture warnings. The existing `dist` application is stale v1.3.0 build 5 and
+was not used. A process under `/Applications` was unrelated/stale. Neither is
+evidence of a Task 8 app launch.
+
+Independent read-only system checks found both configured File Provider roots:
+
+| Provider root | Access/domain evidence | Immediate children |
+| --- | --- | ---: |
+| `/Users/mac/Library/CloudStorage/GoogleDrive-pmh10401@gmail.com` | Readable/searchable, mode `0500`, File Provider domain xattr, `NSFileProviderManager.getIdentifierForUserVisibleFile`: `domainPresent=true`, `error=false` | 5 directories |
+| `/Users/mac/Library/CloudStorage/OneDrive-개인` | Readable/searchable, mode `0700`, File Provider domain xattr, `NSFileProviderManager.getIdentifierForUserVisibleFile`: `domainPresent=true`, `error=false` | 21 children |
+
+Metadata-only Foundation snapshots taken before and after a two-second interval
+were unchanged:
+
+| Provider | Before | After | Download indicators |
+| --- | --- | --- | --- |
+| Google Drive | 5 `Current` | 5 `Current` | `downloadingFlags=0`, `percentValues=0` in both snapshots |
+| OneDrive | 19 `Current`, 2 `NotDownloaded` | 19 `Current`, 2 `NotDownloaded` | `downloadingFlags=0`, `percentValues=0` in both snapshots |
+
+`fileproviderctl dump` reported four providers and zero action-engine
+operations. A BloomFileManager unified-log predicate for provider, download,
+and materialization produced no rows. No content read, preview, download, or
+materialization action was triggered by these checks.
+
+This supports **PASS for system-level metadata-only File Provider safety**. It
+does not prove the Pengrid in-app list/filter/sort/navigation flow, so the live
+in-app cloud gate remains **PENDING**.
+
+### Repository-wide cleanup audit input
+
+This is classification evidence for a separate cleanup plan, not deletion
+authorization. `Sources/BloomFileManager` contains 31,784 Swift lines and
+`Tests/BloomFileManagerTests` contains 46,624 Swift lines. A full Xcode
+`indexstore-db` executable was not available, so the audit records that limit
+instead of claiming index evidence.
+
+| Classification | Candidate/evidence | Decision for Task 8 |
+| --- | --- | --- |
+| `proven-unused` | `MZUnused` and `entryExists` have one exact repository reference each: their private declarations. Detailed runtime review is below. | Retain for a separate deletion plan; do not delete in this audit. |
+| `duplicate` | The same standardized, percent-decoded, trailing-slash-trimming URL-path body appears in `PaneEntryPath.normalize`, `FilePaneState.entryPath`, `PaneViewStateCache.key`, and `PaneNavigationHistory.path`; `FileOperationController.directoryKey` is also equivalent in shape. All have live references and distinct ownership today. | Consolidation candidate only. Prove cross-module semantics and run navigation, persistence, monitor, selection, Undo-overlap, and symlink tests before changing it. |
+| `compatibility` | `SmartSearchQuery.includeDirectories`, its `CodingKeys`/optional metadata decoder, `SmartSearchMetadataFilter.legacy`, and the two-argument `compressSelection` overload are exercised by legacy decode, unchanged stored-bytes, metadata round-trip, and callable-overload tests. | Retain. A migration and compatibility window are required before removal. |
+| `safety-boundary` | `legacyTransfer`; scoped-access leases; captured identity/fingerprint revalidation; Undo/quarantine/recovery paths; symlink boundaries; archive and protected-ZIP validation. | Retain. These are live fail-closed boundaries, not cleanup candidates. |
+| `live-large-file` | Largest production Swift files: `FileSystemAccess.swift` 2,529 lines, `ComparisonCoordinator.swift` 1,981, `FileOperationController.swift` 1,670, `FileOperationService.swift` 1,137, `FilePaneState.swift` 1,059, `FileTableView.swift` 952, and `ProtectedZIPOperationService.swift` 887. | Live responsibility-split backlog only; line count is not dead-code evidence. |
+| `test-support` | Test-only support includes `RecordingFileSystem.swift` 780 lines and the Task 1 `NavigationPerformanceProbe.swift` 74 lines. Exact references show they are used across operation, archive, cloud, listing, and performance tests. | Retain while those tests remain; production target does not consume them. |
+
+#### Deletion-candidate evidence
+
+| Candidate | Declaration and all exact references | Selector/Codable/reflection review | Relevant tests | Classification/next step |
+| --- | --- | --- | --- | --- |
+| `MZUnused` | `Sources/BloomFileManager/Services/ProtectedZIPEngine.swift:288`; exact whole-repository identifier search returns only that declaration. | Private generic free Swift function; not `@objc`, not a selector target, not a `CodingKey`/Codable member, not reflected, and not exported to the C protected-ZIP callback boundary. | Fresh full suite includes protected-ZIP engine, operation, end-to-end, model, routing, archive, cancellation, and recovery coverage; 1,146/1,146 passed. | `proven-unused`; propose isolated deletion plus focused protected-ZIP and full-suite rerun in a separate reviewed cleanup. |
+| `entryExists` | `Sources/BloomFileManager/Services/FileSystemAccess.swift:2123`; exact whole-repository identifier search returns only that declaration. | Private instance Swift method; not `@objc`, not a selector target, not Codable, not reflected, and not protocol witness/dynamic dispatch. | Fresh full suite includes `FileSystemAccessTests`, file mutation/transfer/Undo, archive, quarantine, symlink, and recovery coverage; 1,146/1,146 passed. | `proven-unused`; propose isolated deletion plus focused filesystem/safety and full-suite rerun in a separate reviewed cleanup. |
+
+Audit searches also reviewed private declarations with one/two textual
+occurrences, legacy/CodingKeys/selector/reflection sites, resource-value reads,
+`contentsOfDirectory`/enumerator calls, visible projection/index uses,
+`reloadData`/`insertRows`, and the largest source/test files. No regex result was
+deleted or treated as proof by itself.
+
+### Independent acceptance status
+
+| Area | Status | Evidence/blocker |
+| --- | --- | --- |
+| Performance | **FAIL** | Direct filter/sort 30% target and ordinary sorted-insert/no-reload gate are unmet; other measured performance sub-gates pass. |
+| Safety | **PASS (automated)** | Focused and full suites cover cancellation/generation races, selection, rename, scroll/focus restoration, refresh rollback, monitor races, identity, Undo, journal/quarantine, symlink, archive, and protected ZIP. |
+| Cloud | **PENDING overall** | Automated zero-materialization/scoped-access and independent system metadata-only Google Drive/OneDrive checks pass with no download indicators; the live Pengrid in-app flow is unverified because GUI automation was unavailable. |
+| Compatibility | **PASS (automated)** | Workspace persistence, legacy saved-search bytes/decoding, `FileSort` Codable, and legacy compression-overload tests pass. |
+| Full suite | **PASS** | 1,146 tests in 80 suites, 55.014 s. |
+| Release build | **PASS** | Production build completed in 37.23 s. |
+| UI | **PENDING/BLOCKED** | The GUI automation tool was unavailable; no real app UI, accessibility-tree, spoken VoiceOver, or in-app provider-flow pass is claimed. |
+
+Overall Task 8 acceptance is **not complete**: performance has two explicit
+misses, and real in-app UI/VoiceOver/File Provider checks remain pending.
+Nothing in this report revises the approved variance rule.
