@@ -179,18 +179,19 @@ final class PaneSearchPerformanceProbe {
         let items = paneSearchFixture()
         let session = makeSession(items: items)
         let clock = ContinuousClock()
-        let start = clock.now
+        var start: ContinuousClock.Instant?
         let acceptedAt = try await observeVisibleItemsChange(
             in: session.pane,
             sampleIndex: sampleIndex,
             boundary: "complete-load acceptance"
         ) {
+            start = clock.now
             session.navigationTask = session.pane.beginNavigation(to: session.directory, recordHistory: false)
         }
         await session.navigationTask?.value
         let expected = oracle(items: items, query: "", sort: FileSort())
         try verifyAcceptedItems(session.pane.visibleItems, expected: expected)
-        let acceptedSeconds = seconds(from: start, to: acceptedAt)
+        let acceptedSeconds = seconds(from: start!, to: acceptedAt)
         let tableStart = clock.now
         session.coordinator.apply(items: session.pane.visibleItems, selection: [], to: session.table)
         session.table.layoutSubtreeIfNeeded()
@@ -207,7 +208,7 @@ final class PaneSearchPerformanceProbe {
             projectionPath: "baseline-full-filter-sort",
             setterToAcceptanceSeconds: acceptedSeconds,
             acceptanceToTableSeconds: seconds(from: tableStart, to: finish),
-            endToEndSeconds: seconds(from: start, to: finish),
+            endToEndSeconds: seconds(from: start!, to: finish),
             peakResidentBytes: residentBytes(),
             cancelledWorkerCandidateVisits: 0
         )
@@ -254,11 +255,13 @@ final class PaneSearchPerformanceProbe {
         if PaneFilenameFilter.normalize(fromQuery) == PaneFilenameFilter.normalize(toQuery) {
             start = clock.now
             session.pane.updateFilterQuery(toQuery)
+            let acceptedAt = clock.now
             try verifyAcceptedItems(session.pane.visibleItems, expected: expected)
+            let tableStart = clock.now
             session.coordinator.apply(items: session.pane.visibleItems, selection: [], to: session.table)
             session.table.layoutSubtreeIfNeeded()
             let finish = clock.now
-            return PaneSearchTransitionSample(sampleIndex: sampleIndex, trace: trace.rawValue, fromQuery: fromQuery, toQuery: toQuery, expectedCount: expected.count, sortKey: session.pane.sort.key.rawValue, sortDirection: session.pane.sort.direction.rawValue, cardinality: expected.count, projectionPath: "accepted-projection-reuse", setterToAcceptanceSeconds: 0, acceptanceToTableSeconds: seconds(from: start!, to: finish), endToEndSeconds: seconds(from: start!, to: finish), peakResidentBytes: residentBytes(), cancelledWorkerCandidateVisits: 0)
+            return PaneSearchTransitionSample(sampleIndex: sampleIndex, trace: trace.rawValue, fromQuery: fromQuery, toQuery: toQuery, expectedCount: expected.count, sortKey: session.pane.sort.key.rawValue, sortDirection: session.pane.sort.direction.rawValue, cardinality: expected.count, projectionPath: "accepted-projection-reuse", setterToAcceptanceSeconds: seconds(from: start!, to: acceptedAt), acceptanceToTableSeconds: seconds(from: tableStart, to: finish), endToEndSeconds: seconds(from: start!, to: finish), peakResidentBytes: residentBytes(), cancelledWorkerCandidateVisits: 0)
         }
         let acceptedAt = try await observeVisibleItemsChange(
             in: session.pane,
@@ -304,12 +307,13 @@ final class PaneSearchPerformanceProbe {
         let finalQuery = queries[19]
         let expected = oracle(items: session.items, query: finalQuery, sort: session.pane.sort)
         let clock = ContinuousClock()
-        let start = clock.now
+        var start: ContinuousClock.Instant?
         let acceptedAt = try await observeVisibleItemsChange(
             in: session.pane,
             sampleIndex: sampleIndex,
             boundary: "rapid-burst final-query acceptance"
         ) {
+            start = clock.now
             for query in queries {
                 tracker.publish(query)
                 session.pane.updateFilterQuery(query)
@@ -330,9 +334,9 @@ final class PaneSearchPerformanceProbe {
             sortDirection: session.pane.sort.direction.rawValue,
             cardinality: expected.count,
             projectionPath: "baseline-counting-filter-sort",
-            setterToAcceptanceSeconds: seconds(from: start, to: acceptedAt),
+            setterToAcceptanceSeconds: seconds(from: start!, to: acceptedAt),
             acceptanceToTableSeconds: seconds(from: tableStart, to: finish),
-            endToEndSeconds: seconds(from: start, to: finish),
+            endToEndSeconds: seconds(from: start!, to: finish),
             peakResidentBytes: residentBytes(),
             cancelledWorkerCandidateVisits: tracker.cancelledCandidateVisits,
         )
@@ -351,12 +355,13 @@ final class PaneSearchPerformanceProbe {
         try await reset(session: session, query: query, sort: opposite(of: target), sampleIndex: sampleIndex)
         let expected = oracle(items: session.items, query: query, sort: target)
         let clock = ContinuousClock()
-        let start = clock.now
+        var start: ContinuousClock.Instant?
         let acceptedAt = try await observeVisibleItemsChange(
             in: session.pane,
             sampleIndex: sampleIndex,
             boundary: "sort acceptance"
         ) {
+            start = clock.now
             session.pane.sort = target
         }
         try verifyAcceptedItems(session.pane.visibleItems, expected: expected)
@@ -374,9 +379,9 @@ final class PaneSearchPerformanceProbe {
             sortDirection: direction.rawValue,
             cardinality: cardinality,
             projectionPath: "baseline-full-filter-sort",
-            setterToAcceptanceSeconds: seconds(from: start, to: acceptedAt),
+            setterToAcceptanceSeconds: seconds(from: start!, to: acceptedAt),
             acceptanceToTableSeconds: seconds(from: tableStart, to: finish),
-            endToEndSeconds: seconds(from: start, to: finish),
+            endToEndSeconds: seconds(from: start!, to: finish),
             peakResidentBytes: residentBytes(),
             cancelledWorkerCandidateVisits: 0
         )
