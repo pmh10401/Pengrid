@@ -20,6 +20,29 @@ struct PaneFilenameFilterTests {
         let matches = PaneFilenameFilter(query: "여행").apply(to: items)
         #expect(matches.map(\.name) == ["여행사진.heic", "여행계획.md"])
     }
+
+    @Test func localizedMatchingCounterexamplesPreventGlobalCandidateNarrowing() {
+        #expect(!"ß".localizedStandardContains("s"))
+        #expect("ß".localizedStandardContains("ss"))
+        #expect(!"⑫".localizedStandardContains("1"))
+        #expect("⑫".localizedStandardContains("12"))
+    }
+
+    @Test func printableASCIIPartitionUsesTheExactApprovedScalarRange() {
+        #expect(PaneFilenameFilter.isPrintableASCII("report-1999.txt"))
+        #expect(PaneFilenameFilter.isPrintableASCII(" !~"))
+        #expect(!PaneFilenameFilter.isPrintableASCII(""))
+        #expect(!PaneFilenameFilter.isPrintableASCII("보고서.txt"))
+        #expect(!PaneFilenameFilter.isPrintableASCII("Résumé.pdf"))
+    }
+
+    @Test func eligibleASCIIExtensionRequiresOneNormalizedASCIIAlphanumericSuffix() {
+        #expect(PaneFilenameFilter.isEligibleASCIIExtension(from: " report ", to: "report2"))
+        #expect(!PaneFilenameFilter.isEligibleASCIIExtension(from: "report", to: "report-"))
+        #expect(!PaneFilenameFilter.isEligibleASCIIExtension(from: "report", to: "reports2"))
+        #expect(!PaneFilenameFilter.isEligibleASCIIExtension(from: "보고", to: "보고서"))
+        #expect(!PaneFilenameFilter.isEligibleASCIIExtension(from: "", to: "a"))
+    }
 }
 
 private func filterItems(_ names: String...) -> [FileItem] {
