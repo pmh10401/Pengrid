@@ -208,6 +208,7 @@ struct FilePaneView: View {
             FileTableView(
                 items: state.visibleItems,
                 selection: $state.selection,
+                projectionToken: state.acceptedProjectionToken,
                 sort: state.sort,
                 directory: state.currentDirectory,
                 focusRequestID: state.focusRequestID,
@@ -218,6 +219,7 @@ struct FilePaneView: View {
                 onActivatePane: onActivate,
                 onOpen: open,
                 onSortChange: { state.sort = $0 },
+                onProjectionApplied: state.recordTableApplicationCompleted,
                 onCancel: { handleEscape() },
                 onFirstVisibleItemChange: state.recordFirstVisibleItem,
                 onConsumeScrollRequest: state.consumeScrollRestoreRequest,

@@ -134,6 +134,57 @@ import Testing
         #expect(await availability.requestedURLs() == [file.standardizedFileURL])
         #expect(await materializer.recordedCalls().isEmpty)
     }
+
+    @MainActor
+    @Test func filteringAndSortingOnlineOnlyGoogleDriveAndOneDriveMetadataDoesNotMaterialize() async {
+        let directory = URL(filePath: "/Cloud", directoryHint: .isDirectory)
+        let google = FileItem(
+            url: directory.appending(path: "Google Drive/report-19.txt"),
+            name: "report-19.txt",
+            isDirectory: false,
+            isPackage: false,
+            modifiedAt: nil,
+            byteSize: 19,
+            typeDescription: "Text",
+            availability: .onlineOnly
+        )
+        let oneDrive = FileItem(
+            url: directory.appending(path: "OneDrive/report-10.txt"),
+            name: "report-10.txt",
+            isDirectory: false,
+            isPackage: false,
+            modifiedAt: nil,
+            byteSize: 10,
+            typeDescription: "Text",
+            availability: .onlineOnly
+        )
+        let materializer = InMemoryCloudMaterializer()
+        let pane = FilePaneState(
+            directory: directory,
+            listingService: StubDirectoryListingService(values: [directory: [google, oneDrive]])
+        )
+
+        await pane.navigate(to: directory, recordHistory: false)
+        pane.updateFilterQuery("report")
+        #expect(await cloudAvailabilityWait { pane.visibleItems.map(\.name) == ["report-10.txt", "report-19.txt"] })
+        pane.sort = FileSort(key: .size, direction: .descending)
+        #expect(await cloudAvailabilityWait { pane.visibleItems.map(\.name) == ["report-19.txt", "report-10.txt"] })
+        #expect(pane.visibleItems.map(\.availability) == [.onlineOnly, .onlineOnly])
+        #expect(await materializer.recordedCalls().isEmpty)
+    }
+}
+
+@MainActor
+private func cloudAvailabilityWait(
+    timeout: Duration = .seconds(2),
+    condition: @escaping @MainActor () -> Bool
+) async -> Bool {
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: timeout)
+    while !condition(), clock.now < deadline {
+        await Task.yield()
+    }
+    return condition()
 }
 
 private actor StubCloudItemMetadataReader: CloudItemMetadataReading {

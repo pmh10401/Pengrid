@@ -106,6 +106,71 @@ struct CloudLocationScopedAccessTests {
         #expect(driver.stoppedURLs == [directory.url])
     }
 
+    @Test func filteringOnlineOnlyCloudMetadataDoesNotOpenAnotherScopeOrRequestContents() async throws {
+        let directory = try TemporaryDirectory()
+        defer { directory.remove() }
+        let driver = RecordingSecurityScopeDriver()
+        let coordinator = CloudLocationScopedAccessCoordinator(driver: driver)
+        coordinator.replaceManualRoots([directory.url])
+        let google = FileItem(
+            url: directory.url.appending(path: "Google Drive/online-report.txt"),
+            name: "online-report.txt",
+            isDirectory: false,
+            isPackage: false,
+            modifiedAt: nil,
+            byteSize: 1,
+            typeDescription: "Text",
+            availability: .onlineOnly
+        )
+        let oneDrive = FileItem(
+            url: directory.url.appending(path: "OneDrive/online-plan.txt"),
+            name: "online-plan.txt",
+            isDirectory: false,
+            isPackage: false,
+            modifiedAt: nil,
+            byteSize: 2,
+            typeDescription: "Text",
+            availability: .onlineOnly
+        )
+        let materializer = InMemoryCloudMaterializer()
+        try await coordinator.withAccess(to: directory.url) {}
+        await assertOnlineOnlyFilteringDoesNotUseScopedAccess(
+            directory: directory.url,
+            google: google,
+            oneDrive: oneDrive,
+            driver: driver,
+            materializer: materializer
+        )
+    }
+
+    @MainActor
+    private func assertOnlineOnlyFilteringDoesNotUseScopedAccess(
+        directory: URL,
+        google: FileItem,
+        oneDrive: FileItem,
+        driver: RecordingSecurityScopeDriver,
+        materializer: InMemoryCloudMaterializer
+    ) async {
+        let pane = FilePaneState(
+            directory: directory,
+            listingService: StubDirectoryListingService(values: [directory: [google, oneDrive]])
+        )
+
+        await pane.navigate(to: directory, recordHistory: false)
+        pane.updateFilterQuery("online")
+        #expect(await scopedAccessWait {
+            pane.visibleItems.map(\.name) == ["online-plan.txt", "online-report.txt"]
+        })
+        pane.sort = FileSort(key: .size, direction: .descending)
+        #expect(await scopedAccessWait {
+            pane.visibleItems.map(\.name) == ["online-plan.txt", "online-report.txt"]
+        })
+        #expect(pane.visibleItems.allSatisfy { $0.availability == .onlineOnly })
+        #expect(driver.startedURLs == [directory])
+        #expect(driver.stoppedURLs == [directory])
+        #expect(await materializer.recordedCalls().isEmpty)
+    }
+
     @Test func materializationHoldsAccessUntilPreparationFinishes() async throws {
         let directory = try TemporaryDirectory()
         defer { directory.remove() }

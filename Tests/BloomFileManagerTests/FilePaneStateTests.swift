@@ -568,7 +568,12 @@ struct FilePaneStateTests {
         pane.sort = FileSort(key: .size, direction: .descending)
 
         let expected = pane.sort.apply(to: PaneFilenameFilter(query: "report-1").apply(to: items))
-        #expect(await waitForPaneCondition { pane.visibleItems == expected })
+        #expect(await waitForPaneCondition {
+            pane.visibleItems == expected
+                && pane.acceptedProjectionDiagnostics.path == .sortedVisibleSubset
+                && pane.acceptedProjectionToken != acceptedToken
+        })
+        #expect(await projector.waitForActiveOrderBuildCount(2))
         #expect(await projector.sortedSubsetCount == 1)
         #expect(await projector.lastSubsetInputCount == 11)
         #expect(pane.acceptedProjectionDiagnostics.path == .sortedVisibleSubset)
@@ -588,13 +593,21 @@ struct FilePaneStateTests {
         await pane.navigate(to: directory, recordHistory: false)
         pane.updateFilterQuery("19")
         #expect(await waitForPaneCondition { pane.visibleItems.count == 299 })
+        let acceptedToken = pane.acceptedProjectionToken
 
         await projector.suspendNextActiveOrderBuild()
         pane.sort = FileSort(key: .size, direction: .descending)
+        let sortedSubset = pane.sort.apply(to: PaneFilenameFilter(query: "19").apply(to: items))
+        #expect(await waitForPaneCondition {
+            pane.visibleItems == sortedSubset
+                && pane.acceptedProjectionDiagnostics.path == .sortedVisibleSubset
+                && pane.acceptedProjectionToken != acceptedToken
+        })
         #expect(await projector.waitForWarmUpStart(count: 1))
 
         pane.updateFilterQuery("199")
 
+        #expect(await projector.waitForWarmUpCancellationCount(1))
         #expect(await projector.warmUpCancellationCount == 1)
         #expect(await waitForPaneCondition {
             pane.visibleItems == pane.sort.apply(to: PaneFilenameFilter(query: "199").apply(to: items))
@@ -1397,11 +1410,27 @@ private actor ControlledPaneItemProjector: PaneItemProjecting {
     }
 
     func waitForWarmUpStart(count: Int) async -> Bool {
-        for _ in 0..<10_000 {
+        for _ in 0..<200 {
             if warmUpStartCount >= count { return true }
-            await Task.yield()
+            try? await Task.sleep(for: .milliseconds(5))
         }
         return warmUpStartCount >= count
+    }
+
+    func waitForActiveOrderBuildCount(_ count: Int) async -> Bool {
+        for _ in 0..<200 {
+            if activeOrderBuildCount >= count { return true }
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        return activeOrderBuildCount >= count
+    }
+
+    func waitForWarmUpCancellationCount(_ count: Int) async -> Bool {
+        for _ in 0..<200 {
+            if warmUpCancellationCount >= count { return true }
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        return warmUpCancellationCount >= count
     }
 
     private func suspend(request: Int) async throws {

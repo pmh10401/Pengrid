@@ -236,6 +236,19 @@ func stalePasswordDismissalCannotCancelNewCoordinatorRequest() async throws {
     #expect(PaneFilterAccessibilityPresentation.resultCount(12) == "12 matching items")
 }
 
+@Test func paneFilterPreservesAccessibilityPresentationAndUsesThePaneFilterBinding() throws {
+    let implementation = try source(named: "Views/FilePaneView.swift")
+
+    #expect(implementation.contains("AccessibilityIdentifiers.leftPaneFilter"))
+    #expect(implementation.contains("AccessibilityIdentifiers.rightPaneFilter"))
+    #expect(implementation.contains("AccessibilityIdentifiers.leftPaneFilterResults"))
+    #expect(implementation.contains("AccessibilityIdentifiers.rightPaneFilterResults"))
+    #expect(implementation.contains("PaneFilterAccessibilityPresentation.fieldLabel(for: paneID)"))
+    #expect(implementation.contains("PaneFilterAccessibilityPresentation.resultCountLabel(for: paneID)"))
+    #expect(implementation.contains("PaneFilterAccessibilityPresentation.closeLabel(for: paneID)"))
+    #expect(implementation.contains("set: { state.updateFilterQuery($0) }"))
+}
+
 @Test func reduceMotionDisablesOnlyNonessentialAnimation() {
     #expect(AccessibilityMotionPresentation.allowsNonessentialAnimation(reduceMotion: false))
     #expect(!AccessibilityMotionPresentation.allowsNonessentialAnimation(reduceMotion: true))

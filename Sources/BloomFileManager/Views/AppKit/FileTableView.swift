@@ -4,6 +4,7 @@ import SwiftUI
 struct FileTableView: NSViewRepresentable {
     let items: [FileItem]
     @Binding var selection: Set<URL>
+    let projectionToken: PaneProjectionToken?
     let sort: FileSort
     let directory: URL
     let focusRequestID: UUID?
@@ -15,6 +16,7 @@ struct FileTableView: NSViewRepresentable {
     let onActivatePane: () -> Void
     let onOpen: (FileItem) -> Void
     let onSortChange: (FileSort) -> Void
+    let onProjectionApplied: (PaneProjectionToken) -> Void
     let onCancel: () -> Bool
     let onFirstVisibleItemChange: (URL?) -> Void
     let onConsumeScrollRequest: (UUID) -> Void
@@ -37,6 +39,7 @@ struct FileTableView: NSViewRepresentable {
     init(
         items: [FileItem],
         selection: Binding<Set<URL>>,
+        projectionToken: PaneProjectionToken? = nil,
         sort: FileSort = FileSort(),
         directory: URL = URL(filePath: "/", directoryHint: .isDirectory),
         focusRequestID: UUID? = nil,
@@ -50,6 +53,7 @@ struct FileTableView: NSViewRepresentable {
         onActivatePane: @escaping () -> Void,
         onOpen: @escaping (FileItem) -> Void,
         onSortChange: @escaping (FileSort) -> Void,
+        onProjectionApplied: @escaping (PaneProjectionToken) -> Void = { _ in },
         onCancel: @escaping () -> Bool = { false },
         onFirstVisibleItemChange: @escaping (URL?) -> Void = { _ in },
         onConsumeScrollRequest: @escaping (UUID) -> Void = { _ in },
@@ -71,6 +75,7 @@ struct FileTableView: NSViewRepresentable {
     ) {
         self.items = items
         _selection = selection
+        self.projectionToken = projectionToken
         self.sort = sort
         self.directory = directory
         self.focusRequestID = focusRequestID
@@ -82,6 +87,7 @@ struct FileTableView: NSViewRepresentable {
         self.onActivatePane = onActivatePane
         self.onOpen = onOpen
         self.onSortChange = onSortChange
+        self.onProjectionApplied = onProjectionApplied
         self.onCancel = onCancel
         self.onFirstVisibleItemChange = onFirstVisibleItemChange
         self.onConsumeScrollRequest = onConsumeScrollRequest
@@ -177,6 +183,7 @@ struct FileTableView: NSViewRepresentable {
         coordinator.applyScrollRequest(to: tableView)
         coordinator.reportFirstVisibleItem(in: tableView)
         coordinator.applyFocusRequest(to: tableView)
+        coordinator.notifyProjectionAppliedIfNeeded(projectionToken)
     }
 
     static func dismantleNSView(_ scrollView: NSScrollView, coordinator: Coordinator) {
@@ -264,6 +271,7 @@ extension FileTableView {
         private var isInlineEditingActive = false
         private var inlineEditingToken: UUID?
         private var isPreservingInlineEditing = false
+        private var lastAppliedProjectionToken: PaneProjectionToken?
 
         private struct InlineEditingSnapshot {
             let identity: URL
@@ -365,6 +373,17 @@ extension FileTableView {
                   window.makeFirstResponder(tableView)
             else { return }
             lastHandledFocusRequestID = requestID
+        }
+
+        func notifyProjectionAppliedIfNeeded(_ token: PaneProjectionToken?) {
+            guard let token else { return }
+            guard lastAppliedProjectionToken != token else { return }
+            if let lastAppliedProjectionToken,
+               !token.isNewer(than: lastAppliedProjectionToken) {
+                return
+            }
+            lastAppliedProjectionToken = token
+            parent.onProjectionApplied(token)
         }
 
         func reportFirstVisibleItem(in tableView: NSTableView) {

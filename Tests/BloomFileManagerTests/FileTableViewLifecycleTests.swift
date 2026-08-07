@@ -1316,6 +1316,118 @@ struct FileTableViewLifecycleTests {
         #expect((19...21).contains(index))
     }
 
+    @Test func projectionApplicationWaitsForTheCompleteTableUpdateAndReportsEachNewestTokenOnce() throws {
+        let item = makeTableItem(named: "unchanged.txt", in: URL(filePath: "/table"))
+        let first = PaneProjectionToken(navigationGeneration: 1, projectionGeneration: 1)
+        let second = PaneProjectionToken(navigationGeneration: 1, projectionGeneration: 2)
+        var applied: [PaneProjectionToken] = []
+        var view = FileTableView(
+            items: [item],
+            selection: .constant([]),
+            projectionToken: first,
+            onActivatePane: {},
+            onOpen: { _ in },
+            onSortChange: { _ in },
+            onProjectionApplied: { applied.append($0) }
+        )
+        let coordinator = view.makeCoordinator()
+        let table = NSTableView()
+        table.addTableColumn(NSTableColumn(identifier: NSUserInterfaceItemIdentifier("name")))
+
+        coordinator.apply(sort: view.sort, to: table)
+        coordinator.apply(items: view.items, selection: [], to: table)
+        coordinator.applyScrollRequest(to: table)
+        coordinator.reportFirstVisibleItem(in: table)
+        coordinator.applyFocusRequest(to: table)
+        #expect(applied.isEmpty)
+        coordinator.notifyProjectionAppliedIfNeeded(first)
+
+        view = FileTableView(
+            items: [item],
+            selection: .constant([]),
+            projectionToken: second,
+            onActivatePane: {},
+            onOpen: { _ in },
+            onSortChange: { _ in },
+            onProjectionApplied: { applied.append($0) }
+        )
+        coordinator.parent = view
+        coordinator.apply(sort: view.sort, to: table)
+        coordinator.apply(items: view.items, selection: [], to: table)
+        coordinator.applyScrollRequest(to: table)
+        coordinator.reportFirstVisibleItem(in: table)
+        coordinator.applyFocusRequest(to: table)
+        coordinator.notifyProjectionAppliedIfNeeded(second)
+        coordinator.notifyProjectionAppliedIfNeeded(second)
+
+        #expect(applied == [first, second])
+    }
+
+    @Test func staleProjectionTokenCannotReportAfterANewerTableApplication() {
+        let item = makeTableItem(named: "item.txt", in: URL(filePath: "/table"))
+        let stale = PaneProjectionToken(navigationGeneration: 1, projectionGeneration: 1)
+        let newest = PaneProjectionToken(navigationGeneration: 1, projectionGeneration: 2)
+        var applied: [PaneProjectionToken] = []
+        var view = FileTableView(
+            items: [item],
+            selection: .constant([]),
+            projectionToken: newest,
+            onActivatePane: {},
+            onOpen: { _ in },
+            onSortChange: { _ in },
+            onProjectionApplied: { applied.append($0) }
+        )
+        let coordinator = view.makeCoordinator()
+
+        coordinator.notifyProjectionAppliedIfNeeded(newest)
+        view = FileTableView(
+            items: [item],
+            selection: .constant([]),
+            projectionToken: stale,
+            onActivatePane: {},
+            onOpen: { _ in },
+            onSortChange: { _ in },
+            onProjectionApplied: { applied.append($0) }
+        )
+        coordinator.parent = view
+        coordinator.notifyProjectionAppliedIfNeeded(stale)
+
+        #expect(applied == [newest])
+    }
+
+    @Test func paneProjectionTraceOrdersSetterSchedulingAcceptanceAndOneTableApplication() async throws {
+        let directory = URL(filePath: "/trace", directoryHint: .isDirectory)
+        let item = makeTableItem(named: "report.txt", in: directory)
+        let pane = FilePaneState(
+            directory: directory,
+            listingService: StubDirectoryListingService(values: [directory: [item]])
+        )
+        let recorder = PaneProjectionTraceRecorder()
+        pane.projectionTraceRecorder = recorder
+        await pane.navigate(to: directory, recordHistory: false)
+        let initialToken = try #require(pane.acceptedProjectionToken)
+        recorder.events.removeAll()
+
+        pane.updateFilterQuery("report")
+        #expect(await waitForTablePaneCondition {
+            pane.visibleItems == [item] && pane.acceptedProjectionToken != initialToken
+        })
+        let token = try #require(pane.acceptedProjectionToken)
+        pane.recordTableApplicationCompleted(token)
+
+        #expect(recorder.events.count == 4)
+        #expect(recorder.events[0] == .setterEntry(query: "report"))
+        guard case let .requestScheduled(scheduledToken, scheduledKey) = recorder.events[1] else {
+            Issue.record("expected the search projection to record its scheduled token")
+            return
+        }
+        #expect(scheduledToken == token)
+        #expect(scheduledKey.normalizedQuery == "report")
+        #expect(scheduledKey.sort == FileSort())
+        #expect(recorder.events[2] == .aggregateAccepted(token, scheduledKey))
+        #expect(recorder.events[3] == .tableApplied(token))
+    }
+
     @Test func scrollRestorationPinsTopAnchorToFirstVisibleRow() throws {
         let fixture = try scrollRestorationFixture(anchorIndex: 0, initialY: 300)
 
@@ -1467,6 +1579,15 @@ struct FileTableViewLifecycleTests {
         scroll.contentView.scroll(to: NSPoint(x: 0, y: initialY))
         scroll.reflectScrolledClipView(scroll.contentView)
         return (coordinator, scroll, table)
+    }
+}
+
+@MainActor
+private final class PaneProjectionTraceRecorder: PaneProjectionTraceRecording {
+    var events: [PaneProjectionTraceEvent] = []
+
+    func record(_ event: PaneProjectionTraceEvent) {
+        events.append(event)
     }
 }
 

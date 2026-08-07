@@ -40,6 +40,23 @@ struct LivePaneItemProjector: PaneItemProjecting {
 struct PaneProjectionToken: Equatable, Sendable {
     let navigationGeneration: UInt64
     let projectionGeneration: UInt64
+
+    func isNewer(than other: Self) -> Bool {
+        navigationGeneration > other.navigationGeneration
+            || (navigationGeneration == other.navigationGeneration
+                && projectionGeneration > other.projectionGeneration)
+    }
+}
+
+enum PaneProjectionTraceEvent: Equatable, Sendable {
+    case setterEntry(query: String)
+    case requestScheduled(PaneProjectionToken, PaneProjectionKey)
+    case aggregateAccepted(PaneProjectionToken, PaneProjectionKey)
+    case tableApplied(PaneProjectionToken)
+}
+
+@MainActor protocol PaneProjectionTraceRecording: AnyObject {
+    func record(_ event: PaneProjectionTraceEvent)
 }
 
 struct PaneProjectionRequest: Sendable {
@@ -128,6 +145,7 @@ final class FilePaneState {
     private var warmUpGeneration: UInt64 = 0
     private var acceptedProjectionState: AcceptedPaneProjectionState
     var projectionAcceptanceHandler: (@MainActor (PaneProjectionKey) -> Void)?
+    var projectionTraceRecorder: (any PaneProjectionTraceRecording)?
     private var batchBuffer = PaneBatchBuffer()
     private let batchSleeper: any PaneBatchSleeping
     private let batchFlushDelay: Duration
@@ -190,9 +208,15 @@ final class FilePaneState {
     }
 
     func updateFilterQuery(_ query: String) {
+        projectionTraceRecorder?.record(.setterEntry(query: query))
         guard query != filterQuery else { return }
         filterQuery = query
         scheduleProjection()
+    }
+
+    func recordTableApplicationCompleted(_ token: PaneProjectionToken) {
+        guard acceptedProjectionToken == token else { return }
+        projectionTraceRecorder?.record(.tableApplied(token))
     }
 
     func dismissFiltering() {
@@ -805,6 +829,7 @@ final class FilePaneState {
             navigationGeneration: navigationGeneration,
             projectionGeneration: generation
         )
+        projectionTraceRecorder?.record(.requestScheduled(token, key))
         let directoryKey = Self.entryPath(directory)
         let worker = Task.detached(priority: .userInitiated) {
             try await Self.routeProjection(
@@ -943,6 +968,7 @@ final class FilePaneState {
             navigationGeneration: navigationGeneration,
             projectionGeneration: generation
         )
+        projectionTraceRecorder?.record(.requestScheduled(token, key))
         let routed: RoutedPaneProjection
         do {
             routed = try await awaitRoutedProjectionWorker(
@@ -1000,6 +1026,7 @@ final class FilePaneState {
                 navigationGeneration: navigationGeneration,
                 projectionGeneration: generation
             )
+            projectionTraceRecorder?.record(.requestScheduled(token, key))
             let routed: RoutedPaneProjection
             do {
                 routed = try await awaitRoutedProjectionWorker(
@@ -1180,6 +1207,7 @@ final class FilePaneState {
             diagnostics: projection.diagnostics
         )
         acceptedProjectionState = accepted
+        projectionTraceRecorder?.record(.aggregateAccepted(token, projection.key))
         validatePendingRenameSelection()
         projectionAcceptanceHandler?(projection.key)
     }
