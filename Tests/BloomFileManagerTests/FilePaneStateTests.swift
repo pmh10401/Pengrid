@@ -10,10 +10,93 @@ struct FilePaneStateTests {
         let pane = FilePaneState(directory: directory, listingService: StubDirectoryListingService(values: [directory: [item]]))
         var observed = false
         pane.projectionAcceptanceHandler = { _ in
-            observed = pane.visibleItems == [item] && pane.visibleIndexByURL[item.url] == 0
+            observed = pane.visibleItems == [item]
+                && pane.visibleIndexByURL[item.url] == 0
+                && pane.selection.isEmpty
+                && pane.acceptedProjectionToken != nil
+                && pane.acceptedProjectionDiagnostics.path == .fallbackFilterThenSort
         }
         await pane.navigate(to: directory, recordHistory: false)
         #expect(observed)
+    }
+
+    @Test func acceptedPaneProjectionStateReplacesOnlyTheRequestedAggregateMembers() {
+        // Catches a projection aggregate replacement that accidentally drops
+        // indexes, immutable metadata, or the current selection.
+        let directory = URL(filePath: "/accepted-projection-state", directoryHint: .isDirectory)
+        let item = makeItem(named: "visible.txt", in: directory)
+        let key = PaneProjectionKey(itemsRevision: 3, normalizedQuery: "visible", sort: .init())
+        let token = PaneProjectionToken(navigationGeneration: 7, projectionGeneration: 11)
+        let diagnostics = PaneProjectionDiagnostics(
+            path: .activeOrderFullScan,
+            visitedASCIIPositions: 1,
+            visitedLocalizedPositions: 0
+        )
+        let state = AcceptedPaneProjectionState(
+            directoryKey: PaneEntryPath.normalize(directory),
+            key: key,
+            token: token,
+            visibleItems: [item],
+            indexByURL: [item.url.standardizedFileURL: 0],
+            urlByEntryPath: [PaneEntryPath.normalize(item.url): item.url],
+            selection: [item.url],
+            activeOrder: nil,
+            search: nil,
+            diagnostics: diagnostics
+        )
+
+        let clearedSelection = state.replacing(selection: [])
+        let replacementMetadata = state.replacing(activeOrder: nil, search: nil)
+
+        #expect(clearedSelection.selection.isEmpty)
+        #expect(clearedSelection.visibleItems == [item])
+        #expect(clearedSelection.indexByURL == [item.url.standardizedFileURL: 0])
+        #expect(clearedSelection.urlByEntryPath == [PaneEntryPath.normalize(item.url): item.url])
+        #expect(clearedSelection.key == key)
+        #expect(clearedSelection.token == token)
+        #expect(clearedSelection.diagnostics == diagnostics)
+        #expect(replacementMetadata == state)
+    }
+
+    @Test func filteredOutPendingRenameIsCancelledByTheAcceptedSelectionReplacement() async {
+        // Catches a projection publication that changes membership without
+        // running the existing pending-rename identity validation.
+        let directory = URL(filePath: "/filtered-rename", directoryHint: .isDirectory)
+        let selected = makeItem(named: "selected.txt", in: directory)
+        let other = makeItem(named: "other.txt", in: directory)
+        let pane = FilePaneState(
+            directory: directory,
+            listingService: StubDirectoryListingService(values: [directory: [selected, other]])
+        )
+        await pane.navigate(to: directory, recordHistory: false)
+        pane.selection = [selected.url]
+        #expect(pane.requestInlineRename())
+
+        pane.updateFilterQuery("other")
+
+        #expect(await waitForPaneCondition {
+            pane.visibleItems == [other]
+                && pane.selection.isEmpty
+                && pane.pendingRenameTarget == nil
+                && pane.renameRequestID == nil
+        })
+    }
+
+    @Test func acceptProjectionPublishesOneAggregateInsteadOfIndependentProjectionFields() throws {
+        // This deliberately protects the atomic-publication boundary specified
+        // for the pane, where a partial assignment exposes mixed rows/indexes.
+        let source = try String(contentsOf: filePaneStateSourceURL(), encoding: .utf8)
+        let body = try #require(
+            source.components(separatedBy: "private func acceptProjection(").dropFirst().first?
+                .components(separatedBy: "private func replaceAcceptedProjectionMetadata").first
+        )
+        let assignments = body.components(separatedBy: "acceptedProjectionState =").count - 1
+
+        #expect(assignments == 1)
+        #expect(!body.contains("visibleItems ="))
+        #expect(!body.contains("visibleIndexByURL ="))
+        #expect(!body.contains("visibleURLByEntryPath ="))
+        #expect(!body.contains("acceptedProjectionKey ="))
     }
     @Test func navigationMaintainsIndependentHistoryAndClearsSelection() async {
         let home = URL(filePath: "/private/test-home")
@@ -435,11 +518,15 @@ struct FilePaneStateTests {
         #expect(await waitForPaneCondition { pane.visibleItems == [beta] })
         #expect(await projector.hasCompleted(request: 2))
         #expect(!(await projector.hasCompleted(request: 1)))
+        let acceptedToken = pane.acceptedProjectionToken
+        let acceptedDiagnostics = pane.acceptedProjectionDiagnostics
 
         await projector.resumeProjection(request: 1)
         #expect(await waitForProjectionCompletion(projector, request: 1))
         #expect(pane.visibleItems == [beta])
         #expect(pane.visibleIndexByURL == [beta.url.standardizedFileURL: 0])
+        #expect(pane.acceptedProjectionToken == acceptedToken)
+        #expect(pane.acceptedProjectionDiagnostics == acceptedDiagnostics)
     }
 
     @Test func cancelledLoadRejectsItsPendingBatchFlush() async {
@@ -497,6 +584,8 @@ struct FilePaneStateTests {
         await control.finish(in: directory, request: 0)
         await initialLoad.value
         pane.selection = [old.url]
+        let acceptedToken = pane.acceptedProjectionToken
+        let acceptedDiagnostics = pane.acceptedProjectionDiagnostics
 
         let refresh = Task { await pane.refresh() }
         await control.waitForStart(in: directory, count: 2)
@@ -512,6 +601,8 @@ struct FilePaneStateTests {
         #expect(pane.visibleItems == [old])
         #expect(pane.visibleIndexByURL == [old.url.standardizedFileURL: 0])
         #expect(pane.selection == [old.url])
+        #expect(pane.acceptedProjectionToken == acceptedToken)
+        #expect(pane.acceptedProjectionDiagnostics == acceptedDiagnostics)
         #expect(pane.errorMessage != nil)
     }
 
@@ -1122,4 +1213,12 @@ private func makeItem(named name: String, byteSize: Int64, in directory: URL) ->
         byteSize: byteSize,
         typeDescription: "Text"
     )
+}
+
+private func filePaneStateSourceURL() -> URL {
+    URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .appending(path: "Sources/BloomFileManager/Stores/FilePaneState.swift")
 }

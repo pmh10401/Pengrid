@@ -69,15 +69,25 @@ struct NavigationProductivityPerformanceTests {
         await pane.navigate(to: directory, recordHistory: false)
         let clock = ContinuousClock()
         var observedRows = 0
+        var observedTokens = 0
+        var observedFallbackDiagnostics = 0
 
         let elapsed = clock.measure {
             for _ in 0..<100 {
                 observedRows += pane.visibleItems.count
                 observedRows += pane.visibleIndexByURL.count
+                if pane.acceptedProjectionToken != nil {
+                    observedTokens += 1
+                }
+                if pane.acceptedProjectionDiagnostics.path == .fallbackFilterThenSort {
+                    observedFallbackDiagnostics += 1
+                }
             }
         }
 
         #expect(observedRows == 2_000_000)
+        #expect(observedTokens == 100)
+        #expect(observedFallbackDiagnostics == 100)
         #expect(elapsed < .seconds(5), "stored pane projection reads exceeded the hang ceiling")
         print("navigation-pane-projection repeatedReads=100 elapsed=\(elapsed)")
     }

@@ -11,6 +11,54 @@ struct LivePaneItemProjector: PaneItemProjecting {
     }
 }
 
+struct PaneProjectionToken: Equatable, Sendable {
+    let navigationGeneration: UInt64
+    let projectionGeneration: UInt64
+}
+
+struct AcceptedPaneProjectionState: Equatable, Sendable {
+    let directoryKey: String
+    let key: PaneProjectionKey?
+    let token: PaneProjectionToken?
+    let visibleItems: [FileItem]
+    let indexByURL: [URL: Int]
+    let urlByEntryPath: [String: URL]
+    let selection: Set<URL>
+    let activeOrder: ActiveOrderSnapshot?
+    let search: AcceptedSearchSnapshot?
+    let diagnostics: PaneProjectionDiagnostics
+
+    func replacing(selection: Set<URL>) -> Self {
+        Self(
+            directoryKey: directoryKey,
+            key: key,
+            token: token,
+            visibleItems: visibleItems,
+            indexByURL: indexByURL,
+            urlByEntryPath: urlByEntryPath,
+            selection: selection,
+            activeOrder: activeOrder,
+            search: search,
+            diagnostics: diagnostics
+        )
+    }
+
+    func replacing(activeOrder: ActiveOrderSnapshot?, search: AcceptedSearchSnapshot?) -> Self {
+        Self(
+            directoryKey: directoryKey,
+            key: key,
+            token: token,
+            visibleItems: visibleItems,
+            indexByURL: indexByURL,
+            urlByEntryPath: urlByEntryPath,
+            selection: selection,
+            activeOrder: activeOrder,
+            search: search,
+            diagnostics: diagnostics
+        )
+    }
+}
+
 @MainActor @Observable
 final class FilePaneState {
     private let listingService: any DirectoryListingService
@@ -35,30 +83,28 @@ final class FilePaneState {
     private var firstVisibleItem: URL?
     private var itemsRevision: UInt64 = 0
     private var projectionGeneration: UInt64 = 0
-    private var acceptedProjectionKey: PaneProjectionKey?
+    private var acceptedProjectionState: AcceptedPaneProjectionState
     var projectionAcceptanceHandler: (@MainActor (PaneProjectionKey) -> Void)?
     private var batchBuffer = PaneBatchBuffer()
     private let batchSleeper: any PaneBatchSleeping
     private let batchFlushDelay: Duration
     private let projector: any PaneItemProjecting
-    private var visibleURLByEntryPath: [String: URL] = [:]
 
     private(set) var currentDirectory: URL
     private(set) var items: [FileItem] = []
-    private(set) var visibleItems: [FileItem] = []
-    private(set) var visibleIndexByURL: [URL: Int] = [:]
+    var visibleItems: [FileItem] { acceptedProjectionState.visibleItems }
+    var visibleIndexByURL: [URL: Int] { acceptedProjectionState.indexByURL }
+    private var visibleURLByEntryPath: [String: URL] { acceptedProjectionState.urlByEntryPath }
+    private var acceptedProjectionKey: PaneProjectionKey? { acceptedProjectionState.key }
+    var acceptedProjectionToken: PaneProjectionToken? { acceptedProjectionState.token }
+    var acceptedProjectionDiagnostics: PaneProjectionDiagnostics { acceptedProjectionState.diagnostics }
     var backHistory: [URL] { navigationHistory.backward }
     var forwardHistory: [URL] { navigationHistory.forward }
-    var selection: Set<URL> = [] {
-        didSet {
-            guard let pendingRenameTarget else { return }
-            let targetPath = Self.entryPath(pendingRenameTarget.url)
-            guard selection.count == 1,
-                  selection.contains(where: { Self.entryPath($0) == targetPath })
-            else {
-                clearPendingRename()
-                return
-            }
+    var selection: Set<URL> {
+        get { acceptedProjectionState.selection }
+        set {
+            acceptedProjectionState = acceptedProjectionState.replacing(selection: newValue)
+            validatePendingRenameSelection()
         }
     }
     var sort: FileSort {
@@ -186,6 +232,17 @@ final class FilePaneState {
         pendingRenameTarget = nil
     }
 
+    private func validatePendingRenameSelection() {
+        guard let pendingRenameTarget else { return }
+        let targetPath = Self.entryPath(pendingRenameTarget.url)
+        guard selection.count == 1,
+              selection.contains(where: { Self.entryPath($0) == targetPath })
+        else {
+            clearPendingRename()
+            return
+        }
+    }
+
     init(
         directory: URL,
         sort: FileSort = FileSort(),
@@ -200,6 +257,22 @@ final class FilePaneState {
             normalizedQuery: "",
             sort: sort
         )
+        let initialProjectionState = AcceptedPaneProjectionState(
+            directoryKey: Self.entryPath(directory),
+            key: initialProjectionKey,
+            token: nil,
+            visibleItems: [],
+            indexByURL: [:],
+            urlByEntryPath: [:],
+            selection: [],
+            activeOrder: nil,
+            search: nil,
+            diagnostics: .init(
+                path: .fallbackFilterThenSort,
+                visitedASCIIPositions: 0,
+                visitedLocalizedPositions: 0
+            )
+        )
         currentDirectory = directory
         self.sort = sort
         self.listingService = listingService
@@ -207,16 +280,12 @@ final class FilePaneState {
         self.batchSleeper = batchSleeper
         self.batchFlushDelay = batchFlushDelay
         self.projector = projector
-        acceptedProjectionKey = initialProjectionKey
+        acceptedProjectionState = initialProjectionState
         committedState = PaneSnapshot(
             directory: directory,
             items: [],
-            visibleItems: [],
-            visibleIndexByURL: [:],
-            visibleURLByEntryPath: [:],
-            acceptedProjectionKey: initialProjectionKey,
+            acceptedProjectionState: initialProjectionState,
             itemsRevision: 0,
-            selection: [],
             firstVisibleItem: nil,
             navigationHistory: PaneNavigationHistory(capacity: 100)
         )
@@ -289,15 +358,11 @@ final class FilePaneState {
         storeCurrentDirectoryViewState()
 
         currentDirectory = directory
-        selection.removeAll()
         firstVisibleItem = nil
         scrollRestoreRequest = nil
         clearPendingRename()
         items.removeAll(keepingCapacity: true)
-        visibleItems.removeAll(keepingCapacity: true)
-        visibleIndexByURL.removeAll(keepingCapacity: true)
-        visibleURLByEntryPath.removeAll(keepingCapacity: true)
-        acceptedProjectionKey = nil
+        acceptedProjectionState = emptyProjectionState(for: directory)
         itemsRevision &+= 1
         batchBuffer = PaneBatchBuffer()
         errorMessage = nil
@@ -549,8 +614,15 @@ final class FilePaneState {
         ), itemsRevision == previousRevision else { return }
         items = refreshedItems
         itemsRevision = replacementRevision
-        selection = Set(selectedPaths.compactMap { projection.urlByEntryPath[$0] })
-        acceptProjection(projection)
+        let restoredSelection = Set(selectedPaths.compactMap { projection.urlByEntryPath[$0]?.standardizedFileURL })
+        acceptProjection(
+            projection,
+            selection: restoredSelection,
+            token: .init(
+                navigationGeneration: navigationGeneration,
+                projectionGeneration: projectionGeneration
+            )
+        )
         errorMessage = preservedErrorMessage
         committedState = snapshot()
         finishRefresh(refreshID)
@@ -685,7 +757,14 @@ final class FilePaneState {
                 itemsRevision: revision,
                 projectionGeneration: generation
             ) {
-                self.acceptProjection(result, intersectsSelection: intersectsSelection)
+                self.acceptProjection(
+                    result,
+                    intersectsSelection: intersectsSelection,
+                    token: .init(
+                        navigationGeneration: navigationGeneration,
+                        projectionGeneration: generation
+                    )
+                )
             }
             self.finishScheduledProjection(generation: generation)
         }
@@ -723,7 +802,14 @@ final class FilePaneState {
                 projectionGeneration: generation
               )
         else { return }
-        acceptProjection(result, intersectsSelection: intersectsSelection)
+        acceptProjection(
+            result,
+            intersectsSelection: intersectsSelection,
+            token: .init(
+                navigationGeneration: navigationGeneration,
+                projectionGeneration: generation
+            )
+        )
     }
 
     private func stageRefreshProjection(
@@ -804,16 +890,63 @@ final class FilePaneState {
 
     private func acceptProjection(
         _ projection: PaneItemProjection,
-        intersectsSelection: Bool = true
+        intersectsSelection: Bool = true,
+        selection replacementSelection: Set<URL>? = nil,
+        token: PaneProjectionToken
     ) {
-        visibleItems = projection.items
-        visibleIndexByURL = projection.indexByURL
-        visibleURLByEntryPath = projection.urlByEntryPath
-        acceptedProjectionKey = projection.key
-        if intersectsSelection {
-            selection.formIntersection(visibleIndexByURL.keys)
+        let selectedVisibleIdentities: Set<URL>
+        if let replacementSelection {
+            selectedVisibleIdentities = Set(replacementSelection.map(\.standardizedFileURL))
+        } else if intersectsSelection {
+            selectedVisibleIdentities = Set(acceptedProjectionState.selection.map(\.standardizedFileURL))
+                .intersection(projection.indexByURL.keys)
+        } else {
+            selectedVisibleIdentities = acceptedProjectionState.selection
         }
+        let accepted = AcceptedPaneProjectionState(
+            directoryKey: Self.entryPath(currentDirectory),
+            key: projection.key,
+            token: token,
+            visibleItems: projection.items,
+            indexByURL: projection.indexByURL,
+            urlByEntryPath: projection.urlByEntryPath,
+            selection: selectedVisibleIdentities,
+            activeOrder: projection.activeOrder,
+            search: projection.search,
+            diagnostics: projection.diagnostics
+        )
+        acceptedProjectionState = accepted
+        validatePendingRenameSelection()
         projectionAcceptanceHandler?(projection.key)
+    }
+
+    private func replaceAcceptedProjectionMetadata(
+        activeOrder: ActiveOrderSnapshot?,
+        search: AcceptedSearchSnapshot?
+    ) {
+        acceptedProjectionState = acceptedProjectionState.replacing(
+            activeOrder: activeOrder,
+            search: search
+        )
+    }
+
+    private func emptyProjectionState(for directory: URL) -> AcceptedPaneProjectionState {
+        AcceptedPaneProjectionState(
+            directoryKey: Self.entryPath(directory),
+            key: nil,
+            token: nil,
+            visibleItems: [],
+            indexByURL: [:],
+            urlByEntryPath: [:],
+            selection: [],
+            activeOrder: nil,
+            search: nil,
+            diagnostics: .init(
+                path: .fallbackFilterThenSort,
+                visitedASCIIPositions: 0,
+                visitedLocalizedPositions: 0
+            )
+        )
     }
 
     private nonisolated static func project(
@@ -924,12 +1057,8 @@ final class FilePaneState {
         PaneSnapshot(
             directory: currentDirectory,
             items: items,
-            visibleItems: visibleItems,
-            visibleIndexByURL: visibleIndexByURL,
-            visibleURLByEntryPath: visibleURLByEntryPath,
-            acceptedProjectionKey: acceptedProjectionKey,
+            acceptedProjectionState: acceptedProjectionState,
             itemsRevision: itemsRevision,
-            selection: selection,
             firstVisibleItem: firstVisibleItem,
             navigationHistory: navigationHistory
         )
@@ -938,12 +1067,9 @@ final class FilePaneState {
     private func restore(_ snapshot: PaneSnapshot) {
         currentDirectory = snapshot.directory
         items = snapshot.items
-        visibleItems = snapshot.visibleItems
-        visibleIndexByURL = snapshot.visibleIndexByURL
-        visibleURLByEntryPath = snapshot.visibleURLByEntryPath
-        acceptedProjectionKey = snapshot.acceptedProjectionKey
+        acceptedProjectionState = snapshot.acceptedProjectionState
         itemsRevision = snapshot.itemsRevision
-        selection = snapshot.selection
+        validatePendingRenameSelection()
         firstVisibleItem = snapshot.firstVisibleItem.flatMap { anchor in
             snapshot.items.first {
                 Self.entryPath($0.url) == Self.entryPath(anchor)
@@ -1044,12 +1170,8 @@ private final class PaneTaskLifecycle: @unchecked Sendable {
 private struct PaneSnapshot {
     let directory: URL
     let items: [FileItem]
-    let visibleItems: [FileItem]
-    let visibleIndexByURL: [URL: Int]
-    let visibleURLByEntryPath: [String: URL]
-    let acceptedProjectionKey: PaneProjectionKey?
+    let acceptedProjectionState: AcceptedPaneProjectionState
     let itemsRevision: UInt64
-    let selection: Set<URL>
     let firstVisibleItem: URL?
     let navigationHistory: PaneNavigationHistory
 }
