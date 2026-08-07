@@ -26,25 +26,65 @@ struct FileTableUpdatePlannerTests {
 
     @Test func plannerInsertsWhenOldOrderIsSubsequence() {
         #expect(
-            FileTableUpdatePlanner().plan(
+            FileTableUpdatePlanner(maximumIncrementalChanges: 512).plan(
                 from: items(["b", "d"]),
                 to: items(["a", "b", "c", "d"])
             ) == .insert(IndexSet([0, 2]))
         )
     }
 
+    @Test func plannerFallsBackWhenInsertionAlsoChangesASurvivingRow() {
+        let old = items(["b", "d"])
+        let changedB = FileItem(
+            url: old[0].url,
+            name: "changed-b",
+            isDirectory: false,
+            isPackage: false,
+            modifiedAt: nil,
+            byteSize: 2,
+            typeDescription: "Changed File"
+        )
+
+        #expect(
+            FileTableUpdatePlanner(maximumIncrementalChanges: 512).plan(
+                from: old,
+                to: [item(name: "a", url: URL(filePath: "/table/a")), changedB, old[1]]
+            ) == .reloadAll
+        )
+    }
+
     @Test func plannerRemovesWhenNewOrderIsSubsequence() {
         #expect(
-            FileTableUpdatePlanner().plan(
+            FileTableUpdatePlanner(maximumIncrementalChanges: 512).plan(
                 from: items(["a", "b", "c", "d"]),
                 to: items(["b", "d"])
             ) == .remove(IndexSet([0, 2]))
         )
     }
 
+    @Test func plannerFallsBackWhenRemovalAlsoChangesASurvivingRow() {
+        let old = items(["a", "b", "c"])
+        let changedB = FileItem(
+            url: old[1].url,
+            name: "changed-b",
+            isDirectory: false,
+            isPackage: false,
+            modifiedAt: nil,
+            byteSize: 2,
+            typeDescription: "Changed File"
+        )
+
+        #expect(
+            FileTableUpdatePlanner(maximumIncrementalChanges: 512).plan(
+                from: old,
+                to: [changedB, old[2]]
+            ) == .reloadAll
+        )
+    }
+
     @Test func plannerBuildsSequentialMovesForPureReorder() {
         #expect(
-            FileTableUpdatePlanner().plan(
+            FileTableUpdatePlanner(maximumIncrementalChanges: 512).plan(
                 from: items(["a", "b", "c", "d"]),
                 to: items(["d", "b", "a", "c"])
             ) == .move([
@@ -66,7 +106,10 @@ struct FileTableUpdatePlannerTests {
             typeDescription: "File"
         )
 
-        #expect(FileTableUpdatePlanner().plan(from: old, to: [old[1], changedA]) == .reloadAll)
+        #expect(
+            FileTableUpdatePlanner(maximumIncrementalChanges: 512)
+                .plan(from: old, to: [old[1], changedA]) == .reloadAll
+        )
     }
 
     @Test func plannerFallsBackForMixedInsertionAndRemoval() {
@@ -79,7 +122,10 @@ struct FileTableUpdatePlannerTests {
     }
 
     @Test func plannerFallsBackForDuplicates() {
-        #expect(FileTableUpdatePlanner().plan(from: [], to: items(["a", "a"])) == .reloadAll)
+        #expect(
+            FileTableUpdatePlanner(maximumIncrementalChanges: 512)
+                .plan(from: [], to: items(["a", "a"])) == .reloadAll
+        )
     }
 
     @Test func plannerRejectsDuplicatesAfterURLStandardization() {
@@ -88,7 +134,10 @@ struct FileTableUpdatePlannerTests {
             item(name: "alias", url: URL(filePath: "/table/folder/../a"))
         ]
 
-        #expect(FileTableUpdatePlanner().plan(from: [], to: duplicateRows) == .reloadAll)
+        #expect(
+            FileTableUpdatePlanner(maximumIncrementalChanges: 512)
+                .plan(from: [], to: duplicateRows) == .reloadAll
+        )
     }
 
     @Test func plannerUsesStandardizedURLAsRowIdentity() {

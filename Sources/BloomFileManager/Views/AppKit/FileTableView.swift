@@ -322,6 +322,14 @@ extension FileTableView {
         private var editingURL: URL?
         private var isInlineEditingActive = false
         private var inlineEditingToken: UUID?
+        private var isPreservingInlineEditing = false
+
+        private struct InlineEditingSnapshot {
+            let identity: URL
+            let draft: String
+            let selectedRange: NSRange
+            let wasFirstResponder: Bool
+        }
 
         private static let modifiedDateFormatter: DateFormatter = {
             let formatter = DateFormatter()
@@ -347,6 +355,9 @@ extension FileTableView {
 
         func apply(items newItems: [FileItem], selection desiredSelection: Set<URL>, to tableView: NSTableView) {
             let updatePlan = updatePlanner.plan(from: items, to: newItems)
+            let inlineEditingSnapshot = updatePlan == .none
+                ? nil
+                : captureInlineEditing(in: tableView)
             let newItemIndexByIdentity = desiredSelection.isEmpty
                 ? nil
                 : Self.makeItemIndexByIdentity(for: newItems)
@@ -368,13 +379,20 @@ extension FileTableView {
             let tableHadFocus = requiresStableStateRestoration
                 && tableView.window?.firstResponder === tableView
             isApplyingSelection = true
-            defer { isApplyingSelection = false }
+            isPreservingInlineEditing = inlineEditingSnapshot != nil
+            defer {
+                isPreservingInlineEditing = false
+                isApplyingSelection = false
+            }
             items = newItems
             itemIndexByIdentity = newItemIndexByIdentity ?? [:]
             hasCompleteItemIndexByIdentity = newItemIndexByIdentity != nil || newItems.isEmpty
             apply(updatePlan, to: tableView)
             if tableView.selectedRowIndexes != desiredIndexes {
                 tableView.selectRowIndexes(desiredIndexes, byExtendingSelection: false)
+            }
+            if let inlineEditingSnapshot {
+                restoreInlineEditing(inlineEditingSnapshot, in: tableView)
             }
             restoreFirstVisibleIdentity(firstVisibleIdentity, in: tableView)
             if tableHadFocus,
@@ -556,6 +574,7 @@ extension FileTableView {
         }
 
         func controlTextDidEndEditing(_ notification: Notification) {
+            guard !isPreservingInlineEditing else { return }
             guard let textField = notification.object as? NSTextField,
                   let source = editingURL
             else { return }
@@ -753,6 +772,84 @@ extension FileTableView {
             }
         }
 
+        private func captureInlineEditing(in tableView: NSTableView) -> InlineEditingSnapshot? {
+            guard isInlineEditingActive,
+                  let identity = editingURL?.standardizedFileURL,
+                  let editor = tableView.window?.firstResponder as? NSTextView
+            else { return nil }
+            return InlineEditingSnapshot(
+                identity: identity,
+                draft: editor.string,
+                selectedRange: editor.selectedRange(),
+                wasFirstResponder: tableView.window?.firstResponder === editor
+            )
+        }
+
+        private func restoreInlineEditing(
+            _ snapshot: InlineEditingSnapshot,
+            in tableView: NSTableView
+        ) {
+            guard let row = itemIndex(for: snapshot.identity),
+                  let nameColumn = tableView.tableColumns.firstIndex(where: {
+                      $0.identifier == Column.name.identifier
+                  })
+            else {
+                discardUnrestorableInlineEditing(in: tableView)
+                return
+            }
+
+            editingURL = items[row].url
+            tableView.editColumn(nameColumn, row: row, with: nil, select: false)
+            guard let cell = tableView.view(
+                atColumn: nameColumn,
+                row: row,
+                makeIfNecessary: true
+            ) as? NSTableCellView,
+                  let textField = cell.textField
+            else {
+                discardUnrestorableInlineEditing(in: tableView)
+                return
+            }
+
+            textField.stringValue = snapshot.draft
+            var editor = tableView.currentEditor() as? NSTextView
+            if editor == nil {
+                textField.selectText(nil)
+                editor = textField.currentEditor() as? NSTextView
+            }
+            guard let editor else {
+                discardUnrestorableInlineEditing(in: tableView)
+                return
+            }
+
+            editor.string = snapshot.draft
+            editor.setSelectedRange(Self.clamped(snapshot.selectedRange, in: snapshot.draft))
+            if snapshot.wasFirstResponder,
+               tableView.window?.firstResponder !== editor {
+                _ = tableView.window?.makeFirstResponder(editor)
+            }
+        }
+
+        private func discardUnrestorableInlineEditing(in tableView: NSTableView) {
+            _ = tableView.window?.makeFirstResponder(nil)
+            editingURL = nil
+            if isInlineEditingActive {
+                isInlineEditingActive = false
+                if let inlineEditingToken {
+                    parent.onInlineEditingEvent(.ended(inlineEditingToken))
+                }
+                inlineEditingToken = nil
+            }
+            parent.onDiscardRename()
+        }
+
+        private static func clamped(_ range: NSRange, in text: String) -> NSRange {
+            let length = (text as NSString).length
+            let location = min(max(0, range.location), length)
+            let remaining = length - location
+            return NSRange(location: location, length: min(max(0, range.length), remaining))
+        }
+
         private func apply(_ plan: FileTableUpdatePlan, to tableView: NSTableView) {
             switch plan {
             case .none:
@@ -822,9 +919,7 @@ extension FileTableView {
             result.reserveCapacity(items.count)
             for (index, item) in items.enumerated() {
                 let identity = item.url.standardizedFileURL
-                if result[identity] == nil {
-                    result[identity] = index
-                }
+                result[identity] = index
             }
             return result
         }

@@ -52,13 +52,13 @@ struct FileTableViewLifecycleTests {
         let table = RenameRecordingTableView()
         table.addTableColumn(NSTableColumn(identifier: NSUserInterfaceItemIdentifier("name")))
         coordinator.apply(items: workspace.left.visibleItems, selection: [item.url], to: table)
-        await Task.yield()
         let textField = NSTextField(string: item.name)
         #expect(coordinator.control(textField, textShouldBeginEditing: NSTextView()))
         coordinator.controlTextDidBeginEditing(Notification(
             name: NSControl.textDidBeginEditingNotification,
             object: textField
         ))
+        await Task.yield()
         textField.stringValue = "Renamed Folder"
         coordinator.controlTextDidEndEditing(textEditingNotification(textField, movement: .return))
         while controller.isRunning { await Task.yield() }
@@ -107,10 +107,6 @@ struct FileTableViewLifecycleTests {
         let tableView = RenameRecordingTableView()
         tableView.addTableColumn(NSTableColumn(identifier: NSUserInterfaceItemIdentifier("name")))
         coordinator.apply(items: [item], selection: [source], to: tableView)
-        await Task.yield()
-
-        #expect(workspace.left.renameRequestID == nil)
-        #expect(workspace.left.pendingRenameTarget?.url == source)
         let textField = NSTextField(string: item.name)
         let editor = NSTextView()
         #expect(coordinator.control(textField, textShouldBeginEditing: editor))
@@ -118,6 +114,10 @@ struct FileTableViewLifecycleTests {
             name: NSControl.textDidBeginEditingNotification,
             object: textField
         ))
+        await Task.yield()
+
+        #expect(workspace.left.renameRequestID == nil)
+        #expect(workspace.left.pendingRenameTarget?.url == source)
         textField.stringValue = destination.lastPathComponent
         coordinator.controlTextDidEndEditing(textEditingNotification(textField, movement: .return))
         while controller.isRunning { await Task.yield() }
@@ -186,7 +186,7 @@ struct FileTableViewLifecycleTests {
         let oldItems = ["b", "d"].map { makeTableItem(named: $0, in: directory) }
         let newItems = ["a", "b", "c", "d"].map { makeTableItem(named: $0, in: directory) }
         let selection = SelectionRecorder(value: [])
-        let coordinator = makeTableView(items: oldItems, selection: selection).makeCoordinator()
+        let coordinator = makeIncrementalCoordinator(items: oldItems, selection: selection)
         let tableView = UpdateRecordingTableView()
 
         coordinator.apply(items: newItems, selection: [], to: tableView)
@@ -196,6 +196,19 @@ struct FileTableViewLifecycleTests {
             .insert(IndexSet([0, 2])),
             .end
         ])
+    }
+
+    @Test func defaultCoordinatorUsesMeasuredFullReloadForStructuralChanges() {
+        let directory = URL(filePath: "/table", directoryHint: .isDirectory)
+        let oldItems = [makeTableItem(named: "b", in: directory)]
+        let newItems = [makeTableItem(named: "a", in: directory)] + oldItems
+        let selection = SelectionRecorder(value: [])
+        let coordinator = makeTableView(items: oldItems, selection: selection).makeCoordinator()
+        let tableView = UpdateRecordingTableView()
+
+        coordinator.apply(items: newItems, selection: [], to: tableView)
+
+        #expect(tableView.updateCalls == [.reloadAll])
     }
 
     @Test func changedRowValueReloadsOnlyThatRow() {
@@ -210,7 +223,7 @@ struct FileTableViewLifecycleTests {
             typeDescription: "File"
         )]
         let selection = SelectionRecorder(value: [])
-        let coordinator = makeTableView(items: oldItems, selection: selection).makeCoordinator()
+        let coordinator = makeIncrementalCoordinator(items: oldItems, selection: selection)
         let tableView = UpdateRecordingTableView()
         tableView.addTableColumn(NSTableColumn(identifier: NSUserInterfaceItemIdentifier("name")))
 
@@ -224,7 +237,7 @@ struct FileTableViewLifecycleTests {
         let oldItems = ["a", "b", "c", "d"].map { makeTableItem(named: $0, in: directory) }
         let newItems = [oldItems[3], oldItems[1], oldItems[0], oldItems[2]]
         let selection = SelectionRecorder(value: [])
-        let coordinator = makeTableView(items: oldItems, selection: selection).makeCoordinator()
+        let coordinator = makeIncrementalCoordinator(items: oldItems, selection: selection)
         let tableView = UpdateRecordingTableView()
 
         coordinator.apply(items: newItems, selection: [], to: tableView)
@@ -242,7 +255,7 @@ struct FileTableViewLifecycleTests {
         let oldItems = ["a", "b", "c", "d"].map { makeTableItem(named: $0, in: directory) }
         let newItems = [oldItems[1], oldItems[3]]
         let selection = SelectionRecorder(value: [])
-        let coordinator = makeTableView(items: oldItems, selection: selection).makeCoordinator()
+        let coordinator = makeIncrementalCoordinator(items: oldItems, selection: selection)
         let tableView = UpdateRecordingTableView()
 
         coordinator.apply(items: newItems, selection: [], to: tableView)
@@ -254,12 +267,90 @@ struct FileTableViewLifecycleTests {
         ])
     }
 
+    @Test func realTableRemovalProducesTheNewRowsAndCellValues() throws {
+        let directory = URL(filePath: "/table-real", directoryHint: .isDirectory)
+        let oldItems = ["a", "b", "c", "d"].map { makeTableItem(named: $0, in: directory) }
+        let timingTable = DataSourceTimingTableView()
+        let fixture = try makeRealTableFixture(
+            items: oldItems,
+            tableView: timingTable,
+            maximumIncrementalChanges: 512
+        )
+        defer { fixture.window.orderOut(nil) }
+        let newItems = [oldItems[1], oldItems[3]]
+
+        fixture.coordinator.apply(items: newItems, selection: [], to: fixture.tableView)
+        fixture.tableView.layoutSubtreeIfNeeded()
+
+        #expect(fixture.tableView.numberOfRows == 2)
+        #expect(try visibleNames(in: fixture.tableView) == ["b", "d"])
+        #expect(timingTable.dataSourceRowCounts == [2])
+        #expect(timingTable.dataSourceFirstNames == ["b"])
+    }
+
+    @Test func realTableSequentialMovesProduceTheNewRowsAndCellValues() throws {
+        let directory = URL(filePath: "/table-real", directoryHint: .isDirectory)
+        let oldItems = ["a", "b", "c", "d"].map { makeTableItem(named: $0, in: directory) }
+        let timingTable = DataSourceTimingTableView()
+        let fixture = try makeRealTableFixture(
+            items: oldItems,
+            tableView: timingTable,
+            maximumIncrementalChanges: 512
+        )
+        defer { fixture.window.orderOut(nil) }
+        let newItems = [oldItems[3], oldItems[1], oldItems[0], oldItems[2]]
+
+        fixture.coordinator.apply(items: newItems, selection: [], to: fixture.tableView)
+        fixture.tableView.layoutSubtreeIfNeeded()
+
+        #expect(fixture.tableView.numberOfRows == 4)
+        #expect(try visibleNames(in: fixture.tableView) == ["d", "b", "a", "c"])
+        #expect(timingTable.dataSourceRowCounts == [4, 4])
+        #expect(timingTable.dataSourceFirstNames == ["d", "d"])
+    }
+
+    @Test func realTableSuppressesUpdateSelectionCallbacksThenReportsTheNextUserSelection() throws {
+        let directory = URL(filePath: "/table-real", directoryHint: .isDirectory)
+        let oldItems = ["a", "b", "c"].map { makeTableItem(named: $0, in: directory) }
+        let selection = SelectionRecorder(value: [oldItems[2].url])
+        var activationCount = 0
+        let fixture = try makeRealTableFixture(
+            items: oldItems,
+            selection: selection,
+            onActivatePane: { activationCount += 1 }
+        )
+        defer { fixture.window.orderOut(nil) }
+        fixture.coordinator.apply(
+            items: oldItems,
+            selection: [oldItems[2].url],
+            to: fixture.tableView
+        )
+        selection.writes.removeAll()
+        activationCount = 0
+
+        fixture.coordinator.apply(
+            items: [oldItems[1], oldItems[2]],
+            selection: [oldItems[2].url],
+            to: fixture.tableView
+        )
+
+        #expect(fixture.tableView.selectedRowIndexes == IndexSet(integer: 1))
+        #expect(selection.writes.isEmpty)
+        #expect(activationCount == 0)
+
+        fixture.tableView.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+
+        #expect(selection.value == [oldItems[1].url])
+        #expect(selection.writes == [[oldItems[1].url]])
+        #expect(activationCount == 1)
+    }
+
     @Test func ambiguousMixedChangeReloadsAllRowsExactlyOnce() {
         let directory = URL(filePath: "/table", directoryHint: .isDirectory)
         let oldItems = ["a", "b", "c"].map { makeTableItem(named: $0, in: directory) }
         let newItems = ["a", "d", "c"].map { makeTableItem(named: $0, in: directory) }
         let selection = SelectionRecorder(value: [])
-        let coordinator = makeTableView(items: oldItems, selection: selection).makeCoordinator()
+        let coordinator = makeIncrementalCoordinator(items: oldItems, selection: selection)
         let tableView = UpdateRecordingTableView()
 
         coordinator.apply(items: newItems, selection: [], to: tableView)
@@ -273,13 +364,37 @@ struct FileTableViewLifecycleTests {
         let newItems = ["a", "b", "c", "d"].map { makeTableItem(named: $0, in: directory) }
         let selectedAlias = URL(filePath: "/table/folder/../d")
         let selection = SelectionRecorder(value: [selectedAlias])
-        let coordinator = makeTableView(items: oldItems, selection: selection).makeCoordinator()
+        let coordinator = makeIncrementalCoordinator(items: oldItems, selection: selection)
         let tableView = UpdateRecordingTableView()
 
         coordinator.apply(items: newItems, selection: [selectedAlias], to: tableView)
 
         #expect(tableView.selectionRequests == [IndexSet(integer: 3)])
         #expect(selection.value == [selectedAlias])
+    }
+
+    @Test func duplicateReloadAllRestoresSelectionToTheLastStandardizedIdentity() {
+        let directory = URL(filePath: "/table", directoryHint: .isDirectory)
+        let oldItems = [makeTableItem(named: "old", in: directory)]
+        let first = makeTableItem(named: "a", in: directory)
+        let last = FileItem(
+            url: URL(filePath: "/table/folder/../a"),
+            name: "last-a",
+            isDirectory: false,
+            isPackage: false,
+            modifiedAt: nil,
+            byteSize: 1,
+            typeDescription: "File"
+        )
+        let selectedAlias = URL(filePath: "/table/other/../a")
+        let selection = SelectionRecorder(value: [selectedAlias])
+        let coordinator = makeIncrementalCoordinator(items: oldItems, selection: selection)
+        let tableView = UpdateRecordingTableView()
+
+        coordinator.apply(items: [first, last], selection: [selectedAlias], to: tableView)
+
+        #expect(tableView.updateCalls == [.reloadAll])
+        #expect(tableView.selectionRequests == [IndexSet(integer: 1)])
     }
 
     @Test func renameRequestResolvesAStandardizedSelectionIdentity() {
@@ -303,6 +418,39 @@ struct FileTableViewLifecycleTests {
         #expect(tableView.editRequests == [RenameEditRequest(column: 0, row: 0)])
     }
 
+    @Test func duplicateReloadAllStartsRenameAtTheLastStandardizedIdentity() {
+        let directory = URL(filePath: "/table", directoryHint: .isDirectory)
+        let oldItems = [makeTableItem(named: "old", in: directory)]
+        let first = makeTableItem(named: "a", in: directory)
+        let last = FileItem(
+            url: URL(filePath: "/table/folder/../a"),
+            name: "last-a",
+            isDirectory: false,
+            isPackage: false,
+            modifiedAt: nil,
+            byteSize: 1,
+            typeDescription: "File"
+        )
+        let selectedAlias = URL(filePath: "/table/other/../a")
+        let selection = SelectionRecorder(value: [selectedAlias])
+        let view = FileTableView(
+            items: [first, last],
+            selection: selection.binding,
+            renameRequestID: UUID(),
+            onActivatePane: {},
+            onOpen: { _ in },
+            onSortChange: { _ in }
+        )
+        let coordinator = makeIncrementalCoordinator(items: oldItems, selection: selection)
+        coordinator.parent = view
+        let tableView = RenameRecordingTableView()
+        tableView.addTableColumn(NSTableColumn(identifier: NSUserInterfaceItemIdentifier("name")))
+
+        coordinator.apply(items: [first, last], selection: [selectedAlias], to: tableView)
+
+        #expect(tableView.editRequests == [RenameEditRequest(column: 0, row: 1)])
+    }
+
     @Test func scrollRequestResolvesAStandardizedAnchorIdentity() {
         let item = makeTableItem(named: "a", in: URL(filePath: "/table"))
         let request = PaneScrollRequest(id: UUID(), anchor: URL(filePath: "/table/folder/../a"))
@@ -323,6 +471,66 @@ struct FileTableViewLifecycleTests {
         #expect(consumed == [request.id])
     }
 
+    @Test func duplicateReloadAllScrollRequestUsesTheLastStandardizedIdentity() throws {
+        let directory = URL(filePath: "/table-scroll", directoryHint: .isDirectory)
+        let oldItems = [makeTableItem(named: "old", in: directory)]
+        var newItems = (0..<30).map {
+            makeTableItem(named: "item-\($0)", in: directory)
+        }
+        let anchor = URL(filePath: "/table-scroll/target")
+        newItems[4] = FileItem(
+            url: anchor,
+            name: "first-target",
+            isDirectory: false,
+            isPackage: false,
+            modifiedAt: nil,
+            byteSize: 1,
+            typeDescription: "File"
+        )
+        newItems[15] = FileItem(
+            url: URL(filePath: "/table-scroll/folder/../target"),
+            name: "last-target",
+            isDirectory: false,
+            isPackage: false,
+            modifiedAt: nil,
+            byteSize: 1,
+            typeDescription: "File"
+        )
+        let request = PaneScrollRequest(
+            id: UUID(),
+            anchor: URL(filePath: "/table-scroll/other/../target")
+        )
+        let originalView = FileTableView(
+            items: oldItems,
+            selection: .constant([]),
+            onActivatePane: {},
+            onOpen: { _ in },
+            onSortChange: { _ in }
+        )
+        let coordinator = FileTableView.Coordinator(
+            parent: originalView,
+            updatePlanner: FileTableUpdatePlanner(maximumIncrementalChanges: 512)
+        )
+        let scrollView = originalView.makeScrollView(coordinator: coordinator)
+        scrollView.hasVerticalScroller = false
+        scrollView.frame = NSRect(x: 0, y: 0, width: 500, height: 140)
+        let tableView = try #require(scrollView.documentView as? NSTableView)
+        tableView.frame = NSRect(x: 0, y: 0, width: 500, height: 30 * 28)
+        coordinator.parent = FileTableView(
+            items: newItems,
+            selection: .constant([]),
+            scrollRequest: request,
+            onActivatePane: {},
+            onOpen: { _ in },
+            onSortChange: { _ in }
+        )
+
+        coordinator.apply(items: newItems, selection: [], to: tableView)
+        coordinator.applyScrollRequest(to: tableView)
+
+        #expect(tableView.rows(in: tableView.visibleRect).location == 15)
+    }
+
     @Test func insertionPreservesTheFirstVisibleRowByStableIdentity() throws {
         let directory = URL(filePath: "/table-scroll", directoryHint: .isDirectory)
         let oldItems = (0..<30).map {
@@ -336,7 +544,10 @@ struct FileTableViewLifecycleTests {
             onOpen: { _ in },
             onSortChange: { _ in }
         )
-        let coordinator = view.makeCoordinator()
+        let coordinator = FileTableView.Coordinator(
+            parent: view,
+            updatePlanner: FileTableUpdatePlanner(maximumIncrementalChanges: 512)
+        )
         let scrollView = view.makeScrollView(coordinator: coordinator)
         scrollView.hasVerticalScroller = false
         scrollView.frame = NSRect(x: 0, y: 0, width: 500, height: 140)
@@ -354,12 +565,218 @@ struct FileTableViewLifecycleTests {
         #expect(coordinator.items[updatedFirstRow].url.standardizedFileURL == originalFirstIdentity)
     }
 
+    @Test func duplicateReloadAllRestoresTheAnchorToTheLastStandardizedIdentity() throws {
+        let directory = URL(filePath: "/table-anchor", directoryHint: .isDirectory)
+        let oldItems = (0..<30).map {
+            makeTableItem(named: String(format: "item-%02d", $0), in: directory)
+        }
+        let view = FileTableView(
+            items: [],
+            selection: .constant([]),
+            onActivatePane: {},
+            onOpen: { _ in },
+            onSortChange: { _ in }
+        )
+        let coordinator = FileTableView.Coordinator(
+            parent: view,
+            updatePlanner: FileTableUpdatePlanner(maximumIncrementalChanges: 512)
+        )
+        let scrollView = view.makeScrollView(coordinator: coordinator)
+        scrollView.hasVerticalScroller = false
+        scrollView.frame = NSRect(x: 0, y: 0, width: 500, height: 140)
+        let tableView = try #require(scrollView.documentView as? NSTableView)
+        tableView.frame = NSRect(x: 0, y: 0, width: 500, height: 31 * 28)
+        coordinator.apply(items: oldItems, selection: [], to: tableView)
+        scrollView.contentView.scroll(to: NSPoint(x: 0, y: 10 * 28))
+        scrollView.reflectScrolledClipView(scrollView.contentView)
+        let firstVisibleRow = tableView.rows(in: tableView.visibleRect).location
+        let anchor = oldItems[firstVisibleRow]
+        var newItems = oldItems.filter { $0.url != anchor.url }
+        newItems.insert(FileItem(
+            url: anchor.url
+                .deletingLastPathComponent()
+                .appending(path: "folder/../\(anchor.url.lastPathComponent)"),
+            name: "first-anchor",
+            isDirectory: false,
+            isPackage: false,
+            modifiedAt: nil,
+            byteSize: 1,
+            typeDescription: "File"
+        ), at: 2)
+        newItems.insert(anchor, at: 20)
+
+        coordinator.apply(items: newItems, selection: [], to: tableView)
+
+        #expect(tableView.rows(in: tableView.visibleRect).location == 20)
+    }
+
+    @Test func activeInlineRenameSurvivesInsertionWithDraftSelectionAndResponder() throws {
+        let directory = URL(filePath: "/table-edit", directoryHint: .isDirectory)
+        let oldItems = ["b.txt", "c.txt"].map { makeTableItem(named: $0, in: directory) }
+        let fixture = try makeActiveEditingFixture(items: oldItems, targetIndex: 1)
+        defer { fixture.window.orderOut(nil) }
+        fixture.editor.string = "draft-c.txt"
+        fixture.editor.setSelectedRange(NSRange(location: 2, length: 5))
+        let newItems = [makeTableItem(named: "a.txt", in: directory)] + oldItems
+
+        fixture.coordinator.apply(
+            items: newItems,
+            selection: [oldItems[1].url],
+            to: fixture.tableView
+        )
+
+        let restoredEditor = try activeEditor(in: fixture.tableView, row: 2)
+        #expect(restoredEditor.string == "draft-c.txt")
+        #expect(restoredEditor.selectedRange() == NSRange(location: 2, length: 5))
+        #expect(fixture.window.firstResponder === restoredEditor)
+        #expect(fixture.renameRecorder.commits.isEmpty)
+        #expect(fixture.renameRecorder.discardCount == 0)
+    }
+
+    @Test func activeInlineRenameSurvivesSequentialMoveWithDraftSelectionAndResponder() throws {
+        let directory = URL(filePath: "/table-edit", directoryHint: .isDirectory)
+        let oldItems = ["a.txt", "b.txt", "c.txt"].map { makeTableItem(named: $0, in: directory) }
+        let fixture = try makeActiveEditingFixture(items: oldItems, targetIndex: 2)
+        defer { fixture.window.orderOut(nil) }
+        fixture.editor.string = "draft-c.txt"
+        fixture.editor.setSelectedRange(NSRange(location: 1, length: 4))
+
+        fixture.coordinator.apply(
+            items: [oldItems[2], oldItems[0], oldItems[1]],
+            selection: [oldItems[2].url],
+            to: fixture.tableView
+        )
+
+        let restoredEditor = try activeEditor(in: fixture.tableView, row: 0)
+        #expect(restoredEditor.string == "draft-c.txt")
+        #expect(restoredEditor.selectedRange() == NSRange(location: 1, length: 4))
+        #expect(fixture.window.firstResponder === restoredEditor)
+        #expect(fixture.renameRecorder.commits.isEmpty)
+        #expect(fixture.renameRecorder.discardCount == 0)
+    }
+
+    @Test func activeInlineRenameSurvivesValueReloadWithDraftSelectionAndResponder() throws {
+        let directory = URL(filePath: "/table-edit", directoryHint: .isDirectory)
+        let oldItems = ["a.txt", "b.txt"].map { makeTableItem(named: $0, in: directory) }
+        let fixture = try makeActiveEditingFixture(items: oldItems, targetIndex: 1)
+        defer { fixture.window.orderOut(nil) }
+        fixture.editor.string = "draft-b.txt"
+        fixture.editor.setSelectedRange(NSRange(location: 3, length: 2))
+        let refreshed = FileItem(
+            url: oldItems[1].url,
+            name: "server-b.txt",
+            isDirectory: false,
+            isPackage: false,
+            modifiedAt: Date(timeIntervalSince1970: 1),
+            byteSize: 2,
+            typeDescription: "Changed File"
+        )
+
+        fixture.coordinator.apply(
+            items: [oldItems[0], refreshed],
+            selection: [oldItems[1].url],
+            to: fixture.tableView
+        )
+
+        let restoredEditor = try activeEditor(in: fixture.tableView, row: 1)
+        #expect(restoredEditor.string == "draft-b.txt")
+        #expect(restoredEditor.selectedRange() == NSRange(location: 3, length: 2))
+        #expect(fixture.window.firstResponder === restoredEditor)
+        #expect(fixture.renameRecorder.commits.isEmpty)
+        #expect(fixture.renameRecorder.discardCount == 0)
+    }
+
+    @Test func activeInlineRenameSurvivesReloadAllWithDraftSelectionAndResponder() throws {
+        let directory = URL(filePath: "/table-edit", directoryHint: .isDirectory)
+        let oldItems = ["a.txt", "b.txt", "c.txt"].map { makeTableItem(named: $0, in: directory) }
+        let fixture = try makeActiveEditingFixture(items: oldItems, targetIndex: 1)
+        defer { fixture.window.orderOut(nil) }
+        fixture.editor.string = "draft-b.txt"
+        fixture.editor.setSelectedRange(NSRange(location: 2, length: 3))
+        let newItems = [oldItems[0], oldItems[1], makeTableItem(named: "d.txt", in: directory)]
+
+        fixture.coordinator.apply(
+            items: newItems,
+            selection: [oldItems[1].url],
+            to: fixture.tableView
+        )
+
+        let restoredEditor = try activeEditor(in: fixture.tableView, row: 1)
+        #expect(restoredEditor.string == "draft-b.txt")
+        #expect(restoredEditor.selectedRange() == NSRange(location: 2, length: 3))
+        #expect(fixture.window.firstResponder === restoredEditor)
+        #expect(fixture.renameRecorder.commits.isEmpty)
+        #expect(fixture.renameRecorder.discardCount == 0)
+    }
+
+    @Test func activeInlineRenameUsesCanonicalReplacementIdentityOnCommit() throws {
+        let directory = URL(filePath: "/table-edit", directoryHint: .isDirectory)
+        let aliasedURL = URL(filePath: "/table-edit/folder/../b.txt")
+        let oldItems = [
+            makeTableItem(named: "a.txt", in: directory),
+            FileItem(
+                url: aliasedURL,
+                name: "b.txt",
+                isDirectory: false,
+                isPackage: false,
+                modifiedAt: nil,
+                byteSize: 1,
+                typeDescription: "File"
+            )
+        ]
+        let fixture = try makeActiveEditingFixture(items: oldItems, targetIndex: 1)
+        defer { fixture.window.orderOut(nil) }
+        fixture.editor.string = "canonical-draft.txt"
+        fixture.editor.setSelectedRange(NSRange(location: 0, length: 9))
+        let canonical = makeTableItem(named: "b.txt", in: directory)
+
+        fixture.coordinator.apply(
+            items: [oldItems[0], canonical],
+            selection: [aliasedURL],
+            to: fixture.tableView
+        )
+
+        let restoredEditor = try activeEditor(in: fixture.tableView, row: 1)
+        #expect(restoredEditor.string == "canonical-draft.txt")
+        #expect(restoredEditor.selectedRange() == NSRange(location: 0, length: 9))
+        let textField = try #require(
+            (fixture.tableView.view(atColumn: 0, row: 1, makeIfNecessary: false) as? NSTableCellView)?.textField
+        )
+        textField.stringValue = restoredEditor.string
+        fixture.coordinator.controlTextDidEndEditing(textEditingNotification(textField, movement: .return))
+
+        #expect(fixture.renameRecorder.commits.count == 1)
+        #expect(fixture.renameRecorder.commits.first?.url == canonical.url)
+        #expect(fixture.renameRecorder.commits.first?.name == "canonical-draft.txt")
+        #expect(fixture.renameRecorder.discardCount == 0)
+    }
+
+    @Test func activeInlineRenameIsNotRestoredAfterItsIdentityIsRemoved() throws {
+        let directory = URL(filePath: "/table-edit", directoryHint: .isDirectory)
+        let oldItems = ["a.txt", "b.txt", "c.txt"].map { makeTableItem(named: $0, in: directory) }
+        let fixture = try makeActiveEditingFixture(items: oldItems, targetIndex: 1)
+        defer { fixture.window.orderOut(nil) }
+        fixture.editor.string = "draft-b.txt"
+
+        fixture.coordinator.apply(
+            items: [oldItems[0], oldItems[2]],
+            selection: [],
+            to: fixture.tableView
+        )
+
+        #expect(fixture.tableView.editedRow == -1)
+        #expect((0..<fixture.tableView.numberOfRows).allSatisfy { row in
+            let cell = fixture.tableView.view(atColumn: 0, row: row, makeIfNecessary: false) as? NSTableCellView
+            return cell?.textField?.currentEditor() == nil
+        })
+    }
+
     @Test func insertionRestoresTableFocusWhenAppKitDropsTheResponder() throws {
         let directory = URL(filePath: "/table-focus", directoryHint: .isDirectory)
         let oldItems = [makeTableItem(named: "b", in: directory)]
         let newItems = [makeTableItem(named: "a", in: directory)] + oldItems
         let selection = SelectionRecorder(value: [])
-        let coordinator = makeTableView(items: oldItems, selection: selection).makeCoordinator()
+        let coordinator = makeIncrementalCoordinator(items: oldItems, selection: selection)
         let tableView = FocusDisruptingUpdateTableView()
         let window = FocusStateRecordingWindow(
             contentRect: NSRect(x: 0, y: 0, width: 500, height: 300),
@@ -376,20 +793,96 @@ struct FileTableViewLifecycleTests {
         #expect(window.firstResponder === tableView)
     }
 
-    @Test func tableUpdateThreshold128Measurement() {
-        measureTableUpdateThreshold(128, expectsIncrementalBatch: false)
+    @Test func tableUpdateThreshold128Batch256Measurement() {
+        measureTableUpdateThreshold(128, batchSize: 256)
     }
 
-    @Test func tableUpdateThreshold256Measurement() {
-        measureTableUpdateThreshold(256, expectsIncrementalBatch: true)
+    @Test func tableUpdateThreshold128Batch128Measurement() {
+        measureTableUpdateThreshold(128, batchSize: 128)
     }
 
-    @Test func tableUpdateThreshold512Measurement() {
-        measureTableUpdateThreshold(512, expectsIncrementalBatch: true)
+    @Test func tableUpdateThreshold128Batch1Measurement() {
+        measureTableUpdateThreshold(128, batchSize: 1)
     }
 
-    @Test func tableUpdateThreshold1024Measurement() {
-        measureTableUpdateThreshold(1_024, expectsIncrementalBatch: true)
+    @Test func tableUpdateThreshold128Batch16Measurement() {
+        measureTableUpdateThreshold(128, batchSize: 16)
+    }
+
+    @Test func tableUpdateThreshold128Batch64Measurement() {
+        measureTableUpdateThreshold(128, batchSize: 64)
+    }
+
+    @Test func tableUpdateThreshold128Batch129Measurement() {
+        measureTableUpdateThreshold(128, batchSize: 129)
+    }
+
+    @Test func tableUpdateThreshold128Batch257Measurement() {
+        measureTableUpdateThreshold(128, batchSize: 257)
+    }
+
+    @Test func tableUpdateThreshold128Batch512Measurement() {
+        measureTableUpdateThreshold(128, batchSize: 512)
+    }
+
+    @Test func tableUpdateThreshold128Batch513Measurement() {
+        measureTableUpdateThreshold(128, batchSize: 513)
+    }
+
+    @Test func tableUpdateThreshold256Batch256Measurement() {
+        measureTableUpdateThreshold(256, batchSize: 256)
+    }
+
+    @Test func tableUpdateThreshold256Batch257Measurement() {
+        measureTableUpdateThreshold(256, batchSize: 257)
+    }
+
+    @Test func tableUpdateThreshold256Batch512Measurement() {
+        measureTableUpdateThreshold(256, batchSize: 512)
+    }
+
+    @Test func tableUpdateThreshold256Batch513Measurement() {
+        measureTableUpdateThreshold(256, batchSize: 513)
+    }
+
+    @Test func tableUpdateThreshold512Batch256Measurement() {
+        measureTableUpdateThreshold(512, batchSize: 256)
+    }
+
+    @Test func tableUpdateThreshold512Batch257Measurement() {
+        measureTableUpdateThreshold(512, batchSize: 257)
+    }
+
+    @Test func tableUpdateThreshold512Batch512Measurement() {
+        measureTableUpdateThreshold(512, batchSize: 512)
+    }
+
+    @Test func tableUpdateThreshold512Batch513Measurement() {
+        measureTableUpdateThreshold(512, batchSize: 513)
+    }
+
+    @Test func tableUpdateThreshold1024Batch256Measurement() {
+        measureTableUpdateThreshold(1_024, batchSize: 256)
+    }
+
+    @Test func tableUpdateThreshold1024Batch257Measurement() {
+        measureTableUpdateThreshold(1_024, batchSize: 257)
+    }
+
+    @Test func tableUpdateThreshold1024Batch512Measurement() {
+        measureTableUpdateThreshold(1_024, batchSize: 512)
+    }
+
+    @Test func tableUpdateThreshold1024Batch513Measurement() {
+        measureTableUpdateThreshold(1_024, batchSize: 513)
+    }
+
+    @Test func tableUpdateThreshold1024Batch1024Measurement() {
+        measureTableUpdateThreshold(1_024, batchSize: 1_024)
+    }
+
+    @Test func tableUpdateThreshold1024Batch1025Measurement() {
+        measureTableUpdateThreshold(1_024, batchSize: 1_025)
     }
 
     @Test func oversizedInitialPopulationFallsBackBeforeIdentityPlanningOverhead() {
@@ -933,6 +1426,16 @@ struct FileTableViewLifecycleTests {
         )
     }
 
+    private func makeIncrementalCoordinator(
+        items: [FileItem],
+        selection: SelectionRecorder
+    ) -> FileTableView.Coordinator {
+        FileTableView.Coordinator(
+            parent: makeTableView(items: items, selection: selection),
+            updatePlanner: FileTableUpdatePlanner(maximumIncrementalChanges: 512)
+        )
+    }
+
     private func scrollRestorationFixture(
         anchorIndex: Int,
         initialY: CGFloat
@@ -970,76 +1473,179 @@ struct FileTableViewLifecycleTests {
 @MainActor
 private func measureTableUpdateThreshold(
     _ threshold: Int,
-    expectsIncrementalBatch: Bool
+    batchSize: Int
 ) {
     let directory = URL(filePath: "/table-threshold", directoryHint: .isDirectory)
     let oldItems = (0..<10_000).map {
         makeTableItem(named: String(format: "item-%05d", $0), in: directory)
     }
-    let newItems = oldItems + (10_000..<10_256).map {
+    let newItems = oldItems + (10_000..<(10_000 + batchSize)).map {
         makeTableItem(named: String(format: "item-%05d", $0), in: directory)
     }
-    let planner = FileTableUpdatePlanner(maximumIncrementalChanges: threshold)
-    let plan = planner.plan(from: oldItems, to: newItems)
-    if expectsIncrementalBatch {
-        guard case let .insert(indexes) = plan else {
-            Issue.record("threshold \(threshold) unexpectedly fell back for a 256-row batch")
+    let candidatePlanner = FileTableUpdatePlanner(maximumIncrementalChanges: threshold)
+    let reloadAllPlanner = FileTableUpdatePlanner(maximumIncrementalChanges: 0)
+    let candidatePlan = candidatePlanner.plan(from: oldItems, to: newItems)
+    let reloadAllPlan = reloadAllPlanner.plan(from: oldItems, to: newItems)
+    if batchSize <= threshold {
+        guard case let .insert(indexes) = candidatePlan else {
+            Issue.record("threshold \(threshold) unexpectedly fell back for a \(batchSize)-row batch")
             return
         }
-        #expect(indexes.count == 256)
+        #expect(indexes.count == batchSize)
     } else {
-        #expect(plan == .reloadAll)
+        #expect(candidatePlan == .reloadAll)
     }
+    #expect(reloadAllPlan == .reloadAll)
 
-    let clock = ContinuousClock()
     let recordedSampleCount = max(
         1,
         Int(ProcessInfo.processInfo.environment["PENGRID_TABLE_THRESHOLD_SAMPLES"] ?? "") ?? 1
     )
+    let measurementMode = ProcessInfo.processInfo.environment["PENGRID_TABLE_THRESHOLD_MODE"]
+        ?? "paired"
     let warmupCount = recordedSampleCount > 1 ? 3 : 0
-    var samples: [Duration] = []
+    var candidateSamples: [Double] = []
+    var reloadAllSamples: [Double] = []
     var finalRowCount = 0
     for iteration in 0..<(warmupCount + recordedSampleCount) {
-        let elapsed: Duration = autoreleasepool {
-            let view = FileTableView(
-                items: [],
-                selection: .constant([]),
-                onActivatePane: {},
-                onOpen: { _ in },
-                onSortChange: { _ in }
+        switch measurementMode {
+        case "candidate":
+            let candidate = measureSingleTableUpdate(
+                planner: candidatePlanner,
+                oldItems: oldItems,
+                newItems: newItems
             )
-            let coordinator = FileTableView.Coordinator(
-                parent: view,
-                updatePlanner: planner
-            )
-            let scrollView = view.makeScrollView(coordinator: coordinator)
-            scrollView.frame = NSRect(x: 0, y: 0, width: 700, height: 300)
-            let tableView = scrollView.documentView as! NSTableView
-            tableView.frame = NSRect(x: 0, y: 0, width: 700, height: 300)
-            coordinator.apply(items: oldItems, selection: [], to: tableView)
-            tableView.layoutSubtreeIfNeeded()
-
-            let duration = clock.measure {
-                coordinator.apply(items: newItems, selection: [], to: tableView)
-                tableView.layoutSubtreeIfNeeded()
+            finalRowCount = candidate.rowCount
+            if iteration >= warmupCount {
+                candidateSamples.append(candidate.seconds)
             }
-            finalRowCount = tableView.numberOfRows
-            return duration
-        }
-        if iteration >= warmupCount {
-            samples.append(elapsed)
+        case "reloadAll":
+            let reloadAll = measureSingleTableUpdate(
+                planner: reloadAllPlanner,
+                oldItems: oldItems,
+                newItems: newItems
+            )
+            finalRowCount = reloadAll.rowCount
+            if iteration >= warmupCount {
+                reloadAllSamples.append(reloadAll.seconds)
+            }
+        default:
+            let candidateFirst = iteration.isMultiple(of: 2)
+            let firstPlanner = candidateFirst ? candidatePlanner : reloadAllPlanner
+            let secondPlanner = candidateFirst ? reloadAllPlanner : candidatePlanner
+            let first = measureSingleTableUpdate(
+                planner: firstPlanner,
+                oldItems: oldItems,
+                newItems: newItems
+            )
+            let second = measureSingleTableUpdate(
+                planner: secondPlanner,
+                oldItems: oldItems,
+                newItems: newItems
+            )
+            let candidate = candidateFirst ? first : second
+            let reloadAll = candidateFirst ? second : first
+            finalRowCount = candidate.rowCount
+            #expect(reloadAll.rowCount == newItems.count)
+            if iteration >= warmupCount {
+                candidateSamples.append(candidate.seconds)
+                reloadAllSamples.append(reloadAll.seconds)
+            }
         }
     }
 
-    let sortedSamples = samples.sorted()
-    let p95Index = Int(ceil(Double(sortedSamples.count) * 0.95)) - 1
-    let p95 = sortedSamples[p95Index]
     #expect(finalRowCount == newItems.count)
-    #expect(p95 < .seconds(5), "threshold \(threshold) exceeded the table-update hang ceiling")
-    print(
-        "navigation-table-threshold threshold=\(threshold) batch=256 samples=\(samples.count) "
-            + "plan=\(plan) p95=\(p95) rows=\(finalRowCount)"
-    )
+    #expect(candidateSamples.allSatisfy { $0 < 5 })
+    #expect(reloadAllSamples.allSatisfy { $0 < 5 })
+    if recordedSampleCount == 1 {
+        let samples = [
+            candidateSamples.first.map { "candidateSampleSeconds=\($0)" },
+            reloadAllSamples.first.map { "reloadAllSampleSeconds=\($0)" }
+        ].compactMap { $0 }.joined(separator: " ")
+        print(
+            "navigation-table-threshold threshold=\(threshold) batch=\(batchSize) "
+                + "mode=\(measurementMode) samples=1 candidatePlan=\(candidatePlan) "
+                + "\(samples) rows=\(finalRowCount)"
+        )
+        return
+    }
+
+    switch measurementMode {
+    case "candidate":
+        let candidate = tableUpdateStatistics(candidateSamples)
+        print(
+            "navigation-table-threshold threshold=\(threshold) batch=\(batchSize) "
+                + "mode=candidate samples=\(recordedSampleCount) candidatePlan=\(candidatePlan) "
+                + "medianSeconds=\(candidate.median) p95Seconds=\(candidate.p95) rows=\(finalRowCount)"
+        )
+    case "reloadAll":
+        let reloadAll = tableUpdateStatistics(reloadAllSamples)
+        print(
+            "navigation-table-threshold threshold=\(threshold) batch=\(batchSize) "
+                + "mode=reloadAll samples=\(recordedSampleCount) candidatePlan=\(candidatePlan) "
+                + "medianSeconds=\(reloadAll.median) p95Seconds=\(reloadAll.p95) rows=\(finalRowCount)"
+        )
+    default:
+        let candidate = tableUpdateStatistics(candidateSamples)
+        let reloadAll = tableUpdateStatistics(reloadAllSamples)
+        let medianDelta = percentageDelta(candidate.median, relativeTo: reloadAll.median)
+        let p95Delta = percentageDelta(candidate.p95, relativeTo: reloadAll.p95)
+        print(
+            "navigation-table-threshold threshold=\(threshold) batch=\(batchSize) "
+                + "mode=paired samples=\(recordedSampleCount) candidatePlan=\(candidatePlan) "
+                + "candidateMedianSeconds=\(candidate.median) candidateP95Seconds=\(candidate.p95) "
+                + "reloadAllMedianSeconds=\(reloadAll.median) reloadAllP95Seconds=\(reloadAll.p95) "
+                + "medianDeltaPercent=\(medianDelta) p95DeltaPercent=\(p95Delta) rows=\(finalRowCount)"
+        )
+    }
+}
+
+@MainActor
+private func measureSingleTableUpdate(
+    planner: FileTableUpdatePlanner,
+    oldItems: [FileItem],
+    newItems: [FileItem]
+) -> (seconds: Double, rowCount: Int) {
+    autoreleasepool {
+        let view = FileTableView(
+            items: [],
+            selection: .constant([]),
+            onActivatePane: {},
+            onOpen: { _ in },
+            onSortChange: { _ in }
+        )
+        let coordinator = FileTableView.Coordinator(parent: view, updatePlanner: planner)
+        let scrollView = view.makeScrollView(coordinator: coordinator)
+        scrollView.frame = NSRect(x: 0, y: 0, width: 700, height: 300)
+        let tableView = scrollView.documentView as! NSTableView
+        tableView.frame = NSRect(x: 0, y: 0, width: 700, height: 300)
+        coordinator.apply(items: oldItems, selection: [], to: tableView)
+        tableView.layoutSubtreeIfNeeded()
+        let duration = ContinuousClock().measure {
+            coordinator.apply(items: newItems, selection: [], to: tableView)
+            tableView.layoutSubtreeIfNeeded()
+        }
+        return (durationSeconds(duration), tableView.numberOfRows)
+    }
+}
+
+private func durationSeconds(_ duration: Duration) -> Double {
+    let components = duration.components
+    return Double(components.seconds) + Double(components.attoseconds) / 1e18
+}
+
+private func tableUpdateStatistics(_ values: [Double]) -> (median: Double, p95: Double) {
+    let sorted = values.sorted()
+    let middle = sorted.count / 2
+    let median = sorted.count.isMultiple(of: 2)
+        ? (sorted[middle - 1] + sorted[middle]) / 2
+        : sorted[middle]
+    let p95Index = Int(ceil(Double(sorted.count) * 0.95)) - 1
+    return (median, sorted[p95Index])
+}
+
+private func percentageDelta(_ candidate: Double, relativeTo baseline: Double) -> Double {
+    ((candidate / baseline) - 1) * 100
 }
 
 @MainActor
@@ -1189,6 +1795,189 @@ private final class ClickedRowTableView: NSTableView {
 private struct RenameEditRequest: Equatable {
     let column: Int
     let row: Int
+}
+
+@MainActor
+private final class DataSourceTimingTableView: NSTableView {
+    var dataSourceRowCounts: [Int] = []
+    var dataSourceFirstNames: [String] = []
+
+    override func removeRows(
+        at indexes: IndexSet,
+        withAnimation animationOptions: NSTableView.AnimationOptions = []
+    ) {
+        recordDataSourceState()
+        super.removeRows(at: indexes, withAnimation: animationOptions)
+    }
+
+    override func moveRow(at oldIndex: Int, to newIndex: Int) {
+        recordDataSourceState()
+        super.moveRow(at: oldIndex, to: newIndex)
+    }
+
+    private func recordDataSourceState() {
+        dataSourceRowCounts.append(dataSource?.numberOfRows?(in: self) ?? -1)
+        guard let column = tableColumns.first,
+              let cell = delegate?.tableView?(self, viewFor: column, row: 0) as? NSTableCellView,
+              let name = cell.textField?.stringValue
+        else { return }
+        dataSourceFirstNames.append(name)
+    }
+}
+
+@MainActor
+private struct ActiveEditingFixture {
+    let coordinator: FileTableView.Coordinator
+    let tableView: PaneActivatingTableView
+    let window: NSWindow
+    let editor: NSTextView
+    let renameRecorder: InlineRenameRecorder
+}
+
+@MainActor
+private struct RealTableFixture {
+    let coordinator: FileTableView.Coordinator
+    let tableView: NSTableView
+    let window: NSWindow
+}
+
+@MainActor
+private final class InlineRenameRecorder {
+    struct Commit {
+        let url: URL
+        let name: String
+    }
+
+    var commits: [Commit] = []
+    var discardCount = 0
+}
+
+@MainActor
+private func makeRealTableFixture(
+    items: [FileItem],
+    selection: SelectionRecorder = SelectionRecorder(value: []),
+    onActivatePane: @escaping () -> Void = {},
+    tableView: NSTableView = NSTableView(),
+    maximumIncrementalChanges: Int? = nil
+) throws -> RealTableFixture {
+    let view = FileTableView(
+        items: items,
+        selection: selection.binding,
+        onActivatePane: onActivatePane,
+        onOpen: { _ in },
+        onSortChange: { _ in }
+    )
+    let coordinator = maximumIncrementalChanges.map {
+        FileTableView.Coordinator(
+            parent: view,
+            updatePlanner: FileTableUpdatePlanner(maximumIncrementalChanges: $0)
+        )
+    } ?? view.makeCoordinator()
+    tableView.dataSource = coordinator
+    tableView.delegate = coordinator
+    tableView.rowHeight = 28
+    for identifier in ["name", "modifiedAt", "kind", "size"] {
+        tableView.addTableColumn(NSTableColumn(
+            identifier: NSUserInterfaceItemIdentifier(identifier)
+        ))
+    }
+    coordinator.tableView = tableView
+    let scrollView = NSScrollView()
+    scrollView.documentView = tableView
+    scrollView.frame = NSRect(x: 0, y: 0, width: 600, height: 240)
+    tableView.frame = NSRect(x: 0, y: 0, width: 600, height: max(240, items.count * 28))
+    let window = NSWindow(
+        contentRect: NSRect(x: 0, y: 0, width: 600, height: 240),
+        styleMask: [.titled],
+        backing: .buffered,
+        defer: false
+    )
+    window.contentView = scrollView
+    window.makeKeyAndOrderFront(nil)
+    window.contentView?.layoutSubtreeIfNeeded()
+    tableView.reloadData()
+    tableView.layoutSubtreeIfNeeded()
+    return RealTableFixture(coordinator: coordinator, tableView: tableView, window: window)
+}
+
+@MainActor
+private func visibleNames(in tableView: NSTableView) throws -> [String] {
+    try (0..<tableView.numberOfRows).map { row in
+        let cell = try #require(
+            tableView.view(atColumn: 0, row: row, makeIfNecessary: true) as? NSTableCellView
+        )
+        return try #require(cell.textField).stringValue
+    }
+}
+
+@MainActor
+private func makeActiveEditingFixture(
+    items: [FileItem],
+    targetIndex: Int
+) throws -> ActiveEditingFixture {
+    let selectedURL = items[targetIndex].url
+    let renameRecorder = InlineRenameRecorder()
+    let view = FileTableView(
+        items: items,
+        selection: .constant([selectedURL]),
+        renameRequestID: UUID(),
+        onActivatePane: {},
+        onOpen: { _ in },
+        onSortChange: { _ in },
+        onDiscardRename: { renameRecorder.discardCount += 1 },
+        onCommitRename: { url, name in
+            renameRecorder.commits.append(.init(url: url, name: name))
+        }
+    )
+    let coordinator = FileTableView.Coordinator(
+        parent: view,
+        updatePlanner: FileTableUpdatePlanner(maximumIncrementalChanges: 512)
+    )
+    let scrollView = view.makeScrollView(coordinator: coordinator)
+    scrollView.frame = NSRect(x: 0, y: 0, width: 600, height: 240)
+    let tableView = try #require(scrollView.documentView as? PaneActivatingTableView)
+    tableView.frame = NSRect(x: 0, y: 0, width: 600, height: max(240, items.count * 28))
+    let window = NSWindow(
+        contentRect: NSRect(x: 0, y: 0, width: 600, height: 240),
+        styleMask: [.titled],
+        backing: .buffered,
+        defer: false
+    )
+    window.contentView = scrollView
+    window.makeKeyAndOrderFront(nil)
+    window.contentView?.layoutSubtreeIfNeeded()
+    tableView.reloadData()
+    tableView.layoutSubtreeIfNeeded()
+    let cell = try #require(
+        tableView.view(atColumn: 0, row: targetIndex, makeIfNecessary: true) as? NSTableCellView
+    )
+    let textField = try #require(cell.textField)
+    textField.delegate = nil
+    textField.selectText(nil)
+    let editor = try #require(textField.currentEditor() as? NSTextView)
+    coordinator.apply(items: items, selection: [selectedURL], to: tableView)
+    textField.delegate = coordinator
+    coordinator.controlTextDidBeginEditing(Notification(
+        name: NSControl.textDidBeginEditingNotification,
+        object: textField
+    ))
+    #expect(window.firstResponder === editor)
+    return ActiveEditingFixture(
+        coordinator: coordinator,
+        tableView: tableView,
+        window: window,
+        editor: editor,
+        renameRecorder: renameRecorder
+    )
+}
+
+@MainActor
+private func activeEditor(in tableView: NSTableView, row: Int) throws -> NSTextView {
+    let cell = try #require(
+        tableView.view(atColumn: 0, row: row, makeIfNecessary: true) as? NSTableCellView
+    )
+    let textField = try #require(cell.textField)
+    return try #require(textField.currentEditor() as? NSTextView)
 }
 
 @MainActor

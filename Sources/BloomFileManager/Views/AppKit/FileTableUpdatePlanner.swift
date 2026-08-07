@@ -17,7 +17,7 @@ enum FileTableUpdatePlan: Equatable {
 struct FileTableUpdatePlanner {
     let maximumIncrementalChanges: Int
 
-    init(maximumIncrementalChanges: Int = 512) {
+    init(maximumIncrementalChanges: Int = 0) {
         self.maximumIncrementalChanges = max(0, maximumIncrementalChanges)
     }
 
@@ -46,12 +46,20 @@ struct FileTableUpdatePlanner {
             return .reload(IndexSet(new.indices.filter { old[$0] != new[$0] }))
         }
 
+        let oldItemsByID = Dictionary(uniqueKeysWithValues: zip(oldIDs, old))
+
         if newIDs.filter(oldIDSet.contains) == oldIDs {
+            guard zip(newIDs, new).allSatisfy({ identity, item in
+                !oldIDSet.contains(identity) || oldItemsByID[identity] == item
+            }) else { return .reloadAll }
             let inserted = IndexSet(newIDs.indices.filter { !oldIDSet.contains(newIDs[$0]) })
             return bounded(inserted.count, plan: .insert(inserted))
         }
 
         if oldIDs.filter(newIDSet.contains) == newIDs {
+            guard zip(newIDs, new).allSatisfy({ oldItemsByID[$0.0] == $0.1 }) else {
+                return .reloadAll
+            }
             let removed = IndexSet(oldIDs.indices.filter { !newIDSet.contains(oldIDs[$0]) })
             return bounded(removed.count, plan: .remove(removed))
         }
@@ -60,7 +68,6 @@ struct FileTableUpdatePlanner {
             return .reloadAll
         }
 
-        let oldItemsByID = Dictionary(uniqueKeysWithValues: zip(oldIDs, old))
         guard zip(newIDs, new).allSatisfy({ oldItemsByID[$0.0] == $0.1 }) else {
             return .reloadAll
         }
