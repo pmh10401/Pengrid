@@ -377,19 +377,19 @@ for root in "$CLOUD_ROOT"/GoogleDrive-* "$CLOUD_ROOT"/OneDrive-*; do
 done
 ```
 
-Raw output from the 2026-08-07 rerun (provider domain IDs are deliberately
-redacted; the pre-existing account-root label is retained):
+Raw output from the 2026-08-07 rerun (provider domain IDs and the personal
+Google Drive account-root basename are deliberately redacted):
 
 ```text
-ROOT=GoogleDrive-pmh10401@gmail.com mode=500
+ROOT=GoogleDrive-<account> mode=500
 DOMAIN=com.google.drivefs.fpext/gdrive-<redacted-domain-id>
 ROOT=OneDrive-개인 mode=700
 DOMAIN=com.microsoft.OneDrive.FileProvider/OneDrive
-BEFORE GoogleDrive-pmh10401@gmail.com children=5 statuses=NSURLUbiquitousItemDownloadingStatusCurrent=5 downloadingFlags=0 percentValues=0
+BEFORE GoogleDrive-<account> children=5 statuses=NSURLUbiquitousItemDownloadingStatusCurrent=5 downloadingFlags=0 percentValues=0
 BEFORE OneDrive-개인 children=21 statuses=NSURLUbiquitousItemDownloadingStatusCurrent=19,NSURLUbiquitousItemDownloadingStatusNotDownloaded=2 downloadingFlags=0 percentValues=0
-AFTER GoogleDrive-pmh10401@gmail.com children=5 statuses=NSURLUbiquitousItemDownloadingStatusCurrent=5 downloadingFlags=0 percentValues=0
+AFTER GoogleDrive-<account> children=5 statuses=NSURLUbiquitousItemDownloadingStatusCurrent=5 downloadingFlags=0 percentValues=0
 AFTER OneDrive-개인 children=21 statuses=NSURLUbiquitousItemDownloadingStatusCurrent=19,NSURLUbiquitousItemDownloadingStatusNotDownloaded=2 downloadingFlags=0 percentValues=0
-FILEPROVIDERCTL GoogleDrive-pmh10401@gmail.com
+FILEPROVIDERCTL GoogleDrive-<account>
 == action operation engine ==
 =================
 0 operations
@@ -417,7 +417,7 @@ instead of claiming index evidence.
 
 | Classification | Candidate/evidence | Decision for Task 8 |
 | --- | --- | --- |
-| `proven-unused` | `MZUnused` and `entryExists` have one exact repository reference each: their private declarations. Detailed runtime review is below. | Retain for a separate deletion plan; do not delete in this audit. |
+| `proven-unused` | `MZUnused` and `entryExists` each have one exact reference in the **Sources/Tests code-only** search, excluding `docs/` and build output: their private declarations. Detailed runtime review is below. | Retain for a separate deletion plan; do not delete in this audit. |
 | `duplicate` | The same standardized, percent-decoded, trailing-slash-trimming URL-path body appears in `PaneEntryPath.normalize`, `FilePaneState.entryPath`, `PaneViewStateCache.key`, and `PaneNavigationHistory.path`; `FileOperationController.directoryKey` is also equivalent in shape. All have live references and distinct ownership today. | Consolidation candidate only. Prove cross-module semantics and run navigation, persistence, monitor, selection, Undo-overlap, and symlink tests before changing it. |
 | `compatibility` | `SmartSearchQuery.includeDirectories`, its `CodingKeys`/optional metadata decoder, `SmartSearchMetadataFilter.legacy`, and the two-argument `compressSelection` overload are exercised by legacy decode, unchanged stored-bytes, metadata round-trip, and callable-overload tests. | Retain. A migration and compatibility window are required before removal. |
 | `safety-boundary` | `legacyTransfer`; scoped-access leases; captured identity/fingerprint revalidation; Undo/quarantine/recovery paths; symlink boundaries; archive and protected-ZIP validation. | Retain. These are live fail-closed boundaries, not cleanup candidates. |
@@ -443,7 +443,7 @@ deleted or treated as proof by itself.
 | --- | --- | --- |
 | Performance | **FAIL** | Direct filter/sort 30% target and ordinary sorted-insert/no-reload gate are unmet; other measured performance sub-gates pass. |
 | Safety | **PASS (automated)** | Focused and full suites cover cancellation/generation races, selection, rename, scroll/focus restoration, refresh rollback, monitor races, identity, Undo, journal/quarantine, symlink, archive, and protected ZIP. |
-| Cloud | **PENDING overall** | Automated zero-materialization/scoped-access and independent system metadata-only Google Drive/OneDrive checks pass with no download indicators; the live Pengrid in-app flow is unverified because GUI automation was unavailable. |
+| Cloud | **PENDING overall** | Static architectural absence plus availability-mapping/scoped-access checks, and independent system metadata-only Google Drive/OneDrive checks, pass with no download indicators. The former is **not** runtime-observable zero-call proof; the live Pengrid in-app flow is unverified because GUI automation was unavailable. |
 | Compatibility | **PASS (automated)** | Workspace persistence, legacy saved-search bytes/decoding, `FileSort` Codable, and legacy compression-overload tests pass. |
 | Full suite | **PASS** | 1,146 tests in 80 suites, 55.014 s. |
 | Release build | **PASS** | Production build completed in 37.23 s. |
