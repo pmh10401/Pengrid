@@ -578,7 +578,7 @@ struct FilePaneStateTests {
     @Test func rapidTwentyQueryBurstDrainsCancelledProjectionWorkers() async {
         let directory = URL(filePath: "/projection-burst-drain", directoryHint: .isDirectory)
         let items = (0..<10_000).map { makeItem(named: "report-\($0).txt", in: directory) }
-        let projector = CancellationRecordingPaneItemProjector()
+        let projector = CooperativeCancellationPaneItemProjector()
         let pane = FilePaneState(
             directory: directory,
             listingService: StubDirectoryListingService(values: [directory: items]),
@@ -587,18 +587,60 @@ struct FilePaneStateTests {
         await pane.navigate(to: directory, recordHistory: false)
 
         for query in (0..<20).map({ "report-\($0)" }) {
-            await projector.suspendNextProjection()
             pane.updateFilterQuery(query)
-            await Task.yield()
+            #expect(await projector.waitUntilStarted(request: query))
         }
-        await projector.resumeAll()
+        pane.updateFilterQuery("report-final")
+        #expect(await projector.waitUntilStarted(request: "report-final"))
 
-        #expect(await waitForPaneCondition { pane.filterQuery == "report-19" })
+        #expect(await projector.waitForCancellations(count: 20))
         #expect(await projector.waitForDrain())
+        #expect(await projector.cancelledRequestCount == 20)
+        let cancelledRequests = await projector.cancelledRequests
+        for request in cancelledRequests {
+            #expect(
+                await projector.postCancellationVisits(for: request)
+                    <= PaneFilenameFilter.cancellationCheckStride
+            )
+        }
         #expect(await projector.activeWorkerCount == 0)
-        #expect(await projector.cancelledTailCandidateVisits <= PaneFilenameFilter.cancellationCheckStride)
         #expect(await projector.retainedSnapshotCount == 0)
         #expect(await projector.retainedResultCount == 0)
+    }
+
+    @Test func navigationCancelsTheProjectionScheduledWhileResettingTheOldDirectory() async {
+        let oldDirectory = URL(filePath: "/old-projection-navigation", directoryHint: .isDirectory)
+        let newDirectory = URL(filePath: "/new-projection-navigation", directoryHint: .isDirectory)
+        let oldItem = makeItem(named: "old.txt", in: oldDirectory)
+        let projector = ControlledPaneItemProjector()
+        let listing = ControlledListingControl()
+        let pane = FilePaneState(
+            directory: oldDirectory,
+            listingService: ControlledDirectoryListingService(control: listing),
+            projector: projector
+        )
+
+        let initial = Task { await pane.navigate(to: oldDirectory, recordHistory: false) }
+        await listing.waitForStart(in: oldDirectory, count: 1)
+        await listing.yield([oldItem], in: oldDirectory, request: 0)
+        await listing.finish(in: oldDirectory, request: 0)
+        await initial.value
+
+        await projector.suspendNextProjection()
+        pane.updateFilterQuery("old")
+        #expect(await waitForProjectionStart(projector, count: 2))
+
+        let navigation = pane.beginNavigation(to: newDirectory)
+
+        #expect(await projector.waitForCancellation(request: 1))
+        #expect(pane.currentDirectory == newDirectory)
+        #expect(pane.items.isEmpty)
+        #expect(pane.errorMessage == nil)
+        #expect(!(await projector.hasCompleted(request: 1)))
+
+        await listing.waitForStart(in: newDirectory, count: 1)
+        await listing.finish(in: newDirectory, request: 0)
+        await navigation.value
     }
 
     @Test func cancelledLoadRejectsItsPendingBatchFlush() async {
@@ -1184,6 +1226,7 @@ private actor ControlledPaneItemProjector: PaneItemProjecting {
     private var suspended: [Int: CheckedContinuation<Void, any Error>] = [:]
     private var startWaiters: [(count: Int, continuation: CheckedContinuation<Void, Never>)] = []
     private var completedRequests: Set<Int> = []
+    private var cancelledRequests: Set<Int> = []
     private(set) var requests: [ControlledPaneProjectionRequest] = []
 
     var requestCount: Int { requests.count }
@@ -1245,7 +1288,19 @@ private actor ControlledPaneItemProjector: PaneItemProjecting {
         completedRequests.contains(request)
     }
 
+    func waitForCancellation(request: Int) async -> Bool {
+        for _ in 0..<10_000 {
+            if cancelledRequests.contains(request) { return true }
+            await Task.yield()
+        }
+        return cancelledRequests.contains(request)
+    }
+
     private func suspend(request: Int) async throws {
+        if Task.isCancelled {
+            cancelledRequests.insert(request)
+            throw CancellationError()
+        }
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 suspended[request] = continuation
@@ -1256,6 +1311,7 @@ private actor ControlledPaneItemProjector: PaneItemProjecting {
     }
 
     private func cancelSuspension(request: Int) {
+        cancelledRequests.insert(request)
         suspended.removeValue(forKey: request)?.resume(throwing: CancellationError())
     }
 
@@ -1272,6 +1328,93 @@ private actor ControlledPaneItemProjector: PaneItemProjecting {
     }
 }
 
+private actor CooperativeCancellationPaneItemProjector: PaneItemProjecting {
+    private var startedRequests: Set<String> = []
+    private var activeRequests: Set<String> = []
+    private var cancelledRequestSet: Set<String> = []
+    private var postCancellationVisitCounts: [String: Int] = [:]
+    private var retainedSnapshots: [String: [FileItem]] = [:]
+    private var retainedResults: [String: PaneItemProjection] = [:]
+
+    var cancelledRequestCount: Int { cancelledRequestSet.count }
+    var cancelledRequests: [String] { cancelledRequestSet.sorted() }
+    var activeWorkerCount: Int { activeRequests.count }
+    var retainedSnapshotCount: Int { retainedSnapshots.count }
+    var retainedResultCount: Int { retainedResults.count }
+
+    func project(_ input: PaneProjectionInput) async throws -> PaneItemProjection {
+        let request = input.key.normalizedQuery
+        startedRequests.insert(request)
+        activeRequests.insert(request)
+        retainedSnapshots[request] = input.items
+        defer {
+            activeRequests.remove(request)
+            retainedSnapshots.removeValue(forKey: request)
+            retainedResults.removeValue(forKey: request)
+        }
+
+        do {
+            for (index, item) in input.items.enumerated() {
+                _ = item.name
+                if Task.isCancelled {
+                    postCancellationVisitCounts[request, default: 0] += 1
+                }
+                if (index + 1).isMultiple(of: PaneFilenameFilter.cancellationCheckStride) {
+                    try Task.checkCancellation()
+                    await Task.yield()
+                }
+            }
+            try Task.checkCancellation()
+            let result = try await PaneItemProjector().projectFallback(items: input.items, key: input.key)
+            try Task.checkCancellation()
+            retainedResults[request] = result
+            return result
+        } catch is CancellationError {
+            cancelledRequestSet.insert(request)
+            throw CancellationError()
+        }
+    }
+
+    func buildActiveOrder(
+        items: [FileItem], directoryKey: String, key: PaneProjectionKey
+    ) async throws -> ActiveOrderSnapshot? {
+        try await PaneItemProjector().buildActiveOrder(items: items, directoryKey: directoryKey, key: key)
+    }
+
+    func projectSortedSubset(items: [FileItem], key: PaneProjectionKey) async throws -> PaneItemProjection {
+        try await PaneItemProjector().projectSortedSubset(items: items, key: key)
+    }
+
+    func waitUntilStarted(request: String) async -> Bool {
+        if startedRequests.contains(request) { return true }
+        for _ in 0..<10_000 {
+            if startedRequests.contains(request) { return true }
+            await Task.yield()
+        }
+        return startedRequests.contains(request)
+    }
+
+    func waitForCancellations(count: Int) async -> Bool {
+        for _ in 0..<10_000 {
+            if cancelledRequestSet.count >= count { return true }
+            await Task.yield()
+        }
+        return cancelledRequestSet.count >= count
+    }
+
+    func postCancellationVisits(for request: String) -> Int {
+        postCancellationVisitCounts[request, default: 0]
+    }
+
+    func waitForDrain() async -> Bool {
+        for _ in 0..<1_000 {
+            if activeRequests.isEmpty && retainedSnapshots.isEmpty && retainedResults.isEmpty { return true }
+            try? await Task.sleep(for: .milliseconds(1))
+        }
+        return activeRequests.isEmpty && retainedSnapshots.isEmpty && retainedResults.isEmpty
+    }
+}
+
 private actor CancellationRecordingPaneItemProjector: PaneItemProjecting {
     private var suspensionBudget = 0
     private var suspended: [Int: CheckedContinuation<Void, any Error>] = [:]
@@ -1281,8 +1424,6 @@ private actor CancellationRecordingPaneItemProjector: PaneItemProjecting {
     private var retainedSnapshots: [Int: [FileItem]] = [:]
     private var retainedResults: [Int: PaneItemProjection] = [:]
     private var requests: [PaneProjectionInput] = []
-    private(set) var cancelledTailCandidateVisits = 0
-
     var requestCount: Int { requests.count }
     var activeWorkerCount: Int { activeRequests.count }
     var retainedSnapshotCount: Int { retainedSnapshots.count }

@@ -798,20 +798,11 @@ private struct CountingBaselinePaneItemProjector: PaneItemProjecting {
     func project(_ input: PaneProjectionInput) async throws -> PaneItemProjection {
         await Task.yield()
         let query = input.key.normalizedQuery
-        var filtered: [FileItem] = []
-        filtered.reserveCapacity(input.items.count)
-        for (index, item) in input.items.enumerated() {
+        let filtered = input.items.filter { item in
             tracker.recordCandidateVisit(for: query)
-            if query.isEmpty || item.name.localizedStandardContains(query) {
-                filtered.append(item)
-            }
-            if (index + 1).isMultiple(of: PaneFilenameFilter.cancellationCheckStride) {
-                try Task.checkCancellation()
-            }
+            return query.isEmpty || item.name.localizedStandardContains(query)
         }
-        try Task.checkCancellation()
         let projected = input.key.sort.apply(to: filtered)
-        try Task.checkCancellation()
         var indexByURL: [URL: Int] = [:]
         var urlByEntryPath: [String: URL] = [:]
         for (index, item) in projected.enumerated() {

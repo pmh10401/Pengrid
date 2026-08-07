@@ -43,17 +43,6 @@ struct PaneProjectionRequest: Sendable {
     let token: PaneProjectionToken
 }
 
-enum PaneProjectionLifecycleEvent: Equatable, Sendable {
-    case workerStarted(PaneProjectionToken)
-    case cancellationRequested(PaneProjectionToken)
-    case workerFinished(PaneProjectionToken, cancelled: Bool)
-    case buffersReleased(PaneProjectionToken)
-}
-
-protocol PaneProjectionLifecycleRecording: Sendable {
-    func record(_ event: PaneProjectionLifecycleEvent) async
-}
-
 struct AcceptedPaneProjectionState: Equatable, Sendable {
     let directoryKey: String
     let key: PaneProjectionKey?
@@ -395,6 +384,9 @@ final class FilePaneState {
         intent: PaneNavigationIntent
     ) -> Task<Void, Never> {
         storeCurrentDirectoryViewState()
+        // resetFilterForNavigation can schedule an old-directory projection before
+        // this method changes the directory and request generation.
+        cancelProjectionWorkers()
 
         currentDirectory = directory
         firstVisibleItem = nil
