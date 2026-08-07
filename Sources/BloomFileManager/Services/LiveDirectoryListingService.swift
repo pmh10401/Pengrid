@@ -3,7 +3,7 @@ import Foundation
 struct LiveDirectoryListingService: DirectoryListingService {
     let batchSize: Int
     private let visibility: DirectoryVisibilityPolicy
-    private let availabilityReader: any CloudItemAvailabilityReading
+    private let batchBuilder: DirectoryEntryBatchBuilder
     private let accessCoordinator: CloudLocationScopedAccessCoordinator
     private let cursorFactory: any ImmediateDirectoryEntryCursorFactory
 
@@ -11,13 +11,17 @@ struct LiveDirectoryListingService: DirectoryListingService {
         batchSize: Int = 256,
         visibility: DirectoryVisibilityPolicy = .baseline,
         availabilityReader: any CloudItemAvailabilityReading = LiveCloudItemAvailabilityService(),
+        metadataReader: any DirectoryEntryMetadataReading = LiveDirectoryEntryMetadataReader(),
         accessCoordinator: CloudLocationScopedAccessCoordinator = .init(),
         cursorFactory: any ImmediateDirectoryEntryCursorFactory = LiveImmediateDirectoryEntryCursorFactory()
     ) {
         precondition(batchSize > 0, "batchSize must be greater than zero")
         self.batchSize = batchSize
         self.visibility = visibility
-        self.availabilityReader = availabilityReader
+        self.batchBuilder = DirectoryEntryBatchBuilder(
+            metadataReader: metadataReader,
+            availabilityReader: availabilityReader
+        )
         self.accessCoordinator = accessCoordinator
         self.cursorFactory = cursorFactory
     }
@@ -27,7 +31,7 @@ struct LiveDirectoryListingService: DirectoryListingService {
             directory: directory,
             batchSize: batchSize,
             visibility: visibility,
-            availabilityReader: availabilityReader,
+            batchBuilder: batchBuilder,
             accessCoordinator: accessCoordinator,
             cursorFactory: cursorFactory
         )
@@ -39,14 +43,15 @@ private actor DirectoryListingBatchProducer {
     private let directory: URL
     private let batchSize: Int
     private let visibility: DirectoryVisibilityPolicy
-    private let availabilityReader: any CloudItemAvailabilityReading
+    private let batchBuilder: DirectoryEntryBatchBuilder
     private let accessCoordinator: CloudLocationScopedAccessCoordinator
     private let cursorFactory: any ImmediateDirectoryEntryCursorFactory
     private let keys: Set<URLResourceKey> = [
         .isDirectoryKey,
         .isPackageKey,
         .contentModificationDateKey,
-        .fileSizeKey
+        .fileSizeKey,
+        .localizedTypeDescriptionKey
     ]
     private var accessLease: CloudLocationScopedAccessLease?
     private var cursor: (any ImmediateDirectoryEntryCursor)?
@@ -55,14 +60,14 @@ private actor DirectoryListingBatchProducer {
         directory: URL,
         batchSize: Int,
         visibility: DirectoryVisibilityPolicy,
-        availabilityReader: any CloudItemAvailabilityReading,
+        batchBuilder: DirectoryEntryBatchBuilder,
         accessCoordinator: CloudLocationScopedAccessCoordinator,
         cursorFactory: any ImmediateDirectoryEntryCursorFactory
     ) {
         self.directory = directory
         self.batchSize = batchSize
         self.visibility = visibility
-        self.availabilityReader = availabilityReader
+        self.batchBuilder = batchBuilder
         self.accessCoordinator = accessCoordinator
         self.cursorFactory = cursorFactory
     }
@@ -95,28 +100,7 @@ private actor DirectoryListingBatchProducer {
         }
         guard !urls.isEmpty else { return nil }
 
-        var batch: [FileItem] = []
-        batch.reserveCapacity(urls.count)
-        for url in urls {
-            try Task.checkCancellation()
-            let values = try url.resourceValues(forKeys: keys)
-            let typeDescription = try? url.resourceValues(
-                forKeys: [.localizedTypeDescriptionKey]
-            ).localizedTypeDescription
-            let standardizedURL = url.standardizedFileURL
-            let availability = await availabilityReader.availability(of: standardizedURL)
-            try Task.checkCancellation()
-            batch.append(FileItem(
-                url: standardizedURL,
-                name: url.lastPathComponent,
-                isDirectory: values.isDirectory == true,
-                isPackage: values.isPackage == true,
-                modifiedAt: values.contentModificationDate,
-                byteSize: values.isDirectory == true ? nil : values.fileSize.map(Int64.init),
-                typeDescription: typeDescription ?? "File",
-                availability: availability
-            ))
-        }
+        let batch = try await batchBuilder.build(urls: urls)
         try Task.checkCancellation()
         return batch
     }

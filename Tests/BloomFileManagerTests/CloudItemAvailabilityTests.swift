@@ -3,6 +3,43 @@ import Testing
 @testable import BloomFileManager
 
 @Suite struct CloudItemAvailabilityTests {
+    @Test func batchBuilderReadsOnceBoundsConcurrencyAndPreservesOrder() async throws {
+        let urls = (0..<20).map { URL(filePath: "/virtual/\($0).txt") }
+        let metadata = RecordingDirectoryEntryMetadataReader()
+        let availability = ConcurrencyRecordingAvailabilityReader(result: .onlineOnly)
+        let builder = DirectoryEntryBatchBuilder(
+            metadataReader: metadata,
+            availabilityReader: availability,
+            maximumConcurrency: 4
+        )
+
+        let items = try await builder.build(urls: urls)
+
+        #expect(items.map(\.url) == urls.map(\.standardizedFileURL))
+        #expect(metadata.requestCount == 20)
+        #expect(await availability.maximumObservedConcurrency() <= 4)
+    }
+
+    @Test func batchBuilderCancellationPropagatesWithoutPartialResults() async throws {
+        let urls = (0..<3).map { URL(filePath: "/virtual/\($0).txt") }
+        let metadata = RecordingDirectoryEntryMetadataReader()
+        let availability = SuspendedAvailabilityReader()
+        let builder = DirectoryEntryBatchBuilder(
+            metadataReader: metadata,
+            availabilityReader: availability,
+            maximumConcurrency: 3
+        )
+        let task = Task { try await builder.build(urls: urls) }
+
+        await availability.waitUntilEntered()
+        task.cancel()
+        await availability.release()
+
+        await #expect(throws: CancellationError.self) {
+            _ = try await task.value
+        }
+    }
+
     @Test func ordinaryLocalFileIsAvailableWithoutMaterialization() async {
         let url = URL(filePath: "/fixture/local.txt")
         let reader = StubCloudItemMetadataReader(metadata: [
@@ -114,6 +151,79 @@ private actor StubCloudItemMetadataReader: CloudItemMetadataReading {
             percentDownloaded: nil,
             isInsideKnownCloudRoot: false
         )
+    }
+}
+
+private final class RecordingDirectoryEntryMetadataReader:
+    DirectoryEntryMetadataReading, @unchecked Sendable {
+    private let lock = NSLock()
+    private var requests = 0
+
+    var requestCount: Int { lock.withLock { requests } }
+
+    func metadata(for url: URL) throws -> DirectoryEntryMetadata {
+        lock.withLock { requests += 1 }
+        let standardizedURL = url.standardizedFileURL
+        return DirectoryEntryMetadata(
+            url: standardizedURL,
+            name: standardizedURL.lastPathComponent,
+            isDirectory: false,
+            isPackage: false,
+            modifiedAt: nil,
+            byteSize: 1,
+            typeDescription: "Text"
+        )
+    }
+}
+
+private actor ConcurrencyRecordingAvailabilityReader: CloudItemAvailabilityReading {
+    private let result: CloudItemAvailability
+    private var active = 0
+    private var maximumActive = 0
+
+    init(result: CloudItemAvailability) {
+        self.result = result
+    }
+
+    func availability(of url: URL) async -> CloudItemAvailability {
+        active += 1
+        maximumActive = max(maximumActive, active)
+        await Task.yield()
+        active -= 1
+        return result
+    }
+
+    func maximumObservedConcurrency() -> Int {
+        maximumActive
+    }
+}
+
+private actor SuspendedAvailabilityReader: CloudItemAvailabilityReading {
+    private var didEnter = false
+    private var didRelease = false
+    private var entryWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseContinuations: [CheckedContinuation<Void, Never>] = []
+
+    func availability(of url: URL) async -> CloudItemAvailability {
+        didEnter = true
+        let waiters = entryWaiters
+        entryWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+        if didRelease { return .availableLocally }
+        await withCheckedContinuation { releaseContinuations.append($0) }
+        return .availableLocally
+    }
+
+    func waitUntilEntered() async {
+        if didEnter { return }
+        await withCheckedContinuation { entryWaiters.append($0) }
+    }
+
+    func release() {
+        didRelease = true
+        let continuations = releaseContinuations
+        releaseContinuations.removeAll()
+        continuations.forEach { $0.resume() }
     }
 }
 
