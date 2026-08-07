@@ -175,8 +175,11 @@ struct FileTableView: NSViewRepresentable {
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        updateNSView(scrollView, coordinator: context.coordinator)
+    }
+
+    func updateNSView(_ scrollView: NSScrollView, coordinator: Coordinator) {
         guard let tableView = scrollView.documentView as? NSTableView else { return }
-        let coordinator = context.coordinator
         coordinator.parent = self
         coordinator.apply(sort: sort, to: tableView)
         coordinator.apply(items: items, selection: selection, to: tableView)

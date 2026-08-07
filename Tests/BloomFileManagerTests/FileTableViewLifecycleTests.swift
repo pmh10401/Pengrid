@@ -1395,6 +1395,59 @@ struct FileTableViewLifecycleTests {
         #expect(applied == [newest])
     }
 
+    @Test func metadataOnlyProjectionWarmUpDoesNotReapplyTheAcceptedTableToken() async throws {
+        let directory = URL(filePath: "/table-metadata", directoryHint: .isDirectory)
+        let item = makeTableItem(named: "report.txt", in: directory)
+        let pane = FilePaneState(
+            directory: directory,
+            listingService: StubDirectoryListingService(values: [directory: [item]])
+        )
+        await pane.navigate(to: directory, recordHistory: false)
+        pane.selection = [item.url]
+        let token = try #require(pane.acceptedProjectionToken)
+        let rows = pane.visibleItems
+        let indexes = pane.visibleIndexByURL
+        let selection = pane.selection
+        var applied: [PaneProjectionToken] = []
+        let binding = Binding<Set<URL>>(
+            get: { pane.selection },
+            set: { pane.selection = $0 }
+        )
+        var view = FileTableView(
+            items: rows,
+            selection: binding,
+            projectionToken: token,
+            onActivatePane: {},
+            onOpen: { _ in },
+            onSortChange: { _ in },
+            onProjectionApplied: { applied.append($0) }
+        )
+        let coordinator = view.makeCoordinator()
+        let scroll = view.makeScrollView(coordinator: coordinator)
+
+        view.updateNSView(scroll, coordinator: coordinator)
+        #expect(applied == [token])
+
+        pane.replaceAcceptedProjectionMetadataForTesting(activeOrder: nil, search: nil)
+        #expect(pane.visibleItems == rows)
+        #expect(pane.visibleIndexByURL == indexes)
+        #expect(pane.selection == selection)
+        #expect(pane.acceptedProjectionToken == token)
+
+        view = FileTableView(
+            items: pane.visibleItems,
+            selection: binding,
+            projectionToken: pane.acceptedProjectionToken,
+            onActivatePane: {},
+            onOpen: { _ in },
+            onSortChange: { _ in },
+            onProjectionApplied: { applied.append($0) }
+        )
+        view.updateNSView(scroll, coordinator: coordinator)
+
+        #expect(applied == [token])
+    }
+
     @Test func paneProjectionTraceOrdersSetterSchedulingAcceptanceAndOneTableApplication() async throws {
         let directory = URL(filePath: "/trace", directoryHint: .isDirectory)
         let item = makeTableItem(named: "report.txt", in: directory)

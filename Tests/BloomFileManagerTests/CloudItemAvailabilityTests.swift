@@ -158,7 +158,6 @@ import Testing
             typeDescription: "Text",
             availability: .onlineOnly
         )
-        let materializer = InMemoryCloudMaterializer()
         let pane = FilePaneState(
             directory: directory,
             listingService: StubDirectoryListingService(values: [directory: [google, oneDrive]])
@@ -170,7 +169,25 @@ import Testing
         pane.sort = FileSort(key: .size, direction: .descending)
         #expect(await cloudAvailabilityWait { pane.visibleItems.map(\.name) == ["report-19.txt", "report-10.txt"] })
         #expect(pane.visibleItems.map(\.availability) == [.onlineOnly, .onlineOnly])
-        #expect(await materializer.recordedCalls().isEmpty)
+    }
+}
+
+@Test func paneProjectionMetadataPathHasNoMaterializationOrContentReadDependency() throws {
+    let packageRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let paths = [
+        "Sources/BloomFileManager/Stores/FilePaneState.swift",
+        "Sources/BloomFileManager/Models/PaneItemProjection.swift"
+    ]
+
+    for path in paths {
+        let source = try String(contentsOf: packageRoot.appending(path: path), encoding: .utf8)
+        #expect(!source.contains("CloudMaterializing"))
+        #expect(!source.contains("materialize("))
+        #expect(!source.contains("Data(contentsOf:"))
+        #expect(!source.contains("String(contentsOf:"))
     }
 }
 

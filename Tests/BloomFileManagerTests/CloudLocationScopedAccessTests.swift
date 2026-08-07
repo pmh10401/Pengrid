@@ -106,69 +106,72 @@ struct CloudLocationScopedAccessTests {
         #expect(driver.stoppedURLs == [directory.url])
     }
 
-    @Test func filteringOnlineOnlyCloudMetadataDoesNotOpenAnotherScopeOrRequestContents() async throws {
+    @MainActor
+    @Test func filteringOnlineOnlyCloudMetadataUsesOneRealListingScopeAndMetadataOnlyReads() async throws {
         let directory = try TemporaryDirectory()
         defer { directory.remove() }
         let driver = RecordingSecurityScopeDriver()
         let coordinator = CloudLocationScopedAccessCoordinator(driver: driver)
         coordinator.replaceManualRoots([directory.url])
-        let google = FileItem(
-            url: directory.url.appending(path: "Google Drive/online-report.txt"),
-            name: "online-report.txt",
-            isDirectory: false,
-            isPackage: false,
-            modifiedAt: nil,
-            byteSize: 1,
-            typeDescription: "Text",
-            availability: .onlineOnly
+        let google = directory.url.appending(path: "Google Drive/google-online-report.txt")
+        let oneDrive = directory.url.appending(path: "OneDrive/onedrive-online-plan.txt")
+        let metadata = ScopedAccessMetadataReader(entries: [
+            google: .init(
+                url: google,
+                name: "google-online-report.txt",
+                isDirectory: false,
+                isPackage: false,
+                modifiedAt: nil,
+                byteSize: 1,
+                typeDescription: "Text"
+            ),
+            oneDrive: .init(
+                url: oneDrive,
+                name: "onedrive-online-plan.txt",
+                isDirectory: false,
+                isPackage: false,
+                modifiedAt: nil,
+                byteSize: 2,
+                typeDescription: "Text"
+            )
+        ])
+        let availability = ScopedAccessAvailabilityReader(value: .onlineOnly)
+        let listing = LiveDirectoryListingService(
+            batchSize: 8,
+            availabilityReader: availability,
+            metadataReader: metadata,
+            accessCoordinator: coordinator,
+            cursorFactory: ScopedAccessCursorFactory(urls: [google, oneDrive])
         )
-        let oneDrive = FileItem(
-            url: directory.url.appending(path: "OneDrive/online-plan.txt"),
-            name: "online-plan.txt",
-            isDirectory: false,
-            isPackage: false,
-            modifiedAt: nil,
-            byteSize: 2,
-            typeDescription: "Text",
-            availability: .onlineOnly
-        )
-        let materializer = InMemoryCloudMaterializer()
-        try await coordinator.withAccess(to: directory.url) {}
-        await assertOnlineOnlyFilteringDoesNotUseScopedAccess(
-            directory: directory.url,
-            google: google,
-            oneDrive: oneDrive,
-            driver: driver,
-            materializer: materializer
-        )
-    }
-
-    @MainActor
-    private func assertOnlineOnlyFilteringDoesNotUseScopedAccess(
-        directory: URL,
-        google: FileItem,
-        oneDrive: FileItem,
-        driver: RecordingSecurityScopeDriver,
-        materializer: InMemoryCloudMaterializer
-    ) async {
         let pane = FilePaneState(
-            directory: directory,
-            listingService: StubDirectoryListingService(values: [directory: [google, oneDrive]])
+            directory: directory.url,
+            listingService: listing
         )
 
-        await pane.navigate(to: directory, recordHistory: false)
+        await pane.navigate(to: directory.url, recordHistory: false)
+        #expect(driver.startedURLs == [directory.url])
+        #expect(driver.stoppedURLs == [directory.url])
+        #expect(Set(metadata.requestedURLs) == Set([google.standardizedFileURL, oneDrive.standardizedFileURL]))
+        #expect(metadata.requestedURLs.count == 2)
+        let availabilityRequests = await availability.requestedURLs()
+        #expect(Set(availabilityRequests) == Set([google.standardizedFileURL, oneDrive.standardizedFileURL]))
+        #expect(availabilityRequests.count == 2)
+
+        let metadataRequestsAfterListing = metadata.requestedURLs
+        let availabilityRequestsAfterListing = await availability.requestedURLs()
         pane.updateFilterQuery("online")
         #expect(await scopedAccessWait {
-            pane.visibleItems.map(\.name) == ["online-plan.txt", "online-report.txt"]
+            pane.visibleItems.map(\.name) == ["google-online-report.txt", "onedrive-online-plan.txt"]
         })
         pane.sort = FileSort(key: .size, direction: .descending)
         #expect(await scopedAccessWait {
-            pane.visibleItems.map(\.name) == ["online-plan.txt", "online-report.txt"]
+            pane.visibleItems.map(\.name) == ["onedrive-online-plan.txt", "google-online-report.txt"]
         })
         #expect(pane.visibleItems.allSatisfy { $0.availability == .onlineOnly })
-        #expect(driver.startedURLs == [directory])
-        #expect(driver.stoppedURLs == [directory])
-        #expect(await materializer.recordedCalls().isEmpty)
+        #expect(driver.startedURLs == [directory.url])
+        #expect(driver.stoppedURLs == [directory.url])
+        #expect(metadata.requestedURLs == metadataRequestsAfterListing)
+        #expect(await availability.requestedURLs() == availabilityRequestsAfterListing)
     }
 
     @Test func materializationHoldsAccessUntilPreparationFinishes() async throws {
@@ -760,6 +763,81 @@ private final class RecordingSecurityScopeDriver: SecurityScopedResourceAccessin
 
     func stopAccessing(_ url: URL) {
         lock.withLock { stopped.append(url) }
+    }
+}
+
+private final class ScopedAccessCursorFactory:
+    ImmediateDirectoryEntryCursorFactory, @unchecked Sendable {
+    private let urls: [URL]
+
+    init(urls: [URL]) {
+        self.urls = urls
+    }
+
+    func makeCursor(
+        in directory: URL,
+        includingPropertiesForKeys keys: Set<URLResourceKey>,
+        options: FileManager.DirectoryEnumerationOptions
+    ) throws -> any ImmediateDirectoryEntryCursor {
+        ScopedAccessCursor(urls: urls)
+    }
+}
+
+private final class ScopedAccessCursor: ImmediateDirectoryEntryCursor {
+    private var urls: ArraySlice<URL>
+
+    init(urls: [URL]) {
+        self.urls = ArraySlice(urls)
+    }
+
+    func next() throws -> URL? {
+        guard let url = urls.first else { return nil }
+        urls.removeFirst()
+        return url
+    }
+}
+
+private final class ScopedAccessMetadataReader:
+    DirectoryEntryMetadataReading, @unchecked Sendable {
+    private let lock = NSLock()
+    private let entries: [URL: DirectoryEntryMetadata]
+    private var requests: [URL] = []
+
+    init(entries: [URL: DirectoryEntryMetadata]) {
+        self.entries = entries
+    }
+
+    var requestedURLs: [URL] {
+        lock.withLock { requests }
+    }
+
+    func metadata(for url: URL) throws -> DirectoryEntryMetadata {
+        let standardizedURL = url.standardizedFileURL
+        return try lock.withLock {
+            requests.append(standardizedURL)
+            guard let entry = entries[standardizedURL] else {
+                throw CocoaError(.fileNoSuchFile)
+            }
+            return entry
+        }
+    }
+}
+
+private actor ScopedAccessAvailabilityReader: CloudItemAvailabilityReading {
+    private let value: CloudItemAvailability
+    private var requests: [URL] = []
+
+    init(value: CloudItemAvailability) {
+        self.value = value
+    }
+
+    func availability(of url: URL) -> CloudItemAvailability {
+        requests.append(url.standardizedFileURL)
+        return value
+    }
+
+    func requestedURLs() -> [URL] {
+        requests
     }
 }
 

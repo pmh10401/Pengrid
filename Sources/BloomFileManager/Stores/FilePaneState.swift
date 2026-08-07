@@ -1222,6 +1222,13 @@ final class FilePaneState {
         )
     }
 
+    func replaceAcceptedProjectionMetadataForTesting(
+        activeOrder: ActiveOrderSnapshot?,
+        search: AcceptedSearchSnapshot?
+    ) {
+        replaceAcceptedProjectionMetadata(activeOrder: activeOrder, search: search)
+    }
+
     private func emptyProjectionState(for directory: URL) -> AcceptedPaneProjectionState {
         AcceptedPaneProjectionState(
             directoryKey: Self.entryPath(directory),
