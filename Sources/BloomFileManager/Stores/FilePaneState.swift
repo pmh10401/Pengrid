@@ -1,10 +1,18 @@
 import Foundation
 import Observation
 
+protocol PaneItemProjecting: Sendable {
+    func project(items: [FileItem], key: PaneProjectionKey) async -> PaneItemProjection
+}
+
+struct LivePaneItemProjector: PaneItemProjecting {
+    func project(items: [FileItem], key: PaneProjectionKey) async -> PaneItemProjection {
+        PaneItemProjector().project(items: items, key: key)
+    }
+}
+
 @MainActor @Observable
 final class FilePaneState {
-    private static let sameTurnProjectionLimit = 256
-
     private let listingService: any DirectoryListingService
     private let monitor: any DirectoryMonitor
     private nonisolated let taskLifecycle = PaneTaskLifecycle()
@@ -31,6 +39,7 @@ final class FilePaneState {
     private var batchBuffer = PaneBatchBuffer()
     private let batchSleeper: any PaneBatchSleeping
     private let batchFlushDelay: Duration
+    private let projector: any PaneItemProjecting
     private var visibleURLByEntryPath: [String: URL] = [:]
 
     private(set) var currentDirectory: URL
@@ -186,7 +195,8 @@ final class FilePaneState {
         listingService: any DirectoryListingService,
         monitor: any DirectoryMonitor = LiveDirectoryMonitor(),
         batchSleeper: any PaneBatchSleeping = LivePaneBatchSleeper(),
-        batchFlushDelay: Duration = .milliseconds(60)
+        batchFlushDelay: Duration = .milliseconds(60),
+        projector: any PaneItemProjecting = LivePaneItemProjector()
     ) {
         let initialProjectionKey = PaneProjectionKey(
             itemsRevision: 0,
@@ -199,6 +209,7 @@ final class FilePaneState {
         self.monitor = monitor
         self.batchSleeper = batchSleeper
         self.batchFlushDelay = batchFlushDelay
+        self.projector = projector
         acceptedProjectionKey = initialProjectionKey
         committedState = PaneSnapshot(
             directory: directory,
@@ -667,23 +678,9 @@ final class FilePaneState {
         let navigationGeneration = nextRequestID
         let generation = beginProjectionGeneration()
         let intersectsSelection = projectionChangesMembership(key)
-        // Existing command and table routes read the result in the same main-actor
-        // turn for a single listing batch. Keep that bounded compatibility path
-        // synchronous; large-directory work always uses the detached path below.
-        if snapshot.count <= Self.sameTurnProjectionLimit {
-            let result = PaneItemProjector().project(items: snapshot, key: key)
-            if canAcceptProjection(
-                navigationGeneration: navigationGeneration,
-                directory: directory,
-                itemsRevision: revision,
-                projectionGeneration: generation
-            ) {
-                acceptProjection(result, intersectsSelection: intersectsSelection)
-            }
-            return
-        }
-        let task = Task { @MainActor [weak self] in
-            let result = await Self.project(items: snapshot, key: key)
+        let projector = projector
+        let task = Task { @MainActor [weak self, projector] in
+            let result = await Self.project(items: snapshot, key: key, projector: projector)
             guard !Task.isCancelled, let self else { return }
             if self.canAcceptProjection(
                 navigationGeneration: navigationGeneration,
@@ -720,7 +717,7 @@ final class FilePaneState {
         let key = projectionKey(itemsRevision: revision)
         let generation = beginProjectionGeneration()
         let intersectsSelection = projectionChangesMembership(key)
-        let result = await Self.project(items: snapshot, key: key)
+        let result = await Self.project(items: snapshot, key: key, projector: projector)
         guard !Task.isCancelled,
               canAcceptProjection(
                 navigationGeneration: navigationGeneration,
@@ -740,19 +737,28 @@ final class FilePaneState {
         navigationGeneration: UInt64,
         previousItemsRevision: UInt64
     ) async -> PaneItemProjection? {
-        let key = projectionKey(itemsRevision: itemsRevision)
-        let generation = beginProjectionGeneration()
-        let result = await Self.project(items: items, key: key)
-        guard !Task.isCancelled,
+        while !Task.isCancelled,
               isCurrentRefresh(
                 refreshID,
                 directory: directory,
                 navigationGeneration: navigationGeneration
               ),
-              self.itemsRevision == previousItemsRevision,
-              projectionGeneration == generation
-        else { return nil }
-        return result
+              self.itemsRevision == previousItemsRevision {
+            let key = projectionKey(itemsRevision: itemsRevision)
+            let generation = beginProjectionGeneration()
+            let result = await Self.project(items: items, key: key, projector: projector)
+            guard !Task.isCancelled,
+                  isCurrentRefresh(
+                    refreshID,
+                    directory: directory,
+                    navigationGeneration: navigationGeneration
+                  ),
+                  self.itemsRevision == previousItemsRevision
+            else { return nil }
+            guard projectionGeneration == generation else { continue }
+            return result
+        }
+        return nil
     }
 
     private func projectionKey(itemsRevision: UInt64) -> PaneProjectionKey {
@@ -814,10 +820,11 @@ final class FilePaneState {
 
     private nonisolated static func project(
         items: [FileItem],
-        key: PaneProjectionKey
+        key: PaneProjectionKey,
+        projector: any PaneItemProjecting
     ) async -> PaneItemProjection {
         await Task.detached(priority: .userInitiated) {
-            PaneItemProjector().project(items: items, key: key)
+            await projector.project(items: items, key: key)
         }.value
     }
 

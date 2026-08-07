@@ -221,7 +221,9 @@ struct WorkspaceCommandTests {
         await workspace.loadInitialDirectories()
         workspace.left.beginFiltering()
         workspace.left.updateFilterQuery("does-not-match")
-        #expect(workspace.left.visibleItems.isEmpty)
+        #expect(await waitForCommandPaneCondition {
+            workspace.left.visibleItems.isEmpty
+        })
 
         #expect(await WorkspaceCommandActions.createFolder(
             in: workspace.left,
@@ -445,6 +447,17 @@ private func menuItemsRecursively(in menu: NSMenu) -> [NSMenuItem] {
         items.append(contentsOf: menuItemsRecursively(in: submenu))
     }
     return items
+}
+
+@MainActor
+private func waitForCommandPaneCondition(
+    _ condition: @escaping @MainActor () -> Bool
+) async -> Bool {
+    for _ in 0..<10_000 {
+        if condition() { return true }
+        await Task.yield()
+    }
+    return condition()
 }
 
 private actor CommandArchiveRecorder: ArchiveOperating {

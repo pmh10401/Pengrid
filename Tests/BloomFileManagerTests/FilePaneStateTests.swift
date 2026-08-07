@@ -403,23 +403,30 @@ struct FilePaneStateTests {
 
     @Test func rapidQueryAndSortChangesPublishOnlyTheNewestProjection() async {
         let directory = URL(filePath: "/projection-generation", directoryHint: .isDirectory)
-        let filler = (0..<1_000).map {
-            makeItem(named: "item-\($0).txt", byteSize: Int64($0), in: directory)
-        }
+        let item = makeItem(named: "item.txt", byteSize: 10, in: directory)
         let beta = makeItem(named: "beta.txt", byteSize: 30, in: directory)
+        let projector = ControlledPaneItemProjector()
         let pane = FilePaneState(
             directory: directory,
-            listingService: StubDirectoryListingService(values: [directory: filler + [beta]])
+            listingService: StubDirectoryListingService(values: [directory: [item, beta]]),
+            projector: projector
         )
         await pane.navigate(to: directory, recordHistory: false)
 
+        await projector.suspendNextProjection()
         pane.updateFilterQuery("item")
+        #expect(await waitForProjectionStart(projector, count: 2))
+
         pane.sort = FileSort(key: .size, direction: .descending)
         pane.updateFilterQuery("beta")
-        pane.sort = FileSort(key: .name, direction: .ascending)
+        #expect(await waitForProjectionStart(projector, count: 3))
 
         #expect(await waitForPaneCondition { pane.visibleItems == [beta] })
-        for _ in 0..<100 { await Task.yield() }
+        #expect(await projector.hasCompleted(request: 2))
+        #expect(!(await projector.hasCompleted(request: 1)))
+
+        await projector.resumeProjection(request: 1)
+        #expect(await waitForProjectionCompletion(projector, request: 1))
         #expect(pane.visibleItems == [beta])
         #expect(pane.visibleIndexByURL == [beta.url.standardizedFileURL: 0])
     }
@@ -497,6 +504,73 @@ struct FilePaneStateTests {
         #expect(pane.errorMessage != nil)
     }
 
+    @Test func refreshReprojectsStagedItemsWhenFilterAndSortSupersedeItsProjection() async {
+        let directory = URL(filePath: "/refresh-projection-race", directoryHint: .isDirectory)
+        let selectedURL = directory.appending(path: "selected-small.txt")
+        let obsolete = makeItem(named: "obsolete.txt", byteSize: 4, in: directory)
+        let oldSelected = FileItem(
+            url: selectedURL,
+            name: "selected-small.txt",
+            isDirectory: false,
+            isPackage: false,
+            modifiedAt: nil,
+            byteSize: 1,
+            typeDescription: "Text"
+        )
+        let refreshedSelected = FileItem(
+            url: selectedURL,
+            name: "selected-small.txt",
+            isDirectory: false,
+            isPackage: false,
+            modifiedAt: nil,
+            byteSize: 2,
+            typeDescription: "Text"
+        )
+        let refreshedLarge = makeItem(named: "selected-large.txt", byteSize: 20, in: directory)
+        let listing = ControlledListingControl()
+        let projector = ControlledPaneItemProjector()
+        let pane = FilePaneState(
+            directory: directory,
+            listingService: ControlledDirectoryListingService(control: listing),
+            projector: projector
+        )
+
+        let initialLoad = Task { await pane.navigate(to: directory, recordHistory: false) }
+        await listing.waitForStart(in: directory, count: 1)
+        await listing.yield([oldSelected, obsolete], in: directory, request: 0)
+        await listing.finish(in: directory, request: 0)
+        await initialLoad.value
+        pane.selection = [oldSelected.url, obsolete.url]
+
+        await projector.suspendNextProjection()
+        let refresh = Task { await pane.refresh() }
+        await listing.waitForStart(in: directory, count: 2)
+        await listing.yield([refreshedSelected, refreshedLarge], in: directory, request: 1)
+        await listing.finish(in: directory, request: 1)
+        await projector.waitForStartCount(2)
+
+        pane.updateFilterQuery("selected")
+        pane.sort = FileSort(key: .size, direction: .descending)
+        #expect(pane.items == [oldSelected, obsolete])
+
+        await projector.resumeProjection(request: 1)
+        await refresh.value
+
+        #expect(pane.items == [refreshedSelected, refreshedLarge])
+        #expect(pane.visibleItems == [refreshedLarge, refreshedSelected])
+        #expect(pane.visibleIndexByURL == [
+            refreshedLarge.url.standardizedFileURL: 0,
+            refreshedSelected.url.standardizedFileURL: 1,
+        ])
+        #expect(pane.selection == [refreshedSelected.url])
+        let refreshRequests = await projector.requests.filter {
+            $0.itemNames == [refreshedSelected.name, refreshedLarge.name]
+        }
+        #expect(refreshRequests.count == 2)
+        #expect(refreshRequests.last?.key.normalizedQuery == "selected")
+        #expect(refreshRequests.last?.key.sort == FileSort(key: .size, direction: .descending))
+    }
+
     @Test func acceptedProjectionIntersectsSelectionAndPublishesItsIndexTogether() async {
         let directory = URL(filePath: "/selection-projection", directoryHint: .isDirectory)
         let alpha = makeItem(named: "alpha.txt", in: directory)
@@ -572,15 +646,19 @@ struct FilePaneStateTests {
         pane.beginFiltering()
         pane.updateFilterQuery("한글")
 
-        #expect(pane.visibleItems.map(\.name) == ["한글보고서.pdf"])
-        #expect(pane.selection.isEmpty)
-        #expect(pane.filterResultCount == 1)
+        #expect(await waitForPaneCondition {
+            pane.visibleItems.map(\.name) == ["한글보고서.pdf"]
+                && pane.selection.isEmpty
+                && pane.filterResultCount == 1
+        })
         #expect(listing.callCount(for: root) == 1)
 
         pane.dismissFiltering()
 
-        #expect(pane.visibleItems.count == 3)
-        #expect(pane.selection == [resume.url])
+        #expect(await waitForPaneCondition {
+            pane.visibleItems.count == 3
+                && pane.selection == [resume.url]
+        })
         #expect(pane.filterQuery.isEmpty)
         #expect(!pane.isFilterPresented)
     }
@@ -903,6 +981,92 @@ private actor ControlledPaneBatchSleeper: PaneBatchSleeping {
         }
         sleepWaiters = pending
     }
+}
+
+private struct ControlledPaneProjectionRequest: Sendable {
+    let itemNames: [String]
+    let key: PaneProjectionKey
+}
+
+private actor ControlledPaneItemProjector: PaneItemProjecting {
+    private var suspensionBudget = 0
+    private var suspended: [Int: CheckedContinuation<Void, Never>] = [:]
+    private var startWaiters: [(count: Int, continuation: CheckedContinuation<Void, Never>)] = []
+    private var completedRequests: Set<Int> = []
+    private(set) var requests: [ControlledPaneProjectionRequest] = []
+
+    var requestCount: Int { requests.count }
+
+    func suspendNextProjection() {
+        suspensionBudget += 1
+    }
+
+    func project(items: [FileItem], key: PaneProjectionKey) async -> PaneItemProjection {
+        let request = requests.count
+        requests.append(ControlledPaneProjectionRequest(
+            itemNames: items.map(\.name),
+            key: key
+        ))
+        resumeSatisfiedStartWaiters()
+        if suspensionBudget > 0 {
+            suspensionBudget -= 1
+            await withCheckedContinuation { continuation in
+                suspended[request] = continuation
+            }
+        }
+        let projection = PaneItemProjector().project(items: items, key: key)
+        completedRequests.insert(request)
+        return projection
+    }
+
+    func waitForStartCount(_ count: Int) async {
+        guard requests.count < count else { return }
+        await withCheckedContinuation { continuation in
+            startWaiters.append((count, continuation))
+        }
+    }
+
+    func resumeProjection(request: Int) {
+        suspended.removeValue(forKey: request)?.resume()
+    }
+
+    func hasCompleted(request: Int) -> Bool {
+        completedRequests.contains(request)
+    }
+
+    private func resumeSatisfiedStartWaiters() {
+        var pending: [(count: Int, continuation: CheckedContinuation<Void, Never>)] = []
+        for waiter in startWaiters {
+            if requests.count >= waiter.count {
+                waiter.continuation.resume()
+            } else {
+                pending.append(waiter)
+            }
+        }
+        startWaiters = pending
+    }
+}
+
+private func waitForProjectionStart(
+    _ projector: ControlledPaneItemProjector,
+    count: Int
+) async -> Bool {
+    for _ in 0..<10_000 {
+        if await projector.requestCount >= count { return true }
+        await Task.yield()
+    }
+    return await projector.requestCount >= count
+}
+
+private func waitForProjectionCompletion(
+    _ projector: ControlledPaneItemProjector,
+    request: Int
+) async -> Bool {
+    for _ in 0..<10_000 {
+        if await projector.hasCompleted(request: request) { return true }
+        await Task.yield()
+    }
+    return await projector.hasCompleted(request: request)
 }
 
 @MainActor

@@ -495,6 +495,9 @@ struct FileTableViewLifecycleTests {
         pane.selection = [captured.url]
         pane.beginFiltering()
         pane.updateFilterQuery("result")
+        #expect(await waitForTablePaneCondition {
+            pane.visibleItems == [result] && pane.selection.isEmpty
+        })
         var broaderCancellations = 0
         var focusTask: Task<Void, Never>?
         let selection = Binding<Set<URL>>(
@@ -554,6 +557,10 @@ struct FileTableViewLifecycleTests {
 
         table.keyDown(with: escape)
         await focusTask?.value
+        #expect(await waitForTablePaneCondition {
+            pane.visibleItems == [captured, result]
+                && pane.selection == [captured.url]
+        })
 
         #expect(!pane.isFilterPresented)
         #expect(pane.filterQuery.isEmpty)
@@ -840,6 +847,17 @@ private func textEditingNotification(_ textField: NSTextField, movement: NSTextM
         object: textField,
         userInfo: ["NSTextMovement": NSNumber(value: movement.rawValue)]
     )
+}
+
+@MainActor
+private func waitForTablePaneCondition(
+    _ condition: @escaping @MainActor () -> Bool
+) async -> Bool {
+    for _ in 0..<10_000 {
+        if condition() { return true }
+        await Task.yield()
+    }
+    return condition()
 }
 
 private func makeTableItem(named name: String, in directory: URL) -> FileItem {
