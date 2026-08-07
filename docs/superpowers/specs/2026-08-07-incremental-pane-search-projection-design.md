@@ -1,7 +1,7 @@
 # Incremental Pane Search Projection Design
 
 **Date:** 2026-08-07
-**Status:** Proposed
+**Status:** Approved
 **Scope:** Pengrid pane filename filtering during interactive typing
 
 ## Context
