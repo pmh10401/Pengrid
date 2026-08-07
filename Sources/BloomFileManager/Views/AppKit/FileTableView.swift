@@ -309,8 +309,11 @@ extension FileTableView {
         var parent: FileTableView
         var items: [FileItem]
         var isApplyingSelection = false
+        private let updatePlanner: FileTableUpdatePlanner
         private var isApplyingSort = false
         private var isApplyingScrollRequest = false
+        private var itemIndexByIdentity: [URL: Int]
+        private var hasCompleteItemIndexByIdentity: Bool
         weak var tableView: NSTableView?
 
         private var lastHandledRenameRequestID: UUID?
@@ -327,9 +330,15 @@ extension FileTableView {
             return formatter
         }()
 
-        init(parent: FileTableView) {
+        init(
+            parent: FileTableView,
+            updatePlanner: FileTableUpdatePlanner = FileTableUpdatePlanner()
+        ) {
             self.parent = parent
             items = parent.items
+            self.updatePlanner = updatePlanner
+            itemIndexByIdentity = [:]
+            hasCompleteItemIndexByIdentity = parent.items.isEmpty
         }
 
         func numberOfRows(in tableView: NSTableView) -> Int {
@@ -337,23 +346,40 @@ extension FileTableView {
         }
 
         func apply(items newItems: [FileItem], selection desiredSelection: Set<URL>, to tableView: NSTableView) {
-            let needsReload = items != newItems
-            let desiredIndexes = IndexSet(newItems.indices.filter {
-                desiredSelection.contains(newItems[$0].url)
+            let updatePlan = updatePlanner.plan(from: items, to: newItems)
+            let newItemIndexByIdentity = desiredSelection.isEmpty
+                ? nil
+                : Self.makeItemIndexByIdentity(for: newItems)
+            let desiredIndexes = IndexSet(desiredSelection.compactMap {
+                newItemIndexByIdentity?[$0.standardizedFileURL]
             })
-            guard needsReload || tableView.selectedRowIndexes != desiredIndexes else {
+            guard updatePlan != .none || tableView.selectedRowIndexes != desiredIndexes else {
                 beginRequestedRenameIfPossible(in: tableView)
                 return
             }
 
+            let requiresStableStateRestoration = switch updatePlan {
+            case .insert, .remove, .move, .reloadAll: true
+            case .none, .reload: false
+            }
+            let firstVisibleIdentity = requiresStableStateRestoration
+                ? firstVisibleIdentity(in: tableView)
+                : nil
+            let tableHadFocus = requiresStableStateRestoration
+                && tableView.window?.firstResponder === tableView
             isApplyingSelection = true
             defer { isApplyingSelection = false }
-            if needsReload {
-                items = newItems
-                tableView.reloadData()
-            }
+            items = newItems
+            itemIndexByIdentity = newItemIndexByIdentity ?? [:]
+            hasCompleteItemIndexByIdentity = newItemIndexByIdentity != nil || newItems.isEmpty
+            apply(updatePlan, to: tableView)
             if tableView.selectedRowIndexes != desiredIndexes {
                 tableView.selectRowIndexes(desiredIndexes, byExtendingSelection: false)
+            }
+            restoreFirstVisibleIdentity(firstVisibleIdentity, in: tableView)
+            if tableHadFocus,
+               tableView.window?.firstResponder !== tableView {
+                _ = tableView.window?.makeFirstResponder(tableView)
             }
             beginRequestedRenameIfPossible(in: tableView)
         }
@@ -392,24 +418,11 @@ extension FileTableView {
         func applyScrollRequest(to tableView: NSTableView) {
             guard let request = parent.scrollRequest,
                   request.id != lastHandledScrollRequestID,
-                  let row = items.firstIndex(where: { $0.url == request.anchor })
+                  let row = itemIndex(for: request.anchor)
             else { return }
 
             isApplyingScrollRequest = true
-            if let scrollView = tableView.enclosingScrollView {
-                let clipView = scrollView.contentView
-                let requestedBounds = NSRect(
-                    x: clipView.bounds.minX,
-                    y: tableView.rect(ofRow: row).minY,
-                    width: clipView.bounds.width,
-                    height: clipView.bounds.height
-                )
-                let targetBounds = clipView.constrainBoundsRect(requestedBounds)
-                clipView.scroll(to: targetBounds.origin)
-                scrollView.reflectScrolledClipView(clipView)
-            } else {
-                tableView.scrollRowToVisible(row)
-            }
+            scroll(row: row, toTopIn: tableView)
             lastHandledScrollRequestID = request.id
             parent.onConsumeScrollRequest(request.id)
             isApplyingScrollRequest = false
@@ -716,12 +729,12 @@ extension FileTableView {
                   requestID != lastHandledRenameRequestID,
                   parent.selection.count == 1,
                   let selectedURL = parent.selection.first,
-                  let row = items.firstIndex(where: { $0.url == selectedURL }),
+                  let row = itemIndex(for: selectedURL),
                   let nameColumn = tableView.tableColumns.firstIndex(where: { $0.identifier == Column.name.identifier })
             else { return }
 
             lastHandledRenameRequestID = requestID
-            editingURL = selectedURL
+            editingURL = items[row].url
             tableView.editColumn(nameColumn, row: row, with: nil, select: true)
             let consumeRequest = parent.onConsumeRenameRequest
             Task { @MainActor in
@@ -738,6 +751,90 @@ extension FileTableView {
                     isDirectory: items[row].isDirectory
                 ))
             }
+        }
+
+        private func apply(_ plan: FileTableUpdatePlan, to tableView: NSTableView) {
+            switch plan {
+            case .none:
+                return
+            case let .insert(indexes):
+                applyBoundedChanges(to: tableView) {
+                    tableView.insertRows(at: indexes, withAnimation: [])
+                }
+            case let .remove(indexes):
+                applyBoundedChanges(to: tableView) {
+                    tableView.removeRows(at: indexes, withAnimation: [])
+                }
+            case let .reload(indexes):
+                tableView.reloadData(
+                    forRowIndexes: indexes,
+                    columnIndexes: IndexSet(integersIn: tableView.tableColumns.indices)
+                )
+            case let .move(moves):
+                applyBoundedChanges(to: tableView) {
+                    for move in moves {
+                        tableView.moveRow(at: move.from, to: move.to)
+                    }
+                }
+            case .reloadAll:
+                tableView.reloadData()
+            }
+        }
+
+        private func applyBoundedChanges(to tableView: NSTableView, changes: () -> Void) {
+            tableView.beginUpdates()
+            changes()
+            tableView.endUpdates()
+        }
+
+        private func firstVisibleIdentity(in tableView: NSTableView) -> URL? {
+            guard tableView.enclosingScrollView != nil else { return nil }
+            let row = tableView.rows(in: tableView.visibleRect).location
+            return items.indices.contains(row) ? items[row].url.standardizedFileURL : nil
+        }
+
+        private func restoreFirstVisibleIdentity(_ identity: URL?, in tableView: NSTableView) {
+            guard let identity,
+                  let row = itemIndex(for: identity)
+            else { return }
+            scroll(row: row, toTopIn: tableView)
+        }
+
+        private func scroll(row: Int, toTopIn tableView: NSTableView) {
+            if let scrollView = tableView.enclosingScrollView {
+                let clipView = scrollView.contentView
+                let requestedBounds = NSRect(
+                    x: clipView.bounds.minX,
+                    y: tableView.rect(ofRow: row).minY,
+                    width: clipView.bounds.width,
+                    height: clipView.bounds.height
+                )
+                let targetBounds = clipView.constrainBoundsRect(requestedBounds)
+                clipView.scroll(to: targetBounds.origin)
+                scrollView.reflectScrolledClipView(clipView)
+            } else {
+                tableView.scrollRowToVisible(row)
+            }
+        }
+
+        private static func makeItemIndexByIdentity(for items: [FileItem]) -> [URL: Int] {
+            var result: [URL: Int] = [:]
+            result.reserveCapacity(items.count)
+            for (index, item) in items.enumerated() {
+                let identity = item.url.standardizedFileURL
+                if result[identity] == nil {
+                    result[identity] = index
+                }
+            }
+            return result
+        }
+
+        private func itemIndex(for url: URL) -> Int? {
+            if !hasCompleteItemIndexByIdentity {
+                itemIndexByIdentity = Self.makeItemIndexByIdentity(for: items)
+                hasCompleteItemIndexByIdentity = true
+            }
+            return itemIndexByIdentity[url.standardizedFileURL]
         }
 
         private func dropDestination(for row: Int) -> URL? {

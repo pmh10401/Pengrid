@@ -181,6 +181,232 @@ struct FileTableViewLifecycleTests {
         #expect(!selection.writes.contains([]))
     }
 
+    @Test func sortedBatchInsertionUsesOneBoundedUpdateWithoutReloadingAllRows() {
+        let directory = URL(filePath: "/table", directoryHint: .isDirectory)
+        let oldItems = ["b", "d"].map { makeTableItem(named: $0, in: directory) }
+        let newItems = ["a", "b", "c", "d"].map { makeTableItem(named: $0, in: directory) }
+        let selection = SelectionRecorder(value: [])
+        let coordinator = makeTableView(items: oldItems, selection: selection).makeCoordinator()
+        let tableView = UpdateRecordingTableView()
+
+        coordinator.apply(items: newItems, selection: [], to: tableView)
+
+        #expect(tableView.updateCalls == [
+            .begin,
+            .insert(IndexSet([0, 2])),
+            .end
+        ])
+    }
+
+    @Test func changedRowValueReloadsOnlyThatRow() {
+        let oldItems = [makeTableItem(named: "a", in: URL(filePath: "/table"))]
+        let changedItems = [FileItem(
+            url: oldItems[0].url,
+            name: "renamed-a",
+            isDirectory: false,
+            isPackage: false,
+            modifiedAt: nil,
+            byteSize: 1,
+            typeDescription: "File"
+        )]
+        let selection = SelectionRecorder(value: [])
+        let coordinator = makeTableView(items: oldItems, selection: selection).makeCoordinator()
+        let tableView = UpdateRecordingTableView()
+        tableView.addTableColumn(NSTableColumn(identifier: NSUserInterfaceItemIdentifier("name")))
+
+        coordinator.apply(items: changedItems, selection: [], to: tableView)
+
+        #expect(tableView.updateCalls == [.reload(IndexSet(integer: 0))])
+    }
+
+    @Test func pureReorderAppliesSequentialMovesInOneBoundedUpdate() {
+        let directory = URL(filePath: "/table", directoryHint: .isDirectory)
+        let oldItems = ["a", "b", "c", "d"].map { makeTableItem(named: $0, in: directory) }
+        let newItems = [oldItems[3], oldItems[1], oldItems[0], oldItems[2]]
+        let selection = SelectionRecorder(value: [])
+        let coordinator = makeTableView(items: oldItems, selection: selection).makeCoordinator()
+        let tableView = UpdateRecordingTableView()
+
+        coordinator.apply(items: newItems, selection: [], to: tableView)
+
+        #expect(tableView.updateCalls == [
+            .begin,
+            .move(FileTableRowMove(from: 3, to: 0)),
+            .move(FileTableRowMove(from: 2, to: 1)),
+            .end
+        ])
+    }
+
+    @Test func subsequenceRemovalUsesOneBoundedUpdateWithoutReloadingAllRows() {
+        let directory = URL(filePath: "/table", directoryHint: .isDirectory)
+        let oldItems = ["a", "b", "c", "d"].map { makeTableItem(named: $0, in: directory) }
+        let newItems = [oldItems[1], oldItems[3]]
+        let selection = SelectionRecorder(value: [])
+        let coordinator = makeTableView(items: oldItems, selection: selection).makeCoordinator()
+        let tableView = UpdateRecordingTableView()
+
+        coordinator.apply(items: newItems, selection: [], to: tableView)
+
+        #expect(tableView.updateCalls == [
+            .begin,
+            .remove(IndexSet([0, 2])),
+            .end
+        ])
+    }
+
+    @Test func ambiguousMixedChangeReloadsAllRowsExactlyOnce() {
+        let directory = URL(filePath: "/table", directoryHint: .isDirectory)
+        let oldItems = ["a", "b", "c"].map { makeTableItem(named: $0, in: directory) }
+        let newItems = ["a", "d", "c"].map { makeTableItem(named: $0, in: directory) }
+        let selection = SelectionRecorder(value: [])
+        let coordinator = makeTableView(items: oldItems, selection: selection).makeCoordinator()
+        let tableView = UpdateRecordingTableView()
+
+        coordinator.apply(items: newItems, selection: [], to: tableView)
+
+        #expect(tableView.updateCalls == [.reloadAll])
+    }
+
+    @Test func insertionRestoresStandardizedURLSelectionFromOneIndexMap() {
+        let directory = URL(filePath: "/table", directoryHint: .isDirectory)
+        let oldItems = ["b", "d"].map { makeTableItem(named: $0, in: directory) }
+        let newItems = ["a", "b", "c", "d"].map { makeTableItem(named: $0, in: directory) }
+        let selectedAlias = URL(filePath: "/table/folder/../d")
+        let selection = SelectionRecorder(value: [selectedAlias])
+        let coordinator = makeTableView(items: oldItems, selection: selection).makeCoordinator()
+        let tableView = UpdateRecordingTableView()
+
+        coordinator.apply(items: newItems, selection: [selectedAlias], to: tableView)
+
+        #expect(tableView.selectionRequests == [IndexSet(integer: 3)])
+        #expect(selection.value == [selectedAlias])
+    }
+
+    @Test func renameRequestResolvesAStandardizedSelectionIdentity() {
+        let item = makeTableItem(named: "a", in: URL(filePath: "/table"))
+        let selectedAlias = URL(filePath: "/table/folder/../a")
+        let selection = SelectionRecorder(value: [selectedAlias])
+        let view = FileTableView(
+            items: [item],
+            selection: selection.binding,
+            renameRequestID: UUID(),
+            onActivatePane: {},
+            onOpen: { _ in },
+            onSortChange: { _ in }
+        )
+        let coordinator = view.makeCoordinator()
+        let tableView = RenameRecordingTableView()
+        tableView.addTableColumn(NSTableColumn(identifier: NSUserInterfaceItemIdentifier("name")))
+
+        coordinator.apply(items: [item], selection: [selectedAlias], to: tableView)
+
+        #expect(tableView.editRequests == [RenameEditRequest(column: 0, row: 0)])
+    }
+
+    @Test func scrollRequestResolvesAStandardizedAnchorIdentity() {
+        let item = makeTableItem(named: "a", in: URL(filePath: "/table"))
+        let request = PaneScrollRequest(id: UUID(), anchor: URL(filePath: "/table/folder/../a"))
+        var consumed: [UUID] = []
+        let view = FileTableView(
+            items: [item],
+            selection: .constant([]),
+            scrollRequest: request,
+            onActivatePane: {},
+            onOpen: { _ in },
+            onSortChange: { _ in },
+            onConsumeScrollRequest: { consumed.append($0) }
+        )
+        let coordinator = view.makeCoordinator()
+
+        coordinator.applyScrollRequest(to: NSTableView())
+
+        #expect(consumed == [request.id])
+    }
+
+    @Test func insertionPreservesTheFirstVisibleRowByStableIdentity() throws {
+        let directory = URL(filePath: "/table-scroll", directoryHint: .isDirectory)
+        let oldItems = (0..<30).map {
+            makeTableItem(named: String(format: "item-%02d", $0), in: directory)
+        }
+        let inserted = makeTableItem(named: "item-before", in: directory)
+        let view = FileTableView(
+            items: [],
+            selection: .constant([]),
+            onActivatePane: {},
+            onOpen: { _ in },
+            onSortChange: { _ in }
+        )
+        let coordinator = view.makeCoordinator()
+        let scrollView = view.makeScrollView(coordinator: coordinator)
+        scrollView.hasVerticalScroller = false
+        scrollView.frame = NSRect(x: 0, y: 0, width: 500, height: 140)
+        let tableView = try #require(scrollView.documentView as? NSTableView)
+        tableView.frame = NSRect(x: 0, y: 0, width: 500, height: 31 * 28)
+        coordinator.apply(items: oldItems, selection: [], to: tableView)
+        scrollView.contentView.scroll(to: NSPoint(x: 0, y: 20 * 28))
+        scrollView.reflectScrolledClipView(scrollView.contentView)
+        let originalFirstRow = tableView.rows(in: tableView.visibleRect).location
+        let originalFirstIdentity = oldItems[originalFirstRow].url.standardizedFileURL
+
+        coordinator.apply(items: [inserted] + oldItems, selection: [], to: tableView)
+
+        let updatedFirstRow = tableView.rows(in: tableView.visibleRect).location
+        #expect(coordinator.items[updatedFirstRow].url.standardizedFileURL == originalFirstIdentity)
+    }
+
+    @Test func insertionRestoresTableFocusWhenAppKitDropsTheResponder() throws {
+        let directory = URL(filePath: "/table-focus", directoryHint: .isDirectory)
+        let oldItems = [makeTableItem(named: "b", in: directory)]
+        let newItems = [makeTableItem(named: "a", in: directory)] + oldItems
+        let selection = SelectionRecorder(value: [])
+        let coordinator = makeTableView(items: oldItems, selection: selection).makeCoordinator()
+        let tableView = FocusDisruptingUpdateTableView()
+        let window = FocusStateRecordingWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 500, height: 300),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = tableView
+        #expect(window.makeFirstResponder(tableView))
+        #expect(window.firstResponder === tableView)
+
+        coordinator.apply(items: newItems, selection: [], to: tableView)
+
+        #expect(window.firstResponder === tableView)
+    }
+
+    @Test func tableUpdateThreshold128Measurement() {
+        measureTableUpdateThreshold(128, expectsIncrementalBatch: false)
+    }
+
+    @Test func tableUpdateThreshold256Measurement() {
+        measureTableUpdateThreshold(256, expectsIncrementalBatch: true)
+    }
+
+    @Test func tableUpdateThreshold512Measurement() {
+        measureTableUpdateThreshold(512, expectsIncrementalBatch: true)
+    }
+
+    @Test func tableUpdateThreshold1024Measurement() {
+        measureTableUpdateThreshold(1_024, expectsIncrementalBatch: true)
+    }
+
+    @Test func oversizedInitialPopulationFallsBackBeforeIdentityPlanningOverhead() {
+        let directory = URL(filePath: "/table-initial", directoryHint: .isDirectory)
+        let items = (0..<10_000).map {
+            makeTableItem(named: String(format: "item-%05d", $0), in: directory)
+        }
+
+        let sample = measureFirstRenderedTableState(firstNonemptyItems: items)
+
+        #expect(sample.rowCount == items.count)
+        #expect(
+            sample.coordinatorApplication < .milliseconds(30),
+            "oversized fallback spent too long building identities: \(sample.coordinatorApplication)"
+        )
+    }
+
     @Test func unchangedSelectionClickStillActivatesPane() {
         let item = makeTableItem(named: "selected", in: URL(filePath: "/tmp/table-test"))
         let selection = SelectionRecorder(value: [item.url])
@@ -742,6 +968,81 @@ struct FileTableViewLifecycleTests {
 }
 
 @MainActor
+private func measureTableUpdateThreshold(
+    _ threshold: Int,
+    expectsIncrementalBatch: Bool
+) {
+    let directory = URL(filePath: "/table-threshold", directoryHint: .isDirectory)
+    let oldItems = (0..<10_000).map {
+        makeTableItem(named: String(format: "item-%05d", $0), in: directory)
+    }
+    let newItems = oldItems + (10_000..<10_256).map {
+        makeTableItem(named: String(format: "item-%05d", $0), in: directory)
+    }
+    let planner = FileTableUpdatePlanner(maximumIncrementalChanges: threshold)
+    let plan = planner.plan(from: oldItems, to: newItems)
+    if expectsIncrementalBatch {
+        guard case let .insert(indexes) = plan else {
+            Issue.record("threshold \(threshold) unexpectedly fell back for a 256-row batch")
+            return
+        }
+        #expect(indexes.count == 256)
+    } else {
+        #expect(plan == .reloadAll)
+    }
+
+    let clock = ContinuousClock()
+    let recordedSampleCount = max(
+        1,
+        Int(ProcessInfo.processInfo.environment["PENGRID_TABLE_THRESHOLD_SAMPLES"] ?? "") ?? 1
+    )
+    let warmupCount = recordedSampleCount > 1 ? 3 : 0
+    var samples: [Duration] = []
+    var finalRowCount = 0
+    for iteration in 0..<(warmupCount + recordedSampleCount) {
+        let elapsed: Duration = autoreleasepool {
+            let view = FileTableView(
+                items: [],
+                selection: .constant([]),
+                onActivatePane: {},
+                onOpen: { _ in },
+                onSortChange: { _ in }
+            )
+            let coordinator = FileTableView.Coordinator(
+                parent: view,
+                updatePlanner: planner
+            )
+            let scrollView = view.makeScrollView(coordinator: coordinator)
+            scrollView.frame = NSRect(x: 0, y: 0, width: 700, height: 300)
+            let tableView = scrollView.documentView as! NSTableView
+            tableView.frame = NSRect(x: 0, y: 0, width: 700, height: 300)
+            coordinator.apply(items: oldItems, selection: [], to: tableView)
+            tableView.layoutSubtreeIfNeeded()
+
+            let duration = clock.measure {
+                coordinator.apply(items: newItems, selection: [], to: tableView)
+                tableView.layoutSubtreeIfNeeded()
+            }
+            finalRowCount = tableView.numberOfRows
+            return duration
+        }
+        if iteration >= warmupCount {
+            samples.append(elapsed)
+        }
+    }
+
+    let sortedSamples = samples.sorted()
+    let p95Index = Int(ceil(Double(sortedSamples.count) * 0.95)) - 1
+    let p95 = sortedSamples[p95Index]
+    #expect(finalRowCount == newItems.count)
+    #expect(p95 < .seconds(5), "threshold \(threshold) exceeded the table-update hang ceiling")
+    print(
+        "navigation-table-threshold threshold=\(threshold) batch=256 samples=\(samples.count) "
+            + "plan=\(plan) p95=\(p95) rows=\(finalRowCount)"
+    )
+}
+
+@MainActor
 private final class MenuActionRecorder: NSObject {
     var performCount = 0
 
@@ -776,6 +1077,87 @@ private final class ReloadNotifyingTableView: NSTableView {
         super.reloadData()
         deselectAll(nil)
         NotificationCenter.default.post(name: NSTableView.selectionDidChangeNotification, object: self)
+    }
+}
+
+private enum TableUpdateCall: Equatable {
+    case begin
+    case end
+    case insert(IndexSet)
+    case remove(IndexSet)
+    case move(FileTableRowMove)
+    case reload(IndexSet)
+    case reloadAll
+}
+
+@MainActor
+private class UpdateRecordingTableView: NSTableView {
+    private var recordedSelection: IndexSet = []
+    var updateCalls: [TableUpdateCall] = []
+    var selectionRequests: [IndexSet] = []
+
+    override var selectedRowIndexes: IndexSet {
+        recordedSelection
+    }
+
+    override func selectRowIndexes(_ indexes: IndexSet, byExtendingSelection extend: Bool) {
+        recordedSelection = extend ? recordedSelection.union(indexes) : indexes
+        selectionRequests.append(recordedSelection)
+    }
+
+    override func beginUpdates() {
+        updateCalls.append(.begin)
+    }
+
+    override func endUpdates() {
+        updateCalls.append(.end)
+    }
+
+    override func insertRows(at indexes: IndexSet, withAnimation animationOptions: NSTableView.AnimationOptions = []) {
+        updateCalls.append(.insert(indexes))
+    }
+
+    override func removeRows(at indexes: IndexSet, withAnimation animationOptions: NSTableView.AnimationOptions = []) {
+        updateCalls.append(.remove(indexes))
+    }
+
+    override func moveRow(at oldIndex: Int, to newIndex: Int) {
+        updateCalls.append(.move(FileTableRowMove(from: oldIndex, to: newIndex)))
+    }
+
+    override func reloadData(forRowIndexes rowIndexes: IndexSet, columnIndexes: IndexSet) {
+        updateCalls.append(.reload(rowIndexes))
+    }
+
+    override func reloadData() {
+        updateCalls.append(.reloadAll)
+    }
+}
+
+@MainActor
+private final class FocusDisruptingUpdateTableView: UpdateRecordingTableView {
+    override func insertRows(at indexes: IndexSet, withAnimation animationOptions: NSTableView.AnimationOptions = []) {
+        super.insertRows(at: indexes, withAnimation: animationOptions)
+        _ = window?.makeFirstResponder(nil)
+    }
+
+    override func reloadData() {
+        super.reloadData()
+        _ = window?.makeFirstResponder(nil)
+    }
+}
+
+@MainActor
+private final class FocusStateRecordingWindow: NSWindow {
+    private var recordedFirstResponder: NSResponder?
+
+    override var firstResponder: NSResponder? {
+        recordedFirstResponder
+    }
+
+    override func makeFirstResponder(_ responder: NSResponder?) -> Bool {
+        recordedFirstResponder = responder
+        return true
     }
 }
 
