@@ -13,7 +13,11 @@ protocol PaneItemProjecting: Sendable {
 
 struct LivePaneItemProjector: PaneItemProjecting {
     func project(_ input: PaneProjectionInput) async throws -> PaneItemProjection {
-        try await PaneItemProjector().projectFallback(items: input.items, key: input.key)
+        let projector = PaneItemProjector()
+        if input.activeOrder != nil {
+            return try await projector.projectActiveOrder(input)
+        }
+        return try await projector.projectFallback(items: input.items, key: input.key)
     }
 
     func buildActiveOrder(
@@ -40,6 +44,16 @@ struct PaneProjectionToken: Equatable, Sendable {
 
 struct PaneProjectionRequest: Sendable {
     let input: PaneProjectionInput
+    let token: PaneProjectionToken
+}
+
+private struct RoutedPaneProjection: Sendable {
+    let projection: PaneItemProjection
+    let startsWarmUp: Bool
+}
+
+private struct StagedRefreshProjection: Sendable {
+    let routed: RoutedPaneProjection
     let token: PaneProjectionToken
 }
 
@@ -111,6 +125,7 @@ final class FilePaneState {
     private var firstVisibleItem: URL?
     private var itemsRevision: UInt64 = 0
     private var projectionGeneration: UInt64 = 0
+    private var warmUpGeneration: UInt64 = 0
     private var acceptedProjectionState: AcceptedPaneProjectionState
     var projectionAcceptanceHandler: (@MainActor (PaneProjectionKey) -> Void)?
     private var batchBuffer = PaneBatchBuffer()
@@ -627,7 +642,7 @@ final class FilePaneState {
         let selectedPaths = Set(selection.map(Self.entryPath))
         let previousRevision = itemsRevision
         let replacementRevision = previousRevision &+ 1
-        let projection = await stageRefreshProjection(
+        let staged = await stageRefreshProjection(
             items: refreshedItems,
             itemsRevision: replacementRevision,
             refreshID: refreshID,
@@ -635,7 +650,7 @@ final class FilePaneState {
             navigationGeneration: navigationGeneration,
             previousItemsRevision: previousRevision
         )
-        guard let projection else {
+        guard let staged else {
             finishRefresh(refreshID)
             return
         }
@@ -646,15 +661,20 @@ final class FilePaneState {
         ), itemsRevision == previousRevision else { return }
         items = refreshedItems
         itemsRevision = replacementRevision
-        let restoredSelection = Set(selectedPaths.compactMap { projection.urlByEntryPath[$0]?.standardizedFileURL })
+        let restoredSelection = Set(selectedPaths.compactMap { staged.routed.projection.urlByEntryPath[$0]?.standardizedFileURL })
         acceptProjection(
-            projection,
+            staged.routed.projection,
             selection: restoredSelection,
-            token: .init(
-                navigationGeneration: navigationGeneration,
-                projectionGeneration: projectionGeneration
-            )
+            token: staged.token
         )
+        if staged.routed.startsWarmUp {
+            startActiveOrderWarmUp(
+                items: refreshedItems,
+                directoryKey: Self.entryPath(directory),
+                key: staged.routed.projection.key,
+                token: staged.token
+            )
+        }
         errorMessage = preservedErrorMessage
         committedState = snapshot()
         finishRefresh(refreshID)
@@ -776,6 +796,7 @@ final class FilePaneState {
         guard acceptedProjectionKey != key else { return }
         let snapshot = items
         let directory = currentDirectory
+        let accepted = acceptedProjectionState
         let navigationGeneration = nextRequestID
         let generation = beginProjectionGeneration()
         let intersectsSelection = projectionChangesMembership(key)
@@ -784,12 +805,15 @@ final class FilePaneState {
             navigationGeneration: navigationGeneration,
             projectionGeneration: generation
         )
-        let request = PaneProjectionRequest(
-            input: projectionInput(items: snapshot, directory: directory, key: key),
-            token: token
-        )
+        let directoryKey = Self.entryPath(directory)
         let worker = Task.detached(priority: .userInitiated) {
-            try await projector.project(request.input)
+            try await Self.routeProjection(
+                items: snapshot,
+                directoryKey: directoryKey,
+                key: key,
+                accepted: accepted,
+                projector: projector
+            )
         }
         let work = ProjectionWork(worker: worker)
         let publication = Task { @MainActor [weak self, weak work] in
@@ -799,7 +823,7 @@ final class FilePaneState {
                 }
             }
             do {
-                let result = try await worker.value
+                let routed = try await worker.value
                 guard !Task.isCancelled, let self else { return }
                 if self.canAcceptProjection(
                     navigationGeneration: navigationGeneration,
@@ -808,10 +832,18 @@ final class FilePaneState {
                     projectionGeneration: generation
                 ) {
                     self.acceptProjection(
-                        result,
+                        routed.projection,
                         intersectsSelection: intersectsSelection,
                         token: token
                     )
+                    if routed.startsWarmUp {
+                        self.startActiveOrderWarmUp(
+                            items: snapshot,
+                            directoryKey: directoryKey,
+                            key: key,
+                            token: token
+                        )
+                    }
                 }
             } catch is CancellationError {
                 // Cancellation is expected when a more current projection replaces this one.
@@ -823,6 +855,66 @@ final class FilePaneState {
         work.installPublication(publication)
         projectionWork = work
         taskLifecycle.setProjectionWork(work)
+    }
+
+    private nonisolated static func routeProjection(
+        items: [FileItem],
+        directoryKey: String,
+        key: PaneProjectionKey,
+        accepted: AcceptedPaneProjectionState,
+        projector: any PaneItemProjecting
+    ) async throws -> RoutedPaneProjection {
+        let fallbackInput = PaneProjectionInput(
+            items: items,
+            directoryKey: directoryKey,
+            key: key,
+            activeOrder: nil,
+            previousSearch: nil
+        )
+
+        if key.normalizedQuery.isEmpty {
+            guard let activeOrder = try await projector.buildActiveOrder(
+                items: items,
+                directoryKey: directoryKey,
+                key: key
+            ) else {
+                return .init(projection: try await projector.project(fallbackInput), startsWarmUp: false)
+            }
+            let input = PaneProjectionInput(
+                items: items,
+                directoryKey: directoryKey,
+                key: key,
+                activeOrder: activeOrder,
+                previousSearch: nil
+            )
+            return .init(projection: try await projector.project(input), startsWarmUp: false)
+        }
+
+        let membershipIsCurrent = accepted.directoryKey == directoryKey
+            && accepted.key?.itemsRevision == key.itemsRevision
+            && accepted.key?.normalizedQuery == key.normalizedQuery
+        if membershipIsCurrent, accepted.key?.sort != key.sort {
+            return .init(
+                projection: try await projector.projectSortedSubset(items: accepted.visibleItems, key: key),
+                startsWarmUp: true
+            )
+        }
+
+        if let activeOrder = accepted.activeOrder,
+           activeOrder.directoryKey == directoryKey,
+           activeOrder.itemsRevision == key.itemsRevision,
+           activeOrder.sort == key.sort {
+            let input = PaneProjectionInput(
+                items: items,
+                directoryKey: directoryKey,
+                key: key,
+                activeOrder: activeOrder,
+                previousSearch: accepted.search
+            )
+            return .init(projection: try await projector.project(input), startsWarmUp: false)
+        }
+
+        return .init(projection: try await projector.project(fallbackInput), startsWarmUp: true)
     }
 
     private func ensureCurrentProjection(
@@ -846,14 +938,19 @@ final class FilePaneState {
         let key = projectionKey(itemsRevision: revision)
         let generation = beginProjectionGeneration()
         let intersectsSelection = projectionChangesMembership(key)
+        let accepted = acceptedProjectionState
         let token = PaneProjectionToken(
             navigationGeneration: navigationGeneration,
             projectionGeneration: generation
         )
-        let result: PaneItemProjection
+        let routed: RoutedPaneProjection
         do {
-            result = try await awaitProjectionWorker(
-                .init(input: projectionInput(items: snapshot, directory: directory, key: key), token: token),
+            routed = try await awaitRoutedProjectionWorker(
+                items: snapshot,
+                directory: directory,
+                key: key,
+                accepted: accepted,
+                token: token,
                 projector: projector
             )
         } catch is CancellationError {
@@ -871,7 +968,15 @@ final class FilePaneState {
                 projectionGeneration: generation
               )
         else { return }
-        acceptProjection(result, intersectsSelection: intersectsSelection, token: token)
+        acceptProjection(routed.projection, intersectsSelection: intersectsSelection, token: token)
+        if routed.startsWarmUp {
+            startActiveOrderWarmUp(
+                items: snapshot,
+                directoryKey: Self.entryPath(directory),
+                key: key,
+                token: token
+            )
+        }
     }
 
     private func stageRefreshProjection(
@@ -881,7 +986,7 @@ final class FilePaneState {
         directory: URL,
         navigationGeneration: UInt64,
         previousItemsRevision: UInt64
-    ) async -> PaneItemProjection? {
+    ) async -> StagedRefreshProjection? {
         while !Task.isCancelled,
               isCurrentRefresh(
                 refreshID,
@@ -895,10 +1000,14 @@ final class FilePaneState {
                 navigationGeneration: navigationGeneration,
                 projectionGeneration: generation
             )
-            let result: PaneItemProjection
+            let routed: RoutedPaneProjection
             do {
-                result = try await awaitProjectionWorker(
-                    .init(input: projectionInput(items: items, directory: directory, key: key), token: token),
+                routed = try await awaitRoutedProjectionWorker(
+                    items: items,
+                    directory: directory,
+                    key: key,
+                    accepted: acceptedProjectionState,
+                    token: token,
                     projector: projector
                 )
             } catch is CancellationError {
@@ -917,7 +1026,7 @@ final class FilePaneState {
                   self.itemsRevision == previousItemsRevision
             else { return nil }
             guard projectionGeneration == generation else { continue }
-            return result
+            return .init(routed: routed, token: token)
         }
         return nil
     }
@@ -946,6 +1055,83 @@ final class FilePaneState {
         else { return }
         projectionWork = nil
         taskLifecycle.setProjectionWork(nil)
+    }
+
+    private func startActiveOrderWarmUp(
+        items: [FileItem],
+        directoryKey: String,
+        key: PaneProjectionKey,
+        token: PaneProjectionToken
+    ) {
+        guard acceptedProjectionKey == key,
+              acceptedProjectionState.directoryKey == directoryKey,
+              acceptedProjectionState.activeOrder == nil
+        else { return }
+
+        warmUpWork?.cancel()
+        taskLifecycle.setWarmUpWork(nil)
+        warmUpGeneration &+= 1
+        let request = ActiveOrderWarmUpRequest(
+            directoryKey: directoryKey,
+            itemsRevision: key.itemsRevision,
+            sort: key.sort,
+            navigationGeneration: token.navigationGeneration,
+            projectionGeneration: token.projectionGeneration,
+            warmUpGeneration: warmUpGeneration,
+            items: items
+        )
+        let projector = projector
+        let worker = Task.detached(priority: .utility) {
+            try await projector.buildActiveOrder(
+                items: request.items,
+                directoryKey: request.directoryKey,
+                key: .init(
+                    itemsRevision: request.itemsRevision,
+                    normalizedQuery: "",
+                    sort: request.sort
+                )
+            )
+        }
+        let work = ProjectionWork(worker: worker)
+        let publication = Task { @MainActor [weak self, weak work] in
+            defer {
+                if let work {
+                    self?.finishActiveOrderWarmUp(work: work, request: request)
+                }
+            }
+            do {
+                let activeOrder = try await worker.value
+                guard !Task.isCancelled, let self,
+                      self.canAcceptActiveOrderWarmUp(request)
+                else { return }
+                self.replaceAcceptedProjectionMetadata(activeOrder: activeOrder, search: nil)
+            } catch is CancellationError {
+                // A newer query, sort, revision, refresh, or navigation owns the replacement route.
+            } catch {
+                guard !Task.isCancelled else { return }
+                self?.errorMessage = error.localizedDescription
+            }
+        }
+        work.installPublication(publication)
+        warmUpWork = work
+        taskLifecycle.setWarmUpWork(work)
+    }
+
+    private func canAcceptActiveOrderWarmUp(_ request: ActiveOrderWarmUpRequest) -> Bool {
+        acceptedProjectionState.directoryKey == request.directoryKey
+            && acceptedProjectionKey?.itemsRevision == request.itemsRevision
+            && acceptedProjectionKey?.sort == request.sort
+            && nextRequestID == request.navigationGeneration
+            && projectionGeneration == request.projectionGeneration
+            && warmUpGeneration == request.warmUpGeneration
+    }
+
+    private func finishActiveOrderWarmUp(work: ProjectionWork, request: ActiveOrderWarmUpRequest) {
+        guard warmUpGeneration == request.warmUpGeneration,
+              warmUpWork === work
+        else { return }
+        warmUpWork = nil
+        taskLifecycle.setWarmUpWork(nil)
     }
 
     private func canAcceptProjection(
@@ -1052,6 +1238,35 @@ final class FilePaneState {
         projectionWork = work
         taskLifecycle.setProjectionWork(work)
         defer { finishScheduledProjection(work: work, token: request.token) }
+        return try await withTaskCancellationHandler {
+            try await worker.value
+        } onCancel: {
+            work.cancel()
+        }
+    }
+
+    private func awaitRoutedProjectionWorker(
+        items: [FileItem],
+        directory: URL,
+        key: PaneProjectionKey,
+        accepted: AcceptedPaneProjectionState,
+        token: PaneProjectionToken,
+        projector: any PaneItemProjecting
+    ) async throws -> RoutedPaneProjection {
+        let directoryKey = Self.entryPath(directory)
+        let worker = Task.detached(priority: .userInitiated) {
+            try await Self.routeProjection(
+                items: items,
+                directoryKey: directoryKey,
+                key: key,
+                accepted: accepted,
+                projector: projector
+            )
+        }
+        let work = ProjectionWork(worker: worker)
+        projectionWork = work
+        taskLifecycle.setProjectionWork(work)
+        defer { finishScheduledProjection(work: work, token: token) }
         return try await withTaskCancellationHandler {
             try await worker.value
         } onCancel: {

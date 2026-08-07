@@ -3,6 +3,35 @@ import Testing
 @testable import BloomFileManager
 
 struct PaneItemProjectionTests {
+    @Test func activeOrderWarmUpRequestCapturesTheFullGenerationBoundIdentity() {
+        let item = makeItem(
+            name: "report.txt",
+            url: URL(filePath: "/warm-up/report.txt"),
+            isDirectory: false,
+            modifiedAt: nil,
+            byteSize: 1,
+            typeDescription: "Text"
+        )
+        let sort = FileSort(key: .size, direction: .descending)
+        let request = ActiveOrderWarmUpRequest(
+            directoryKey: "/warm-up",
+            itemsRevision: 7,
+            sort: sort,
+            navigationGeneration: 11,
+            projectionGeneration: 13,
+            warmUpGeneration: 17,
+            items: [item]
+        )
+
+        #expect(request.directoryKey == "/warm-up")
+        #expect(request.itemsRevision == 7)
+        #expect(request.sort == sort)
+        #expect(request.navigationGeneration == 11)
+        #expect(request.projectionGeneration == 13)
+        #expect(request.warmUpGeneration == 17)
+        #expect(request.items == [item])
+    }
+
     @Test func paneProjectionFiltersSortsAndIndexes() {
         let items = makeProjectionItems([
             ("파일관리.txt", 20),

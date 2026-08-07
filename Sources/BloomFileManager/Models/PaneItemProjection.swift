@@ -84,6 +84,16 @@ struct PaneProjectionInput: Sendable {
     let previousSearch: AcceptedSearchSnapshot?
 }
 
+struct ActiveOrderWarmUpRequest: Sendable {
+    let directoryKey: String
+    let itemsRevision: UInt64
+    let sort: FileSort
+    let navigationGeneration: UInt64
+    let projectionGeneration: UInt64
+    let warmUpGeneration: UInt64
+    let items: [FileItem]
+}
+
 enum PaneEntryPath {
     static func normalize(_ url: URL) -> String {
         var path = url.standardizedFileURL.path(percentEncoded: false)

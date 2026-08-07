@@ -14,7 +14,7 @@ struct FilePaneStateTests {
                 && pane.visibleIndexByURL[item.url] == 0
                 && pane.selection.isEmpty
                 && pane.acceptedProjectionToken != nil
-                && pane.acceptedProjectionDiagnostics.path == .fallbackFilterThenSort
+                && pane.acceptedProjectionDiagnostics.path == .activeOrderFullScan
         }
         await pane.navigate(to: directory, recordHistory: false)
         #expect(observed)
@@ -527,6 +527,80 @@ struct FilePaneStateTests {
         #expect(pane.visibleIndexByURL == [beta.url.standardizedFileURL: 0])
         #expect(pane.acceptedProjectionToken == acceptedToken)
         #expect(pane.acceptedProjectionDiagnostics == acceptedDiagnostics)
+    }
+
+    @Test func matchingActiveOrderFiltersWithoutResorting() async {
+        let directory = URL(filePath: "/active-order-route", directoryHint: .isDirectory)
+        let items = (0..<20).map { makeItem(named: "report-\($0).txt", byteSize: Int64($0), in: directory) }
+        let projector = ControlledPaneItemProjector()
+        let pane = FilePaneState(
+            directory: directory,
+            listingService: StubDirectoryListingService(values: [directory: items]),
+            projector: projector
+        )
+
+        await pane.navigate(to: directory, recordHistory: false)
+        #expect(await projector.activeOrderBuildCount == 1)
+
+        pane.updateFilterQuery("report-1")
+
+        #expect(await waitForPaneCondition {
+            pane.visibleItems == FileSort().apply(to: PaneFilenameFilter(query: "report-1").apply(to: items))
+        })
+        #expect(await projector.latestProjectionPath == .activeOrderFullScan)
+        #expect(await projector.sortedSubsetCount == 0)
+    }
+
+    @Test func nonemptySortChangeUsesOnlyAcceptedVisibleMembershipThenWarmsTheOrder() async {
+        let directory = URL(filePath: "/subset-sort-route", directoryHint: .isDirectory)
+        let items = (0..<100).map { makeItem(named: "report-\($0).txt", byteSize: Int64(100 - $0), in: directory) }
+        let projector = ControlledPaneItemProjector()
+        let pane = FilePaneState(
+            directory: directory,
+            listingService: StubDirectoryListingService(values: [directory: items]),
+            projector: projector
+        )
+        await pane.navigate(to: directory, recordHistory: false)
+        pane.updateFilterQuery("report-1")
+        #expect(await waitForPaneCondition { pane.visibleItems.count == 11 })
+        let acceptedToken = pane.acceptedProjectionToken
+
+        pane.sort = FileSort(key: .size, direction: .descending)
+
+        let expected = pane.sort.apply(to: PaneFilenameFilter(query: "report-1").apply(to: items))
+        #expect(await waitForPaneCondition { pane.visibleItems == expected })
+        #expect(await projector.sortedSubsetCount == 1)
+        #expect(await projector.lastSubsetInputCount == 11)
+        #expect(pane.acceptedProjectionDiagnostics.path == .sortedVisibleSubset)
+        #expect(pane.acceptedProjectionToken != acceptedToken)
+        #expect(await projector.activeOrderBuildCount == 2)
+    }
+
+    @Test func queryDuringWarmUpFallsBackThenStartsOneReplacementWarmUp() async {
+        let directory = URL(filePath: "/warm-up-replacement", directoryHint: .isDirectory)
+        let items = (0..<10_000).map { makeItem(named: "report-\($0).txt", byteSize: Int64($0), in: directory) }
+        let projector = ControlledPaneItemProjector()
+        let pane = FilePaneState(
+            directory: directory,
+            listingService: StubDirectoryListingService(values: [directory: items]),
+            projector: projector
+        )
+        await pane.navigate(to: directory, recordHistory: false)
+        pane.updateFilterQuery("19")
+        #expect(await waitForPaneCondition { pane.visibleItems.count == 299 })
+
+        await projector.suspendNextActiveOrderBuild()
+        pane.sort = FileSort(key: .size, direction: .descending)
+        #expect(await projector.waitForWarmUpStart(count: 1))
+
+        pane.updateFilterQuery("199")
+
+        #expect(await projector.warmUpCancellationCount == 1)
+        #expect(await waitForPaneCondition {
+            pane.visibleItems == pane.sort.apply(to: PaneFilenameFilter(query: "199").apply(to: items))
+        })
+        #expect(await projector.latestProjectionPath == .fallbackFilterThenSort)
+        #expect(await projector.activeOrderBuildCount == 3)
     }
 
     @Test func replacementQueryCancelsTheOwnedDetachedWorker() async {
@@ -1224,15 +1298,27 @@ private struct ControlledPaneProjectionRequest: Sendable {
 private actor ControlledPaneItemProjector: PaneItemProjecting {
     private var suspensionBudget = 0
     private var suspended: [Int: CheckedContinuation<Void, any Error>] = [:]
+    private var activeOrderSuspensionBudget = 0
+    private var suspendedActiveOrderBuild: CheckedContinuation<Void, any Error>?
+    private var warmUpStartCount = 0
+    private(set) var warmUpCancellationCount = 0
     private var startWaiters: [(count: Int, continuation: CheckedContinuation<Void, Never>)] = []
     private var completedRequests: Set<Int> = []
     private var cancelledRequests: Set<Int> = []
     private(set) var requests: [ControlledPaneProjectionRequest] = []
+    private(set) var activeOrderBuildCount = 0
+    private(set) var sortedSubsetCount = 0
+    private(set) var lastSubsetInputCount: Int?
+    private(set) var latestProjectionPath: PaneProjectionPath?
 
     var requestCount: Int { requests.count }
 
     func suspendNextProjection() {
         suspensionBudget += 1
+    }
+
+    func suspendNextActiveOrderBuild() {
+        activeOrderSuspensionBudget += 1
     }
 
     func project(_ input: PaneProjectionInput) async throws -> PaneItemProjection {
@@ -1246,10 +1332,16 @@ private actor ControlledPaneItemProjector: PaneItemProjecting {
             suspensionBudget -= 1
             try await suspend(request: request)
         }
-        let projection = try await PaneItemProjector().projectFallback(
-            items: input.items,
-            key: input.key
-        )
+        let projection: PaneItemProjection
+        if input.activeOrder != nil {
+            projection = try await PaneItemProjector().projectActiveOrder(input)
+        } else {
+            projection = try await PaneItemProjector().projectFallback(
+                items: input.items,
+                key: input.key
+            )
+        }
+        latestProjectionPath = projection.diagnostics.path
         completedRequests.insert(request)
         return projection
     }
@@ -1259,7 +1351,13 @@ private actor ControlledPaneItemProjector: PaneItemProjecting {
         directoryKey: String,
         key: PaneProjectionKey
     ) async throws -> ActiveOrderSnapshot? {
-        try await PaneItemProjector().buildActiveOrder(
+        activeOrderBuildCount += 1
+        if activeOrderSuspensionBudget > 0 {
+            activeOrderSuspensionBudget -= 1
+            warmUpStartCount += 1
+            try await suspendActiveOrderBuild()
+        }
+        return try await PaneItemProjector().buildActiveOrder(
             items: items,
             directoryKey: directoryKey,
             key: key
@@ -1270,7 +1368,9 @@ private actor ControlledPaneItemProjector: PaneItemProjecting {
         items: [FileItem],
         key: PaneProjectionKey
     ) async throws -> PaneItemProjection {
-        try await PaneItemProjector().projectSortedSubset(items: items, key: key)
+        sortedSubsetCount += 1
+        lastSubsetInputCount = items.count
+        return try await PaneItemProjector().projectSortedSubset(items: items, key: key)
     }
 
     func waitForStartCount(_ count: Int) async {
@@ -1296,6 +1396,14 @@ private actor ControlledPaneItemProjector: PaneItemProjecting {
         return cancelledRequests.contains(request)
     }
 
+    func waitForWarmUpStart(count: Int) async -> Bool {
+        for _ in 0..<10_000 {
+            if warmUpStartCount >= count { return true }
+            await Task.yield()
+        }
+        return warmUpStartCount >= count
+    }
+
     private func suspend(request: Int) async throws {
         if Task.isCancelled {
             cancelledRequests.insert(request)
@@ -1313,6 +1421,24 @@ private actor ControlledPaneItemProjector: PaneItemProjecting {
     private func cancelSuspension(request: Int) {
         cancelledRequests.insert(request)
         suspended.removeValue(forKey: request)?.resume(throwing: CancellationError())
+    }
+
+    private func suspendActiveOrderBuild() async throws {
+        try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            try await withCheckedThrowingContinuation { continuation in
+                suspendedActiveOrderBuild = continuation
+            }
+        } onCancel: {
+            Task { await self.cancelActiveOrderBuild() }
+        }
+    }
+
+    private func cancelActiveOrderBuild() {
+        guard let continuation = suspendedActiveOrderBuild else { return }
+        suspendedActiveOrderBuild = nil
+        warmUpCancellationCount += 1
+        continuation.resume(throwing: CancellationError())
     }
 
     private func resumeSatisfiedStartWaiters() {
