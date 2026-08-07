@@ -54,6 +54,10 @@ for key in name modifiedAt kind size; do
   done
 done
 
+env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+  /usr/bin/xcrun swift test -c release --disable-sandbox --no-parallel \
+  --filter paneSearchReleaseBenchmark >/dev/null
+
 for scenario in "${scenarios[@]}"; do
   safe_name="${scenario//:/-}"
   report="$stage/${safe_name}.json"

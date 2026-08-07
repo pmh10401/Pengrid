@@ -35,7 +35,8 @@ See the JSON artifact for the executed scenario reports and raw evidence.
 ## Recorded result
 
 All 48 isolated release scenarios completed with three warm-ups and thirty
-recorded samples each. The aggregate contains 1,590 raw transition samples and
+recorded samples each. The aggregate contains 1,920 raw transition samples (720
+interaction-trace transitions plus 1,200 sort transitions) and
 per-child `/usr/bin/time -l` output. `completeLoad` median/p95 were
 0.977424333s/1.050733792s; `firstQuery` was 0.733107666s/0.747287750s;
 numeric was 1.056032167s/1.074096583s; and rapid burst was
