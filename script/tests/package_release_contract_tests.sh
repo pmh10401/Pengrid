@@ -89,9 +89,9 @@ test_release_tests_run_nonparallel() {
 
 test_version_13_bundle_version_is_declared() {
   assert_file_contains "$SOURCE_SCRIPT" 'APP_VERSION="1.3.0"'
-  assert_file_contains "$SOURCE_SCRIPT" 'BUILD_VERSION="6"'
+  assert_file_contains "$SOURCE_SCRIPT" 'BUILD_VERSION="7"'
   assert_file_contains "$SOURCE_BUILD_SCRIPT" 'APP_VERSION="1.3.0"'
-  assert_file_contains "$SOURCE_BUILD_SCRIPT" 'BUILD_VERSION="6"'
+  assert_file_contains "$SOURCE_BUILD_SCRIPT" 'BUILD_VERSION="7"'
 }
 
 test_notice_and_native_linkage_contract_is_declared() {

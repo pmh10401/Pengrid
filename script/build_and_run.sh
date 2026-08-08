@@ -9,7 +9,7 @@ NOTICE_NAME="THIRD_PARTY_NOTICES.md"
 BUNDLE_ID="com.minho.BloomFileManager"
 MIN_SYSTEM_VERSION="15.0"
 APP_VERSION="1.3.0"
-BUILD_VERSION="6"
+BUILD_VERSION="7"
 
 die() { echo "$*" >&2; exit 1; }
 
