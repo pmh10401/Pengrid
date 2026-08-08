@@ -17,7 +17,11 @@ struct LivePaneItemProjector: PaneItemProjecting {
         if input.activeOrder != nil {
             return try await projector.projectActiveOrder(input)
         }
-        return try await projector.projectFallback(items: input.items, key: input.key)
+        return try await projector.projectFallback(
+            items: input.items,
+            key: input.key,
+            workerVisitProbe: input.workerVisitProbe
+        )
     }
 
     func buildActiveOrder(
@@ -52,6 +56,7 @@ enum PaneProjectionTraceEvent: Equatable, Sendable {
     case setterEntry(query: String)
     case requestScheduled(PaneProjectionToken, PaneProjectionKey)
     case aggregateAccepted(PaneProjectionToken, PaneProjectionKey)
+    case tableApplicationAttempted(PaneProjectionToken)
     case tableApplied(PaneProjectionToken)
 }
 
@@ -67,6 +72,13 @@ struct PaneProjectionRequest: Sendable {
 private struct RoutedPaneProjection: Sendable {
     let projection: PaneItemProjection
     let startsWarmUp: Bool
+}
+
+private struct PendingActiveOrderWarmUp: Sendable {
+    let items: [FileItem]
+    let directoryKey: String
+    let key: PaneProjectionKey
+    let token: PaneProjectionToken
 }
 
 private struct StagedRefreshProjection: Sendable {
@@ -127,6 +139,7 @@ final class FilePaneState {
     private var monitorTask: Task<Void, Never>?
     private var projectionWork: ProjectionWork?
     private var warmUpWork: ProjectionWork?
+    private var pendingActiveOrderWarmUp: PendingActiveOrderWarmUp?
     private var batchFlushTask: Task<Void, Never>?
     private var currentRequestID: UInt64?
     private var nextRequestID: UInt64 = 0
@@ -146,6 +159,8 @@ final class FilePaneState {
     private var acceptedProjectionState: AcceptedPaneProjectionState
     var projectionAcceptanceHandler: (@MainActor (PaneProjectionKey) -> Void)?
     var projectionTraceRecorder: (any PaneProjectionTraceRecording)?
+    var projectionWorkerVisitRecorder: PaneProjectionWorkerVisitRecorder?
+    private var activeProjectionWorkerVisitProbe: PaneProjectionWorkerVisitProbe?
     private var batchBuffer = PaneBatchBuffer()
     private let batchSleeper: any PaneBatchSleeping
     private let batchFlushDelay: Duration
@@ -215,8 +230,22 @@ final class FilePaneState {
     }
 
     func recordTableApplicationCompleted(_ token: PaneProjectionToken) {
-        guard acceptedProjectionToken == token else { return }
         projectionTraceRecorder?.record(.tableApplied(token))
+        guard acceptedProjectionToken == token,
+              let pendingActiveOrderWarmUp,
+              pendingActiveOrderWarmUp.token == token
+        else { return }
+        self.pendingActiveOrderWarmUp = nil
+        startActiveOrderWarmUp(
+            items: pendingActiveOrderWarmUp.items,
+            directoryKey: pendingActiveOrderWarmUp.directoryKey,
+            key: pendingActiveOrderWarmUp.key,
+            token: pendingActiveOrderWarmUp.token
+        )
+    }
+
+    func recordTableApplicationAttempt(_ token: PaneProjectionToken) {
+        projectionTraceRecorder?.record(.tableApplicationAttempted(token))
     }
 
     func dismissFiltering() {
@@ -692,7 +721,7 @@ final class FilePaneState {
             token: staged.token
         )
         if staged.routed.startsWarmUp {
-            startActiveOrderWarmUp(
+            enqueueActiveOrderWarmUp(
                 items: refreshedItems,
                 directoryKey: Self.entryPath(directory),
                 key: staged.routed.projection.key,
@@ -831,18 +860,23 @@ final class FilePaneState {
         )
         projectionTraceRecorder?.record(.requestScheduled(token, key))
         let directoryKey = Self.entryPath(directory)
+        let workerVisitProbe = projectionWorkerVisitRecorder?.beginWorker()
+        activeProjectionWorkerVisitProbe = workerVisitProbe
+        let workerVisitRecorder = projectionWorkerVisitRecorder
         let worker = Task.detached(priority: .userInitiated) {
             try await Self.routeProjection(
                 items: snapshot,
                 directoryKey: directoryKey,
                 key: key,
                 accepted: accepted,
-                projector: projector
+                projector: projector,
+                workerVisitProbe: workerVisitProbe
             )
         }
         let work = ProjectionWork(worker: worker)
         let publication = Task { @MainActor [weak self, weak work] in
             defer {
+                workerVisitRecorder?.finishWorker(workerVisitProbe)
                 if let work {
                     self?.finishScheduledProjection(work: work, token: token)
                 }
@@ -862,7 +896,7 @@ final class FilePaneState {
                         token: token
                     )
                     if routed.startsWarmUp {
-                        self.startActiveOrderWarmUp(
+                        self.enqueueActiveOrderWarmUp(
                             items: snapshot,
                             directoryKey: directoryKey,
                             key: key,
@@ -887,17 +921,43 @@ final class FilePaneState {
         directoryKey: String,
         key: PaneProjectionKey,
         accepted: AcceptedPaneProjectionState,
-        projector: any PaneItemProjecting
+        projector: any PaneItemProjecting,
+        workerVisitProbe: PaneProjectionWorkerVisitProbe?
     ) async throws -> RoutedPaneProjection {
         let fallbackInput = PaneProjectionInput(
             items: items,
             directoryKey: directoryKey,
             key: key,
             activeOrder: nil,
-            previousSearch: nil
+            previousSearch: nil,
+            workerVisitProbe: workerVisitProbe
         )
 
+        let membershipIsCurrent = accepted.directoryKey == directoryKey
+            && accepted.key?.itemsRevision == key.itemsRevision
+            && accepted.key?.normalizedQuery == key.normalizedQuery
+        if membershipIsCurrent, accepted.key?.sort != key.sort {
+            return .init(
+                projection: try await projector.projectSortedSubset(items: accepted.visibleItems, key: key),
+                startsWarmUp: true
+            )
+        }
+
         if key.normalizedQuery.isEmpty {
+            if let activeOrder = accepted.activeOrder,
+               activeOrder.directoryKey == directoryKey,
+               activeOrder.itemsRevision == key.itemsRevision,
+               activeOrder.sort == key.sort {
+                let input = PaneProjectionInput(
+                    items: items,
+                    directoryKey: directoryKey,
+                    key: key,
+                    activeOrder: activeOrder,
+                    previousSearch: accepted.search,
+                    workerVisitProbe: workerVisitProbe
+                )
+                return .init(projection: try await projector.project(input), startsWarmUp: false)
+            }
             guard let activeOrder = try await projector.buildActiveOrder(
                 items: items,
                 directoryKey: directoryKey,
@@ -910,19 +970,10 @@ final class FilePaneState {
                 directoryKey: directoryKey,
                 key: key,
                 activeOrder: activeOrder,
-                previousSearch: nil
+                previousSearch: nil,
+                workerVisitProbe: workerVisitProbe
             )
             return .init(projection: try await projector.project(input), startsWarmUp: false)
-        }
-
-        let membershipIsCurrent = accepted.directoryKey == directoryKey
-            && accepted.key?.itemsRevision == key.itemsRevision
-            && accepted.key?.normalizedQuery == key.normalizedQuery
-        if membershipIsCurrent, accepted.key?.sort != key.sort {
-            return .init(
-                projection: try await projector.projectSortedSubset(items: accepted.visibleItems, key: key),
-                startsWarmUp: true
-            )
         }
 
         if let activeOrder = accepted.activeOrder,
@@ -934,7 +985,8 @@ final class FilePaneState {
                 directoryKey: directoryKey,
                 key: key,
                 activeOrder: activeOrder,
-                previousSearch: accepted.search
+                previousSearch: accepted.search,
+                workerVisitProbe: workerVisitProbe
             )
             return .init(projection: try await projector.project(input), startsWarmUp: false)
         }
@@ -996,7 +1048,7 @@ final class FilePaneState {
         else { return }
         acceptProjection(routed.projection, intersectsSelection: intersectsSelection, token: token)
         if routed.startsWarmUp {
-            startActiveOrderWarmUp(
+            enqueueActiveOrderWarmUp(
                 items: snapshot,
                 directoryKey: Self.entryPath(directory),
                 key: key,
@@ -1081,6 +1133,7 @@ final class FilePaneState {
               projectionWork === work
         else { return }
         projectionWork = nil
+        activeProjectionWorkerVisitProbe = nil
         taskLifecycle.setProjectionWork(nil)
     }
 
@@ -1142,6 +1195,24 @@ final class FilePaneState {
         work.installPublication(publication)
         warmUpWork = work
         taskLifecycle.setWarmUpWork(work)
+    }
+
+    private func enqueueActiveOrderWarmUp(
+        items: [FileItem],
+        directoryKey: String,
+        key: PaneProjectionKey,
+        token: PaneProjectionToken
+    ) {
+        guard acceptedProjectionToken == token,
+              acceptedProjectionKey == key,
+              acceptedProjectionState.directoryKey == directoryKey
+        else { return }
+        pendingActiveOrderWarmUp = .init(
+            items: items,
+            directoryKey: directoryKey,
+            key: key,
+            token: token
+        )
     }
 
     private func canAcceptActiveOrderWarmUp(_ request: ActiveOrderWarmUpRequest) -> Bool {
@@ -1289,29 +1360,42 @@ final class FilePaneState {
         projector: any PaneItemProjecting
     ) async throws -> RoutedPaneProjection {
         let directoryKey = Self.entryPath(directory)
+        let workerVisitProbe = projectionWorkerVisitRecorder?.beginWorker()
+        activeProjectionWorkerVisitProbe = workerVisitProbe
+        let workerVisitRecorder = projectionWorkerVisitRecorder
         let worker = Task.detached(priority: .userInitiated) {
             try await Self.routeProjection(
                 items: items,
                 directoryKey: directoryKey,
                 key: key,
                 accepted: accepted,
-                projector: projector
+                projector: projector,
+                workerVisitProbe: workerVisitProbe
             )
         }
         let work = ProjectionWork(worker: worker)
         projectionWork = work
         taskLifecycle.setProjectionWork(work)
-        defer { finishScheduledProjection(work: work, token: token) }
+        defer {
+            workerVisitRecorder?.finishWorker(workerVisitProbe)
+            finishScheduledProjection(work: work, token: token)
+        }
         return try await withTaskCancellationHandler {
             try await worker.value
         } onCancel: {
             work.cancel()
+            workerVisitProbe?.markCancellationRequested()
         }
     }
 
     private func cancelProjectionWorkers() {
-        projectionWork?.cancel()
+        pendingActiveOrderWarmUp = nil
+        let workerVisitProbe = activeProjectionWorkerVisitProbe
+        let work = projectionWork
+        activeProjectionWorkerVisitProbe = nil
         projectionWork = nil
+        work?.cancel()
+        workerVisitProbe?.markCancellationRequested()
         warmUpWork?.cancel()
         warmUpWork = nil
         taskLifecycle.setProjectionWork(nil)

@@ -5,6 +5,7 @@ struct FileTableView: NSViewRepresentable {
     let items: [FileItem]
     @Binding var selection: Set<URL>
     let projectionToken: PaneProjectionToken?
+    let itemIndexByURL: [URL: Int]?
     let sort: FileSort
     let directory: URL
     let focusRequestID: UUID?
@@ -16,6 +17,9 @@ struct FileTableView: NSViewRepresentable {
     let onActivatePane: () -> Void
     let onOpen: (FileItem) -> Void
     let onSortChange: (FileSort) -> Void
+    /// Receives every non-nil token before coordinator freshness filtering.
+    /// The default is intentionally a no-op for ordinary UI updates.
+    let onProjectionApplicationAttempt: (PaneProjectionToken) -> Void
     let onProjectionApplied: (PaneProjectionToken) -> Void
     let onCancel: () -> Bool
     let onFirstVisibleItemChange: (URL?) -> Void
@@ -40,6 +44,7 @@ struct FileTableView: NSViewRepresentable {
         items: [FileItem],
         selection: Binding<Set<URL>>,
         projectionToken: PaneProjectionToken? = nil,
+        itemIndexByURL: [URL: Int]? = nil,
         sort: FileSort = FileSort(),
         directory: URL = URL(filePath: "/", directoryHint: .isDirectory),
         focusRequestID: UUID? = nil,
@@ -53,6 +58,7 @@ struct FileTableView: NSViewRepresentable {
         onActivatePane: @escaping () -> Void,
         onOpen: @escaping (FileItem) -> Void,
         onSortChange: @escaping (FileSort) -> Void,
+        onProjectionApplicationAttempt: @escaping (PaneProjectionToken) -> Void = { _ in },
         onProjectionApplied: @escaping (PaneProjectionToken) -> Void = { _ in },
         onCancel: @escaping () -> Bool = { false },
         onFirstVisibleItemChange: @escaping (URL?) -> Void = { _ in },
@@ -76,6 +82,7 @@ struct FileTableView: NSViewRepresentable {
         self.items = items
         _selection = selection
         self.projectionToken = projectionToken
+        self.itemIndexByURL = itemIndexByURL
         self.sort = sort
         self.directory = directory
         self.focusRequestID = focusRequestID
@@ -87,6 +94,7 @@ struct FileTableView: NSViewRepresentable {
         self.onActivatePane = onActivatePane
         self.onOpen = onOpen
         self.onSortChange = onSortChange
+        self.onProjectionApplicationAttempt = onProjectionApplicationAttempt
         self.onProjectionApplied = onProjectionApplied
         self.onCancel = onCancel
         self.onFirstVisibleItemChange = onFirstVisibleItemChange
@@ -180,6 +188,8 @@ struct FileTableView: NSViewRepresentable {
 
     func updateNSView(_ scrollView: NSScrollView, coordinator: Coordinator) {
         guard let tableView = scrollView.documentView as? NSTableView else { return }
+        if let projectionToken { onProjectionApplicationAttempt(projectionToken) }
+        guard coordinator.shouldApplyProjectionToken(projectionToken) else { return }
         coordinator.parent = self
         coordinator.apply(sort: sort, to: tableView)
         coordinator.apply(items: items, selection: selection, to: tableView)
@@ -265,6 +275,7 @@ extension FileTableView {
         private var isApplyingScrollRequest = false
         private var itemIndexByIdentity: [URL: Int]
         private var hasCompleteItemIndexByIdentity: Bool
+        private var isUsingSuppliedItemIndexByIdentity: Bool
         weak var tableView: NSTableView?
 
         private var lastHandledRenameRequestID: UUID?
@@ -297,8 +308,13 @@ extension FileTableView {
             self.parent = parent
             items = parent.items
             self.updatePlanner = updatePlanner
-            itemIndexByIdentity = [:]
-            hasCompleteItemIndexByIdentity = parent.items.isEmpty
+            itemIndexByIdentity = parent.itemIndexByURL ?? [:]
+            hasCompleteItemIndexByIdentity = parent.itemIndexByURL != nil || parent.items.isEmpty
+            isUsingSuppliedItemIndexByIdentity = parent.itemIndexByURL != nil
+        }
+
+        var isUsingSuppliedItemIndexByURLForTesting: Bool {
+            isUsingSuppliedItemIndexByIdentity
         }
 
         func numberOfRows(in tableView: NSTableView) -> Int {
@@ -310,13 +326,22 @@ extension FileTableView {
             let inlineEditingSnapshot = updatePlan == .none
                 ? nil
                 : captureInlineEditing(in: tableView)
-            let newItemIndexByIdentity = desiredSelection.isEmpty
-                ? nil
-                : Self.makeItemIndexByIdentity(for: newItems)
+            let suppliedItemIndexByIdentity = parent.itemIndexByURL
+            let newItemIndexByIdentity = suppliedItemIndexByIdentity
+                ?? (desiredSelection.isEmpty ? nil : Self.makeItemIndexByIdentity(for: newItems))
             let desiredIndexes = IndexSet(desiredSelection.compactMap {
                 newItemIndexByIdentity?[$0.standardizedFileURL]
             })
             guard updatePlan != .none || tableView.selectedRowIndexes != desiredIndexes else {
+                if let suppliedItemIndexByIdentity {
+                    itemIndexByIdentity = suppliedItemIndexByIdentity
+                    hasCompleteItemIndexByIdentity = true
+                    isUsingSuppliedItemIndexByIdentity = true
+                } else {
+                    itemIndexByIdentity = [:]
+                    hasCompleteItemIndexByIdentity = items.isEmpty
+                    isUsingSuppliedItemIndexByIdentity = false
+                }
                 beginRequestedRenameIfPossible(in: tableView)
                 return
             }
@@ -339,6 +364,7 @@ extension FileTableView {
             items = newItems
             itemIndexByIdentity = newItemIndexByIdentity ?? [:]
             hasCompleteItemIndexByIdentity = newItemIndexByIdentity != nil || newItems.isEmpty
+            isUsingSuppliedItemIndexByIdentity = suppliedItemIndexByIdentity != nil
             apply(updatePlan, to: tableView)
             if tableView.selectedRowIndexes != desiredIndexes {
                 tableView.selectRowIndexes(desiredIndexes, byExtendingSelection: false)
@@ -387,6 +413,11 @@ extension FileTableView {
             }
             lastAppliedProjectionToken = token
             parent.onProjectionApplied(token)
+        }
+
+        func shouldApplyProjectionToken(_ token: PaneProjectionToken?) -> Bool {
+            guard let token, let lastAppliedProjectionToken else { return true }
+            return token == lastAppliedProjectionToken || token.isNewer(than: lastAppliedProjectionToken)
         }
 
         func reportFirstVisibleItem(in tableView: NSTableView) {
@@ -893,6 +924,7 @@ extension FileTableView {
             if !hasCompleteItemIndexByIdentity {
                 itemIndexByIdentity = Self.makeItemIndexByIdentity(for: items)
                 hasCompleteItemIndexByIdentity = true
+                isUsingSuppliedItemIndexByIdentity = false
             }
             return itemIndexByIdentity[url.standardizedFileURL]
         }

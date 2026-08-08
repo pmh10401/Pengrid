@@ -1,6 +1,60 @@
 import Foundation
 import Testing
 
+@Test func paneSearchBenchmarkScriptNormalizesComponentTimingAndRecordsProvenance() throws {
+    let repositoryRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let source = try String(
+        contentsOf: repositoryRoot.appendingPathComponent("script/benchmark_pane_search.sh"),
+        encoding: .utf8
+    )
+
+    #expect(source.contains("def product_end_to_end(sample):"))
+    #expect(source.contains("candidate-timing-integrity"))
+    #expect(source.contains("baselineTimingNormalizedFromComponentIntervals"))
+    #expect(source.contains("application-latency-v2"))
+    #expect(source.contains("trackedDiffSHA256"))
+    #expect(source.contains("gitStatusShort"))
+    #expect(source.contains("trace_end_to_end_by_sample_index"))
+    #expect(source.contains("script/evaluate_pane_search_gates.py"))
+}
+
+@Test func paneSearchBenchmarkScriptSeparatesProvenanceFromReportsAndPreservesFailedStage() throws {
+    let repositoryRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let source = try String(
+        contentsOf: repositoryRoot.appendingPathComponent("script/benchmark_pane_search.sh"),
+        encoding: .utf8
+    )
+
+    #expect(source.contains("reports_dir=\"$stage/reports\""))
+    #expect(source.contains("stage.glob(\"reports/*.json\")"))
+    #expect(source.contains("if [[ \"$merge_status\" -eq 0 ]]; then"))
+    #expect(source.contains("completed=1\n  print \"wrote $output\""))
+    #expect(source.contains("\ncompleted=1\nif [[ \"$merge_status\"") == false)
+    #expect(source.contains("benchmark merge failed; staging preserved: $stage"))
+}
+
+@Test func paneSearchGateReplayUsesTheVersionedV3EvaluatorPolicy() throws {
+    let repositoryRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let evaluator = repositoryRoot.appendingPathComponent("script/evaluate_pane_search_gates.py")
+    let source = try String(contentsOf: evaluator, encoding: .utf8)
+
+    #expect(source.contains("pane-search-application-latency-v3"))
+    #expect(source.contains("max(0.10 * baseline_p50, 0.005)"))
+    #expect(source.contains("relativeP95Advisories"))
+    #expect(source.contains("sourceArtifactSHA256"))
+    #expect(source.contains("os.replace"))
+    #expect(source.contains("gateEvaluations"))
+}
+
 @Test func buildScriptRejectsNonAppleSiliconHosts() throws {
     let fileManager = FileManager.default
     let temporaryDirectory = fileManager.temporaryDirectory

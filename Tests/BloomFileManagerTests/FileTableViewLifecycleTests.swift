@@ -404,6 +404,7 @@ struct FileTableViewLifecycleTests {
         let view = FileTableView(
             items: [item],
             selection: selection.binding,
+            itemIndexByURL: [item.url.standardizedFileURL: 0],
             renameRequestID: UUID(),
             onActivatePane: {},
             onOpen: { _ in },
@@ -416,6 +417,7 @@ struct FileTableViewLifecycleTests {
         coordinator.apply(items: [item], selection: [selectedAlias], to: tableView)
 
         #expect(tableView.editRequests == [RenameEditRequest(column: 0, row: 0)])
+        #expect(coordinator.isUsingSuppliedItemIndexByURLForTesting)
     }
 
     @Test func duplicateReloadAllStartsRenameAtTheLastStandardizedIdentity() {
@@ -563,6 +565,52 @@ struct FileTableViewLifecycleTests {
 
         let updatedFirstRow = tableView.rows(in: tableView.visibleRect).location
         #expect(coordinator.items[updatedFirstRow].url.standardizedFileURL == originalFirstIdentity)
+    }
+
+    @Test func suppliedProjectionIndexRestoresMountedStructuralReloadWithoutLazyRebuild() throws {
+        let directory = URL(filePath: "/table-supplied-index", directoryHint: .isDirectory)
+        let oldItems = (0..<30).map {
+            makeTableItem(named: String(format: "item-%02d", $0), in: directory)
+        }
+        let inserted = makeTableItem(named: "item-before", in: directory)
+        let newItems = [inserted] + oldItems
+        let suppliedIndex = Dictionary(uniqueKeysWithValues: newItems.enumerated().map {
+            ($0.element.url.standardizedFileURL, $0.offset)
+        })
+        let initialView = FileTableView(
+            items: [],
+            selection: .constant([]),
+            onActivatePane: {},
+            onOpen: { _ in },
+            onSortChange: { _ in }
+        )
+        let coordinator = FileTableView.Coordinator(
+            parent: initialView,
+            updatePlanner: FileTableUpdatePlanner(maximumIncrementalChanges: 512)
+        )
+        let scrollView = initialView.makeScrollView(coordinator: coordinator)
+        scrollView.hasVerticalScroller = false
+        scrollView.frame = NSRect(x: 0, y: 0, width: 500, height: 140)
+        let tableView = try #require(scrollView.documentView as? NSTableView)
+        tableView.frame = NSRect(x: 0, y: 0, width: 500, height: 31 * 28)
+        coordinator.apply(items: oldItems, selection: [], to: tableView)
+        scrollView.contentView.scroll(to: NSPoint(x: 0, y: 10 * 28))
+        scrollView.reflectScrolledClipView(scrollView.contentView)
+        let firstVisibleIdentity = oldItems[tableView.rows(in: tableView.visibleRect).location].url.standardizedFileURL
+
+        coordinator.parent = FileTableView(
+            items: newItems,
+            selection: .constant([]),
+            itemIndexByURL: suppliedIndex,
+            onActivatePane: {},
+            onOpen: { _ in },
+            onSortChange: { _ in }
+        )
+        coordinator.apply(items: newItems, selection: [], to: tableView)
+
+        #expect(coordinator.isUsingSuppliedItemIndexByURLForTesting)
+        #expect(tableView.rows(in: tableView.visibleRect).location == suppliedIndex[firstVisibleIdentity])
+        #expect(tableView.selectedRowIndexes.isEmpty)
     }
 
     @Test func duplicateReloadAllRestoresTheAnchorToTheLastStandardizedIdentity() throws {
@@ -1393,6 +1441,103 @@ struct FileTableViewLifecycleTests {
         coordinator.notifyProjectionAppliedIfNeeded(stale)
 
         #expect(applied == [newest])
+    }
+
+    @Test func staleProjectionAttemptIsRecordedBeforeItIsRejectedWithoutReplacingRows() throws {
+        let directory = URL(filePath: "/table-token-freshness", directoryHint: .isDirectory)
+        let newest = PaneProjectionToken(navigationGeneration: 1, projectionGeneration: 3)
+        let stale = PaneProjectionToken(navigationGeneration: 1, projectionGeneration: 2)
+        let newer = PaneProjectionToken(navigationGeneration: 1, projectionGeneration: 4)
+        let newestItems = [makeTableItem(named: "newest.txt", in: directory)]
+        let staleItems = [
+            makeTableItem(named: "stale-a.txt", in: directory),
+            makeTableItem(named: "stale-b.txt", in: directory),
+        ]
+        let newerItems = [
+            makeTableItem(named: "newer-a.txt", in: directory),
+            makeTableItem(named: "newer-b.txt", in: directory),
+            makeTableItem(named: "newer-c.txt", in: directory),
+        ]
+        let selection = SelectionRecorder(value: [])
+        var attempts: [PaneProjectionToken] = []
+        var applied: [PaneProjectionToken] = []
+        var view = FileTableView(
+            items: newestItems,
+            selection: selection.binding,
+            projectionToken: newest,
+            onActivatePane: {},
+            onOpen: { _ in },
+            onSortChange: { _ in },
+            onProjectionApplicationAttempt: { attempts.append($0) },
+            onProjectionApplied: { applied.append($0) }
+        )
+        let coordinator = view.makeCoordinator()
+        let scroll = view.makeScrollView(coordinator: coordinator)
+        let table = try #require(scroll.documentView as? NSTableView)
+
+        view.updateNSView(scroll, coordinator: coordinator)
+        #expect(table.numberOfRows == newestItems.count)
+
+        view = FileTableView(
+            items: staleItems,
+            selection: selection.binding,
+            projectionToken: stale,
+            onActivatePane: {},
+            onOpen: { _ in },
+            onSortChange: { _ in },
+            onProjectionApplicationAttempt: { attempts.append($0) },
+            onProjectionApplied: { applied.append($0) }
+        )
+        view.updateNSView(scroll, coordinator: coordinator)
+        #expect(attempts == [newest, stale])
+        #expect(applied == [newest])
+        #expect(table.numberOfRows == newestItems.count)
+
+        view = FileTableView(
+            items: newerItems,
+            selection: selection.binding,
+            projectionToken: newer,
+            onActivatePane: {},
+            onOpen: { _ in },
+            onSortChange: { _ in },
+            onProjectionApplicationAttempt: { attempts.append($0) },
+            onProjectionApplied: { applied.append($0) }
+        )
+        view.updateNSView(scroll, coordinator: coordinator)
+        #expect(attempts == [newest, stale, newer])
+        #expect(applied == [newest, newer])
+        #expect(table.numberOfRows == newerItems.count)
+
+        selection.value = [newerItems[1].url]
+        let equalTokenChangedItems = [
+            FileItem(
+                url: newerItems[0].url,
+                name: "newer-a-updated.txt",
+                isDirectory: false,
+                isPackage: false,
+                modifiedAt: nil,
+                byteSize: 42,
+                typeDescription: "Updated File"
+            ),
+            newerItems[1],
+            newerItems[2],
+        ]
+        view = FileTableView(
+            items: equalTokenChangedItems,
+            selection: selection.binding,
+            projectionToken: newer,
+            onActivatePane: {},
+            onOpen: { _ in },
+            onSortChange: { _ in },
+            onProjectionApplicationAttempt: { attempts.append($0) },
+            onProjectionApplied: { applied.append($0) }
+        )
+        view.updateNSView(scroll, coordinator: coordinator)
+        #expect(attempts == [newest, stale, newer, newer])
+        #expect(applied == [newest, newer])
+        #expect(table.numberOfRows == equalTokenChangedItems.count)
+        #expect(table.selectedRowIndexes == IndexSet(integer: 1))
+        #expect(coordinator.parent.items.first?.name == "newer-a-updated.txt")
     }
 
     @Test func metadataOnlyProjectionWarmUpDoesNotReapplyTheAcceptedTableToken() async throws {

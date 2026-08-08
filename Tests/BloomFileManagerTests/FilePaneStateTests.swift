@@ -14,7 +14,7 @@ struct FilePaneStateTests {
                 && pane.visibleIndexByURL[item.url] == 0
                 && pane.selection.isEmpty
                 && pane.acceptedProjectionToken != nil
-                && pane.acceptedProjectionDiagnostics.path == .activeOrderFullScan
+                && pane.acceptedProjectionDiagnostics.path == .emptyActiveOrder
         }
         await pane.navigate(to: directory, recordHistory: false)
         #expect(observed)
@@ -551,7 +551,31 @@ struct FilePaneStateTests {
         #expect(await projector.sortedSubsetCount == 0)
     }
 
-    @Test func nonemptySortChangeUsesOnlyAcceptedVisibleMembershipThenWarmsTheOrder() async {
+    @Test func backspaceToEmptyReusesTheExactAcceptedActiveOrder() async {
+        let directory = URL(filePath: "/active-order-empty-reuse", directoryHint: .isDirectory)
+        let items = (0..<20).map { makeItem(named: "report-\($0).txt", byteSize: Int64($0), in: directory) }
+        let projector = ControlledPaneItemProjector()
+        let pane = FilePaneState(
+            directory: directory,
+            listingService: StubDirectoryListingService(values: [directory: items]),
+            projector: projector
+        )
+
+        await pane.navigate(to: directory, recordHistory: false)
+        pane.updateFilterQuery("report-1")
+        #expect(await waitForPaneCondition { pane.visibleItems.count == 11 })
+
+        pane.updateFilterQuery("")
+
+        #expect(await waitForPaneCondition {
+            pane.visibleItems == FileSort().apply(to: items)
+                && pane.acceptedProjectionDiagnostics.path == .emptyActiveOrder
+        })
+        #expect(await projector.activeOrderBuildCount == 1)
+        #expect(await projector.latestProjectionPath == .emptyActiveOrder)
+    }
+
+    @Test func nonemptySortChangeUsesOnlyAcceptedVisibleMembershipThenWarmsTheOrder() async throws {
         let directory = URL(filePath: "/subset-sort-route", directoryHint: .isDirectory)
         let items = (0..<100).map { makeItem(named: "report-\($0).txt", byteSize: Int64(100 - $0), in: directory) }
         let projector = ControlledPaneItemProjector()
@@ -573,6 +597,9 @@ struct FilePaneStateTests {
                 && pane.acceptedProjectionDiagnostics.path == .sortedVisibleSubset
                 && pane.acceptedProjectionToken != acceptedToken
         })
+        let tableToken = try #require(pane.acceptedProjectionToken)
+        #expect(await projector.activeOrderBuildCount == 1)
+        pane.recordTableApplicationCompleted(tableToken)
         #expect(await projector.waitForActiveOrderBuildCount(2))
         #expect(await projector.sortedSubsetCount == 1)
         #expect(await projector.lastSubsetInputCount == 11)
@@ -581,7 +608,219 @@ struct FilePaneStateTests {
         #expect(await projector.activeOrderBuildCount == 2)
     }
 
-    @Test func queryDuringWarmUpFallsBackThenStartsOneReplacementWarmUp() async {
+    @Test func emptyQuerySortChangeUsesAcceptedMembershipThenWarmsTheOrder() async throws {
+        let directory = URL(filePath: "/empty-subset-sort-route", directoryHint: .isDirectory)
+        let items = (0..<100).map { makeItem(named: "report-\($0).txt", byteSize: Int64(100 - $0), in: directory) }
+        let projector = ControlledPaneItemProjector()
+        let pane = FilePaneState(
+            directory: directory,
+            listingService: StubDirectoryListingService(values: [directory: items]),
+            projector: projector
+        )
+        await pane.navigate(to: directory, recordHistory: false)
+        let acceptedToken = pane.acceptedProjectionToken
+
+        pane.sort = FileSort(key: .size, direction: .descending)
+
+        let expectedItems = pane.sort.apply(to: items)
+        let expectedIndex = Dictionary(uniqueKeysWithValues: expectedItems.enumerated().map {
+            ($0.element.url.standardizedFileURL, $0.offset)
+        })
+        #expect(await waitForPaneCondition {
+            pane.visibleItems == expectedItems
+                && pane.visibleIndexByURL == expectedIndex
+                && pane.acceptedProjectionDiagnostics.path == .sortedVisibleSubset
+                && pane.acceptedProjectionToken != acceptedToken
+        })
+        let tableToken = try #require(pane.acceptedProjectionToken)
+        #expect(await projector.activeOrderBuildCount == 1)
+        pane.recordTableApplicationCompleted(tableToken)
+        #expect(await projector.waitForActiveOrderBuildCount(2))
+        #expect(await projector.sortedSubsetCount == 1)
+        #expect(await projector.lastSubsetInputCount == items.count)
+        #expect(await projector.activeOrderBuildCount == 2)
+    }
+
+    @Test func emptyQuerySortChangeReusesItsWarmedActiveOrderForTheNextQuery() async throws {
+        let directory = URL(filePath: "/empty-subset-sort-reuse", directoryHint: .isDirectory)
+        let items = (0..<100).map { makeItem(named: "report-\($0).txt", byteSize: Int64(100 - $0), in: directory) }
+        let projector = ControlledPaneItemProjector()
+        let pane = FilePaneState(
+            directory: directory,
+            listingService: StubDirectoryListingService(values: [directory: items]),
+            projector: projector
+        )
+        await pane.navigate(to: directory, recordHistory: false)
+
+        pane.sort = FileSort(key: .size, direction: .descending)
+        #expect(await waitForPaneCondition {
+            pane.acceptedProjectionDiagnostics.path == .sortedVisibleSubset
+        })
+        let tableToken = try #require(pane.acceptedProjectionToken)
+        pane.recordTableApplicationCompleted(tableToken)
+        #expect(await projector.waitForCompletedActiveOrderBuildCount(2))
+
+        pane.updateFilterQuery("report-1")
+
+        let expected = pane.sort.apply(to: PaneFilenameFilter(query: "report-1").apply(to: items))
+        #expect(await waitForPaneCondition { pane.visibleItems == expected })
+        #expect(await projector.latestProjectionPath == .activeOrderFullScan)
+        #expect(await projector.activeOrderBuildCount == 2)
+        #expect(await projector.sortedSubsetCount == 1)
+    }
+
+    @Test func emptyQuerySortWarmUpIsCancelledBeforeReplacementCanPublishStaleMetadata() async throws {
+        let directory = URL(filePath: "/empty-subset-sort-warmup-cancellation", directoryHint: .isDirectory)
+        let items = (0..<100).map { makeItem(named: "report-\($0).txt", byteSize: Int64($0), in: directory) }
+        let projector = ControlledPaneItemProjector()
+        let pane = FilePaneState(
+            directory: directory,
+            listingService: StubDirectoryListingService(values: [directory: items]),
+            projector: projector
+        )
+        await pane.navigate(to: directory, recordHistory: false)
+        await projector.suspendNextActiveOrderBuild()
+
+        pane.sort = FileSort(key: .size, direction: .descending)
+
+        let sortedItems = pane.sort.apply(to: items)
+        #expect(await waitForPaneCondition {
+            pane.visibleItems == sortedItems
+                && pane.acceptedProjectionDiagnostics.path == .sortedVisibleSubset
+        })
+        let tableToken = try #require(pane.acceptedProjectionToken)
+        pane.recordTableApplicationCompleted(tableToken)
+        #expect(await projector.waitForWarmUpStart(count: 1))
+
+        pane.updateFilterQuery("199")
+
+        let expected = pane.sort.apply(to: PaneFilenameFilter(query: "199").apply(to: items))
+        #expect(await projector.waitForWarmUpCancellationCount(1))
+        #expect(await waitForPaneCondition { pane.visibleItems == expected })
+        #expect(await projector.latestProjectionPath == .fallbackFilterThenSort)
+        #expect(await projector.warmUpCancellationCount == 1)
+        #expect(await projector.activeOrderBuildCount == 2)
+    }
+
+    @Test func sortedSubsetWarmUpStartsOnlyAfterItsMatchingTableToken() async throws {
+        let directory = URL(filePath: "/table-committed-warmup", directoryHint: .isDirectory)
+        let items = (0..<100).map { makeItem(named: "report-\($0).txt", byteSize: Int64($0), in: directory) }
+        let projector = ControlledPaneItemProjector()
+        let pane = FilePaneState(
+            directory: directory,
+            listingService: StubDirectoryListingService(values: [directory: items]),
+            projector: projector
+        )
+        await pane.navigate(to: directory, recordHistory: false)
+        await projector.suspendNextActiveOrderBuild()
+
+        pane.sort = FileSort(key: .size, direction: .descending)
+
+        #expect(await waitForPaneCondition {
+            pane.acceptedProjectionDiagnostics.path == .sortedVisibleSubset
+        })
+        let token = try #require(pane.acceptedProjectionToken)
+        let staleToken = PaneProjectionToken(
+            navigationGeneration: token.navigationGeneration,
+            projectionGeneration: token.projectionGeneration &- 1
+        )
+        let unrelatedNewerToken = PaneProjectionToken(
+            navigationGeneration: token.navigationGeneration,
+            projectionGeneration: token.projectionGeneration &+ 1
+        )
+        #expect(await projector.activeOrderBuildCount == 1)
+
+        pane.recordTableApplicationCompleted(staleToken)
+        pane.recordTableApplicationCompleted(unrelatedNewerToken)
+        #expect(await projector.activeOrderBuildCount == 1)
+
+        pane.recordTableApplicationCompleted(token)
+        #expect(await projector.waitForWarmUpStart(count: 1))
+        pane.recordTableApplicationCompleted(token)
+        pane.recordTableApplicationCompleted(staleToken)
+        #expect(await projector.activeOrderBuildCount == 2)
+
+        pane.updateFilterQuery("199")
+        #expect(await projector.waitForWarmUpCancellationCount(1))
+    }
+
+    @Test func newerProjectionDiscardsTheOlderPendingWarmUpUntilItsOwnTableTokenArrives() async throws {
+        let directory = URL(filePath: "/replaced-pending-warmup", directoryHint: .isDirectory)
+        let items = (0..<100).map { makeItem(named: "report-\($0).txt", byteSize: Int64($0), in: directory) }
+        let projector = ControlledPaneItemProjector()
+        let pane = FilePaneState(
+            directory: directory,
+            listingService: StubDirectoryListingService(values: [directory: items]),
+            projector: projector
+        )
+        await pane.navigate(to: directory, recordHistory: false)
+
+        pane.sort = FileSort(key: .size, direction: .descending)
+        #expect(await waitForPaneCondition {
+            pane.acceptedProjectionDiagnostics.path == .sortedVisibleSubset
+        })
+        let oldToken = try #require(pane.acceptedProjectionToken)
+
+        pane.updateFilterQuery("199")
+        #expect(await waitForPaneCondition {
+            pane.visibleItems == pane.sort.apply(to: PaneFilenameFilter(query: "199").apply(to: items))
+        })
+        let replacementToken = try #require(pane.acceptedProjectionToken)
+        #expect(replacementToken != oldToken)
+
+        pane.recordTableApplicationCompleted(oldToken)
+        #expect(await projector.activeOrderBuildCount == 1)
+        pane.recordTableApplicationCompleted(replacementToken)
+        #expect(await projector.waitForActiveOrderBuildCount(2))
+    }
+
+    @Test func navigationDiscardsThePriorProjectionPendingWarmUp() async throws {
+        let origin = URL(filePath: "/pending-warmup-origin", directoryHint: .isDirectory)
+        let destination = URL(filePath: "/pending-warmup-destination", directoryHint: .isDirectory)
+        let originItems = (0..<100).map { makeItem(named: "report-\($0).txt", byteSize: Int64($0), in: origin) }
+        let destinationItems = [makeItem(named: "destination.txt", in: destination)]
+        let projector = ControlledPaneItemProjector()
+        let pane = FilePaneState(
+            directory: origin,
+            listingService: StubDirectoryListingService(values: [origin: originItems, destination: destinationItems]),
+            projector: projector
+        )
+        await pane.navigate(to: origin, recordHistory: false)
+        pane.sort = FileSort(key: .size, direction: .descending)
+        #expect(await waitForPaneCondition {
+            pane.acceptedProjectionDiagnostics.path == .sortedVisibleSubset
+        })
+        let originToken = try #require(pane.acceptedProjectionToken)
+
+        await pane.navigate(to: destination, recordHistory: false)
+        #expect(pane.visibleItems == destinationItems)
+        pane.recordTableApplicationCompleted(originToken)
+        #expect(await projector.activeOrderBuildCount == 2)
+    }
+
+    @Test func refreshDiscardsThePriorProjectionPendingWarmUp() async throws {
+        let directory = URL(filePath: "/pending-warmup-refresh", directoryHint: .isDirectory)
+        let items = (0..<100).map { makeItem(named: "report-\($0).txt", byteSize: Int64($0), in: directory) }
+        let projector = ControlledPaneItemProjector()
+        let pane = FilePaneState(
+            directory: directory,
+            listingService: StubDirectoryListingService(values: [directory: items]),
+            projector: projector
+        )
+        await pane.navigate(to: directory, recordHistory: false)
+        pane.sort = FileSort(key: .size, direction: .descending)
+        #expect(await waitForPaneCondition {
+            pane.acceptedProjectionDiagnostics.path == .sortedVisibleSubset
+        })
+        let oldToken = try #require(pane.acceptedProjectionToken)
+
+        await pane.refresh()
+
+        pane.recordTableApplicationCompleted(oldToken)
+        #expect(await projector.activeOrderBuildCount == 2)
+    }
+
+    @Test func queryDuringWarmUpFallsBackThenStartsOneReplacementWarmUp() async throws {
         let directory = URL(filePath: "/warm-up-replacement", directoryHint: .isDirectory)
         let items = (0..<10_000).map { makeItem(named: "report-\($0).txt", byteSize: Int64($0), in: directory) }
         let projector = ControlledPaneItemProjector()
@@ -603,6 +842,8 @@ struct FilePaneStateTests {
                 && pane.acceptedProjectionDiagnostics.path == .sortedVisibleSubset
                 && pane.acceptedProjectionToken != acceptedToken
         })
+        let tableToken = try #require(pane.acceptedProjectionToken)
+        pane.recordTableApplicationCompleted(tableToken)
         #expect(await projector.waitForWarmUpStart(count: 1))
 
         pane.updateFilterQuery("199")
@@ -613,7 +854,7 @@ struct FilePaneStateTests {
             pane.visibleItems == pane.sort.apply(to: PaneFilenameFilter(query: "199").apply(to: items))
         })
         #expect(await projector.latestProjectionPath == .fallbackFilterThenSort)
-        #expect(await projector.activeOrderBuildCount == 3)
+        #expect(await projector.activeOrderBuildCount == 2)
     }
 
     @Test func replacementQueryCancelsTheOwnedDetachedWorker() async {
@@ -1320,6 +1561,7 @@ private actor ControlledPaneItemProjector: PaneItemProjecting {
     private var cancelledRequests: Set<Int> = []
     private(set) var requests: [ControlledPaneProjectionRequest] = []
     private(set) var activeOrderBuildCount = 0
+    private(set) var completedActiveOrderBuildCount = 0
     private(set) var sortedSubsetCount = 0
     private(set) var lastSubsetInputCount: Int?
     private(set) var latestProjectionPath: PaneProjectionPath?
@@ -1370,11 +1612,13 @@ private actor ControlledPaneItemProjector: PaneItemProjecting {
             warmUpStartCount += 1
             try await suspendActiveOrderBuild()
         }
-        return try await PaneItemProjector().buildActiveOrder(
+        let activeOrder = try await PaneItemProjector().buildActiveOrder(
             items: items,
             directoryKey: directoryKey,
             key: key
         )
+        completedActiveOrderBuildCount += 1
+        return activeOrder
     }
 
     func projectSortedSubset(
@@ -1423,6 +1667,14 @@ private actor ControlledPaneItemProjector: PaneItemProjecting {
             try? await Task.sleep(for: .milliseconds(5))
         }
         return activeOrderBuildCount >= count
+    }
+
+    func waitForCompletedActiveOrderBuildCount(_ count: Int) async -> Bool {
+        for _ in 0..<200 {
+            if completedActiveOrderBuildCount >= count { return true }
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        return completedActiveOrderBuildCount >= count
     }
 
     func waitForWarmUpCancellationCount(_ count: Int) async -> Bool {
