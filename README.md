@@ -13,16 +13,16 @@ compatibility.
 ## Download
 
 The current build is
-[Pengrid 1.3.0 Developer Preview 4](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.4).
-It is the first published Pengrid DMG that includes password-protected ZIP
-creation and extraction.
+[Pengrid 1.3.0 Developer Preview 5](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.5).
+It improves large-folder loading, pane filtering, sorting, and cancellation
+while retaining Preview 4's protected-ZIP and file-manager features.
 
-- [Download Pengrid.dmg](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.4/Pengrid.dmg)
-- App version: **1.3.0 (build 6)**
+- [Download Pengrid.dmg](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.5/Pengrid.dmg)
+- App version: **1.3.0 (build 7)**
 - Requirements: **Apple Silicon Mac, macOS 15 or later**
-- Verification: **1,059 automated tests in 77 suites**
+- Verification: **1,223 automated tests in 80 suites**
 - DMG SHA-256:
-  `700f4dac87e07b76809d06b3ee5c237a7126550663a087ddc9a9547f9669c585`
+  `3db4c0bd18b7001fe93d83ea92baf7928527d393bc5310e4ba40f7e9d75148e6`
 
 > **Developer Preview trust notice**
 >
@@ -138,7 +138,7 @@ The development bundle is created at `dist/Pengrid.app`. Its executable remains
 
 - [Detailed feature guide](docs/user-guide.md)
 - [Release and packaging guide](docs/release.md)
-- [Developer Preview 4 release notes](docs/release-notes-v1.3.0-developer-preview.4.md)
+- [Developer Preview 5 release notes](docs/release-notes-v1.3.0-developer-preview.5.md)
 - [Version 1.3 archive verification](docs/verification/version-1.3-archive-checklist.md)
 - [Smart Search verification](docs/verification/2026-08-04-smart-search.md)
 - [Folder preview verification](docs/verification/2026-08-04-folder-preview.md)
