@@ -61,6 +61,7 @@ warning. Pengrid does not ask you to disable macOS security controls.
 - Release packaging contract tests and arm64 production build passed
 - Ad-hoc signature, DMG checksum, mounted-app validation, local installation,
   and launch checks passed
+- GitHub asset digest and byte-for-byte public redownload passed
 - Pane-search performance policy-v3: 267/267 hard gates passed
 - DMG SHA-256:
   `3db4c0bd18b7001fe93d83ea92baf7928527d393bc5310e4ba40f7e9d75148e6`
@@ -127,6 +128,7 @@ GitHub 릴리스에서만 다운로드하고 경고를 이해하고 동의하는
 - 80개 스위트의 자동 테스트 1,223개 통과
 - 릴리스 패키징 계약 테스트와 arm64 프로덕션 빌드 통과
 - ad-hoc 서명, DMG 체크섬, 마운트 앱 검사, 로컬 설치 및 실행 검사 통과
+- GitHub 자산 digest 및 공개 재다운로드 바이트 비교 통과
 - 패널 검색 성능 정책-v3: 하드 게이트 267/267 통과
 - DMG SHA-256:
   `3db4c0bd18b7001fe93d83ea92baf7928527d393bc5310e4ba40f7e9d75148e6`
