@@ -172,9 +172,15 @@ struct WorkspaceView: View {
             }
         }
         .sheet(isPresented: selectionFolderPresentation) {
-            SelectionFolderSheet(model: selectionFolder) { _ in
-                // Tasks 10 and 11 own the exclusive transaction and queue handoff.
-                false
+            SelectionFolderSheet(model: selectionFolder) { plan in
+                let capturedPane = selectionFolder.snapshot?.sourcePaneID == .right
+                    ? workspace.right
+                    : workspace.left
+                return operationController.encloseSelection(
+                    plan,
+                    in: capturedPane,
+                    workspace: workspace
+                )
             }
             .onAppear { modalPresentationState.selectionFolderSheetDidAppear() }
             .onDisappear { modalPresentationState.selectionFolderSheetDidDisappear() }

@@ -553,6 +553,152 @@ struct FileOperationUndoServiceTests {
         #expect(await fixture.fileSystem.existingURLs.contains(fixture.url("A.txt")))
         #expect(await fixture.fileSystem.existingURLs.contains(fixture.url("C.txt")))
     }
+
+    @Test func selectionFolderUndoRecipeRequiresACompleteUnchangedTransaction() async throws {
+        let fixture = try await SelectionFolderUndoFixture()
+        let undoService = FileOperationUndoService(
+            fileSystem: fixture.fileSystem,
+            selectionFolderTransactionService: fixture.transaction
+        )
+
+        let recipe = try #require(await undoService.makeRecipe(
+            kind: .encloseSelection,
+            result: fixture.result,
+            allowsUndo: true
+        ))
+        #expect(recipe == .selectionFolder(fixture.undoPlan))
+
+        await fixture.fileSystem.mutateContents(at: fixture.folder.appending(path: "A.txt"))
+        await fixture.fileSystem.clearEvents()
+
+        #expect(await undoService.makeRecipe(
+            kind: .encloseSelection,
+            result: fixture.result,
+            allowsUndo: true
+        ) == nil)
+        #expect(await fixture.fileSystem.events.contains(where: {
+            $0.hasPrefix("move") || $0.hasPrefix("remove")
+        }) == false)
+    }
+
+    @Test func selectionFolderUndoRecipeRejectsEveryGlobalPreflightChangeWithoutMutation() async throws {
+        let extraChild = try await SelectionFolderUndoFixture()
+        await extraChild.fileSystem.replaceIdentity(
+            at: extraChild.folder.appending(path: "External.txt"),
+            with: FileIdentity(entryIdentifier: "external", resolvedIdentifier: "external")
+        )
+        let extraChildUndo = FileOperationUndoService(fileSystem: extraChild.fileSystem)
+        await extraChild.fileSystem.clearEvents()
+        #expect(await extraChildUndo.makeRecipe(
+            kind: .encloseSelection,
+            result: extraChild.result,
+            allowsUndo: true
+        ) == nil)
+        #expect(await extraChild.fileSystem.events.contains(where: { $0.hasPrefix("move") }) == false)
+
+        let occupiedOriginal = try await SelectionFolderUndoFixture()
+        await occupiedOriginal.fileSystem.replaceIdentity(
+            at: occupiedOriginal.parent.appending(path: "A.txt"),
+            with: FileIdentity(entryIdentifier: "external", resolvedIdentifier: "external")
+        )
+        let occupiedOriginalUndo = FileOperationUndoService(fileSystem: occupiedOriginal.fileSystem)
+        await occupiedOriginal.fileSystem.clearEvents()
+        #expect(await occupiedOriginalUndo.makeRecipe(
+            kind: .encloseSelection,
+            result: occupiedOriginal.result,
+            allowsUndo: true
+        ) == nil)
+        #expect(await occupiedOriginal.fileSystem.events.contains(where: { $0.hasPrefix("move") }) == false)
+
+        let changedFolder = try await SelectionFolderUndoFixture()
+        await changedFolder.fileSystem.replaceIdentity(
+            at: changedFolder.folder,
+            with: FileIdentity(entryIdentifier: "external-folder", resolvedIdentifier: "external-folder")
+        )
+        let changedFolderUndo = FileOperationUndoService(fileSystem: changedFolder.fileSystem)
+        await changedFolder.fileSystem.clearEvents()
+        #expect(await changedFolderUndo.makeRecipe(
+            kind: .encloseSelection,
+            result: changedFolder.result,
+            allowsUndo: true
+        ) == nil)
+        #expect(await changedFolder.fileSystem.events.contains(where: { $0.hasPrefix("move") }) == false)
+
+        let partial = try await SelectionFolderUndoFixture()
+        let partialResult = FileOperationResult(
+            outcomes: [
+                .succeeded(
+                    source: partial.undoPlan.entries[0].originalSource.item.url,
+                    destination: partial.undoPlan.entries[0].folderURL
+                ),
+                .failed(
+                    source: partial.undoPlan.entries[1].originalSource.item.url,
+                    message: "interrupted"
+                )
+            ],
+            selectionFolderUndoPlan: partial.undoPlan
+        )
+        let partialUndo = FileOperationUndoService(fileSystem: partial.fileSystem)
+        await partial.fileSystem.clearEvents()
+        #expect(await partialUndo.makeRecipe(
+            kind: .encloseSelection,
+            result: partialResult,
+            allowsUndo: true
+        ) == nil)
+        #expect(await partial.fileSystem.events.contains(where: { $0.hasPrefix("move") }) == false)
+    }
+
+    @Test func selectionFolderUndoRoutesTheAcceptedRecipeThroughTheReverseTransaction() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let parent = root.url
+        let folder = parent.appending(path: "Collected", directoryHint: .isDirectory)
+        let first = parent.appending(path: "A.txt")
+        let second = parent.appending(path: "B.txt")
+        try Data("A".utf8).write(to: first)
+        try Data("B".utf8).write(to: second)
+        let fileSystem = LiveFileSystemAccess()
+        let transaction = SelectionFolderTransactionService(fileSystem: fileSystem)
+        let parentIdentity = try #require(await fileSystem.identity(of: parent))
+        var sources: [ContextActionSource] = []
+        for url in [first, second] {
+            sources.append(ContextActionSource(
+                item: FileItem(
+                    url: url,
+                    name: url.lastPathComponent,
+                    isDirectory: false,
+                    isPackage: false,
+                    modifiedAt: nil,
+                    byteSize: nil,
+                    typeDescription: "Document"
+                ),
+                identity: try #require(await fileSystem.identity(of: url))
+            ))
+        }
+        let forward = await transaction.execute(SelectionFolderPlan(
+            parentURL: parent,
+            parentIdentity: parentIdentity,
+            folderName: "Collected",
+            folderURL: folder,
+            sources: sources
+        ), progress: { _ in })
+        let undoService = FileOperationUndoService(
+            fileSystem: fileSystem,
+            selectionFolderTransactionService: transaction
+        )
+        let recipe = try #require(await undoService.makeRecipe(
+            kind: .encloseSelection,
+            result: forward,
+            allowsUndo: true
+        ))
+
+        let result = await undoService.perform(recipe)
+
+        #expect(!result.hasFailures)
+        #expect(FileManager.default.fileExists(atPath: folder.path) == false)
+        #expect(try String(contentsOf: first, encoding: .utf8) == "A")
+        #expect(try String(contentsOf: second, encoding: .utf8) == "B")
+    }
 }
 
 private struct BatchRenameUndoFixture {
@@ -612,6 +758,49 @@ private struct BatchRenameUndoFixture {
 
     func identity(_ name: String) async throws -> FileIdentity? {
         try await fileSystem.identity(of: url(name))
+    }
+}
+
+private struct SelectionFolderUndoFixture {
+    let parent = URL(filePath: "/workspace", directoryHint: .isDirectory)
+    let folder = URL(filePath: "/workspace/Collected", directoryHint: .isDirectory)
+    let fileSystem: RecordingFileSystem
+    let transaction: SelectionFolderTransactionService
+    let result: FileOperationResult
+    let undoPlan: SelectionFolderUndoPlan
+
+    init() async throws {
+        let parentURL = URL(filePath: "/workspace", directoryHint: .isDirectory)
+        let folderURL = parentURL.appending(path: "Collected", directoryHint: .isDirectory)
+        let sourceURLs = ["A.txt", "B.txt"].map { parentURL.appending(path: $0) }
+        fileSystem = RecordingFileSystem(existingURLs: Set([parentURL] + sourceURLs))
+        transaction = SelectionFolderTransactionService(fileSystem: fileSystem)
+        let parentIdentity = try #require(await fileSystem.identity(of: parentURL))
+        var sources: [ContextActionSource] = []
+        for url in sourceURLs {
+            sources.append(ContextActionSource(
+                item: FileItem(
+                    url: url,
+                    name: url.lastPathComponent,
+                    isDirectory: false,
+                    isPackage: false,
+                    modifiedAt: nil,
+                    byteSize: nil,
+                    typeDescription: "Document"
+                ),
+                identity: try #require(await fileSystem.identity(of: url))
+            ))
+        }
+        let plan = SelectionFolderPlan(
+            parentURL: parentURL,
+            parentIdentity: parentIdentity,
+            folderName: "Collected",
+            folderURL: folderURL,
+            sources: sources
+        )
+        result = await transaction.execute(plan, progress: { _ in })
+        undoPlan = try #require(result.selectionFolderUndoMetadata())
+        await fileSystem.clearEvents()
     }
 }
 

@@ -6,6 +6,7 @@ enum FileOperationJobKind: Sendable, Equatable {
     case move
     case trash
     case createFolder
+    case encloseSelection
     case rename
     case compress(ArchiveFormat)
     case compressProtectedZIP
@@ -19,6 +20,7 @@ enum FileOperationJobKind: Sendable, Equatable {
         case .move: "Move"
         case .trash: "Move to Trash"
         case .createFolder: "Create Folder"
+        case .encloseSelection: "New Folder with Selection"
         case .rename: "Rename"
         case let .compress(format): "Compress \(format.displayName)"
         case .compressProtectedZIP: "Compress Encrypted ZIP"

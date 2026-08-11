@@ -6,6 +6,7 @@ enum FileOperationStage: Equatable {
     case operating(FileOperationProgress)
     case archiving(ArchiveOperationProgress)
     case batchRenaming(BatchRenameTransactionProgress)
+    case enclosingSelection(SelectionFolderTransactionProgress)
 }
 
 enum CloudOperationRequestGate {
@@ -80,6 +81,7 @@ final class FileOperationController {
     private let materializer: any CloudMaterializing
     private let archiveService: any ArchiveOperating
     private let batchRenameService: BatchRenameTransactionService
+    private let selectionFolderTransactionService: SelectionFolderTransactionService
     private let undoService: FileOperationUndoService
 
     private(set) var stage: FileOperationStage?
@@ -125,6 +127,12 @@ final class FileOperationController {
                 totalCount: progress.totalCount,
                 currentName: progress.currentName
             )
+        case let .enclosingSelection(progress):
+            return FileOperationProgress(
+                completedCount: progress.completedCount,
+                totalCount: progress.totalCount,
+                currentName: progress.currentName
+            )
         case .preparing, .archiving, nil:
             return nil
         }
@@ -151,6 +159,7 @@ final class FileOperationController {
         materializer: any CloudMaterializing,
         archiveService: (any ArchiveOperating)? = nil,
         batchRenameService: BatchRenameTransactionService? = nil,
+        selectionFolderTransactionService: SelectionFolderTransactionService? = nil,
         historyLimit: Int = 100
     ) {
         self.service = service
@@ -160,8 +169,12 @@ final class FileOperationController {
         let resolvedBatchRenameService = batchRenameService
             ?? service.makeBatchRenameTransactionService()
         self.batchRenameService = resolvedBatchRenameService
+        let resolvedSelectionFolderTransactionService = selectionFolderTransactionService
+            ?? service.makeSelectionFolderTransactionService()
+        self.selectionFolderTransactionService = resolvedSelectionFolderTransactionService
         self.undoService = service.makeUndoService(
-            batchRenameService: resolvedBatchRenameService
+            batchRenameService: resolvedBatchRenameService,
+            selectionFolderTransactionService: resolvedSelectionFolderTransactionService
         )
         self.historyLimit = max(historyLimit, 1)
     }
@@ -357,6 +370,12 @@ final class FileOperationController {
         ) { [weak self] in
             guard let self else {
                 return FileOperationResult(outcomes: [])
+            }
+            if case let .selectionFolder(plan) = recipe {
+                return await self.undoService.performSelectionFolderUndo(plan) { [weak self] progress in
+                    guard let self else { return }
+                    await self.publish(stage: .enclosingSelection(progress))
+                }
             }
             return await self.undoService.perform(recipe) { [weak self] progress in
                 guard let self else { return }
@@ -1149,6 +1168,47 @@ final class FileOperationController {
         }
     }
 
+    @discardableResult
+    func encloseSelection(
+        _ plan: SelectionFolderPlan,
+        in pane: FilePaneState,
+        workspace: WorkspaceState
+    ) -> Bool {
+        guard plan.sources.count >= 2 else { return false }
+        return beginOperation(
+            kind: .encloseSelection,
+            totalCount: plan.sources.count,
+            initialName: plan.folderName,
+            initialStage: .enclosingSelection(SelectionFolderTransactionProgress(
+                phase: .creatingFolder,
+                completedCount: 0,
+                totalCount: plan.sources.count,
+                currentName: plan.folderName
+            )),
+            touchedDirectories: [plan.parentURL, plan.folderURL],
+            workspace: workspace,
+            cancellationSources: plan.sources.map(\.item.url),
+            requiresExclusiveQueue: true,
+            onCompletion: { result in
+                guard result.outcomes.count == plan.sources.count,
+                      result.outcomes.allSatisfy({
+                          if case .succeeded = $0 { return true }
+                          return false
+                      }),
+                      pane.currentDirectory.standardizedFileURL
+                        == plan.parentURL.standardizedFileURL
+                else { return }
+                pane.selection = [plan.folderURL]
+            }
+        ) { [weak self, selectionFolderTransactionService] in
+            guard let self else { return FileOperationResult(outcomes: []) }
+            return await selectionFolderTransactionService.execute(plan) { [weak self] progress in
+                guard let self else { return }
+                await self.publish(stage: .enclosingSelection(progress))
+            }
+        }
+    }
+
     func requestTrashConfirmation(for urls: [URL], workspace: WorkspaceState) async {
         let paneID = workspace.activePaneID
         let requestedSelection = Set(urls)
@@ -1507,6 +1567,17 @@ final class FileOperationController {
             case .staging: "Staging names"
             case .publishing: "Publishing names"
             case .rollingBack: "Rolling back names"
+            }
+            return FileOperationJobProgress(
+                completedCount: progress.completedCount,
+                totalCount: progress.totalCount,
+                detail: detail
+            )
+        case let .enclosingSelection(progress):
+            let detail = switch progress.phase {
+            case .creatingFolder: "Creating folder"
+            case .movingItems: "Moving selected items"
+            case .rollingBack: "Rolling back selection"
             }
             return FileOperationJobProgress(
                 completedCount: progress.completedCount,

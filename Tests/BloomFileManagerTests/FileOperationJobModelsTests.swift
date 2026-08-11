@@ -173,4 +173,18 @@ struct FileOperationJobModelsTests {
         #expect(snapshot.canRetry)
         #expect(snapshot.accessibilityLabel.contains("1 of 2, Report.txt"))
     }
+
+    @Test func selectionEnclosureUsesItsOwnQueueTitle() {
+        let snapshot = FileOperationJobSnapshot(
+            id: UUID(),
+            kind: .encloseSelection,
+            itemDisplayName: "Collected",
+            itemCount: 2,
+            state: .running,
+            progress: nil,
+            canUndo: false
+        )
+
+        #expect(snapshot.title == "New Folder with Selection")
+    }
 }

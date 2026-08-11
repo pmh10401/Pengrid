@@ -2317,6 +2317,95 @@ struct FileOperationControllerTests {
         ])
     }
 
+    @Test func selectionEnclosureRunsExclusivelyPublishesProgressAndSelectsOnlyItsCapturedPane() async throws {
+        let fixture = try await SelectionFolderControllerFixture(
+            suspendCheckedExclusiveMoveAttempt: 1
+        )
+        fixture.workspace.activate(.right)
+
+        #expect(fixture.controller.encloseSelection(
+            fixture.plan,
+            in: fixture.workspace.left,
+            workspace: fixture.workspace
+        ))
+        await fixture.fileSystem.waitForSuspendedCheckedExclusiveMove()
+
+        #expect(fixture.controller.activeJob?.kind == .encloseSelection)
+        #expect(fixture.controller.activeJob?.title == "New Folder with Selection")
+        #expect(fixture.controller.activeJob?.progress == FileOperationJobProgress(
+            completedCount: 0,
+            totalCount: 2,
+            detail: "Creating folder"
+        ))
+        #expect(await fixture.controller.createFolder(
+            in: fixture.parent,
+            named: "Blocked",
+            workspace: fixture.workspace
+        ) == false)
+
+        await fixture.fileSystem.releaseSuspendedCheckedExclusiveMove()
+        await waitUntilQueueIsIdle(fixture.controller)
+
+        let job = try #require(fixture.controller.operationHistory.first)
+        #expect(job.state == .succeeded)
+        #expect(job.canUndo)
+        #expect(fixture.workspace.activePaneID == .right)
+        #expect(fixture.workspace.left.selection == [fixture.folder])
+        #expect(fixture.workspace.right.selection.isEmpty)
+    }
+
+    @Test func failedSelectionEnclosureRemainsRetryableWithoutOfferingUndo() async throws {
+        let fixture = try await SelectionFolderControllerFixture()
+        let stalePlan = SelectionFolderPlan(
+            parentURL: fixture.plan.parentURL,
+            parentIdentity: FileIdentity(
+                entryIdentifier: "replaced-parent",
+                resolvedIdentifier: "replaced-parent"
+            ),
+            folderName: fixture.plan.folderName,
+            folderURL: fixture.plan.folderURL,
+            sources: fixture.plan.sources
+        )
+
+        #expect(fixture.controller.encloseSelection(
+            stalePlan,
+            in: fixture.workspace.left,
+            workspace: fixture.workspace
+        ))
+        await waitUntilQueueIsIdle(fixture.controller)
+        let failed = try #require(fixture.controller.operationHistory.first)
+        #expect(failed.state == .failed)
+        #expect(failed.canRetry)
+        #expect(!failed.canUndo)
+
+        #expect(fixture.controller.retryJob(failed.id))
+        await waitUntilQueueIsIdle(fixture.controller)
+        #expect(fixture.controller.operationHistory.first?.state == .failed)
+    }
+
+    @Test func selectionEnclosureRecoveryBlocksLaterQueuedWorkUntilAcknowledged() async throws {
+        let fixture = try await SelectionFolderControllerFixture(
+            failCheckedExclusiveMoveAttempts: [1]
+        )
+
+        #expect(fixture.controller.encloseSelection(
+            fixture.plan,
+            in: fixture.workspace.left,
+            workspace: fixture.workspace
+        ))
+        await waitUntilQueueIsIdle(fixture.controller)
+
+        #expect(fixture.controller.isQueueBlockedByRecovery)
+        #expect(fixture.controller.operationHistory.first?.canUndo == false)
+        #expect(await fixture.controller.createFolder(
+            in: fixture.parent,
+            named: "Deferred",
+            workspace: fixture.workspace
+        ))
+        #expect(fixture.controller.isRunning == false)
+        #expect(fixture.controller.queuedJobs.count == 1)
+    }
+
     @Test func batchRenameUndoRunsThroughTheSameExclusiveQueue() async throws {
         let fixture = try await BatchRenameControllerFixture()
         #expect(fixture.controller.batchRename(fixture.plan, workspace: fixture.workspace))
@@ -2513,6 +2602,65 @@ private struct BatchRenameControllerFixture {
     }
 
     func url(_ name: String) -> URL { parent.appending(path: name) }
+}
+
+@MainActor
+private struct SelectionFolderControllerFixture {
+    let parent = URL(filePath: "/workspace", directoryHint: .isDirectory)
+    let folder = URL(filePath: "/workspace/Collected", directoryHint: .isDirectory)
+    let fileSystem: RecordingFileSystem
+    let controller: FileOperationController
+    let workspace: WorkspaceState
+    let plan: SelectionFolderPlan
+
+    init(
+        suspendCheckedExclusiveMoveAttempt: Int? = nil,
+        failCheckedExclusiveMoveAttempts: Set<Int> = []
+    ) async throws {
+        let parentURL = URL(filePath: "/workspace", directoryHint: .isDirectory)
+        let folderURL = parentURL.appending(path: "Collected", directoryHint: .isDirectory)
+        let sourceURLs = ["A.txt", "B.txt"].map { parentURL.appending(path: $0) }
+        fileSystem = RecordingFileSystem(
+            existingURLs: Set([parentURL] + sourceURLs),
+            suspendCheckedExclusiveMoveAttempt: suspendCheckedExclusiveMoveAttempt,
+            failCheckedExclusiveMoveAttempts: failCheckedExclusiveMoveAttempts
+        )
+        let transaction = SelectionFolderTransactionService(fileSystem: fileSystem)
+        controller = FileOperationController(
+            service: FileOperationService(fileSystem: fileSystem),
+            materializer: InMemoryCloudMaterializer(),
+            selectionFolderTransactionService: transaction
+        )
+        workspace = WorkspaceState(
+            leftURL: parentURL,
+            rightURL: URL(filePath: "/other", directoryHint: .isDirectory),
+            listingService: StubDirectoryListingService(values: [:])
+        )
+        let parentIdentity = try #require(await fileSystem.identity(of: parentURL))
+        var sources: [ContextActionSource] = []
+        for url in sourceURLs {
+            sources.append(ContextActionSource(
+                item: FileItem(
+                    url: url,
+                    name: url.lastPathComponent,
+                    isDirectory: false,
+                    isPackage: false,
+                    modifiedAt: nil,
+                    byteSize: nil,
+                    typeDescription: "Document"
+                ),
+                identity: try #require(await fileSystem.identity(of: url))
+            ))
+        }
+        plan = SelectionFolderPlan(
+            parentURL: parentURL,
+            parentIdentity: parentIdentity,
+            folderName: "Collected",
+            folderURL: folderURL,
+            sources: sources
+        )
+        await fileSystem.clearEvents()
+    }
 }
 
 private struct ProtectedWorkspaceFixture {
