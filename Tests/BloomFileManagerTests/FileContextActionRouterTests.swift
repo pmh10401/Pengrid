@@ -113,6 +113,100 @@ struct FileContextActionRouterTests {
         #expect(router.error == nil)
     }
 
+    @Test func identifiedTransferRequestsPreserveCapturedDestinationAndVisibleSourceOrder() async throws {
+        let sourceDirectory = URL(filePath: "/capture/source", directoryHint: .isDirectory)
+        let capturedDestination = URL(filePath: "/capture/captured", directoryHint: .isDirectory)
+        let first = sourceDirectory.appending(path: "first.txt")
+        let second = sourceDirectory.appending(path: "second.txt")
+        let firstIdentity = identity("first")
+        let secondIdentity = identity("second")
+        let destinationIdentity = identity("captured-destination")
+        let router = FileContextActionRouter(fileSystem: RecordingFileSystem(identities: [
+            first: firstIdentity,
+            second: secondIdentity,
+            sourceDirectory: identity("source-directory"),
+            capturedDestination: destinationIdentity
+        ]))
+        let captured = await router.capture(draft(
+            sources: [item(at: second), item(at: first)],
+            directory: sourceDirectory,
+            oppositeDirectory: capturedDestination,
+            oppositeCapability: .writable
+        ))
+
+        let requests = await router.identifiedTransferRequests(from: try #require(captured))
+
+        #expect(requests == [
+            IdentifiedTransferRequest(
+                source: second,
+                sourceIdentity: secondIdentity,
+                destinationRoot: capturedDestination,
+                destinationRootIdentity: destinationIdentity,
+                relativeParentComponents: []
+            ),
+            IdentifiedTransferRequest(
+                source: first,
+                sourceIdentity: firstIdentity,
+                destinationRoot: capturedDestination,
+                destinationRootIdentity: destinationIdentity,
+                relativeParentComponents: []
+            )
+        ])
+    }
+
+    @Test func identifiedTransferRequestsRejectReplacedCapturedSourceOrDestination() async throws {
+        let sourceDirectory = URL(filePath: "/capture/source", directoryHint: .isDirectory)
+        let destination = URL(filePath: "/capture/destination", directoryHint: .isDirectory)
+        let source = sourceDirectory.appending(path: "report.txt")
+        let sourceIdentity = identity("source")
+        let destinationIdentity = identity("destination")
+        let fileSystem = RecordingFileSystem(identities: [
+            source: sourceIdentity,
+            sourceDirectory: identity("source-directory"),
+            destination: destinationIdentity
+        ])
+        let router = FileContextActionRouter(fileSystem: fileSystem)
+        let captured = try #require(await router.capture(draft(
+            sources: [item(at: source)],
+            directory: sourceDirectory,
+            oppositeDirectory: destination,
+            oppositeCapability: .writable
+        )))
+
+        await fileSystem.replaceIdentity(at: source, with: identity("replacement-source"))
+        #expect(await router.identifiedTransferRequests(from: captured) == nil)
+        #expect(router.error == .itemChanged)
+
+        await fileSystem.replaceIdentity(at: source, with: sourceIdentity)
+        await fileSystem.replaceIdentity(at: destination, with: identity("replacement-destination"))
+        #expect(await router.identifiedTransferRequests(from: captured) == nil)
+        #expect(router.error == .itemChanged)
+    }
+
+    @Test func identifiedTransferRequestsRejectNonWritableOrSameCapturedDestination() async throws {
+        let directory = URL(filePath: "/capture/directory", directoryHint: .isDirectory)
+        let otherDirectory = URL(filePath: "/capture/other", directoryHint: .isDirectory)
+        let source = directory.appending(path: "report.txt")
+        let fileSystem = RecordingFileSystem(identities: identities(for: [source, directory, otherDirectory]))
+        let router = FileContextActionRouter(fileSystem: fileSystem)
+
+        let readOnly = try #require(await router.capture(draft(
+            sources: [item(at: source)],
+            directory: directory,
+            oppositeDirectory: otherDirectory,
+            oppositeCapability: .readOnly
+        )))
+        #expect(await router.identifiedTransferRequests(from: readOnly) == nil)
+
+        let sameDirectory = try #require(await router.capture(draft(
+            sources: [item(at: source)],
+            directory: directory,
+            oppositeDirectory: directory,
+            oppositeCapability: .writable
+        )))
+        #expect(await router.identifiedTransferRequests(from: sameDirectory) == nil)
+    }
+
     @Test func finderRevealRevalidatesEveryCapturedSourceInOrderWithOneAdapterCall() async {
         let directory = URL(filePath: "/finder", directoryHint: .isDirectory)
         let opposite = URL(filePath: "/opposite", directoryHint: .isDirectory)
@@ -716,7 +810,9 @@ private func contextItem(
 private func draft(
     sources: [FileItem],
     directory: URL,
-    oppositeDirectory: URL
+    oppositeDirectory: URL,
+    sourceCapability: LocalFileOperationCapability = .writable,
+    oppositeCapability: LocalFileOperationCapability = .readOnly
 ) -> ContextActionDraft {
     ContextActionDraft(
         sources: sources,
@@ -724,8 +820,8 @@ private func draft(
         oppositePaneID: .right,
         sourceDirectory: directory,
         oppositeDirectory: oppositeDirectory,
-        sourceCapability: .writable,
-        oppositeCapability: .readOnly
+        sourceCapability: sourceCapability,
+        oppositeCapability: oppositeCapability
     )!
 }
 

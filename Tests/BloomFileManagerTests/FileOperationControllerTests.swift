@@ -907,6 +907,59 @@ struct FileOperationControllerTests {
         #expect(await listingService.requestCount(for: untouchedDirectory) == 1)
     }
 
+    @Test func capturedTransferUsesItsImmutableDestinationAndOrdinaryCopyPipeline() async {
+        let source = URL(filePath: "/source/report.txt")
+        let capturedDestination = URL(filePath: "/captured-destination", directoryHint: .isDirectory)
+        let initialOtherPaneDestination = URL(filePath: "/initial-other-pane", directoryHint: .isDirectory)
+        let liveOtherPaneDestination = URL(filePath: "/later-navigation", directoryHint: .isDirectory)
+        let sourceIdentity = FileIdentity(entryIdentifier: "source", resolvedIdentifier: "source")
+        let destinationIdentity = FileIdentity(
+            entryIdentifier: "captured-destination",
+            resolvedIdentifier: "captured-destination"
+        )
+        let fileSystem = RecordingFileSystem(
+            existingURLs: [
+                source, capturedDestination, initialOtherPaneDestination, liveOtherPaneDestination
+            ],
+            identities: [
+                source: sourceIdentity,
+                capturedDestination: destinationIdentity
+            ]
+        )
+        let controller = FileOperationController(
+            service: FileOperationService(fileSystem: fileSystem)
+        )
+        let listingService = RequestRecordingListingService()
+        let workspace = WorkspaceState(
+            leftURL: capturedDestination,
+            rightURL: initialOtherPaneDestination,
+            listingService: listingService
+        )
+        await workspace.loadInitialDirectories()
+        let request = IdentifiedTransferRequest(
+            source: source,
+            sourceIdentity: sourceIdentity,
+            destinationRoot: capturedDestination,
+            destinationRootIdentity: destinationIdentity,
+            relativeParentComponents: []
+        )
+        await workspace.right.navigate(to: liveOtherPaneDestination)
+
+        #expect(controller.transferToCapturedDirectory([request], mode: .copy, workspace: workspace))
+        await waitUntilIdle(controller)
+
+        let copied = capturedDestination.appending(path: "report.txt")
+        #expect(await fileSystem.existingURLs.contains(copied))
+        #expect(await !fileSystem.existingURLs.contains(
+            liveOtherPaneDestination.appending(path: "report.txt")
+        ))
+        #expect(await listingService.requestCount(for: capturedDestination) == 2)
+        #expect(controller.operationHistory.first?.canUndo == true)
+        #expect(controller.undoJob(controller.operationHistory.first!.id))
+        await waitUntilIdle(controller)
+        #expect(await !fileSystem.existingURLs.contains(copied))
+    }
+
     @Test func transferCollisionRemainsRunningUntilThePendingConflictIsResolved() async {
         let source = URL(filePath: "/source/item")
         let destinationDirectory = URL(filePath: "/destination")

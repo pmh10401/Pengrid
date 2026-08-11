@@ -458,26 +458,41 @@ struct FilePaneView: View {
     }
 
     private func routeContextAction(_ action: ContextActionKind, items: [FileItem]) {
+        let capturedAction = action
+        let targetPaneID = oppositePaneID
         let capturedApplicationURL: URL?
-        switch action {
+        let capturedTransferMode: TransferMode?
+        switch capturedAction {
         case let .openWith(applicationURL):
             capturedApplicationURL = applicationURL.standardizedFileURL
+            capturedTransferMode = nil
+        case let .transferToOtherPane(mode):
+            capturedApplicationURL = nil
+            capturedTransferMode = mode
         case .quickLook, .openInOtherPane:
             capturedApplicationURL = nil
+            capturedTransferMode = nil
         default:
             return
         }
-        let targetPane = FileContextActionTargetRouting.pane(with: oppositePaneID, in: workspace)
+        let targetPane = FileContextActionTargetRouting.pane(with: targetPaneID, in: workspace)
         let sourceDirectory = state.currentDirectory
         let oppositeDirectory = targetPane.currentDirectory
+        let sourceCapability = cloudLocations.localFileOperationCapability(for: sourceDirectory)
+        let oppositeCapability = cloudLocations.localFileOperationCapability(for: oppositeDirectory)
+        if let capturedTransferMode {
+            guard oppositeCapability == .writable,
+                  capturedTransferMode != .move || sourceCapability == .writable
+            else { return }
+        }
         guard let draft = ContextActionDraft(
             sources: items,
             sourcePaneID: paneID,
-            oppositePaneID: oppositePaneID,
+            oppositePaneID: targetPaneID,
             sourceDirectory: sourceDirectory,
             oppositeDirectory: oppositeDirectory,
-            sourceCapability: cloudLocations.localFileOperationCapability(for: sourceDirectory),
-            oppositeCapability: cloudLocations.localFileOperationCapability(for: oppositeDirectory)
+            sourceCapability: sourceCapability,
+            oppositeCapability: oppositeCapability
         ) else { return }
         let router = FileContextActionRouter(
             fileSystem: fileSystem,
@@ -488,7 +503,7 @@ struct FilePaneView: View {
 
         Task { @MainActor in
             guard let snapshot = await router.capture(draft) else { return }
-            switch action {
+            switch capturedAction {
             case .quickLook:
                 _ = await router.quickLook(snapshot, previewCoordinator: previewCoordinator)
             case .openInOtherPane:
@@ -496,6 +511,15 @@ struct FilePaneView: View {
             case .openWith:
                 guard let capturedApplicationURL else { return }
                 _ = await router.openWith(snapshot, applicationURL: capturedApplicationURL)
+            case let .transferToOtherPane(mode):
+                guard let capturedTransferMode, capturedTransferMode == mode,
+                      let requests = await router.identifiedTransferRequests(from: snapshot)
+                else { return }
+                _ = operationController.transferToCapturedDirectory(
+                    requests,
+                    mode: capturedTransferMode,
+                    workspace: workspace
+                )
             default:
                 return
             }

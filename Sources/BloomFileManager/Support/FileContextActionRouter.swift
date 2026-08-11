@@ -350,6 +350,51 @@ final class FileContextActionRouter {
         return true
     }
 
+    func identifiedTransferRequests(
+        from snapshot: ContextActionSnapshot
+    ) async -> [IdentifiedTransferRequest]? {
+        error = nil
+        guard !Task.isCancelled,
+              snapshot.oppositeCapability == .writable,
+              snapshot.sourceDirectory.url.standardizedFileURL
+                != snapshot.oppositeDirectory.url.standardizedFileURL,
+              !snapshot.sourceDirectory.identity.refersToSameItem(
+                as: snapshot.oppositeDirectory.identity
+              )
+        else {
+            return nil
+        }
+
+        let accessLeases: [CloudLocationScopedAccessLease]
+        do {
+            accessLeases = try accessCoordinator.acquireAccess(for: snapshot.sources.map(\.item.url) + [
+                snapshot.sourceDirectory.url,
+                snapshot.oppositeDirectory.url
+            ])
+        } catch {
+            guard !Task.isCancelled else { return nil }
+            self.error = .accessDenied
+            return nil
+        }
+        defer { accessLeases.forEach { $0.finish() } }
+
+        guard await sourcesStillMatch(snapshot.sources),
+              await requestStillMatches(snapshot.sourceDirectory),
+              await requestStillMatches(snapshot.oppositeDirectory),
+              !Task.isCancelled
+        else { return nil }
+
+        return snapshot.sources.map {
+            IdentifiedTransferRequest(
+                source: $0.item.url,
+                sourceIdentity: $0.identity,
+                destinationRoot: snapshot.oppositeDirectory.url,
+                destinationRootIdentity: snapshot.oppositeDirectory.identity,
+                relativeParentComponents: []
+            )
+        }
+    }
+
     private func identity(at url: URL) async -> FileIdentity? {
         do {
             try Task.checkCancellation()

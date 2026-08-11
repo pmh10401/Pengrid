@@ -734,6 +734,22 @@ final class FileOperationController {
         }
     }
 
+    @discardableResult
+    func transferToCapturedDirectory(
+        _ requests: [IdentifiedTransferRequest],
+        mode: TransferMode,
+        workspace: WorkspaceState
+    ) -> Bool {
+        guard !requests.isEmpty else { return false }
+        return runIdentifiedTransfer(
+            requests,
+            mode: mode,
+            workspace: workspace,
+            onCompletion: nil,
+            includeSafeRelativePaths: false
+        )
+    }
+
     private enum PreparedTransferRequests {
         case ready([IdentifiedTransferRequest])
         case rejected(FileOperationResult)
