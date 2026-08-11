@@ -418,6 +418,97 @@ struct WorkspaceCommandTests {
         }
     }
 
+    @Test func contextActionAccessibilityExplainsDestinationCountAndDisabledReasonWithoutPaths() {
+        let privatePath = "/Users/example/Confidential/Report.txt"
+        let value = ContextActionAccessibilityPresentation.value(
+            action: .transferToOtherPane(.copy),
+            itemCount: 2,
+            destinationPaneID: .right,
+            availability: .disabled(reason: "Finish editing first.")
+        )
+
+        #expect(value == "2 selected items. Destination: right pane. Unavailable: Finish editing first.")
+        #expect(!value.contains(privatePath))
+    }
+
+    @Test @MainActor
+    func incompleteCommandSelectionFailsClosedBeforePolicyOrDraftCapture() {
+        let sourceDirectory = URL(filePath: "/left", directoryHint: .isDirectory)
+        let selectedItem = commandItem("visible.txt", in: sourceDirectory)
+        let workspace = WorkspaceState(
+            leftURL: sourceDirectory,
+            rightURL: URL(filePath: "/right", directoryHint: .isDirectory),
+            listingService: StubDirectoryListingService(values: [:])
+        )
+
+        let controller = FileOperationController(
+            service: FileOperationService(fileSystem: LiveFileSystemAccess())
+        )
+        let policy = WorkspaceContextActionRouting.policy(
+            items: [selectedItem],
+            capturedSelectionCount: 2,
+            sourcePaneID: .left,
+            workspace: workspace,
+            operationController: controller,
+            cloudLocations: nil
+        )
+        let draft = WorkspaceContextActionRouting.draft(
+            items: [selectedItem],
+            capturedSelectionCount: 2,
+            sourcePaneID: .left,
+            workspace: workspace,
+            cloudLocations: nil
+        )
+
+        #expect(!policy.quickLook.isEnabled)
+        #expect(policy.quickLook.disabledReason == "Selection is still loading.")
+        #expect(draft == nil)
+    }
+
+    @Test func contextCommandsKeepApprovedShortcutsAndSharedCapturedAuthority() throws {
+        let commands = try workspaceSource(named: "Support/WorkspaceCommands.swift")
+        let pane = try workspaceSource(named: "Views/FilePaneView.swift")
+        let contextActionSection = try #require(commands.slice(
+            from: "@ViewBuilder\n    private var contextActionCommands",
+            until: "    private var contextPresentation"
+        ))
+
+        #expect(commands.contains(".keyboardShortcut(.space, modifiers: [])"))
+        #expect(contextActionSection.contains(
+            "Button(\"Copy Full Path\") { dispatchContextAction(.copyPath(.fullPath)) }\n                    .keyboardShortcut(\"c\", modifiers: [.command, .option])"
+        ))
+        #expect(contextActionSection.contains(
+            "Button(\"Duplicate\") { dispatchContextAction(.duplicate) }\n                .keyboardShortcut(\"d\", modifiers: .command)"
+        ))
+        #expect(contextActionSection.components(separatedBy: ".keyboardShortcut(").count - 1 == 2)
+        #expect(commands.contains("WorkspaceContextActionRouting.policy("))
+        #expect(commands.contains("WorkspaceContextActionRouting.draft("))
+        #expect(pane.contains("WorkspaceContextActionRouting.policy("))
+        #expect(pane.contains("WorkspaceContextActionRouting.draft("))
+        #expect(commands.contains("return workspace.activePane.visibleItems.filter"))
+
+        let textEditingPolicy = WorkspaceCommandPolicy(
+            selectionCount: 1,
+            isOperationRunning: false,
+            pasteboardHasFileURLs: true,
+            selectedItems: [commandItem("report.txt", in: URL(filePath: "/left"))],
+            isTextEditing: true
+        )
+        #expect(textEditingPolicy.copyRoute == .textResponder)
+        #expect(!textEditingPolicy.canQuickLook)
+        let pathCopyPolicy = FileContextMenuPolicy(.init(
+            workspaceCommandPolicy: textEditingPolicy,
+            selectedItems: textEditingPolicy.selectedItems,
+            sourceDirectory: URL(filePath: "/left", directoryHint: .isDirectory),
+            oppositeDirectory: URL(filePath: "/right", directoryHint: .isDirectory),
+            sourceCapability: .writable,
+            oppositeCapability: .writable,
+            isExclusiveOperationActive: false
+        ))
+        #expect(!pathCopyPolicy.copyPath.isEnabled)
+        #expect(pathCopyPolicy.copyPath.disabledReason == "Finish editing first.")
+    }
+
     @Test func filterEditingIsATextSessionAndCommandFTargetsOnlyTheActivePane() {
         let workspace = WorkspaceState(
             leftURL: URL(filePath: "/left"),
@@ -504,6 +595,26 @@ private func menuItemsRecursively(in menu: NSMenu) -> [NSMenuItem] {
         items.append(contentsOf: menuItemsRecursively(in: submenu))
     }
     return items
+}
+
+private func workspaceSource(named relativePath: String) throws -> String {
+    let testsDirectory = URL(filePath: #filePath).deletingLastPathComponent()
+    let packageRoot = testsDirectory
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    return try String(
+        contentsOf: packageRoot.appending(path: "Sources/BloomFileManager/\(relativePath)"),
+        encoding: .utf8
+    )
+}
+
+private extension String {
+    func slice(from start: String, until end: String) -> String? {
+        guard let startRange = range(of: start),
+              let endRange = range(of: end, range: startRange.upperBound..<endIndex)
+        else { return nil }
+        return String(self[startRange.lowerBound..<endRange.lowerBound])
+    }
 }
 
 @MainActor

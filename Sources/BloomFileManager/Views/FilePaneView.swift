@@ -115,8 +115,9 @@ struct FilePaneView: View {
     let fileSystem: any FileSystemAccess
     let accessCoordinator: CloudLocationScopedAccessCoordinator
     let previewCoordinator: WorkspacePreviewCoordinator
-    @State private var openWithProvider: any OpenWithApplicationProviding = OpenWithApplicationProvider()
-    let applicationOpener: any ApplicationOpening = LiveApplicationOpener()
+    let contextActionRouter: FileContextActionRouter
+    let openWithProvider: any OpenWithApplicationProviding
+    let selectionFolder: SelectionFolderModel
     let isActive: Bool
     let onActivate: () -> Void
     let onRequestTrashConfirmation: ([URL]) -> Void
@@ -431,25 +432,14 @@ struct FilePaneView: View {
     }
 
     private func contextMenuPresentation(for items: [FileItem]) -> FileContextMenuPresentation {
-        let oppositePane = FileContextActionTargetRouting.pane(
-            with: oppositePaneID,
-            in: workspace
+        let policy = WorkspaceContextActionRouting.policy(
+            items: items,
+            capturedSelectionCount: items.count,
+            sourcePaneID: paneID,
+            workspace: workspace,
+            operationController: operationController,
+            cloudLocations: cloudLocations
         )
-        let policy = FileContextMenuPolicy(.init(
-            workspaceCommandPolicy: WorkspaceCommandPolicy(
-                selectionCount: items.count,
-                isOperationRunning: operationController.isRunning,
-                pasteboardHasFileURLs: FileURLPasteboard.containsFileURLs(in: .general),
-                selectedItems: items,
-                isTextEditing: workspace.activeTextEditingSession != nil
-            ),
-            selectedItems: items,
-            sourceDirectory: state.currentDirectory,
-            oppositeDirectory: oppositePane.currentDirectory,
-            sourceCapability: cloudLocations.localFileOperationCapability(for: state.currentDirectory),
-            oppositeCapability: cloudLocations.localFileOperationCapability(for: oppositePane.currentDirectory),
-            isExclusiveOperationActive: false
-        ))
         return OpenWithMenuPresentation.make(
             policy: policy,
             selectedItems: items,
@@ -459,69 +449,53 @@ struct FilePaneView: View {
 
     private func routeContextAction(_ action: ContextActionKind, items: [FileItem]) {
         let capturedAction = action
-        let targetPaneID = oppositePaneID
-        let capturedApplicationURL: URL?
-        let capturedTransferMode: TransferMode?
-        switch capturedAction {
-        case let .openWith(applicationURL):
-            capturedApplicationURL = applicationURL.standardizedFileURL
-            capturedTransferMode = nil
-        case let .transferToOtherPane(mode):
-            capturedApplicationURL = nil
-            capturedTransferMode = mode
-        case .quickLook, .openInOtherPane:
-            capturedApplicationURL = nil
-            capturedTransferMode = nil
-        default:
-            return
-        }
-        let targetPane = FileContextActionTargetRouting.pane(with: targetPaneID, in: workspace)
-        let sourceDirectory = state.currentDirectory
-        let oppositeDirectory = targetPane.currentDirectory
-        let sourceCapability = cloudLocations.localFileOperationCapability(for: sourceDirectory)
-        let oppositeCapability = cloudLocations.localFileOperationCapability(for: oppositeDirectory)
-        if let capturedTransferMode {
-            guard oppositeCapability == .writable,
-                  capturedTransferMode != .move || sourceCapability == .writable
-            else { return }
-        }
-        guard let draft = ContextActionDraft(
-            sources: items,
+        let policy = WorkspaceContextActionRouting.policy(
+            items: items,
+            capturedSelectionCount: items.count,
             sourcePaneID: paneID,
-            oppositePaneID: targetPaneID,
-            sourceDirectory: sourceDirectory,
-            oppositeDirectory: oppositeDirectory,
-            sourceCapability: sourceCapability,
-            oppositeCapability: oppositeCapability
-        ) else { return }
-        let router = FileContextActionRouter(
-            fileSystem: fileSystem,
-            accessCoordinator: accessCoordinator,
-            materializer: materializer,
-            applicationOpener: applicationOpener
+            workspace: workspace,
+            operationController: operationController,
+            cloudLocations: cloudLocations
+        )
+        guard capturedAction.availability(in: policy).isEnabled,
+              let draft = WorkspaceContextActionRouting.draft(
+                  items: items,
+                  capturedSelectionCount: items.count,
+                  sourcePaneID: paneID,
+                  workspace: workspace,
+                  cloudLocations: cloudLocations
+              )
+        else { return }
+        let targetPane = FileContextActionTargetRouting.pane(
+            with: draft.oppositePaneID,
+            in: workspace
         )
 
         Task { @MainActor in
-            guard let snapshot = await router.capture(draft) else { return }
+            guard let snapshot = await contextActionRouter.capture(draft) else { return }
             switch capturedAction {
             case .quickLook:
-                _ = await router.quickLook(snapshot, previewCoordinator: previewCoordinator)
+                _ = await contextActionRouter.quickLook(snapshot, previewCoordinator: previewCoordinator)
             case .openInOtherPane:
-                _ = await router.openInOtherPane(snapshot, targetPane: targetPane)
-            case .openWith:
-                guard let capturedApplicationURL else { return }
-                _ = await router.openWith(snapshot, applicationURL: capturedApplicationURL)
+                _ = await contextActionRouter.openInOtherPane(snapshot, targetPane: targetPane)
+            case let .openWith(applicationURL):
+                _ = await contextActionRouter.openWith(snapshot, applicationURL: applicationURL)
             case let .transferToOtherPane(mode):
-                guard let capturedTransferMode, capturedTransferMode == mode,
-                      let requests = await router.identifiedTransferRequests(from: snapshot)
+                guard let requests = await contextActionRouter.identifiedTransferRequests(from: snapshot)
                 else { return }
                 _ = operationController.transferToCapturedDirectory(
                     requests,
-                    mode: capturedTransferMode,
+                    mode: mode,
                     workspace: workspace
                 )
-            default:
-                return
+            case .showInFinder:
+                _ = await contextActionRouter.showInFinder(snapshot)
+            case let .copyPath(kind):
+                _ = contextActionRouter.copyPath(kind, from: snapshot)
+            case .duplicate:
+                _ = operationController.duplicate(snapshot, in: state, workspace: workspace)
+            case .encloseSelection:
+                await selectionFolder.present(snapshot)
             }
         }
     }

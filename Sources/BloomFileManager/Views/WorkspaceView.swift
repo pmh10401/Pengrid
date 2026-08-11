@@ -87,10 +87,12 @@ struct WorkspaceView: View {
     let cloudWorkspaceActions: any CloudLocationWorkspaceActions
     let cloudAccessCoordinator: CloudLocationScopedAccessCoordinator
     let passwordCoordinator: ArchivePasswordPromptCoordinator
+    let contextActionRouter: FileContextActionRouter
+    let openWithProvider: any OpenWithApplicationProviding
+    let selectionFolder: SelectionFolderModel
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var modalPresentationState = WorkspaceModalPresentationState()
-    @State private var selectionFolder = SelectionFolderModel()
 
     var body: some View {
         let hasOverlay = comparison.isActive || storage.isActive
@@ -133,6 +135,12 @@ struct WorkspaceView: View {
                 Text(workspace.activePaneID == .left ? "Left panel active" : "Right panel active")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                Text(contextActionStatus)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier(AccessibilityIdentifiers.workspaceContextActionStatus)
+                    .accessibilityLabel("Context action status")
+                    .accessibilityValue(contextActionStatus)
                 Spacer()
             }
             .padding(.horizontal, 8)
@@ -242,6 +250,9 @@ struct WorkspaceView: View {
                     fileSystem: fileSystem,
                     accessCoordinator: cloudAccessCoordinator,
                     previewCoordinator: previewCoordinator,
+                    contextActionRouter: contextActionRouter,
+                    openWithProvider: openWithProvider,
+                    selectionFolder: selectionFolder,
                     isActive: workspace.activePaneID == .left,
                     onActivate: { workspace.activate(.left) },
                     onRequestTrashConfirmation: workspace.requestTrashConfirmation
@@ -259,6 +270,9 @@ struct WorkspaceView: View {
                     fileSystem: fileSystem,
                     accessCoordinator: cloudAccessCoordinator,
                     previewCoordinator: previewCoordinator,
+                    contextActionRouter: contextActionRouter,
+                    openWithProvider: openWithProvider,
+                    selectionFolder: selectionFolder,
                     isActive: workspace.activePaneID == .right,
                     onActivate: { workspace.activate(.right) },
                     onRequestTrashConfirmation: workspace.requestTrashConfirmation
@@ -292,6 +306,16 @@ struct WorkspaceView: View {
     private var selectedItemsForPreview: [FileItem] {
         let selectedURLs = Set(workspace.selectedURLsForCommands)
         return workspace.activePane.items.filter { selectedURLs.contains($0.url) }
+    }
+
+    private var contextActionStatus: String {
+        if operationController.isRunning {
+            return "File operation in progress."
+        }
+        if let result = operationController.lastResult {
+            return OperationStatusSummary(result: result).accessibilityLabel
+        }
+        return "No file operation in progress."
     }
 
     private var pendingConflict: Binding<IdentifiedFileConflict?> {
