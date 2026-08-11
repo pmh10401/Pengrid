@@ -120,6 +120,8 @@ final class CloudLocationsStore {
                 candidateDocument.records[index].provider = PersistedProviderKind(location.provider)
                 candidateDocument.records[index].displayName = location.displayName
                 candidateDocument.records[index].isAvailable = location.isAvailable
+                candidateDocument.records[index].supportsLocalFileOperations =
+                    location.capabilities.contains(.localFileOperations)
             } else {
                 candidateDocument.records.append(
                     CloudLocationRecord(
@@ -131,7 +133,9 @@ final class CloudLocationsStore {
                         domainIdentifier: key.domainIdentifier,
                         bookmarkData: nil,
                         isHidden: false,
-                        isAvailable: location.isAvailable
+                        isAvailable: location.isAvailable,
+                        supportsLocalFileOperations:
+                            location.capabilities.contains(.localFileOperations)
                     )
                 )
             }
@@ -413,7 +417,9 @@ final class CloudLocationsStore {
                 continue
             }
             var capabilities: StorageCapabilities = [.browse, .materialize]
-            if localFileOperationsSupported(rootURL) {
+            let discoverySupportsLocalOperations = !record.isDiscovered
+                || record.supportsLocalFileOperations == true
+            if discoverySupportsLocalOperations && localFileOperationsSupported(rootURL) {
                 capabilities.insert(.localFileOperations)
             }
             let location = StorageLocation(
@@ -489,6 +495,7 @@ private struct CloudLocationRecord: Codable, Identifiable, Equatable {
     var bookmarkData: Data?
     var isHidden: Bool
     var isAvailable: Bool
+    var supportsLocalFileOperations: Bool? = nil
 
     var isDiscovered: Bool {
         rootIdentity != nil && bookmarkData == nil

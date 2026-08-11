@@ -15,10 +15,10 @@ Command:
 ```bash
 env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
   /usr/bin/xcrun swift test --enable-swift-testing --no-parallel \
-  --filter 'BatchRename|WorkspaceCommandPolicyTests|WorkspaceCommandTests|FileTableViewLifecycleTests|OperationStatusViewTests|AccessibilityPresentationTests'
+  --filter 'BatchRename|CloudLocationsStoreTests|FileOperationUndoServiceTests|WorkspaceCommandPolicyTests|WorkspaceCommandTests|FileTableViewLifecycleTests|OperationStatusViewTests|AccessibilityPresentationTests'
 ```
 
-Result: **PASS — 170 tests in 8 suites, 6.434 seconds.**
+Result: **PASS — 206 tests in 10 suites, 6.459 seconds.**
 
 Covered behavior includes:
 
@@ -27,15 +27,17 @@ Covered behavior includes:
 - source identity drift and destination creation after preview;
 - cancellation during staging and publishing, rollback, and recovery-needed
   escalation;
-- immutable-plan retry and conservative two-phase Undo;
+- immutable-plan retry, live-filesystem Undo after relocation metadata changes,
+  and conservative two-phase Undo;
 - parent replacement, reserved temporary-name collision, publication identity
-  drift, and one-shot scoped-access denial;
+  drift, mutation during Undo publication, and one-shot scoped-access denial;
+- discovery capability preservation plus live directory-writability gating;
 - active-pane visible-order capture, menu and context-menu routing;
 - latest-only preview publication and one scoped-access failure without retry;
 - accessible validation, phase labels, keyboard contracts, Reduce Motion, and
   parent-path privacy.
 
-The 10,000-row preview completed in **0.491 seconds** against the **5-second**
+The 10,000-row preview completed in **0.487 seconds** against the **5-second**
 regression ceiling in this focused run.
 
 ### Complete product suite
@@ -48,7 +50,7 @@ env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
   --filter BloomFileManagerTests
 ```
 
-Result: **PASS — 1,279 tests in 85 suites, 82.264 seconds.**
+Result: **PASS — 1,282 tests in 85 suites, 81.822 seconds.**
 
 ### Release configuration
 
@@ -59,7 +61,7 @@ env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
   /usr/bin/xcrun swift build -c release
 ```
 
-Result: **PASS — production executable linked in 41.74 seconds.**
+Result: **PASS — production executable linked in 41.63 seconds.**
 
 SwiftPM emitted the existing warning for 11 ProtectedZIP fixture files that are
 consumed by tests but are not declared as target resources. The warning did not

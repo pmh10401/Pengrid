@@ -131,25 +131,23 @@ actor BatchRenameTransactionService {
                 workingEntries[index].currentIdentity = stagedIdentity
             }
 
-            for entry in workingEntries {
-                try Task.checkCancellation()
-                guard let expectedFingerprint = expectedSourceFingerprints[
-                    entry.planEntry.source.url
-                ] else { continue }
-                guard try await fileSystem.fingerprint(of: entry.currentURL)
-                    == expectedFingerprint else {
-                    throw BatchRenameTransactionFailure.sourceChanged(
-                        entry.planEntry.source.name
-                    )
-                }
-            }
-
             var finalIdentities: [URL: FileIdentity] = [:]
             var finalFingerprints: [URL: SourceFingerprint] = [:]
             var undoEntries: [BatchRenameUndoEntry] = []
             for index in workingEntries.indices {
                 try Task.checkCancellation()
                 let entry = workingEntries[index]
+                let expectedFingerprint = expectedSourceFingerprints[
+                    entry.planEntry.source.url
+                ]
+                if let expectedFingerprint {
+                    guard try await fileSystem.fingerprint(of: entry.currentURL)
+                        .matchesAfterRelocation(expectedFingerprint) else {
+                        throw BatchRenameTransactionFailure.sourceChanged(
+                            entry.planEntry.source.name
+                        )
+                    }
+                }
                 try await fileSystem.moveExclusively(
                     entry.currentURL,
                     identifiedBy: entry.currentIdentity,
@@ -175,6 +173,12 @@ actor BatchRenameTransactionService {
                 let fingerprint = try await fileSystem.fingerprint(
                     of: entry.planEntry.destinationURL
                 )
+                if let expectedFingerprint,
+                   !fingerprint.matchesAfterRelocation(expectedFingerprint) {
+                    throw BatchRenameTransactionFailure.sourceChanged(
+                        entry.planEntry.source.name
+                    )
+                }
                 finalIdentities[entry.planEntry.destinationURL] = finalIdentity
                 finalFingerprints[entry.planEntry.destinationURL] = fingerprint
                 undoEntries.append(BatchRenameUndoEntry(

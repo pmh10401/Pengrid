@@ -327,6 +327,26 @@ struct CloudLocationsStoreTests {
             fixture.directory("Cloud Backup")
         ) == false)
     }
+
+    @Test func discoveredReadOnlyCapabilitySurvivesStorePresentation() async throws {
+        let fixture = try CloudLocationsFixture()
+        defer { fixture.remove() }
+        let discovered = fixture.discovered(
+            "Read Only",
+            identity: Data([0x77]),
+            capabilities: [.browse, .materialize]
+        )
+        let store = fixture.store(
+            discovery: MutableCloudLocationDiscovery([discovered]),
+            localFileOperationsSupported: { _ in true }
+        )
+
+        try await store.rescan()
+
+        let location = try #require(store.visibleLocations.first)
+        #expect(location.capabilities.contains(.localFileOperations) == false)
+        #expect(store.batchRenameCapability(for: location.rootURL) == .readOnly)
+    }
 }
 
 private actor SequencedCloudLocationDiscovery: CloudLocationDiscovering {
@@ -415,7 +435,8 @@ private struct CloudLocationsFixture {
     func discovered(
         _ basename: String,
         identity: Data,
-        domain: String = "com.example.files"
+        domain: String = "com.example.files",
+        capabilities: StorageCapabilities = [.browse, .materialize, .localFileOperations]
     ) -> StorageLocation {
         StorageLocation(
             id: .fileProvider(domainIdentifier: domain, rootIdentity: identity),
@@ -423,7 +444,7 @@ private struct CloudLocationsFixture {
             displayName: basename,
             rootURL: directory(basename),
             isAvailable: true,
-            capabilities: [.browse, .materialize, .localFileOperations],
+            capabilities: capabilities,
             source: .discovered
         )
     }
@@ -431,13 +452,15 @@ private struct CloudLocationsFixture {
     func store(
         discovery: any CloudLocationDiscovering,
         bookmarking: any CloudLocationBookmarking = InMemoryCloudLocationBookmarking(),
-        accessCoordinator: CloudLocationScopedAccessCoordinator = .init()
+        accessCoordinator: CloudLocationScopedAccessCoordinator = .init(),
+        localFileOperationsSupported: @escaping @Sendable (URL) -> Bool = { _ in true }
     ) -> CloudLocationsStore {
         CloudLocationsStore(
             storageURL: storageURL,
             discovery: discovery,
             bookmarking: bookmarking,
-            accessCoordinator: accessCoordinator
+            accessCoordinator: accessCoordinator,
+            localFileOperationsSupported: localFileOperationsSupported
         )
     }
 }

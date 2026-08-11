@@ -124,6 +124,24 @@ struct SourceFingerprint: Equatable, Sendable {
     }
 
     let entries: [Entry]
+
+    func matchesAfterRelocation(_ original: SourceFingerprint) -> Bool {
+        guard entries.count == original.entries.count else { return false }
+        return zip(entries, original.entries).allSatisfy { current, captured in
+            guard current.relativePath == captured.relativePath,
+                  current.device == captured.device,
+                  current.inode == captured.inode,
+                  current.mode == captured.mode,
+                  current.size == captured.size,
+                  current.modificationSeconds == captured.modificationSeconds,
+                  current.modificationNanoseconds == captured.modificationNanoseconds
+            else { return false }
+            return current.relativePath == "." || (
+                current.changeSeconds == captured.changeSeconds
+                    && current.changeNanoseconds == captured.changeNanoseconds
+            )
+        }
+    }
 }
 
 protocol FileSystemAccess: Sendable {
