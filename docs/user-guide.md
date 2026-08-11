@@ -48,6 +48,10 @@ Useful navigation and file commands include:
 | Move to Trash with confirmation | **Delete** |
 | Move to Trash immediately | **Command-Delete** |
 
+Double-click a row, press **Command-O**, or choose **Open** from the context menu.
+Folders navigate in the current pane, while files and application or document
+packages open through macOS.
+
 Commands are disabled while the selection or current editing state makes them
 unsafe. Rename, location editing, and filtering retain normal text-editing
 priority for Return, Space, Escape, and Delete.
