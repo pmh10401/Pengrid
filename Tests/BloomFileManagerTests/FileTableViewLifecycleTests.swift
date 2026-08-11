@@ -1213,6 +1213,58 @@ struct FileTableViewLifecycleTests {
         #expect(coordinator.control(NSTextField(string: item.name), textShouldBeginEditing: NSTextView()) == false)
     }
 
+    @Test func contextMenuOpenRoutesTheStableTableOrderSelection() throws {
+        let directory = URL(filePath: "/tmp/table-open", directoryHint: .isDirectory)
+        let first = makeTableItem(named: "first.txt", in: directory)
+        let middle = makeTableItem(named: "middle.txt", in: directory)
+        let last = makeTableItem(named: "last.txt", in: directory)
+        let selection = SelectionRecorder(value: [last.url, first.url])
+        var opened: [FileItem] = []
+        let view = FileTableView(
+            items: [first, middle, last],
+            selection: selection.binding,
+            onActivatePane: {},
+            onOpen: { _ in },
+            onOpenSelection: { opened = $0 },
+            onSortChange: { _ in }
+        )
+        let coordinator = view.makeCoordinator()
+        let scrollView = view.makeScrollView(coordinator: coordinator)
+        let tableView = try #require(scrollView.documentView as? NSTableView)
+        coordinator.apply(items: view.items, selection: selection.value, to: tableView)
+        let menu = try #require(tableView.menu)
+
+        coordinator.menuNeedsUpdate(menu)
+        let openItem = try #require(menu.items.first { $0.title == "Open" })
+        #expect(openItem.isEnabled)
+        #expect(NSApp.sendAction(openItem.action!, to: openItem.target, from: openItem))
+
+        #expect(opened == [first, last])
+    }
+
+    @Test func contextMenuOpenIsDisabledDuringTextEditing() throws {
+        let item = makeTableItem(named: "draft.txt", in: URL(filePath: "/tmp/table-open"))
+        let selection = SelectionRecorder(value: [item.url])
+        let view = FileTableView(
+            items: [item],
+            selection: selection.binding,
+            isTextEditing: true,
+            onActivatePane: {},
+            onOpen: { _ in },
+            onOpenSelection: { _ in },
+            onSortChange: { _ in }
+        )
+        let coordinator = view.makeCoordinator()
+        let scrollView = view.makeScrollView(coordinator: coordinator)
+        let tableView = try #require(scrollView.documentView as? NSTableView)
+        coordinator.apply(items: view.items, selection: selection.value, to: tableView)
+        let menu = try #require(tableView.menu)
+
+        coordinator.menuNeedsUpdate(menu)
+
+        #expect(menu.items.first { $0.title == "Open" }?.isEnabled == false)
+    }
+
     @Test func plainSpaceRoutesToTheQuickLookMenuEquivalentBeforeTheTableConsumesIt() throws {
         let application = NSApplication.shared
         let originalMainMenu = application.mainMenu

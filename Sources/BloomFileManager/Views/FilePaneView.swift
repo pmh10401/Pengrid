@@ -219,6 +219,7 @@ struct FilePaneView: View {
                 isTextEditing: workspace.activeTextEditingSession != nil,
                 onActivatePane: onActivate,
                 onOpen: open,
+                onOpenSelection: open,
                 onSortChange: { state.sort = $0 },
                 onProjectionApplicationAttempt: state.recordTableApplicationAttempt,
                 onProjectionApplied: state.recordTableApplicationCompleted,
@@ -371,10 +372,14 @@ struct FilePaneView: View {
     }
 
     private func open(_ item: FileItem) {
+        open([item])
+    }
+
+    private func open(_ items: [FileItem]) {
         onActivate()
         Task {
             await WorkspaceOpenActions.open(
-                [item],
+                items,
                 in: state,
                 materializer: materializer,
                 accessCoordinator: accessCoordinator

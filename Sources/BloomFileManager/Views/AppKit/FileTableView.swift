@@ -16,6 +16,7 @@ struct FileTableView: NSViewRepresentable {
     let dropModifierFlags: () -> NSEvent.ModifierFlags
     let onActivatePane: () -> Void
     let onOpen: (FileItem) -> Void
+    let onOpenSelection: ([FileItem]) -> Void
     let onSortChange: (FileSort) -> Void
     /// Receives every non-nil token before coordinator freshness filtering.
     /// The default is intentionally a no-op for ordinary UI updates.
@@ -57,6 +58,7 @@ struct FileTableView: NSViewRepresentable {
         },
         onActivatePane: @escaping () -> Void,
         onOpen: @escaping (FileItem) -> Void,
+        onOpenSelection: @escaping ([FileItem]) -> Void = { _ in },
         onSortChange: @escaping (FileSort) -> Void,
         onProjectionApplicationAttempt: @escaping (PaneProjectionToken) -> Void = { _ in },
         onProjectionApplied: @escaping (PaneProjectionToken) -> Void = { _ in },
@@ -93,6 +95,7 @@ struct FileTableView: NSViewRepresentable {
         self.dropModifierFlags = dropModifierFlags
         self.onActivatePane = onActivatePane
         self.onOpen = onOpen
+        self.onOpenSelection = onOpenSelection
         self.onSortChange = onSortChange
         self.onProjectionApplicationAttempt = onProjectionApplicationAttempt
         self.onProjectionApplied = onProjectionApplied
@@ -628,6 +631,8 @@ extension FileTableView {
                 isTextEditing: parent.isTextEditing
             )
             menu.removeAllItems()
+            addMenuItem("Open", action: #selector(openFromMenu), enabled: policy.canOpen, to: menu)
+            menu.addItem(.separator())
             addMenuItem("New Folder", action: #selector(createFolderFromMenu), enabled: policy.canCreateFolder, to: menu)
             addMenuItem(
                 "Add to Favorites",
@@ -664,6 +669,10 @@ extension FileTableView {
             addMenuItem("Move to Trash…", action: #selector(trashFromMenu), enabled: policy.canTrash, to: menu)
         }
 
+        @objc private func openFromMenu() {
+            let selectedItems = items.filter { parent.selection.contains($0.url) }
+            parent.onOpenSelection(selectedItems)
+        }
         @objc private func createFolderFromMenu() { parent.onCreateFolder() }
         @objc private func addFavoriteFromMenu() {
             guard let favoriteForContextMenu else { return }
