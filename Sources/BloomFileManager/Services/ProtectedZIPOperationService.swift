@@ -780,7 +780,7 @@ actor ProtectedZIPOperationService: ProtectedZIPOperating, ArchiveOperating {
         await cleanupInputReservation(reservation, itemIdentity: itemIdentity)
     }
 
-    private func withClosedDescriptor<T>(
+    private func withClosedDescriptor<T: Sendable>(
         _ item: OpenedEmptyFileSystemItem,
         operation: () async throws -> T
     ) async rethrows -> T {

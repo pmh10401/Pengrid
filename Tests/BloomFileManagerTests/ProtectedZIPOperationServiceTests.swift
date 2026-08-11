@@ -5,6 +5,17 @@ import Testing
 
 @Suite("ProtectedZIPOperationServiceTests")
 struct ProtectedZIPOperationServiceTests {
+    @Test func descriptorScopeDeclaresItsCrossActorResultSendable() throws {
+        let sourceURL = URL(filePath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appending(path: "Sources/BloomFileManager/Services/ProtectedZIPOperationService.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        #expect(source.contains("private func withClosedDescriptor<T: Sendable>("))
+    }
+
     @Test @MainActor func preparationCompletesBeforePasswordPrompt() async throws {
         let root = try TemporaryDirectory()
         defer { root.remove() }
