@@ -247,8 +247,20 @@ struct PaneItemProjectionTests {
         #expect(snapshot.normalizedEntryPaths == snapshot.standardizedURLs.map(PaneEntryPath.normalize))
         #expect(snapshot.standardizedURLs.count == snapshot.orderedItems.count)
         #expect(snapshot.normalizedEntryPaths.count == snapshot.orderedItems.count)
-        #expect(snapshot.asciiLiteralSafePositions == [0, 8, 11, 13])
-        #expect(snapshot.localizedFallbackPositions == [1, 2, 3, 4, 5, 6, 7, 9, 10, 12])
+        let printableASCIINames: Set<String> = [
+            " !~",
+            "report-1999.txt",
+            "space report.txt",
+            "Zebra_42.md"
+        ]
+        let expectedASCIIPositions = snapshot.orderedItems.indices.filter {
+            printableASCIINames.contains(snapshot.orderedItems[$0].name)
+        }
+        let expectedFallbackPositions = snapshot.orderedItems.indices.filter {
+            !printableASCIINames.contains(snapshot.orderedItems[$0].name)
+        }
+        #expect(snapshot.asciiLiteralSafePositions == expectedASCIIPositions)
+        #expect(snapshot.localizedFallbackPositions == expectedFallbackPositions)
         let coveredPositions = Set(snapshot.asciiLiteralSafePositions + snapshot.localizedFallbackPositions)
         #expect(coveredPositions == Set(0..<14))
         #expect(Set(snapshot.asciiLiteralSafePositions).isDisjoint(with: Set(snapshot.localizedFallbackPositions)))

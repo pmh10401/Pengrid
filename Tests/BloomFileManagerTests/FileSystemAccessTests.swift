@@ -492,7 +492,13 @@ struct FileSystemAccessTests {
         })
         let cancellationRequest = try #require(await cancellation.captureFolderPreviewRequest(paneID: .left, url: folder))
         await #expect(throws: CancellationError.self) {
-            try await cancellation.snapshotFolder(cancellationRequest, visibility: .baseline, progress: { _ in })
+            try await Task {
+                try await cancellation.snapshotFolder(
+                    cancellationRequest,
+                    visibility: .baseline,
+                    progress: { _ in }
+                )
+            }.value
         }
         let hookFailure = LiveFileSystemAccess(onAfterFolderPreviewOpen: { _ in
             throw FolderPreviewFixtureError.expected
