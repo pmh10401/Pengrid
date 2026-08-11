@@ -1,172 +1,135 @@
-# Pengrid
+<p align="center">
+  <img src="Assets/Pengrid/AppIcon-1024.png" width="160" alt="Pengrid app icon">
+</p>
 
-[한국어](README.ko.md) · **English**
+<h1 align="center">Pengrid</h1>
 
-Pengrid is a free, open-source, dual-pane file manager for macOS. It combines
-fast keyboard navigation with recursive search, safe queued file operations,
-folder previews, archive tools, directory comparison, and storage inspection.
+<p align="center">
+  <strong>A fast, keyboard-friendly dual-pane file manager for macOS.</strong><br>
+  <a href="README.ko.md">한국어</a> · <strong>English</strong>
+</p>
 
-The Swift package, executable, source module, bundle identifier, and existing
-persistence locations retain the internal name `BloomFileManager` for
-compatibility.
+Pengrid combines two-pane navigation, recursive search, previews, queued file
+operations, archive tools, directory comparison, and storage inspection in one
+free, open-source macOS app.
 
 ## Download
 
-The current build is
+The current release is
 [Pengrid 1.3.0 Developer Preview 6](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.6).
-It adds captured-selection context actions, safe opposite-pane transfers,
-Duplicate, and transactional New Folder with Selection while retaining the
-large-folder, search, preview, and archive improvements from earlier previews.
 
 - [Download Pengrid.dmg](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.6/Pengrid.dmg)
-- App version: **1.3.0 (build 8)**
+- Version: **1.3.0 (build 8)**
 - Requirements: **Apple Silicon Mac, macOS 15 or later**
 - Verification: **1,407 automated tests in 92 suites**
 - DMG SHA-256:
   `ece6212bd5f80d21bc64ef2059839db8a79a416b3706b140b1c4155dbe801b32`
 
+Open the DMG, then copy `Pengrid.app` to `Applications`.
+
 > **Developer Preview trust notice**
 >
 > This free DMG is ad-hoc signed. It is not Developer ID signed or notarized,
 > so macOS Gatekeeper may block it. Download it only from this repository's
-> GitHub release page and proceed only if you understand and accept that warning.
+> GitHub release page and proceed only if you understand and accept the warning.
 > Pengrid does not ask you to disable macOS security controls.
 
-After downloading, open the DMG and copy `Pengrid.app` to `Applications`.
 See the [release guide](docs/release.md) for artifact verification and local
 packaging instructions.
 
-## Highlights
+## Why Pengrid
 
-### Dual-pane workspace
+- **Work in context:** browse two independent panes and transfer files between
+  the captured source and destination instead of opening many Finder windows.
+- **Stay on the keyboard:** search, filter, preview, duplicate, copy paths, and
+  manage common file actions with focused desktop shortcuts.
+- **Prefer recoverable operations:** queued mutations revalidate file identity,
+  report progress, clean up cancellation, and offer Retry or Undo only when the
+  captured state still makes them safe.
 
-Browse two folders side by side with independent navigation history, sorting,
-selection, and pane-local filename filtering. Copy and move workflows operate
-between the active pane and the other pane.
+## What You Can Do
 
-### Smart Search, including Korean initial consonants
+### Navigate and manage two panes
 
-Press **Command-Shift-F** for recursive filename and relative-path search.
-Queries support Korean initial-consonant matching, ordinary text, mixed clauses,
-file/folder type, extension, size, and modified-date filters. Searches can be
-saved and reopened. Result actions revalidate the captured file identity before
-they mutate anything.
+Each pane keeps its own history, selection, sorting, and filename filter. Copy,
+move, Open in Other Pane, and reviewed comparison transfers use the pane and
+destination captured when the command starts.
 
-### Space-key previews
+### Find files quickly
 
-Press **Space** on one ordinary folder to open Pengrid's read-only, one-level
-folder-contents preview. Files, packages, symbolic links, and multiple
-selections continue to use system Quick Look. Cloud folder preview reads
-available metadata only and does not intentionally download contents.
+Smart Search scans filenames and relative paths recursively. It supports
+ordinary text, Korean initial-consonant matching, mixed queries, type,
+extension, size, and modified-date filters. Searches can be saved and reopened.
 
-### Context-menu productivity (Preview 6)
+### Preview and act without losing context
 
-Right-clicking a selected row preserves the whole selection; right-clicking an
-unselected row selects that row first. Commands consume that captured selection
-in visible table order, not in a later pane or selection state. The context menu
-keeps **Open** first, then groups **Quick Look**, **Open With**, and **Open in
-Other Pane**; **Copy/Move to Other Pane**, **Show in Finder**, and **Copy Path**;
-then **New Folder**, **New Folder with Selection**, favorites, **Duplicate**,
-rename, existing copy/paste and archive actions, and Trash.
+Press **Space** to preview one folder's immediate contents or open system Quick
+Look for files, packages, symbolic links, and multiple selections. The context
+menu includes Open, Open With, Open in Other Pane, Show in Finder, Copy Path,
+Duplicate, New Folder with Selection, rename, archives, and Trash.
 
-Quick Look keeps **Space**. Open With is available for one regular file,
-package, or symbolic link; Open in Other Pane opens one directory there, or selects one
-identity-matched non-directory from its captured parent. Copy/Move to Other
-Pane use the other pane directory captured at invocation, so later navigation
-cannot redirect the job. Show in Finder reveals captured entries without
-reading bytes. **Copy Path** offers Full Path (**Option-Command-C**), Name,
-Parent Path, and File URL as UTF-8 text in visible order. **Duplicate** uses
-**Command-D**, extension-preserving **Keep Both** names, and no-overwrite
-publication. **New Folder with Selection** accepts two or more siblings and
-moves them transactionally into a validated new folder.
+Preview 6 captures the visible selection before dispatch, so later navigation
+or selection changes cannot silently redirect an action. Read the
+[release notes](docs/release-notes-v1.3.0-developer-preview.6.md) for the exact
+selection and capability rules.
 
-These actions respect text editing, current writability, File Provider
-capabilities, progress, cancellation, retry, recovery, and conservative Undo.
-Quick Look and Open With can request cloud materialization; path, Finder, and
-other-pane navigation do not intentionally read content. Copy, Move, Duplicate,
-and enclosure require a currently writable local-file-operation location.
+### Run safer file operations
 
-### Preview-first batch rename (Preview 6)
+Copy, move, Trash, rename, new-folder, archive, and Undo jobs share an ordered
+operation center. Jobs expose progress and safe cancellation points; exclusive
+transactions such as batch rename and New Folder with Selection use staged
+publication and conservative rollback checks.
 
-Select at least two rows in the active pane, then choose **File Operations >
-Batch Rename…** or use the row context menu. Literal find/replace, prefix,
-suffix, and stable sequence numbering update editable filename stems while
-preserving ordinary extensions, package extensions, and recognized compound
-archive suffixes such as `.tar.gz`. A full preview reports unchanged names,
-invalid names, duplicates, and sibling collisions before any mutation starts.
+### Create and extract archives
 
-Execution is a same-directory, two-phase transaction that supports swaps and
-cycles. The operation center reports staging, publishing, and rollback phases;
-cancellation restores original names when that can be proven safe. Retry uses
-the captured immutable plan, while Undo is offered only when final identities,
-fingerprints, and original-name availability still match. The preview path has
-an automated 10,000-row regression ceiling of five seconds.
+Pengrid creates and extracts **ZIP**, **TAR**, **TAR.GZ/TGZ**,
+**TAR.BZ2/TBZ/TBZ2**, and **TAR.XZ/TXZ**. Progress distinguishes preparation,
+encoding, and finishing phases. Source builds also create AES-256
+password-protected ZIP files and read supported AES and ZipCrypto entries.
 
-### Safe operation center
+### Work with cloud locations and accessibility tools
 
-Copy, move, Trash, new-folder, rename, compression, extraction, and undo work
-through one ordered mutation queue. Queued work can be reordered, paused at safe
-checkpoints, or cancelled with cleanup. Retry and undo are offered only when
-identity and fingerprint checks show that repeating or reversing an operation
-will not overwrite or remove replacement data.
+Google Drive and OneDrive appear through macOS File Provider. Metadata-only
+search and folder preview avoid intentional content downloads; byte-reading
+operations may ask macOS to materialize an online-only item. Pengrid also
+includes directory comparison, Storage Inspector, keyboard navigation,
+VoiceOver labels, Reduce Motion support, and privacy-preserving status text.
 
-### Archives with visible progress
+## Essential Shortcuts
 
-Create and extract **ZIP**, **TAR**, **TAR.GZ/TGZ**, **TAR.BZ2/TBZ/TBZ2**, and
-**TAR.XZ/TXZ** archives. Multi-item preparation uses at most four bounded
-workers; the native archive command remains a single operation. Pengrid reports
-preparation, encoding, and finishing phases without inventing an unreliable byte
-percentage.
+| Shortcut | Action |
+| --- | --- |
+| **Space** | Folder preview or system Quick Look |
+| **Command-F** | Filter the active pane |
+| **Command-Shift-F** | Smart Search from the active pane |
+| **Command-D** | Duplicate the captured selection |
+| **Option-Command-C** | Copy full paths in visible order |
 
-### Password-protected ZIP
+Batch Rename and the remaining context actions are available from the File
+Operations menu or a row's context menu.
 
-Source builds create password-protected ZIP files with **AES-256 only**. They
-read AES-128, AES-192, AES-256, and ZipCrypto entries using Store or Deflate
-under the current safety policy. ZIP filenames and other central-directory
-metadata remain visible: encryption is not filename privacy. Passwords are
-never saved or recoverable; a failed attempt asks for the password again.
+## Cloud and Safety Boundaries
 
-Finder and Archive Utility may not open an AES ZIP. The repository has automated
-fixture evidence for third-party interoperability, not a live interoperability
-claim. Resource forks, ACLs, and extended attributes are not guaranteed. Unsafe
-or oversized archives fail closed; cleanup uncertainty is retained for recovery
-review and the queue waits for an explicit continue decision. 7z, RAR, and
-password-protected TAR remain unsupported, as do Developer ID signing and
-notarization for this source feature.
+- Pengrid discovers cloud roots through macOS File Provider. It does not
+  implement direct Google or Microsoft OAuth.
+- Availability, write capability, and materialization remain controlled by the
+  installed provider and macOS.
+- Password-protected ZIP encryption does not hide filenames or other central
+  directory metadata. Passwords are never saved or recoverable.
+- 7z, RAR, password-protected TAR, Developer ID signing, and notarization are
+  not included in this Developer Preview.
+- Manual checks that have not been run remain explicitly marked `NOT RUN` in
+  the verification documents.
 
-### Google Drive and OneDrive
+For detailed behavior, safety rules, and limitations, read the
+[feature guide](docs/user-guide.md) and
+[current limitations](docs/current-limitations.md).
 
-Pengrid discovers Google Drive and OneDrive through macOS File Provider. It does
-not implement direct Google or Microsoft OAuth. Metadata-only search and folder
-preview do not intentionally materialize cloud-only file contents; copy,
-archive, or other content-reading operations may ask macOS to download a source.
-
-### Comparison, Storage Inspector, and accessibility
-
-Directory comparison aligns both sides and supports reviewed transfers with
-identity revalidation. Storage Inspector progressively finds large, old, and
-exact-duplicate local files and sends only explicitly reviewed items to Trash.
-Keyboard access, VoiceOver labels, Reduce Motion, and privacy-preserving status
-text are built into the workspace.
-
-Read the [detailed feature guide](docs/user-guide.md) for commands, behavior,
-safety rules, and current limitations.
-
-## Build from source
-
-Clone the repository:
+## Build from Source
 
 ```bash
 git clone https://github.com/pmh10401/Pengrid.git
 cd Pengrid
-```
-
-Or download the
-[main branch source ZIP](https://github.com/pmh10401/Pengrid/archive/refs/heads/main.zip).
-
-Build and verify with full Xcode:
-
-```bash
 env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
   /usr/bin/xcrun swift test --enable-swift-testing --no-parallel \
   --filter BloomFileManagerTests
@@ -175,22 +138,18 @@ env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
 open dist/Pengrid.app
 ```
 
-The development bundle is created at `dist/Pengrid.app`. Its executable remains
-`dist/Pengrid.app/Contents/MacOS/BloomFileManager`.
+The development app is created at `dist/Pengrid.app`. The Swift package,
+executable, source module, bundle identifier, and existing persistence paths
+retain the internal name `BloomFileManager` for compatibility.
 
 ## Documentation
 
 - [Detailed feature guide](docs/user-guide.md)
+- [Developer Preview 6 release notes](docs/release-notes-v1.3.0-developer-preview.6.md)
+- [Release and packaging guide](docs/release.md)
 - [Architecture notes](docs/architecture.md)
 - [Current limitations](docs/current-limitations.md)
-- [Release and packaging guide](docs/release.md)
-- [Developer Preview 6 release notes](docs/release-notes-v1.3.0-developer-preview.6.md)
-- [Version 1.3 archive verification](docs/verification/version-1.3-archive-checklist.md)
-- [Smart Search verification](docs/verification/2026-08-04-smart-search.md)
-- [Folder preview verification](docs/verification/2026-08-04-folder-preview.md)
-- [Batch rename verification](docs/verification/2026-08-11-batch-rename.md)
-- [File context actions verification](docs/verification/2026-08-11-file-context-actions.md)
-- [Storage Inspector verification](docs/verification/storage-inspector-checklist.md)
+- [Verification records](docs/verification/)
 
-Pengrid is under active development. Candidate-specific manual checks that have
-not been run remain marked `NOT RUN` in the verification documents.
+Pengrid is under active development. Contributions and reproducible issue
+reports are welcome.
