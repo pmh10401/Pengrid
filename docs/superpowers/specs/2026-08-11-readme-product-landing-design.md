@@ -54,4 +54,3 @@ Both READMEs use the same section order:
 - Scan for stale preview numbers, unsupported OAuth claims, placeholders, and
   differences between English and Korean section coverage.
 - Run `git diff --check` before committing the README implementation.
-
