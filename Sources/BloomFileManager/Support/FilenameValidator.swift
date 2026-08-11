@@ -1,6 +1,6 @@
 import Foundation
 
-enum FilenameError: Error, Equatable {
+enum FilenameError: Error, Equatable, Sendable {
     case empty
     case containsPathSeparator
     case dotEntry

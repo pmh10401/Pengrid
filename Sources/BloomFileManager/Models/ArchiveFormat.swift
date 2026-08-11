@@ -46,12 +46,19 @@ enum ArchiveFormat: CaseIterable, Hashable, Sendable, Equatable {
     }
 
     static func removingRecognizedSuffix(from filename: String) -> String? {
-        guard let suffix = recognizedSuffixes.first(where: {
+        guard let suffix = recognizedSuffix(in: filename) else {
+            return nil
+        }
+        return String(filename.dropLast(suffix.count))
+    }
+
+    static func recognizedSuffix(in filename: String) -> String? {
+        guard let recognized = recognizedSuffixes.first(where: {
             filename.lowercased().hasSuffix($0.suffix)
         })?.suffix else {
             return nil
         }
-        return String(filename.dropLast(suffix.count))
+        return String(filename.suffix(recognized.count))
     }
 
     private static let recognizedSuffixes: [(suffix: String, format: ArchiveFormat)] = [
