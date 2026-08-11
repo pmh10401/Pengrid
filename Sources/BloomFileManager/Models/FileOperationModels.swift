@@ -42,6 +42,34 @@ struct IdentifiedTransferRequest: Sendable, Equatable {
     let relativeParentComponents: [String]
 }
 
+enum SelectionFolderTransactionPhase: Sendable, Equatable {
+    case creatingFolder
+    case movingItems
+    case rollingBack
+}
+
+struct SelectionFolderTransactionProgress: Sendable, Equatable {
+    let phase: SelectionFolderTransactionPhase
+    let completedCount: Int
+    let totalCount: Int
+    let currentName: String
+}
+
+struct SelectionFolderUndoEntry: Sendable, Equatable {
+    let originalSource: ContextActionSource
+    let folderURL: URL
+    let folderIdentity: FileIdentity
+    let fingerprint: SourceFingerprint
+}
+
+struct SelectionFolderUndoPlan: Sendable, Equatable {
+    let parentURL: URL
+    let parentIdentity: FileIdentity
+    let folderURL: URL
+    let folderIdentity: FileIdentity
+    let entries: [SelectionFolderUndoEntry]
+}
+
 enum ArchiveSelectionEligibility {
     static func canCompress(_ items: [FileItem]) -> Bool {
         !items.isEmpty
@@ -262,13 +290,15 @@ struct FileOperationResult: Sendable, Equatable {
     private let undoDestinationIdentities: [URL: FileIdentity]
     private let undoDestinationFingerprints: [URL: SourceFingerprint]
     private let batchRenameUndoPlan: BatchRenameUndoPlan?
+    private let selectionFolderUndoPlan: SelectionFolderUndoPlan?
 
     init(
         outcomes: [FileOperationItemOutcome],
         safeRelativePathsBySource: [URL: ComparisonRelativePath] = [:],
         undoDestinationIdentities: [URL: FileIdentity] = [:],
         undoDestinationFingerprints: [URL: SourceFingerprint] = [:],
-        batchRenameUndoPlan: BatchRenameUndoPlan? = nil
+        batchRenameUndoPlan: BatchRenameUndoPlan? = nil,
+        selectionFolderUndoPlan: SelectionFolderUndoPlan? = nil
     ) {
         self.outcomes = outcomes
         var normalized: [URL: ComparisonRelativePath] = [:]
@@ -295,6 +325,7 @@ struct FileOperationResult: Sendable, Equatable {
         }
         self.undoDestinationFingerprints = normalizedUndoFingerprints
         self.batchRenameUndoPlan = batchRenameUndoPlan
+        self.selectionFolderUndoPlan = selectionFolderUndoPlan
     }
 
     func safeRelativePath(for source: URL) -> ComparisonRelativePath? {
@@ -313,6 +344,10 @@ struct FileOperationResult: Sendable, Equatable {
         batchRenameUndoPlan
     }
 
+    func selectionFolderUndoMetadata() -> SelectionFolderUndoPlan? {
+        selectionFolderUndoPlan
+    }
+
     func addingSafeRelativePaths(
         _ paths: [URL: ComparisonRelativePath]
     ) -> FileOperationResult {
@@ -325,7 +360,8 @@ struct FileOperationResult: Sendable, Equatable {
             safeRelativePathsBySource: mergedPaths,
             undoDestinationIdentities: undoDestinationIdentities,
             undoDestinationFingerprints: undoDestinationFingerprints,
-            batchRenameUndoPlan: batchRenameUndoPlan
+            batchRenameUndoPlan: batchRenameUndoPlan,
+            selectionFolderUndoPlan: selectionFolderUndoPlan
         )
     }
 
@@ -350,7 +386,8 @@ struct FileOperationResult: Sendable, Equatable {
             safeRelativePathsBySource: paths,
             undoDestinationIdentities: identities,
             undoDestinationFingerprints: fingerprints,
-            batchRenameUndoPlan: batchRenameUndoPlan ?? other.batchRenameUndoPlan
+            batchRenameUndoPlan: batchRenameUndoPlan ?? other.batchRenameUndoPlan,
+            selectionFolderUndoPlan: selectionFolderUndoPlan ?? other.selectionFolderUndoPlan
         )
     }
 

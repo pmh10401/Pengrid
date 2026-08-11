@@ -166,6 +166,7 @@ protocol FileSystemAccess: Sendable {
     func move(_ source: URL, to destination: URL) async throws
     func moveExclusively(_ source: URL, to destination: URL) async throws
     func remove(_ url: URL) async throws
+    func removeEmptyDirectory(_ url: URL, identifiedBy identity: FileIdentity) async throws
     func replace(_ destination: URL, with stagedItem: URL) async throws
     func identity(of url: URL) async throws -> FileIdentity?
     func move(_ source: URL, identifiedBy identity: FileIdentity, to destination: URL) async throws
@@ -233,6 +234,10 @@ protocol FileSystemAccess: Sendable {
 }
 
 extension FileSystemAccess {
+    func removeEmptyDirectory(_ url: URL, identifiedBy identity: FileIdentity) async throws {
+        throw FileSystemAccessError.unsupportedOperation(url)
+    }
+
     func filenameComparisonPolicy(in directory: URL) async throws -> FilenameComparisonPolicy {
         .caseSensitiveCanonical
     }
@@ -455,6 +460,7 @@ actor LiveFileSystemAccess: FileSystemAccess {
     private let onCopyEntryCreated: @Sendable (URL) -> Void
     private let onCopyMetadataApplied: @Sendable () throws -> Void
     private let onAfterEmptyItemCreated: @Sendable (URL, FileIdentity) throws -> Void
+    private let onBeforeEmptyDirectoryUnlink: @Sendable (URL) throws -> Void
     private let storageTrashDirectory: (URL) throws -> URL
     private let storageTrashName: @Sendable () -> String
     private let onAfterStorageQuarantineRename: @Sendable () throws -> Void
@@ -481,6 +487,8 @@ actor LiveFileSystemAccess: FileSystemAccess {
         onCopyMetadataApplied: @escaping @Sendable () throws -> Void = {},
         onAfterEmptyItemCreated:
             @escaping @Sendable (URL, FileIdentity) throws -> Void = { _, _ in },
+        onBeforeEmptyDirectoryUnlink:
+            @escaping @Sendable (URL) throws -> Void = { _ in },
         storageTrashDirectory:
             ((URL) throws -> URL)? = nil,
         storageTrashName:
@@ -514,6 +522,7 @@ actor LiveFileSystemAccess: FileSystemAccess {
         self.onCopyEntryCreated = onCopyEntryCreated
         self.onCopyMetadataApplied = onCopyMetadataApplied
         self.onAfterEmptyItemCreated = onAfterEmptyItemCreated
+        self.onBeforeEmptyDirectoryUnlink = onBeforeEmptyDirectoryUnlink
         self.storageTrashDirectory = storageTrashDirectory ?? { source in
             try fileManager.url(
                 for: .trashDirectory,
@@ -1045,7 +1054,7 @@ actor LiveFileSystemAccess: FileSystemAccess {
         try applyAndClosePendingCopy(for: stagedIdentity)
     }
 
-    func reserveStagingDirectory(beside destination: URL) throws -> StagingReservation {
+    func reserveStagingDirectory(beside destination: URL) async throws -> StagingReservation {
         while true {
             try Task.checkCancellation()
             let directory = destination
@@ -1067,7 +1076,17 @@ actor LiveFileSystemAccess: FileSystemAccess {
                     item: directory.appending(path: "payload")
                 )
             } catch {
-                let cleanupError = removeEmptyDirectory(directory)
+                let cleanupError: (any Error)?
+                if let capturedIdentity = try? identity(of: directory) {
+                    do {
+                        try await removeEmptyDirectory(directory, identifiedBy: capturedIdentity)
+                        cleanupError = nil
+                    } catch {
+                        cleanupError = error
+                    }
+                } else {
+                    cleanupError = nil
+                }
                 throw FileTransferAccessFailure(primary: error, cleanup: cleanupError)
             }
         }
@@ -1079,13 +1098,11 @@ actor LiveFileSystemAccess: FileSystemAccess {
         return SourceFingerprint(entries: entries)
     }
 
-    func removeStagingDirectory(_ reservation: StagingReservation) throws {
-        // The identity check and rmdir are synchronous within this actor, minimizing the
-        // public-API TOCTOU window. rmdir never recursively removes raced-in contents.
-        try requireIdentity(reservation.directoryIdentity, at: reservation.directory)
-        if let error = removeEmptyDirectory(reservation.directory) {
-            throw error
-        }
+    func removeStagingDirectory(_ reservation: StagingReservation) async throws {
+        try await removeEmptyDirectory(
+            reservation.directory,
+            identifiedBy: reservation.directoryIdentity
+        )
     }
 
     func trash(_ url: URL) throws {
@@ -1112,7 +1129,7 @@ actor LiveFileSystemAccess: FileSystemAccess {
         identifiedBy expectedIdentity: FileIdentity
     ) async throws -> StorageTrashQuarantine {
         let trashDirectory = try storageTrashDirectory(url)
-        let reservation = try reserveStagingDirectory(beside: url)
+        let reservation = try await reserveStagingDirectory(beside: url)
         let (sourceParent, sourceName) = try openParentDirectory(of: url)
         let staging: Int32
         do {
@@ -1122,7 +1139,7 @@ actor LiveFileSystemAccess: FileSystemAccess {
             )
         } catch {
             Darwin.close(sourceParent)
-            try? removeStagingDirectory(reservation)
+            try? await removeStagingDirectory(reservation)
             throw error
         }
         var movedIntoStaging = false
@@ -1191,14 +1208,14 @@ actor LiveFileSystemAccess: FileSystemAccess {
                 Darwin.close(staging)
                 Darwin.close(sourceParent)
                 if recovered {
-                    try? removeStagingDirectory(reservation)
+                    try? await removeStagingDirectory(reservation)
                     throw StorageTrashAccessError.failedButRestored
                 }
                 throw StorageTrashAccessError.recoveryRequired
             }
             Darwin.close(staging)
             Darwin.close(sourceParent)
-            try? removeStagingDirectory(reservation)
+            try? await removeStagingDirectory(reservation)
             throw primaryError
         }
     }
@@ -1232,7 +1249,7 @@ actor LiveFileSystemAccess: FileSystemAccess {
             abandonRecoverableQuarantine(context)
             throw StorageTrashAccessError.recoveryRequired
         }
-        finishEmptyQuarantine(context)
+        await finishEmptyQuarantine(context)
     }
 
     func fingerprint(of quarantine: StorageTrashQuarantine) async throws -> SourceFingerprint {
@@ -1315,7 +1332,7 @@ actor LiveFileSystemAccess: FileSystemAccess {
                     destination
                 )
             }
-            finishEmptyQuarantine(context)
+            await finishEmptyQuarantine(context)
             return destination
         } catch {
             if movedToTrash {
@@ -2221,12 +2238,12 @@ actor LiveFileSystemAccess: FileSystemAccess {
         guard status == 0 else { throw currentPOSIXError() }
     }
 
-    private func finishEmptyQuarantine(_ context: StorageQuarantineContext) {
+    private func finishEmptyQuarantine(_ context: StorageQuarantineContext) async {
         storageQuarantines.removeValue(forKey: context.quarantine.id)
         _ = Darwin.fchmod(context.stagingDescriptor, 0o700)
         Darwin.close(context.stagingDescriptor)
         Darwin.close(context.sourceParentDescriptor)
-        try? removeStagingDirectory(context.quarantine.reservation)
+        try? await removeStagingDirectory(context.quarantine.reservation)
     }
 
     private func abandonRecoverableQuarantine(
@@ -2508,13 +2525,40 @@ actor LiveFileSystemAccess: FileSystemAccess {
         }
     }
 
-    private func removeEmptyDirectory(_ directory: URL) -> (any Error)? {
-        let result: Int32 = directory.withUnsafeFileSystemRepresentation { path in
-            guard let path else { return Int32(-1) }
-            return Darwin.rmdir(path)
+    func removeEmptyDirectory(
+        _ url: URL,
+        identifiedBy expectedIdentity: FileIdentity
+    ) async throws {
+        try Task.checkCancellation()
+        let (parentDescriptor, name) = try openParentDirectory(of: url)
+        defer { Darwin.close(parentDescriptor) }
+
+        guard try identity(named: name, in: parentDescriptor, noFollow: true) == expectedIdentity
+        else {
+            throw FileSystemAccessError.identityMismatch(url)
         }
-        guard result != 0 else { return nil }
-        return POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        let descriptor = name.withCString {
+            Darwin.openat(parentDescriptor, $0, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        }
+        guard descriptor >= 0 else { throw currentPOSIXError() }
+        defer { Darwin.close(descriptor) }
+
+        guard try identity(ofDescriptor: descriptor) == expectedIdentity,
+              try identity(named: name, in: parentDescriptor, noFollow: true) == expectedIdentity
+        else {
+            throw FileSystemAccessError.identityMismatch(url)
+        }
+        try Task.checkCancellation()
+        try onBeforeEmptyDirectoryUnlink(url)
+        guard try identity(named: name, in: parentDescriptor, noFollow: true) == expectedIdentity,
+              try identity(ofDescriptor: descriptor) == expectedIdentity
+        else {
+            throw FileSystemAccessError.identityMismatch(url)
+        }
+        let status = name.withCString {
+            Darwin.unlinkat(parentDescriptor, $0, AT_REMOVEDIR)
+        }
+        guard status == 0 else { throw currentPOSIXError() }
     }
 
     private func isFileExists(_ error: any Error) -> Bool {
