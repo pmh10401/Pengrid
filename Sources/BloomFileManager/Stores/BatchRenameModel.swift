@@ -1,11 +1,13 @@
 import Foundation
 import Observation
 
-enum BatchRenameLocationCapability: Sendable, Equatable {
+enum LocalFileOperationCapability: Sendable, Equatable {
     case writable
     case readOnly
     case unknown
 }
+
+typealias BatchRenameLocationCapability = LocalFileOperationCapability
 
 enum BatchRenameModelPhase: Sendable, Equatable {
     case idle

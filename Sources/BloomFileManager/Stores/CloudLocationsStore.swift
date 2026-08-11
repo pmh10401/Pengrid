@@ -153,7 +153,7 @@ final class CloudLocationsStore {
         hasCompletedInitialDiscovery = true
     }
 
-    func batchRenameCapability(for directory: URL) -> BatchRenameLocationCapability {
+    func localFileOperationCapability(for directory: URL) -> LocalFileOperationCapability {
         let candidate = directory.standardizedFileURL
         let locations = (visibleLocations + hiddenLocations).filter {
             Self.contains(candidate, within: $0.rootURL)
@@ -172,6 +172,10 @@ final class CloudLocationsStore {
             .appending(path: "Library/CloudStorage", directoryHint: .isDirectory)
         if Self.contains(candidate, within: cloudStorageRoot) { return .unknown }
         return localFileOperationsSupported(candidate) ? .writable : .readOnly
+    }
+
+    func batchRenameCapability(for directory: URL) -> BatchRenameLocationCapability {
+        localFileOperationCapability(for: directory)
     }
 
     func addManualLocation(_ url: URL) throws {

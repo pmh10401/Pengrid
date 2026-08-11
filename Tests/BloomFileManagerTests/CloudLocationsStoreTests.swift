@@ -345,7 +345,44 @@ struct CloudLocationsStoreTests {
 
         let location = try #require(store.visibleLocations.first)
         #expect(location.capabilities.contains(.localFileOperations) == false)
+        #expect(store.localFileOperationCapability(for: location.rootURL) == .readOnly)
         #expect(store.batchRenameCapability(for: location.rootURL) == .readOnly)
+    }
+
+    @Test func localFileOperationCapabilityClassifiesKnownAndOrdinaryLocations() async throws {
+        let fixture = try CloudLocationsFixture()
+        defer { fixture.remove() }
+        let knownWritable = fixture.discovered("Writable", identity: Data([0x78]))
+        let providerReadOnly = fixture.discovered(
+            "Provider Read Only",
+            identity: Data([0x79]),
+            capabilities: [.browse, .materialize]
+        )
+        let unavailable = fixture.discovered(
+            "Unavailable",
+            identity: Data([0x7A]),
+            isAvailable: false
+        )
+        let ordinaryReadOnly = fixture.directory("Ordinary Read Only")
+        let store = fixture.store(
+            discovery: MutableCloudLocationDiscovery([
+                knownWritable,
+                providerReadOnly,
+                unavailable
+            ]),
+            localFileOperationsSupported: { $0 != ordinaryReadOnly }
+        )
+
+        try await store.rescan()
+
+        #expect(store.localFileOperationCapability(for: knownWritable.rootURL) == .writable)
+        #expect(store.localFileOperationCapability(for: providerReadOnly.rootURL) == .readOnly)
+        #expect(store.localFileOperationCapability(for: unavailable.rootURL) == .unknown)
+        #expect(store.localFileOperationCapability(for: FileManager.default.homeDirectoryForCurrentUser
+            .appending(path: "Library/CloudStorage/Unrecognized Provider/Child", directoryHint: .isDirectory)
+        ) == .unknown)
+        #expect(store.localFileOperationCapability(for: fixture.directory("Ordinary Writable")) == .writable)
+        #expect(store.localFileOperationCapability(for: ordinaryReadOnly) == .readOnly)
     }
 }
 
@@ -436,6 +473,7 @@ private struct CloudLocationsFixture {
         _ basename: String,
         identity: Data,
         domain: String = "com.example.files",
+        isAvailable: Bool = true,
         capabilities: StorageCapabilities = [.browse, .materialize, .localFileOperations]
     ) -> StorageLocation {
         StorageLocation(
@@ -443,7 +481,7 @@ private struct CloudLocationsFixture {
             provider: .other("Example"),
             displayName: basename,
             rootURL: directory(basename),
-            isAvailable: true,
+            isAvailable: isAvailable,
             capabilities: capabilities,
             source: .discovered
         )
