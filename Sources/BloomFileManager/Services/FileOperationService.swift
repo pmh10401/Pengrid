@@ -732,6 +732,7 @@ actor FileOperationService {
                 parentIdentifiedBy: request.destinationRootIdentity
             )
             var stagedIdentity: FileIdentity?
+            var publishedDestination = false
             do {
                 try Task.checkCancellation()
                 stagedIdentity = try await fileSystem.copyAndCaptureIdentity(
@@ -759,6 +760,7 @@ actor FileOperationService {
                         to: destination,
                         destinationParentIdentifiedBy: request.destinationRootIdentity
                     )
+                    publishedDestination = true
                 } catch {
                     if isAlreadyExists(error) {
                         if let cleanupError = await cleanupStaging(
@@ -817,7 +819,16 @@ actor FileOperationService {
             } catch let failure as TransferFailure {
                 throw failure
             } catch {
-                let cleanupError = await cleanupStaging(reservation, itemIdentity: stagedIdentity)
+                let cleanupError: (any Error)?
+                if publishedDestination, let stagedIdentity {
+                    cleanupError = await cleanupPublishedDuplicate(
+                        destination,
+                        identity: stagedIdentity,
+                        reservation: reservation
+                    )
+                } else {
+                    cleanupError = await cleanupStaging(reservation, itemIdentity: stagedIdentity)
+                }
                 if error is CancellationError, cleanupError == nil {
                     throw error
                 }

@@ -99,23 +99,34 @@ actor SelectionFolderTransactionService {
                     path: source.item.url.lastPathComponent,
                     directoryHint: source.item.isDirectory ? .isDirectory : .notDirectory
                 )
+                let sourceFingerprint = try await fileSystem.fingerprint(of: source.item.url)
                 try await fileSystem.moveExclusively(
                     source.item.url,
                     identifiedBy: source.identity,
                     to: destination,
                     destinationParentIdentifiedBy: created.identity
                 )
+                moved.append(.init(
+                    source: source,
+                    folderURL: destination,
+                    identity: source.identity,
+                    fingerprint: sourceFingerprint
+                ))
                 guard let movedIdentity = try await fileSystem.identity(of: destination),
                       movedIdentity == source.identity else {
                     throw SelectionFolderTransactionFailure.sourceChanged(source.item.url.lastPathComponent)
                 }
                 let fingerprint = try await fileSystem.fingerprint(of: destination)
-                moved.append(.init(
+                guard fingerprint.matchesAfterRelocation(sourceFingerprint) else {
+                    throw SelectionFolderTransactionFailure.sourceChanged(source.item.url.lastPathComponent)
+                }
+                try Task.checkCancellation()
+                moved[moved.count - 1] = .init(
                     source: source,
                     folderURL: destination,
                     identity: movedIdentity,
                     fingerprint: fingerprint
-                ))
+                )
                 await progress(.init(
                     phase: .movingItems,
                     completedCount: moved.count,
@@ -169,6 +180,9 @@ actor SelectionFolderTransactionService {
         do {
             for entry in plan.entries.reversed() {
                 try Task.checkCancellation()
+                guard try await fileSystem.identity(of: entry.folderURL) == entry.folderIdentity,
+                      try await fileSystem.fingerprint(of: entry.folderURL) == entry.fingerprint
+                else { throw SelectionFolderTransactionFailure.undoPreflightFailed }
                 try await fileSystem.moveExclusively(
                     entry.folderURL,
                     identifiedBy: entry.folderIdentity,
@@ -266,7 +280,8 @@ actor SelectionFolderTransactionService {
             do {
                 guard await !fileSystem.exists(entry.source.item.url) else { throw SelectionFolderTransactionFailure.destinationOccupied(entry.source.item.url.lastPathComponent) }
                 guard try await fileSystem.identity(of: entry.folderURL) == entry.identity,
-                      try await fileSystem.fingerprint(of: entry.folderURL) == entry.fingerprint
+                      try await fileSystem.fingerprint(of: entry.folderURL)
+                        .matchesAfterRelocation(entry.fingerprint)
                 else { throw SelectionFolderTransactionFailure.sourceChanged(entry.source.item.url.lastPathComponent) }
                 try await fileSystem.moveExclusively(entry.folderURL, identifiedBy: entry.identity,
                     to: entry.source.item.url, destinationParentIdentifiedBy: plan.parentIdentity)

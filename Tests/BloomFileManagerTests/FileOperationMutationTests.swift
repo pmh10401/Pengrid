@@ -122,6 +122,39 @@ struct FileOperationMutationTests {
         #expect(await fileSystem.existingURLs.contains { $0.lastPathComponent.hasPrefix(".bloom-staging-") } == false)
     }
 
+    @Test func duplicateCancellationDuringPublishedIdentityVerificationRemovesOnlyTheOwnedDuplicate() async throws {
+        let parent = URL(filePath: "/workspace", directoryHint: .isDirectory)
+        let source = parent.appending(path: "Report.txt")
+        let destination = parent.appending(path: "Report 2.txt")
+        let fileSystem = RecordingFileSystem(
+            existingURLs: [parent, source],
+            failures: [.identity(destination): CancellationError()]
+        )
+        let service = FileOperationService(fileSystem: fileSystem)
+        let sourceIdentity = try #require(await fileSystem.identity(of: source))
+        let parentIdentity = try #require(await fileSystem.identity(of: parent))
+
+        let operation = Task {
+            await service.duplicate([
+                IdentifiedTransferRequest(
+                    source: source,
+                    sourceIdentity: sourceIdentity,
+                    destinationRoot: parent,
+                    destinationRootIdentity: parentIdentity,
+                    relativeParentComponents: []
+                )
+            ]) { _ in }
+        }
+        let result = await operation.value
+
+        #expect(result.outcomes == [.cancelled(source: source)])
+        #expect(await fileSystem.exists(source))
+        #expect(await fileSystem.exists(destination) == false)
+        #expect(await fileSystem.existingURLs.contains {
+            $0.lastPathComponent.hasPrefix(".bloom-staging-")
+        } == false)
+    }
+
     @Test func duplicatePreservesDirectoriesPackagesAndSymlinks() async throws {
         let root = try TemporaryDirectory()
         defer { root.remove() }

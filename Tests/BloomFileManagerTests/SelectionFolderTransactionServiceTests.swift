@@ -107,7 +107,10 @@ struct SelectionFolderTransactionServiceTests {
         fault: TransactionFault
     ) async throws {
         let fixture = TransactionFixture(fault: fault)
-        let result = await fixture.service.execute(fixture.plan, progress: { _ in })
+        let operation = Task {
+            await fixture.service.execute(fixture.plan, progress: { _ in })
+        }
+        let result = await operation.value
 
         #expect(result.outcomes.allSatisfy {
             if case .cancelled = $0 { return true }
@@ -160,6 +163,20 @@ struct SelectionFolderTransactionServiceTests {
         #expect(await fixture.fileSystem.exists(fixture.folder))
     }
 
+    @Test func executeCancellationDuringPostMoveIdentityVerificationRestoresThePublishedEntry() async throws {
+        let fixture = TransactionFixture(fault: .cancelDuringForwardVerificationAfterMove(1))
+
+        let operation = Task {
+            await fixture.service.execute(fixture.plan, progress: { _ in })
+        }
+        let result = await operation.value
+
+        #expect(result.outcomes.allSatisfy { if case .cancelled = $0 { return true }; return false })
+        #expect(await fixture.fileSystem.exists(fixture.first))
+        #expect(await fixture.fileSystem.exists(fixture.second))
+        #expect(await fixture.fileSystem.exists(fixture.folder) == false)
+    }
+
     @Test(arguments: [TransactionReverseMutation.parent, .folder, .extraChild, .childIdentity, .fingerprint, .occupiedOriginal])
     func reverseGlobalPreflightFailureDoesNotMutate(
         mutation: TransactionReverseMutation
@@ -187,6 +204,20 @@ struct SelectionFolderTransactionServiceTests {
         #expect(await fixture.fileSystem.exists(fixture.folder.appending(path: "B.txt")))
         #expect(!(await fixture.fileSystem.exists(fixture.first)))
         #expect(!(await fixture.fileSystem.exists(fixture.second)))
+    }
+
+    @Test func reverseRechecksEachFingerprintAfterPreflightAndRollsBackEarlierMoves() async throws {
+        let fixture = TransactionFixture(fault: .mutateSiblingAfterReversePreflight)
+        let forward = await fixture.service.execute(fixture.plan, progress: { _ in })
+        let undo = try #require(forward.selectionFolderUndoMetadata())
+
+        let result = await fixture.service.reverse(undo, progress: { _ in })
+
+        #expect(result.outcomes.allSatisfy { if case .failed = $0 { return true }; return false })
+        #expect(await fixture.fileSystem.exists(fixture.folder.appending(path: "A.txt")))
+        #expect(await fixture.fileSystem.exists(fixture.folder.appending(path: "B.txt")))
+        #expect(await fixture.fileSystem.exists(fixture.first) == false)
+        #expect(await fixture.fileSystem.exists(fixture.second) == false)
     }
 
     @Test func incompleteReverseRollbackIsRecoveryNeeded() async throws {
@@ -292,11 +323,13 @@ enum TransactionFault: Sendable, Equatable {
     case failCreate
     case cancelAfterCreate
     case cancelAfterMove(Int)
+    case cancelDuringForwardVerificationAfterMove(Int)
     case failMove(Int)
     case failMoveAndRollback(Int)
     case failReverseMove(Int)
     case failReverseMoveAndRollback(Int)
     case cancelReverseMove(Int)
+    case mutateSiblingAfterReversePreflight
 }
 
 enum TransactionReverseMutation: Sendable, Equatable {
@@ -346,6 +379,8 @@ private actor TransactionFileSystem: FileSystemAccess {
     private var moveAttempt = 0
     private var reverseMoveAttempt = 0
     private var fingerprints: [URL: Int] = [:]
+    private var fingerprintCallCount = 0
+    private var didCancelForwardVerification = false
     private(set) var events: [String] = []
 
     init(parent: URL, parentIdentity: FileIdentity, entries: [URL: FileIdentity], fault: TransactionFault) {
@@ -376,7 +411,16 @@ private actor TransactionFileSystem: FileSystemAccess {
     }
     func remove(_ url: URL) async throws { entries.removeValue(forKey: url) }
     func replace(_ destination: URL, with stagedItem: URL) async throws { try await moveExclusively(stagedItem, to: destination) }
-    func identity(of url: URL) async throws -> FileIdentity? { entries[url] }
+    func identity(of url: URL) async throws -> FileIdentity? {
+        if case let .cancelDuringForwardVerificationAfterMove(index) = fault,
+           moveAttempt == index,
+           !didCancelForwardVerification {
+            didCancelForwardVerification = true
+            withUnsafeCurrentTask { $0?.cancel() }
+            throw CancellationError()
+        }
+        return entries[url]
+    }
     func move(_ source: URL, identifiedBy identity: FileIdentity, to destination: URL) async throws { try await moveExclusively(source, identifiedBy: identity, to: destination) }
     func moveExclusively(_ source: URL, identifiedBy identity: FileIdentity, to destination: URL) async throws { try await checkedMove(source, identity, destination, parent: destination.deletingLastPathComponent()) }
     func moveExclusively(_ source: URL, identifiedBy identity: FileIdentity, to destination: URL, destinationParentIdentifiedBy parentIdentity: FileIdentity) async throws { try await checkedMove(source, identity, destination, parent: destination.deletingLastPathComponent(), expectedParent: parentIdentity) }
@@ -404,7 +448,17 @@ private actor TransactionFileSystem: FileSystemAccess {
     func replace(_ destination: URL, identifiedBy destinationIdentity: FileIdentity, with stagedItem: URL, identifiedBy stagedIdentity: FileIdentity) async throws { try await moveExclusively(stagedItem, identifiedBy: stagedIdentity, to: destination) }
     func reserveStagingDirectory(beside destination: URL) async throws -> StagingReservation { throw FileSystemAccessError.unsupportedOperation(destination) }
     func removeStagingDirectory(_ reservation: StagingReservation) async throws { }
-    func fingerprint(of url: URL) async throws -> SourceFingerprint { .init(entries: [.init(relativePath: ".", device: 1, inode: 1, mode: 0, size: Int64(fingerprints[url, default: 0]), modificationSeconds: 0, modificationNanoseconds: 0, changeSeconds: 0, changeNanoseconds: 0)]) }
+    func fingerprint(of url: URL) async throws -> SourceFingerprint {
+        fingerprintCallCount += 1
+        if fault == .mutateSiblingAfterReversePreflight, fingerprintCallCount == 7 {
+            if let sibling = entries.keys.first(where: {
+                $0.lastPathComponent == "A.txt" && $0.deletingLastPathComponent() != parent
+            }) {
+                fingerprints[sibling] = 1
+            }
+        }
+        return .init(entries: [.init(relativePath: ".", device: 1, inode: 1, mode: 0, size: Int64(fingerprints[url, default: 0]), modificationSeconds: 0, modificationNanoseconds: 0, changeSeconds: 0, changeNanoseconds: 0)])
+    }
     func trash(_ url: URL) async throws { entries.removeValue(forKey: url) }
     func trash(_ url: URL, identifiedBy identity: FileIdentity) async throws { try await remove(url, identifiedBy: identity) }
     func trashAndReturnResultingURL(_ url: URL, identifiedBy identity: FileIdentity) async throws -> URL? { try await remove(url, identifiedBy: identity); return nil }

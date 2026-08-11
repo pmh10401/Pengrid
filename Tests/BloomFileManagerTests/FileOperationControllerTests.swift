@@ -2354,6 +2354,24 @@ struct FileOperationControllerTests {
         #expect(fixture.workspace.right.selection.isEmpty)
     }
 
+    @Test func activeSelectionEnclosurePublishesExclusiveOperationState() async throws {
+        let fixture = try await SelectionFolderControllerFixture(
+            suspendCheckedExclusiveMoveAttempt: 1
+        )
+
+        #expect(fixture.controller.encloseSelection(
+            fixture.plan,
+            in: fixture.workspace.left,
+            workspace: fixture.workspace
+        ))
+        await fixture.fileSystem.waitForSuspendedCheckedExclusiveMove()
+
+        #expect(fixture.controller.hasExclusiveOperationActive)
+        await fixture.fileSystem.releaseSuspendedCheckedExclusiveMove()
+        await waitUntilQueueIsIdle(fixture.controller)
+        #expect(!fixture.controller.hasExclusiveOperationActive)
+    }
+
     @Test func failedSelectionEnclosureRemainsRetryableWithoutOfferingUndo() async throws {
         let fixture = try await SelectionFolderControllerFixture()
         let stalePlan = SelectionFolderPlan(

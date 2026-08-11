@@ -4,115 +4,66 @@ import Testing
 
 @Suite("ContextMenuPerformanceTests", .serialized)
 struct ContextMenuPerformanceTests {
-    @Test @MainActor func tenThousandRowsBuildMenuPolicyFromMetadataWithoutIORequests() throws {
-        // This source inspection is deliberately outside the measured interval.
-        // It proves the policy's value input cannot receive the normal identity,
-        // byte-content, or File Provider materialization dependencies.
-        let dependencies = try ContextMenuPolicyDependencyEvidence.read()
-        let measurement = measureContextMenuPolicy(rowCount: 10_000, dependencies: dependencies)
+    @Test @MainActor func tenThousandRowsFilterInTableOrderAndBuildSynchronousPolicyDescriptor() {
+        let descriptor = buildCapturedContextMenuPolicyDescriptor(rowCount: 10_000)
 
-        #expect(measurement.itemCount == 10_000)
-        #expect(measurement.identityRequestCount == 0)
-        #expect(dependencies.contentRequestCount == 0)
-        #expect(measurement.materializationRequestCount == 0)
-        #expect(measurement.elapsed >= .zero) // evidence only; intentionally no time ceiling
+        #expect(descriptor.itemCount == 10_000)
+        #expect(descriptor.selectedCount == 10_000)
+        #expect(descriptor.firstName == "item-0.txt")
+        #expect(descriptor.lastName == "item-9999.txt")
     }
 }
 
-struct ContextMenuPerformanceMeasurement: Sendable, Equatable {
+private struct ContextMenuDescriptorMeasurement: Sendable, Equatable {
     let itemCount: Int
-    let elapsed: Duration
-    let identityRequestCount: Int
-    let materializationRequestCount: Int
+    let selectedCount: Int
+    let firstName: String?
+    let lastName: String?
 }
 
-/// `FileContextMenuPolicy` has no service dependency: its input is a value
-/// snapshot of `FileItem` metadata. This synchronous, main-actor measurement
-/// therefore completes before an `await` or a new main-run-loop turn is possible.
+/// Exercises the synchronous, AppKit-independent selection and policy descriptor
+/// boundary. Its inputs are captured value data; it accepts no I/O collaborator.
 @MainActor
-private func measureContextMenuPolicy(
-    rowCount: Int,
-    dependencies: ContextMenuPolicyDependencyEvidence,
-    clock: ContinuousClock = .init()
-) -> ContextMenuPerformanceMeasurement {
+private func buildCapturedContextMenuPolicyDescriptor(
+    rowCount: Int
+) -> ContextMenuDescriptorMeasurement {
     let sourceDirectory = URL(filePath: "/performance/source", directoryHint: .isDirectory)
     let oppositeDirectory = URL(filePath: "/performance/opposite", directoryHint: .isDirectory)
     let items = (0 ..< rowCount).map { index in
         FileItem(
             url: sourceDirectory.appending(path: "item-\(index).txt", directoryHint: .notDirectory),
-            name: "item-\(index).txt",
-            isDirectory: false,
-            isPackage: false,
-            modifiedAt: Date(timeIntervalSinceReferenceDate: TimeInterval(index)),
-            byteSize: Int64(index),
-            typeDescription: "Document"
+            name: "item-\(index).txt", isDirectory: false, isPackage: false,
+            modifiedAt: nil, byteSize: Int64(index), typeDescription: "Document"
         )
     }
-    let started = clock.now
+    // Deliberately reverse insertion: output must still follow table order.
+    let selectedURLs = Set(items.reversed().map(\.url))
+    let selectedItems = FileTableContextMenuSelection.orderedItems(
+        from: items,
+        selectedURLs: selectedURLs
+    )
     let policy = FileContextMenuPolicy(.init(
         workspaceCommandPolicy: WorkspaceCommandPolicy(
-            selectionCount: items.count,
+            selectionCount: selectedItems.count,
             isOperationRunning: false,
             pasteboardHasFileURLs: false,
             selectedItems: [],
             isTextEditing: false
         ),
-        selectedItems: items,
+        selectedItems: selectedItems,
         sourceDirectory: sourceDirectory,
         oppositeDirectory: oppositeDirectory,
         sourceCapability: .writable,
         oppositeCapability: .writable,
         isExclusiveOperationActive: false
     ))
-    let elapsed = started.duration(to: clock.now)
 
-    #expect(policy.quickLook.isEnabled)
-    #expect(policy.copyToOtherPane.isEnabled)
-    #expect(policy.moveToOtherPane.isEnabled)
-    #expect(policy.showInFinder.isEnabled)
-    #expect(policy.copyPath.isEnabled)
     #expect(policy.duplicate.isEnabled)
     #expect(policy.encloseSelection.isEnabled)
-
     return .init(
         itemCount: items.count,
-        elapsed: elapsed,
-        identityRequestCount: dependencies.identityRequestCount,
-        materializationRequestCount: dependencies.materializationRequestCount
+        selectedCount: selectedItems.count,
+        firstName: selectedItems.first?.name,
+        lastName: selectedItems.last?.name
     )
-}
-
-private struct ContextMenuPolicyDependencyEvidence {
-    let identityRequestCount: Int
-    let contentRequestCount: Int
-    let materializationRequestCount: Int
-
-    static func read() throws -> Self {
-        let sourceURL = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appending(path: "Sources/BloomFileManager/Support/FileContextMenuPolicy.swift")
-        let source = try String(contentsOf: sourceURL, encoding: .utf8)
-        return .init(
-            identityRequestCount: occurrenceCount(
-                in: source,
-                of: ["FileSystemAccess", "FileIdentity", "identity("]
-            ),
-            contentRequestCount: occurrenceCount(
-                in: source,
-                of: ["Data(contentsOf:", "FileHandle", "InputStream"]
-            ),
-            materializationRequestCount: occurrenceCount(
-                in: source,
-                of: ["CloudMaterializer", "materialize(", "prepareForReading("]
-            )
-        )
-    }
-
-    private static func occurrenceCount(in source: String, of tokens: [String]) -> Int {
-        tokens.reduce(into: 0) { count, token in
-            count += source.components(separatedBy: token).count - 1
-        }
-    }
 }

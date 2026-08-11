@@ -182,7 +182,8 @@ materialization 검사를 거쳐 패널이 갱신됩니다.
 **Copy to Other Pane**과 **Move to Other Pane**은 하나 이상의 선택 항목을
 받습니다. 대상은 나중에 패널을 바꾼 뒤 표시되는 폴더가 아니라 명령 실행 시
 캡처한 반대쪽 패널 디렉터리입니다. 큐에 넣기 전과 실제 변경 전 모두 대상
-동일성과 실시간 쓰기 가능 여부를 확인합니다. 같은 디렉터리를 대상으로 하면
+동일성을 확인합니다. 쓰기 가능 기능은 명령을 표시하고 캡처할 때 판정하며, 이후
+권한이 바뀌면 작업에서 그 실패를 보고합니다. 같은 디렉터리를 대상으로 하면
 비활성화되며, 같은 폴더 안 복사는 **Duplicate**를 사용합니다. 이 작업에는
 초기 단축키가 없습니다.
 
@@ -235,8 +236,8 @@ materialization 검사를 거쳐 패널이 갱신됩니다.
 Quick Look과 Open With는 캡처한 동일성 검사 뒤 기존 scoped access와 File Provider
 materialization을 사용할 수 있습니다. Open in Other Pane, Show in Finder, Copy
 Path는 바이트를 의도적으로 materialize하지 않습니다. Copy/Move to Other Pane,
-Duplicate, New Folder with Selection은 로컬 파일 작업 기능이 있다고 알려지고
-실시간 쓰기 가능 검사를 통과한 위치에서만 실행합니다. 기능을 알 수 없거나
+Duplicate, New Folder with Selection은 명령을 표시할 때 로컬 파일 작업 기능과
+쓰기 가능 상태가 확인된 위치에서만 실행합니다. 기능을 알 수 없거나
 읽기 전용이면 변경 작업을 비활성화합니다. Pengrid에는 Google Drive나 OneDrive
 직접 API 경로가 없습니다.
 

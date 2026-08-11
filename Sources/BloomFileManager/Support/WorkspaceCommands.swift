@@ -136,7 +136,7 @@ enum WorkspaceContextActionRouting {
             oppositeCapability: cloudLocations?.localFileOperationCapability(
                 for: oppositePane.currentDirectory
             ) ?? .unknown,
-            isExclusiveOperationActive: false
+            isExclusiveOperationActive: operationController.hasExclusiveOperationActive
         ))
     }
 
@@ -1019,7 +1019,7 @@ struct WorkspaceCommands: Commands {
                 oppositeDirectory: nil,
                 sourceCapability: .unknown,
                 oppositeCapability: .unknown,
-                isExclusiveOperationActive: false
+                isExclusiveOperationActive: operationController.hasExclusiveOperationActive
             ))
         }
         return WorkspaceContextActionRouting.policy(

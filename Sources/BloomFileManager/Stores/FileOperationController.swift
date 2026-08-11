@@ -117,6 +117,11 @@ final class FileOperationController {
             || !pendingOperations.isEmpty
     }
 
+    var hasExclusiveOperationActive: Bool {
+        activeOperation?.requiresExclusiveQueue == true
+            || pendingOperations.contains(where: \.requiresExclusiveQueue)
+    }
+
     var progress: FileOperationProgress? {
         switch stage {
         case let .operating(progress):

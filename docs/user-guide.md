@@ -190,8 +190,10 @@ materialize contents.
 **Copy to Other Pane** and **Move to Other Pane** accept one or more selected
 entries. Their destination is the opposite-pane directory captured when the
 command was invoked, not the directory currently displayed after a later pane
-change. The destination identity and live writability are checked before queue
-admission and again before mutation. A same-directory destination is disabled;
+change. The destination identity is checked before queue admission and again
+before mutation. Writability capability is evaluated when the command is
+presented and captured; a later permission change is reported by the operation.
+A same-directory destination is disabled;
 use **Duplicate** for a same-directory copy. These actions initially have no
 shortcuts.
 
@@ -248,8 +250,8 @@ Quick Look and Open With may use existing scoped access and File Provider
 materialization after captured-identity checks. Open in Other Pane, Show in
 Finder, and Copy Path never intentionally materialize bytes. Copy/Move to Other
 Pane, Duplicate, and New Folder with Selection require a location that
-advertises local file operations and passes a live writability check; unknown
-or read-only capability disables mutation. Pengrid has no direct Google Drive
+advertises local file operations and is writable when the command is presented;
+unknown or read-only capability disables mutation. Pengrid has no direct Google Drive
 or OneDrive API path.
 
 Transfers, Duplicate, and enclosure run through the operation center and retain

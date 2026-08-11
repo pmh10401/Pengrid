@@ -1,6 +1,15 @@
 import AppKit
 import SwiftUI
 
+enum FileTableContextMenuSelection {
+    static func orderedItems(
+        from items: [FileItem],
+        selectedURLs: Set<URL>
+    ) -> [FileItem] {
+        items.filter { selectedURLs.contains($0.url) }
+    }
+}
+
 struct FileContextMenuPresentation: Equatable {
     let policy: FileContextMenuPolicy
     let openWithApplications: [OpenWithApplication]
@@ -665,7 +674,10 @@ extension FileTableView {
 
         func menuNeedsUpdate(_ menu: NSMenu) {
             prepareSelectionForContextMenu()
-            contextMenuItems = items.filter { parent.selection.contains($0.url) }
+            contextMenuItems = FileTableContextMenuSelection.orderedItems(
+                from: items,
+                selectedURLs: parent.selection
+            )
             capturedContextMenuPresentation = parent.contextMenuPresentation(contextMenuItems)
             let policy = WorkspaceCommandPolicy(
                 selectionCount: parent.selection.count,
