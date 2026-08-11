@@ -13,16 +13,17 @@ compatibility.
 ## Download
 
 The current build is
-[Pengrid 1.3.0 Developer Preview 5](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.5).
-It improves large-folder loading, pane filtering, sorting, and cancellation
-while retaining Preview 4's protected-ZIP and file-manager features.
+[Pengrid 1.3.0 Developer Preview 6](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.6).
+It adds captured-selection context actions, safe opposite-pane transfers,
+Duplicate, and transactional New Folder with Selection while retaining the
+large-folder, search, preview, and archive improvements from earlier previews.
 
-- [Download Pengrid.dmg](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.5/Pengrid.dmg)
-- App version: **1.3.0 (build 7)**
+- [Download Pengrid.dmg](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.6/Pengrid.dmg)
+- App version: **1.3.0 (build 8)**
 - Requirements: **Apple Silicon Mac, macOS 15 or later**
-- Verification: **1,223 automated tests in 80 suites**
+- Verification: **1,405 automated tests in 92 suites**
 - DMG SHA-256:
-  `3db4c0bd18b7001fe93d83ea92baf7928527d393bc5310e4ba40f7e9d75148e6`
+  `72d1e2a3e294c7fe3dd33d9665c4506bf4f2691d3fc1f3f55b175ae6c29c2f95`
 
 > **Developer Preview trust notice**
 >
@@ -58,7 +59,7 @@ folder-contents preview. Files, packages, symbolic links, and multiple
 selections continue to use system Quick Look. Cloud folder preview reads
 available metadata only and does not intentionally download contents.
 
-### Context-menu productivity (current source builds)
+### Context-menu productivity (Preview 6)
 
 Right-clicking a selected row preserves the whole selection; right-clicking an
 unselected row selects that row first. Commands consume that captured selection
@@ -85,7 +86,7 @@ Quick Look and Open With can request cloud materialization; path, Finder, and
 other-pane navigation do not intentionally read content. Copy, Move, Duplicate,
 and enclosure require a currently writable local-file-operation location.
 
-### Preview-first batch rename (current source builds)
+### Preview-first batch rename (Preview 6)
 
 Select at least two rows in the active pane, then choose **File Operations >
 Batch Rename…** or use the row context menu. Literal find/replace, prefix,
@@ -183,7 +184,7 @@ The development bundle is created at `dist/Pengrid.app`. Its executable remains
 - [Architecture notes](docs/architecture.md)
 - [Current limitations](docs/current-limitations.md)
 - [Release and packaging guide](docs/release.md)
-- [Developer Preview 5 release notes](docs/release-notes-v1.3.0-developer-preview.5.md)
+- [Developer Preview 6 release notes](docs/release-notes-v1.3.0-developer-preview.6.md)
 - [Version 1.3 archive verification](docs/verification/version-1.3-archive-checklist.md)
 - [Smart Search verification](docs/verification/2026-08-04-smart-search.md)
 - [Folder preview verification](docs/verification/2026-08-04-folder-preview.md)

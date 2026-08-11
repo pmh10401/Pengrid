@@ -2,16 +2,15 @@
 
 [한국어](user-guide.ko.md) · **English** · [README](../README.md)
 
-This guide describes Pengrid 1.3.0 Developer Preview 5 and features completed in
-the current source tree, including their safety boundaries and deliberately
-omitted behavior. Features explicitly marked **current source builds** are not
-part of the published Preview 5 DMG until a later release is packaged.
+This guide describes Pengrid 1.3.0 Developer Preview 6 and the current source
+tree, including safety boundaries and deliberately omitted behavior. The file
+context actions and batch rename described below are included in Preview 6.
 
 ## Requirements and installation
 
 Pengrid currently supports Apple Silicon Macs running macOS 15 or later.
 Download the DMG from the
-[Developer Preview 5 release](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.5),
+[Developer Preview 6 release](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.6),
 open it, and copy `Pengrid.app` to `Applications`.
 
 The free DMG is ad-hoc signed, not Developer ID signed, and not notarized.
@@ -40,7 +39,7 @@ Useful navigation and file commands include:
 | --- | --- |
 | Open selected item | **Command-O** |
 | Rename one selected item | **Return** or **F2** |
-| Batch rename selected items (current source builds) | **Command-Control-R** |
+| Batch rename selected items | **Command-Control-R** |
 | New folder | **Command-Shift-N** |
 | Copy and paste | **Command-C**, **Command-V** |
 | Back and Forward | **Command-[**, **Command-]** |
@@ -322,7 +321,7 @@ Undo is available only when Pengrid can reverse its own unchanged mutation:
 
 Undo does not overwrite a later item and does not remove a modified output.
 
-## Preview-first batch rename (current source builds)
+## Preview-first batch rename
 
 Select at least two complete rows in one pane and choose **File Operations >
 Batch Rename…**, press **Command-Control-R**, or use **Batch Rename…** in the
@@ -552,7 +551,7 @@ documents.
 
 ## Current limitations
 
-Developer Preview 5 and the current source tree deliberately do not provide:
+Developer Preview 6 and the current source tree deliberately do not provide:
 
 - Intel Mac or macOS 14-and-earlier support;
 - Developer ID signing or Apple notarization;

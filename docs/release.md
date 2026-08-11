@@ -6,25 +6,26 @@ Pengrid is distributed directly for Apple Silicon Macs running macOS 15 or newer
 
 ## Current published Developer Preview
 
-[Pengrid 1.3.0 Developer Preview 5](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.5)
+[Pengrid 1.3.0 Developer Preview 6](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.6)
 is the current free binary release:
 
-- DMG: [Pengrid.dmg](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.5/Pengrid.dmg)
-- Tag: `v1.3.0-developer-preview.5`
-- Packaged source commit: `f380a6454eedfaffb90af1db73b1436dce4d014d`
-- App version: `1.3.0`, build `7`
+- DMG: [Pengrid.dmg](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.6/Pengrid.dmg)
+- Tag: `v1.3.0-developer-preview.6`
+- Packaged source commit: `fc184d6ba4fda64d36cd6b4f382457b3da5df564`
+- App version: `1.3.0`, build `8`
 - Platform: Apple Silicon, macOS 15 or later
-- Automated result: 1,223 tests in 80 suites
+- Automated result: 1,405 tests in 92 suites
 - Packaging: release contract tests and arm64 production build passed
 - Artifact checks: app signature, DMG checksum, mounted app build, local
-  installation, launch, GitHub asset digest, and byte-for-byte public
-  redownload all passed
+  installation, and launch passed; public redownload verification follows
+  publication
 - DMG SHA-256:
-  `3db4c0bd18b7001fe93d83ea92baf7928527d393bc5310e4ba40f7e9d75148e6`
+  `72d1e2a3e294c7fe3dd33d9665c4506bf4f2691d3fc1f3f55b175ae6c29c2f95`
 
-Preview 5 is a performance and cancellation-safety update for large folders and
-pane-local search. The exact packaged app was installed locally as
-`/Applications/Pengrid.app`, verified as build 7, and launched successfully.
+Preview 6 adds captured-selection context actions, opposite-pane transfers,
+Duplicate, and transactional New Folder with Selection. The exact packaged app
+was installed locally as `/Applications/Pengrid.app`, verified as build 8, and
+launched successfully.
 
 This artifact is ad-hoc signed, not Developer ID signed, and not notarized.
 `spctl --assess --type execute` therefore rejects it as a Developer ID
