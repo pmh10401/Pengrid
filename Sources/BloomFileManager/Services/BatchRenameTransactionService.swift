@@ -81,6 +81,7 @@ actor BatchRenameTransactionService {
 
     func execute(
         _ plan: BatchRenamePlan,
+        expectedSourceFingerprints: [URL: SourceFingerprint] = [:],
         progress: @escaping ProgressHandler
     ) async -> FileOperationResult {
         guard !plan.entries.isEmpty else {
@@ -128,6 +129,19 @@ actor BatchRenameTransactionService {
                     )
                 }
                 workingEntries[index].currentIdentity = stagedIdentity
+            }
+
+            for entry in workingEntries {
+                try Task.checkCancellation()
+                guard let expectedFingerprint = expectedSourceFingerprints[
+                    entry.planEntry.source.url
+                ] else { continue }
+                guard try await fileSystem.fingerprint(of: entry.currentURL)
+                    == expectedFingerprint else {
+                    throw BatchRenameTransactionFailure.sourceChanged(
+                        entry.planEntry.source.name
+                    )
+                }
             }
 
             var finalIdentities: [URL: FileIdentity] = [:]

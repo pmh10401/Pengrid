@@ -51,6 +51,22 @@ struct BatchRenamePreviewEntry: Sendable, Equatable {
     let source: BatchRenameSource
     let proposedName: String
     let status: BatchRenamePreviewStatus
+    let editableStem: String
+    let preservedSuffix: String
+
+    init(
+        source: BatchRenameSource,
+        proposedName: String,
+        status: BatchRenamePreviewStatus,
+        editableStem: String = "",
+        preservedSuffix: String = ""
+    ) {
+        self.source = source
+        self.proposedName = proposedName
+        self.status = status
+        self.editableStem = editableStem
+        self.preservedSuffix = preservedSuffix
+    }
 }
 
 struct BatchRenamePlanEntry: Sendable, Equatable {

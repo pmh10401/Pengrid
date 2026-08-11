@@ -90,6 +90,27 @@ import Testing
         #expect(preview.entries.map(\.proposedName) == ["여행 008.jpg", "여행 009.png", "여행 010.tar.xz"])
     }
 
+    @Test func sequenceRejectsBlankBaseAndWidthsOutsideTheSharedOneToNineBound() {
+        let request = request(sources: [source("A.txt"), source("B.txt")])
+
+        #expect(throws: BatchRenamePlanningError.invalidSequence) {
+            try BatchRenamePlanner.preview(
+                request: request,
+                rule: .sequence(baseName: "  \n", start: 1, digits: 2),
+                occupiedNames: ["A.txt", "B.txt"],
+                comparisonPolicy: .caseSensitiveCanonical
+            )
+        }
+        #expect(throws: BatchRenamePlanningError.invalidSequence) {
+            try BatchRenamePlanner.preview(
+                request: request,
+                rule: .sequence(baseName: "Item", start: 1, digits: 10),
+                occupiedNames: ["A.txt", "B.txt"],
+                comparisonPolicy: .caseSensitiveCanonical
+            )
+        }
+    }
+
     @Test func generatedDuplicatesAreRejectedUsingEffectiveFilenameSemantics() throws {
         let request = request(sources: [source("A.txt"), source("a.TXT")])
 

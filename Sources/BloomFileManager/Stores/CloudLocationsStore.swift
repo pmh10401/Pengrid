@@ -21,6 +21,7 @@ final class CloudLocationsStore {
     @ObservationIgnored private let discovery: any CloudLocationDiscovering
     @ObservationIgnored private let bookmarking: any CloudLocationBookmarking
     @ObservationIgnored private let accessCoordinator: CloudLocationScopedAccessCoordinator
+    @ObservationIgnored private let localFileOperationsSupported: @Sendable (URL) -> Bool
     @ObservationIgnored private var document: CloudLocationsDocument
     @ObservationIgnored private var rootURLs: [StorageLocationID: URL]
     @ObservationIgnored private var scanGeneration: UInt64 = 0
@@ -37,12 +38,22 @@ final class CloudLocationsStore {
         storageURL: URL = CloudLocationsStore.defaultStorageURL,
         discovery: any CloudLocationDiscovering = LiveCloudLocationDiscovery(),
         bookmarking: any CloudLocationBookmarking = LiveCloudLocationBookmarking(),
-        accessCoordinator: CloudLocationScopedAccessCoordinator = .init()
+        accessCoordinator: CloudLocationScopedAccessCoordinator = .init(),
+        localFileOperationsSupported: @escaping @Sendable (URL) -> Bool = {
+            let fileManager = FileManager.default
+            guard fileManager.isWritableFile(atPath: $0.path),
+                  let values = try? $0.resourceValues(forKeys: [
+                    .isDirectoryKey,
+                    .volumeIsReadOnlyKey
+                  ]) else { return false }
+            return values.isDirectory == true && values.volumeIsReadOnly != true
+        }
     ) {
         self.storageURL = storageURL
         self.discovery = discovery
         self.bookmarking = bookmarking
         self.accessCoordinator = accessCoordinator
+        self.localFileOperationsSupported = localFileOperationsSupported
 
         let loadedDocument = Self.load(from: storageURL)
         var candidateDocument = loadedDocument
@@ -58,7 +69,11 @@ final class CloudLocationsStore {
             document = loadedDocument
         }
         rootURLs = candidateRootURLs
-        presentation = Self.presentation(for: document, rootURLs: rootURLs)
+        presentation = Self.presentation(
+            for: document,
+            rootURLs: rootURLs,
+            localFileOperationsSupported: localFileOperationsSupported
+        )
         updateScopedAccessRoots()
     }
 
@@ -144,14 +159,15 @@ final class CloudLocationsStore {
                 < $1.rootURL.standardizedFileURL.path.count
         }) {
             guard location.isAvailable else { return .unknown }
-            return location.capabilities.contains(.localFileOperations)
-                ? .writable
-                : .readOnly
+            guard location.capabilities.contains(.localFileOperations),
+                  localFileOperationsSupported(candidate) else { return .readOnly }
+            return .writable
         }
 
         let cloudStorageRoot = FileManager.default.homeDirectoryForCurrentUser
             .appending(path: "Library/CloudStorage", directoryHint: .isDirectory)
-        return Self.contains(candidate, within: cloudStorageRoot) ? .unknown : .writable
+        if Self.contains(candidate, within: cloudStorageRoot) { return .unknown }
+        return localFileOperationsSupported(candidate) ? .writable : .readOnly
     }
 
     func addManualLocation(_ url: URL) throws {
@@ -296,7 +312,11 @@ final class CloudLocationsStore {
         try Self.persist(candidateDocument, to: storageURL)
         document = candidateDocument
         rootURLs = candidateRootURLs
-        presentation = Self.presentation(for: candidateDocument, rootURLs: candidateRootURLs)
+        presentation = Self.presentation(
+            for: candidateDocument,
+            rootURLs: candidateRootURLs,
+            localFileOperationsSupported: localFileOperationsSupported
+        )
         updateScopedAccessRoots()
     }
 
@@ -382,7 +402,8 @@ final class CloudLocationsStore {
 
     private static func presentation(
         for document: CloudLocationsDocument,
-        rootURLs: [StorageLocationID: URL]
+        rootURLs: [StorageLocationID: URL],
+        localFileOperationsSupported: @Sendable (URL) -> Bool
     ) -> Presentation {
         var visible: [StorageLocation] = []
         var hidden: [StorageLocation] = []
@@ -391,13 +412,17 @@ final class CloudLocationsStore {
                   let rootURL = rootURLs[locationID] else {
                 continue
             }
+            var capabilities: StorageCapabilities = [.browse, .materialize]
+            if localFileOperationsSupported(rootURL) {
+                capabilities.insert(.localFileOperations)
+            }
             let location = StorageLocation(
                 id: locationID,
                 provider: record.provider.cloudProvider,
                 displayName: record.userDisplayName ?? record.displayName,
                 rootURL: rootURL,
                 isAvailable: record.isAvailable,
-                capabilities: [.browse, .materialize, .localFileOperations],
+                capabilities: capabilities,
                 source: record.isDiscovered ? .discovered : .manualBookmark
             )
             if record.isHidden {

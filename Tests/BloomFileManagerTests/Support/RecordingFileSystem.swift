@@ -132,6 +132,8 @@ actor RecordingFileSystem: FileSystemAccess {
     private let cancelAfterCheckedExclusiveMoveAttempt: Int?
     private let suspendCheckedExclusiveMoveAttempt: Int?
     private let failCheckedExclusiveMoveAttempts: Set<Int>
+    private let mutateMovedDestinationAfterCheckedExclusiveMoveAttempts: Set<Int>
+    private let replaceMovedDestinationIdentityAfterCheckedExclusiveMoveAttempts: Set<Int>
     private let forceTrashQuarantineRecovery: Bool
     private let failTrashQuarantineCommitOnAttempt: Int?
     private let raceDestinationBeforeExclusiveMove: URL?
@@ -185,6 +187,8 @@ actor RecordingFileSystem: FileSystemAccess {
         cancelAfterCheckedExclusiveMoveAttempt: Int? = nil,
         suspendCheckedExclusiveMoveAttempt: Int? = nil,
         failCheckedExclusiveMoveAttempts: Set<Int> = [],
+        mutateMovedDestinationAfterCheckedExclusiveMoveAttempts: Set<Int> = [],
+        replaceMovedDestinationIdentityAfterCheckedExclusiveMoveAttempts: Set<Int> = [],
         forceTrashQuarantineRecovery: Bool = false,
         failTrashQuarantineCommitOnAttempt: Int? = nil,
         raceDestinationBeforeExclusiveMove: URL? = nil,
@@ -231,6 +235,10 @@ actor RecordingFileSystem: FileSystemAccess {
         self.cancelAfterCheckedExclusiveMoveAttempt = cancelAfterCheckedExclusiveMoveAttempt
         self.suspendCheckedExclusiveMoveAttempt = suspendCheckedExclusiveMoveAttempt
         self.failCheckedExclusiveMoveAttempts = failCheckedExclusiveMoveAttempts
+        self.mutateMovedDestinationAfterCheckedExclusiveMoveAttempts =
+            mutateMovedDestinationAfterCheckedExclusiveMoveAttempts
+        self.replaceMovedDestinationIdentityAfterCheckedExclusiveMoveAttempts =
+            replaceMovedDestinationIdentityAfterCheckedExclusiveMoveAttempts
         self.forceTrashQuarantineRecovery = forceTrashQuarantineRecovery
         self.failTrashQuarantineCommitOnAttempt = failTrashQuarantineCommitOnAttempt
         self.raceDestinationBeforeExclusiveMove = raceDestinationBeforeExclusiveMove
@@ -628,6 +636,12 @@ actor RecordingFileSystem: FileSystemAccess {
         existingURLs.remove(source)
         existingURLs.insert(destination)
         identities[destination] = movedIdentity
+        if mutateMovedDestinationAfterCheckedExclusiveMoveAttempts.contains(attempt) {
+            fingerprintVersions[destination, default: 0] += 1
+        }
+        if replaceMovedDestinationIdentityAfterCheckedExclusiveMoveAttempts.contains(attempt) {
+            identities[destination] = makeIdentity()
+        }
         if cancelAfterCheckedExclusiveMoveAttempt == attempt {
             withUnsafeCurrentTask { $0?.cancel() }
         }

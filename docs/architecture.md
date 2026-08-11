@@ -96,4 +96,3 @@ regression guard rather than the desired interactive latency; normal selections
 should update substantially faster. Filesystem mutation remains serial because
 correct rollback and exclusive name publication are more important than
 parallel rename throughput.
-

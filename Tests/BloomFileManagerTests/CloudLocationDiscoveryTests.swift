@@ -62,6 +62,23 @@ import Testing
         #expect(locations.allSatisfy { $0.provider == .oneDrive })
     }
 
+    @Test func readOnlyCandidateDoesNotAdvertiseLocalFileOperations() async throws {
+        let locations = await LiveCloudLocationDiscovery(
+            fileSystem: StubCloudFS([
+                fixture(
+                    "Read Only",
+                    domain: "com.acme.readonly",
+                    supportsLocalFileOperations: false
+                )
+            ])
+        ).discover()
+
+        let location = try #require(locations.first)
+        #expect(location.capabilities.contains(.browse))
+        #expect(location.capabilities.contains(.materialize))
+        #expect(!location.capabilities.contains(.localFileOperations))
+    }
+
     @Test func missingCloudStorageDirectoryReturnsEmpty() async {
         let locations = await LiveCloudLocationDiscovery(fileSystem: StubCloudFS([])).discover()
 
@@ -106,7 +123,8 @@ import Testing
     private func fixture(
         _ name: String,
         domain: String,
-        identity: Data? = nil
+        identity: Data? = nil,
+        supportsLocalFileOperations: Bool = true
     ) -> StubCloudFS.Entry {
         let url = URL(fileURLWithPath: "/fixture/CloudStorage").appending(path: name, directoryHint: .isDirectory)
         return .candidate(
@@ -115,7 +133,8 @@ import Testing
                 canonicalURL: url,
                 rootIdentity: identity ?? Data(name.utf8),
                 domainIdentifier: domain,
-                systemDisplayName: name
+                systemDisplayName: name,
+                supportsLocalFileOperations: supportsLocalFileOperations
             )
         )
     }

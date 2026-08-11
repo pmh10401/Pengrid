@@ -18,7 +18,7 @@ env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
   --filter 'BatchRename|WorkspaceCommandPolicyTests|WorkspaceCommandTests|FileTableViewLifecycleTests|OperationStatusViewTests|AccessibilityPresentationTests'
 ```
 
-Result: **PASS — 163 tests in 7 suites, 6.053 seconds.**
+Result: **PASS — 170 tests in 8 suites, 6.434 seconds.**
 
 Covered behavior includes:
 
@@ -28,12 +28,14 @@ Covered behavior includes:
 - cancellation during staging and publishing, rollback, and recovery-needed
   escalation;
 - immutable-plan retry and conservative two-phase Undo;
+- parent replacement, reserved temporary-name collision, publication identity
+  drift, and one-shot scoped-access denial;
 - active-pane visible-order capture, menu and context-menu routing;
 - latest-only preview publication and one scoped-access failure without retry;
 - accessible validation, phase labels, keyboard contracts, Reduce Motion, and
   parent-path privacy.
 
-The 10,000-row preview completed in **0.322 seconds** against the **5-second**
+The 10,000-row preview completed in **0.491 seconds** against the **5-second**
 regression ceiling in this focused run.
 
 ### Complete product suite
@@ -46,7 +48,7 @@ env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
   --filter BloomFileManagerTests
 ```
 
-Result: **PASS — 1,270 tests in 85 suites, 81.609 seconds.**
+Result: **PASS — 1,279 tests in 85 suites, 82.264 seconds.**
 
 ### Release configuration
 
@@ -57,7 +59,7 @@ env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
   /usr/bin/xcrun swift build -c release
 ```
 
-Result: **PASS — production executable linked in 43.55 seconds.**
+Result: **PASS — production executable linked in 41.74 seconds.**
 
 SwiftPM emitted the existing warning for 11 ProtectedZIP fixture files that are
 consumed by tests but are not declared as target resources. The warning did not
@@ -93,4 +95,3 @@ must not be inferred from automated tests:
 Automated live-filesystem tests do verify contents, names, swap/cycle behavior,
 rollback, and absence of reserved temporary names. They do not replace the six
 UI and provider checks above.
-

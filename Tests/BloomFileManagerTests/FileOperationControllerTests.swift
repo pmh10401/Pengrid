@@ -2164,6 +2164,25 @@ struct FileOperationControllerTests {
         #expect(await fixture.fileSystem.existingURLs.contains(fixture.url("B.txt")))
     }
 
+    @Test func failedBatchRenameRetryReusesTheCapturedImmutablePlan() async throws {
+        let fixture = try await BatchRenameControllerFixture(
+            failCheckedExclusiveMoveAttempts: [1]
+        )
+        #expect(fixture.controller.batchRename(fixture.plan, workspace: fixture.workspace))
+        await waitUntilQueueIsIdle(fixture.controller)
+        let failed = try #require(fixture.controller.operationHistory.first)
+        #expect(failed.state == .failed)
+        #expect(failed.canRetry)
+
+        fixture.workspace.left.selection = []
+        #expect(fixture.controller.retryJob(failed.id))
+        await waitUntilQueueIsIdle(fixture.controller)
+
+        #expect(fixture.controller.operationHistory.first?.state == .succeeded)
+        #expect(await fixture.fileSystem.existingURLs.contains(fixture.url("new-A.txt")))
+        #expect(await fixture.fileSystem.existingURLs.contains(fixture.url("new-B.txt")))
+    }
+
     @Test func identifiedConflictUsesStableContentIdentity() {
         let conflict = FileConflict(
             source: URL(filePath: "/source/a"),
@@ -2273,14 +2292,18 @@ private struct BatchRenameControllerFixture {
     let workspace: WorkspaceState
     let plan: BatchRenamePlan
 
-    init(suspendCheckedExclusiveMoveAttempt: Int? = nil) async throws {
+    init(
+        suspendCheckedExclusiveMoveAttempt: Int? = nil,
+        failCheckedExclusiveMoveAttempts: Set<Int> = []
+    ) async throws {
         let parentURL = URL(filePath: "/workspace", directoryHint: .isDirectory)
         let sourceNames = ["A.txt", "B.txt"]
         let sourceURLs = sourceNames.map { parentURL.appending(path: $0) }
         fileSystem = RecordingFileSystem(
             existingURLs: Set([parentURL] + sourceURLs),
             caseInsensitivePaths: true,
-            suspendCheckedExclusiveMoveAttempt: suspendCheckedExclusiveMoveAttempt
+            suspendCheckedExclusiveMoveAttempt: suspendCheckedExclusiveMoveAttempt,
+            failCheckedExclusiveMoveAttempts: failCheckedExclusiveMoveAttempts
         )
         let transaction = BatchRenameTransactionService(
             fileSystem: fileSystem,

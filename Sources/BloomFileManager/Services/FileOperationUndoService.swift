@@ -216,7 +216,13 @@ actor FileOperationUndoService {
             return failureResult(for: .batchRename(plan))
         }
 
-        return await batchRenameService.execute(plan.reversePlan) { update in
+        let expectedFingerprints = Dictionary(uniqueKeysWithValues: plan.entries.map {
+            ($0.finalURL, $0.finalFingerprint)
+        })
+        return await batchRenameService.execute(
+            plan.reversePlan,
+            expectedSourceFingerprints: expectedFingerprints
+        ) { update in
             await progress(FileOperationProgress(
                 completedCount: update.completedCount,
                 totalCount: update.totalCount,

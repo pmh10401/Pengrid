@@ -28,6 +28,7 @@ import Testing
             #expect(presentation.originalName == "A.txt")
             #expect(presentation.proposedName == "New A.txt")
             #expect(presentation.statusLabel == expected)
+            #expect(presentation.accessibilityLabel.contains(presentation.statusHint))
             #expect(!presentation.accessibilityLabel.contains("/private"))
         }
     }
@@ -100,13 +101,16 @@ import Testing
 
     @Test @MainActor func localAndUnregisteredCloudStorageCapabilitiesFailAppropriately() {
         let store = CloudLocationsStore(
-            storageURL: URL(filePath: "/tmp/pengrid-batch-rename-\(UUID().uuidString).json")
+            storageURL: URL(filePath: "/tmp/pengrid-batch-rename-\(UUID().uuidString).json"),
+            localFileOperationsSupported: { !$0.path.contains("ReadOnly") }
         )
         let local = URL(filePath: "/Users/example/Documents")
+        let readOnly = URL(filePath: "/Users/example/ReadOnly")
         let unknownCloud = FileManager.default.homeDirectoryForCurrentUser
             .appending(path: "Library/CloudStorage/UnknownProvider/Documents")
 
         #expect(store.batchRenameCapability(for: local) == .writable)
+        #expect(store.batchRenameCapability(for: readOnly) == .readOnly)
         #expect(store.batchRenameCapability(for: unknownCloud) == .unknown)
     }
 

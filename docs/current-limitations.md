@@ -45,4 +45,3 @@ release, including batch rename.
   guaranteed to round-trip.
 - Pengrid moves reviewed items to Trash and does not permanently delete them.
 - No automatic cleanup occurs when ownership or identity cannot be proven.
-

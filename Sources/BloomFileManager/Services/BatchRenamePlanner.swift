@@ -60,10 +60,13 @@ enum BatchRenamePlanner {
         }
 
         let previewEntries = request.sources.indices.map { index in
-            BatchRenamePreviewEntry(
+            let parts = BatchRenameFilenameParts(source: request.sources[index])
+            return BatchRenamePreviewEntry(
                 source: request.sources[index],
                 proposedName: proposedNames[index],
-                status: statuses[index]
+                status: statuses[index],
+                editableStem: parts.stem,
+                preservedSuffix: parts.preservedSuffix
             )
         }
         let invalid = statuses.contains { status in
@@ -150,7 +153,9 @@ enum BatchRenamePlanner {
         case let .suffix(suffix):
             renamedStem = parts.stem + suffix
         case let .sequence(baseName, start, digits):
-            guard start >= 0, (1...12).contains(digits) else {
+            guard !baseName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  start >= 0,
+                  (1...9).contains(digits) else {
                 throw BatchRenamePlanningError.invalidSequence
             }
             let (number, overflow) = start.addingReportingOverflow(sequenceIndex)

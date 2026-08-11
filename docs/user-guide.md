@@ -245,10 +245,11 @@ finish within five seconds. This five-second value is a ceiling for detecting a
 large regression, not a promise that ordinary previews should take that long.
 
 Local writable folders are supported. A configured File Provider location is
-supported only when it advertises local file operations. Read-only providers
-are refused, and an unregistered path under `~/Library/CloudStorage` fails
-closed as an unknown capability. Pengrid acquires scoped access once for the
-captured request; a denial reports one error rather than repeatedly prompting.
+supported only when discovery advertises local file operations and the selected
+directory passes a live filesystem writability check. Read-only providers are
+refused, and an unregistered path under `~/Library/CloudStorage` fails closed as
+an unknown capability. Pengrid acquires scoped access once for the captured
+request; a denial reports one error rather than repeatedly prompting.
 
 ### Transaction, progress, cancellation, retry, and Undo
 

@@ -390,6 +390,32 @@ struct FileOperationUndoServiceTests {
         #expect(await fixture.fileSystem.existingURLs.contains(fixture.url("D.txt")))
     }
 
+    @Test func batchRenameUndoRechecksFingerprintAfterIdentitySafeStaging() async throws {
+        let fixture = try await BatchRenameUndoFixture(
+            mapping: ["A.txt": "C.txt", "B.txt": "D.txt"],
+            mutateMovedDestinationAfterCheckedExclusiveMoveAttempts: [5]
+        )
+        let operationResult = await fixture.transaction.execute(fixture.plan) { _ in }
+        let undoService = FileOperationUndoService(
+            fileSystem: fixture.fileSystem,
+            batchRenameService: fixture.transaction
+        )
+        let recipe = try #require(await undoService.makeRecipe(
+            kind: .rename,
+            result: operationResult,
+            allowsUndo: true
+        ))
+
+        let result = await undoService.perform(recipe)
+
+        #expect(result.hasFailures)
+        #expect(await fixture.fileSystem.existingURLs.contains(fixture.url("C.txt")))
+        #expect(await fixture.fileSystem.existingURLs.contains(fixture.url("D.txt")))
+        #expect(await fixture.fileSystem.existingURLs.contains {
+            $0.lastPathComponent.hasPrefix(".pengrid-rename-")
+        } == false)
+    }
+
     @Test func batchRenameUndoRefusesAnExternallyOccupiedOriginalName() async throws {
         let fixture = try await BatchRenameUndoFixture(
             mapping: ["A.txt": "C.txt", "B.txt": "D.txt"]
@@ -424,13 +450,18 @@ private struct BatchRenameUndoFixture {
     let plan: BatchRenamePlan
     let originalIdentities: [String: FileIdentity]
 
-    init(mapping: [String: String]) async throws {
+    init(
+        mapping: [String: String],
+        mutateMovedDestinationAfterCheckedExclusiveMoveAttempts: Set<Int> = []
+    ) async throws {
         let parentURL = URL(filePath: "/workspace", directoryHint: .isDirectory)
         let names = mapping.keys.sorted()
         let urls = names.map { parentURL.appending(path: $0) }
         fileSystem = RecordingFileSystem(
             existingURLs: Set([parentURL] + urls),
-            caseInsensitivePaths: true
+            caseInsensitivePaths: true,
+            mutateMovedDestinationAfterCheckedExclusiveMoveAttempts:
+                mutateMovedDestinationAfterCheckedExclusiveMoveAttempts
         )
         transaction = BatchRenameTransactionService(
             fileSystem: fileSystem,

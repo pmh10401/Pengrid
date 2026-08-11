@@ -3,6 +3,7 @@ import Foundation
 enum FilenameError: Error, Equatable, Sendable {
     case empty
     case containsPathSeparator
+    case containsNUL
     case dotEntry
 }
 
@@ -13,6 +14,9 @@ enum FilenameValidator {
         }
         guard !candidate.contains("/") else {
             throw FilenameError.containsPathSeparator
+        }
+        guard !candidate.contains("\0") else {
+            throw FilenameError.containsNUL
         }
         guard candidate != ".", candidate != ".." else {
             throw FilenameError.dotEntry

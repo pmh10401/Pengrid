@@ -56,6 +56,26 @@ import Testing
         #expect(try fixture.contents("C.txt") == "B")
     }
 
+    @Test func liveCancellationAfterFirstStagingMoveRollsBackNamesAndContents() async throws {
+        let fixture = try LiveBatchRenameFixture(contents: ["A.txt": "A", "B.txt": "B"])
+        defer { fixture.remove() }
+        let plan = try await fixture.plan(["A.txt": "C.txt", "B.txt": "D.txt"])
+
+        let result = await Task {
+            await fixture.service.execute(plan) { update in
+                guard update.phase == .staging, update.completedCount == 1 else { return }
+                withUnsafeCurrentTask { $0?.cancel() }
+            }
+        }.value
+
+        #expect(result.outcomes.allSatisfy {
+            if case .cancelled = $0 { true } else { false }
+        })
+        #expect(try fixture.names() == ["A.txt", "B.txt"])
+        #expect(try fixture.contents("A.txt") == "A")
+        #expect(try fixture.contents("B.txt") == "B")
+    }
+
     @Test func sourceIdentityDriftFailsBeforeTheFirstMutation() async throws {
         let fixture = try await RecordingBatchRenameFixture(names: ["A.txt", "B.txt"])
         let replacement = FileIdentity(entryIdentifier: "replacement", resolvedIdentifier: "replacement")
@@ -96,6 +116,68 @@ import Testing
         #expect(await fixture.fileSystem.events.contains(where: {
             $0.hasPrefix("moveExclusiveChecked:")
         }) == false)
+    }
+
+    @Test func parentReplacementFailsBeforeTheFirstMutation() async throws {
+        let fixture = try await RecordingBatchRenameFixture(names: ["A.txt", "B.txt"])
+        await fixture.fileSystem.replaceIdentity(
+            at: fixture.parent,
+            with: FileIdentity(entryIdentifier: "new-parent", resolvedIdentifier: "new-parent")
+        )
+
+        let result = await fixture.service.execute(fixture.plan) { _ in }
+
+        #expect(result.hasFailures)
+        #expect(await fixture.fileSystem.events.contains(where: {
+            $0.hasPrefix("moveExclusiveChecked:")
+        }) == false)
+    }
+
+    @Test func reservedTemporaryNameCollisionFailsBeforeTheFirstMutation() async throws {
+        let fixture = try await RecordingBatchRenameFixture(names: ["A.txt", "B.txt"])
+        await fixture.fileSystem.replaceIdentity(
+            at: fixture.url(".pengrid-rename-test-0"),
+            with: FileIdentity(entryIdentifier: "occupied", resolvedIdentifier: "occupied")
+        )
+
+        let result = await fixture.service.execute(fixture.plan) { _ in }
+
+        #expect(result.hasFailures)
+        #expect(await fixture.fileSystem.existingURLs.contains(fixture.url("A.txt")))
+        #expect(await fixture.fileSystem.existingURLs.contains(fixture.url("B.txt")))
+    }
+
+    @Test func publishedIdentityDriftRequiresRecoveryWithoutAdoptingReplacement() async throws {
+        let fixture = try await RecordingBatchRenameFixture(
+            names: ["A.txt", "B.txt"],
+            replaceMovedDestinationIdentityAfterCheckedExclusiveMoveAttempts: [3]
+        )
+
+        let result = await fixture.service.execute(fixture.plan) { _ in }
+
+        #expect(result.outcomes.contains {
+            if case .recoveryNeeded = $0 { true } else { false }
+        })
+        #expect(await fixture.fileSystem.existingURLs.contains(fixture.url("new-A.txt")))
+    }
+
+    @Test func deniedScopedAccessFailsOnceWithoutFilesystemMutation() async throws {
+        let fixture = try await RecordingBatchRenameFixture(names: ["A.txt", "B.txt"])
+        let driver = DenyingBatchRenameSecurityScopeDriver()
+        let coordinator = CloudLocationScopedAccessCoordinator(driver: driver)
+        coordinator.replaceManualRoots([fixture.parent])
+        let service = BatchRenameTransactionService(
+            fileSystem: fixture.fileSystem,
+            accessCoordinator: coordinator,
+            temporaryName: { ".pengrid-rename-denied-\($0)" }
+        )
+        await fixture.fileSystem.clearEvents()
+
+        let result = await service.execute(fixture.plan) { _ in }
+
+        #expect(result.hasFailures)
+        #expect(driver.startCount == 1)
+        #expect(await fixture.fileSystem.events.isEmpty)
     }
 
     @Test func cancellationDuringStagingRollsBackAndLeavesNoTemporaryNames() async throws {
@@ -242,7 +324,8 @@ private struct RecordingBatchRenameFixture {
         names: [String],
         proposedNames: [String]? = nil,
         cancelAfterCheckedExclusiveMoveAttempt: Int? = nil,
-        failCheckedExclusiveMoveAttempts: Set<Int> = []
+        failCheckedExclusiveMoveAttempts: Set<Int> = [],
+        replaceMovedDestinationIdentityAfterCheckedExclusiveMoveAttempts: Set<Int> = []
     ) async throws {
         let parent = self.parent
         let sourceURLs = names.map { parent.appending(path: $0) }
@@ -250,7 +333,9 @@ private struct RecordingBatchRenameFixture {
             existingURLs: Set([parent] + sourceURLs),
             caseInsensitivePaths: true,
             cancelAfterCheckedExclusiveMoveAttempt: cancelAfterCheckedExclusiveMoveAttempt,
-            failCheckedExclusiveMoveAttempts: failCheckedExclusiveMoveAttempts
+            failCheckedExclusiveMoveAttempts: failCheckedExclusiveMoveAttempts,
+            replaceMovedDestinationIdentityAfterCheckedExclusiveMoveAttempts:
+                replaceMovedDestinationIdentityAfterCheckedExclusiveMoveAttempts
         )
         self.fileSystem = fileSystem
         service = BatchRenameTransactionService(
@@ -284,6 +369,21 @@ private struct RecordingBatchRenameFixture {
     }
 
     func url(_ name: String) -> URL { parent.appending(path: name) }
+}
+
+private final class DenyingBatchRenameSecurityScopeDriver:
+    SecurityScopedResourceAccessing, @unchecked Sendable {
+    private let lock = NSLock()
+    private var starts = 0
+
+    var startCount: Int { lock.withLock { starts } }
+
+    func startAccessing(_ url: URL) -> Bool {
+        lock.withLock { starts += 1 }
+        return false
+    }
+
+    func stopAccessing(_ url: URL) {}
 }
 
 private extension Array {

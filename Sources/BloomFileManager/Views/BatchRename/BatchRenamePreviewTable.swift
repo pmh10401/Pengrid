@@ -22,7 +22,7 @@ struct BatchRenameRowPresentation: Equatable, Sendable {
         case .invalidName:
             ("Invalid filename", "Remove invalid characters or choose another rule.")
         }
-        accessibilityLabel = "\(originalName), new name \(proposedName), \(statusLabel)"
+        accessibilityLabel = "\(originalName), new name \(proposedName), \(statusLabel). \(statusHint)"
     }
 
     private static func safeName(_ value: String) -> String {
@@ -61,6 +61,7 @@ struct BatchRenamePreviewTable: View {
                 Text(row.statusLabel)
                     .foregroundStyle(entry.status == .ready ? .secondary : .primary)
                     .help(row.statusHint)
+                    .accessibilityHint(row.statusHint)
             }
             .width(min: 130, ideal: 170)
         }
