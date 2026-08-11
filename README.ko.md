@@ -59,6 +59,22 @@ Pengrid의 읽기 전용 폴더 미리보기가 열립니다. 파일, 패키지,
 미리보기는 현재 제공된 메타데이터만 읽으며 콘텐츠를 의도적으로 다운로드하지
 않습니다.
 
+### 미리보기 우선 일괄 이름 변경 (현재 소스 빌드)
+
+활성 패널에서 두 항목 이상을 선택한 뒤 **File Operations > Batch Rename…**
+또는 행 컨텍스트 메뉴를 선택합니다. 일반 문자열 찾기/바꾸기, 접두사, 접미사,
+안정된 선택 순서를 따르는 일련번호 규칙을 제공합니다. 일반 파일과 패키지의
+확장자 및 `.tar.gz` 같은 알려진 복합 압축 확장자는 보존하고 편집 가능한 이름
+부분만 변경합니다. 전체 미리보기에서 변경 없음, 잘못된 이름, 중복 및 같은
+폴더의 기존 항목 충돌을 실제 변경 전에 확인할 수 있습니다.
+
+실행은 같은 폴더 안에서 2단계 트랜잭션으로 처리하므로 이름 교환과 순환 변경도
+지원합니다. 작업 센터는 임시 이동, 최종 게시 및 롤백 단계를 표시하며, 취소 시
+안전함을 증명할 수 있으면 원래 이름으로 복구합니다. 재시도는 캡처한 불변 계획을
+사용하고, 되돌리기는 최종 동일성·지문과 원래 이름의 사용 가능성이 모두 유지된
+경우에만 제공합니다. 미리보기 경로에는 10,000개 행을 5초 이내에 처리하는 자동
+회귀 기준이 있습니다.
+
 ### 안전한 파일 작업 센터
 
 복사, 이동, 휴지통, 새 폴더, 이름 변경, 압축, 압축 해제 및 되돌리기를 하나의
@@ -138,11 +154,14 @@ open dist/Pengrid.app
 ## 문서
 
 - [상세 기능 안내서](docs/user-guide.ko.md)
+- [아키텍처 안내](docs/architecture.md)
+- [현재 제한 사항](docs/current-limitations.ko.md)
 - [릴리스 및 패키징 안내서](docs/release.ko.md)
 - [Developer Preview 5 릴리스 노트](docs/release-notes-v1.3.0-developer-preview.5.md#한국어)
 - [버전 1.3 압축 검증 기록](docs/verification/version-1.3-archive-checklist.md)
 - [Smart Search 검증 기록](docs/verification/2026-08-04-smart-search.md)
 - [폴더 미리보기 검증 기록](docs/verification/2026-08-04-folder-preview.md)
+- [일괄 이름 변경 검증 기록](docs/verification/2026-08-11-batch-rename.md)
 - [Storage Inspector 검증 기록](docs/verification/storage-inspector-checklist.md)
 
 Pengrid는 계속 개발 중입니다. 아직 실행하지 않은 후보별 수동 검증 항목은

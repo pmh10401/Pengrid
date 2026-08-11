@@ -2,10 +2,10 @@
 
 [한국어](user-guide.ko.md) · **English** · [README](../README.md)
 
-This guide describes the user-visible behavior of Pengrid 1.3.0 Developer
-Preview 5, including its safety boundaries and deliberately omitted features.
-Preview 5 retains protected ZIP while improving large-folder and pane-search
-responsiveness.
+This guide describes Pengrid 1.3.0 Developer Preview 5 and features completed in
+the current source tree, including their safety boundaries and deliberately
+omitted behavior. Features explicitly marked **current source builds** are not
+part of the published Preview 5 DMG until a later release is packaged.
 
 ## Requirements and installation
 
@@ -40,6 +40,7 @@ Useful navigation and file commands include:
 | --- | --- |
 | Open selected item | **Command-O** |
 | Rename one selected item | **Return** or **F2** |
+| Batch rename selected items (current source builds) | **Command-Control-R** |
 | New folder | **Command-Shift-N** |
 | Copy and paste | **Command-C**, **Command-V** |
 | Back and Forward | **Command-[**, **Command-]** |
@@ -201,6 +202,81 @@ Undo is available only when Pengrid can reverse its own unchanged mutation:
 
 Undo does not overwrite a later item and does not remove a modified output.
 
+## Preview-first batch rename (current source builds)
+
+Select at least two complete rows in one pane and choose **File Operations >
+Batch Rename…**, press **Command-Control-R**, or use **Batch Rename…** in the
+file-row context menu. The command always captures the active pane only, in the
+same visible order as its table. It is disabled during inline text editing or
+while another exclusive file operation is running.
+
+### Rules and extension preservation
+
+The sheet provides four non-recursive rules:
+
+- **Find & Replace** replaces literal text, either case-sensitively or with
+  localized case-insensitive matching.
+- **Prefix** inserts text before the editable filename stem.
+- **Suffix** inserts text after the editable filename stem.
+- **Sequence** generates one base name plus a number using the captured table
+  order, configurable start value, and zero-padding width.
+
+Rules edit names only; they do not edit paths or file contents. Ordinary files
+retain their final extension, packages retain their package extension, and
+recognized archive names retain their exact compound suffix, including
+`.tar.gz`, `.tar.bz2`, and `.tar.xz`. Ordinary directories are treated as whole
+names. A leading-dot file with no second dot is also treated as a whole name.
+
+Regex, recursive subfolder renaming, manual extension editing, case-only policy
+overrides, and per-row custom replacements are intentionally out of scope.
+
+### Preview and capability gates
+
+Every selected row appears with its old name, proposed name, and a status. The
+preview refuses submission when there are fewer than two items, mixed parent
+folders, an invalid generated name, duplicate proposed names, a collision with
+an unselected sibling, or a plan in which no row changes. Names currently held
+by another selected source remain available, which allows swaps and longer
+cycles.
+
+Only the latest asynchronous preview may publish results; stale generations are
+discarded. Automated regression coverage requires a 10,000-row preview to
+finish within five seconds. This five-second value is a ceiling for detecting a
+large regression, not a promise that ordinary previews should take that long.
+
+Local writable folders are supported. A configured File Provider location is
+supported only when it advertises local file operations. Read-only providers
+are refused, and an unregistered path under `~/Library/CloudStorage` fails
+closed as an unknown capability. Pengrid acquires scoped access once for the
+captured request; a denial reports one error rather than repeatedly prompting.
+
+### Transaction, progress, cancellation, retry, and Undo
+
+Press Return or choose **Rename N Items** only after the preview is executable.
+The submitted plan is immutable and fields remain locked until the operation is
+handed to the operation center. Before the first mutation, Pengrid revalidates
+the parent, every source identity, filesystem name-comparison policy, sibling
+names, and final destinations.
+
+Execution is serial and same-directory. Changed sources first move to reserved
+temporary names, then publish to their final names. This two-phase transaction
+supports `A -> B, B -> A` swaps and longer cycles without overwriting content.
+The operation center reports **Staging names**, **Publishing names**, and, when
+needed, **Rolling back names**, with bounded item counts and no parent-path
+disclosure.
+
+Cancellation after mutation begins attempts a dependency-safe rollback. A job
+succeeds only when all final names exist and no reserved temporary name remains.
+If restoration cannot be proven, the result is marked for recovery review and
+the queue stops rather than deleting an uncertain item.
+
+Retry creates a new attempt from the exact captured plan after all preflight
+checks run again. Undo reverses the complete transaction through the same
+two-phase engine, but only while every final item retains its recorded identity
+and fingerprint and every original name remains available. Changed or replaced
+outputs, missing items, and newly occupied original names disable or refuse
+Undo.
+
 ## Archive creation, extraction, and progress
 
 Use **File Operations** or a file-row contextual menu to create or extract
@@ -354,7 +430,7 @@ documents.
 
 ## Current limitations
 
-Developer Preview 5 deliberately does not provide:
+Developer Preview 5 and the current source tree deliberately do not provide:
 
 - Intel Mac or macOS 14-and-earlier support;
 - Developer ID signing or Apple notarization;
@@ -364,7 +440,9 @@ Developer Preview 5 deliberately does not provide:
 - reliable per-byte progress from native archive tools;
 - 7z, RAR, or password-protected TAR support;
 - permanent deletion;
-- automatic removal when ownership or identity cannot be proven.
+- automatic removal when ownership or identity cannot be proven;
+- batch-rename regexes, recursive subfolder renaming, manual extension editing,
+  or per-row custom names.
 
 See [release and packaging](release.md) and the
 [verification documents](verification/) for candidate-specific evidence and

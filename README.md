@@ -58,6 +58,22 @@ folder-contents preview. Files, packages, symbolic links, and multiple
 selections continue to use system Quick Look. Cloud folder preview reads
 available metadata only and does not intentionally download contents.
 
+### Preview-first batch rename (current source builds)
+
+Select at least two rows in the active pane, then choose **File Operations >
+Batch Rename…** or use the row context menu. Literal find/replace, prefix,
+suffix, and stable sequence numbering update editable filename stems while
+preserving ordinary extensions, package extensions, and recognized compound
+archive suffixes such as `.tar.gz`. A full preview reports unchanged names,
+invalid names, duplicates, and sibling collisions before any mutation starts.
+
+Execution is a same-directory, two-phase transaction that supports swaps and
+cycles. The operation center reports staging, publishing, and rollback phases;
+cancellation restores original names when that can be proven safe. Retry uses
+the captured immutable plan, while Undo is offered only when final identities,
+fingerprints, and original-name availability still match. The preview path has
+an automated 10,000-row regression ceiling of five seconds.
+
 ### Safe operation center
 
 Copy, move, Trash, new-folder, rename, compression, extraction, and undo work
@@ -137,11 +153,14 @@ The development bundle is created at `dist/Pengrid.app`. Its executable remains
 ## Documentation
 
 - [Detailed feature guide](docs/user-guide.md)
+- [Architecture notes](docs/architecture.md)
+- [Current limitations](docs/current-limitations.md)
 - [Release and packaging guide](docs/release.md)
 - [Developer Preview 5 release notes](docs/release-notes-v1.3.0-developer-preview.5.md)
 - [Version 1.3 archive verification](docs/verification/version-1.3-archive-checklist.md)
 - [Smart Search verification](docs/verification/2026-08-04-smart-search.md)
 - [Folder preview verification](docs/verification/2026-08-04-folder-preview.md)
+- [Batch rename verification](docs/verification/2026-08-11-batch-rename.md)
 - [Storage Inspector verification](docs/verification/storage-inspector-checklist.md)
 
 Pengrid is under active development. Candidate-specific manual checks that have
