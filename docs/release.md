@@ -17,8 +17,8 @@ is the current free binary release:
 - Automated result: 1,407 tests in 92 suites
 - Packaging: release contract tests and arm64 production build passed
 - Artifact checks: app signature, DMG checksum, mounted app build, local
-  installation, and launch passed; public redownload verification follows
-  publication
+  installation, launch, GitHub asset digest, and byte-for-byte public
+  redownload verification passed
 - DMG SHA-256:
   `ece6212bd5f80d21bc64ef2059839db8a79a416b3706b140b1c4155dbe801b32`
 
