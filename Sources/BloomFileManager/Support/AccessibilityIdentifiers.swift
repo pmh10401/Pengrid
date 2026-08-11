@@ -19,6 +19,19 @@ enum AccessibilityIdentifiers {
     static let fileTableCompressProtectedZIP = "fileTable.compressProtectedZIP"
     static let workspaceBatchRename = "workspace.batchRename"
     static let fileTableBatchRename = "fileTable.batchRename"
+    static let fileTableQuickLook = "fileTable.quickLook"
+    static let fileTableOpenWith = "fileTable.openWith"
+    static let fileTableOpenInOtherPane = "fileTable.openInOtherPane"
+    static let fileTableCopyToOtherPane = "fileTable.copyToOtherPane"
+    static let fileTableMoveToOtherPane = "fileTable.moveToOtherPane"
+    static let fileTableShowInFinder = "fileTable.showInFinder"
+    static let fileTableCopyPath = "fileTable.copyPath"
+    static let fileTableCopyFullPath = "fileTable.copyFullPath"
+    static let fileTableCopyName = "fileTable.copyName"
+    static let fileTableCopyParentPath = "fileTable.copyParentPath"
+    static let fileTableCopyFileURL = "fileTable.copyFileURL"
+    static let fileTableEncloseSelection = "fileTable.encloseSelection"
+    static let fileTableDuplicate = "fileTable.duplicate"
     static let batchRenameSheet = "batchRename.sheet"
     static let batchRenameRule = "batchRename.rule"
     static let batchRenameFind = "batchRename.find"
@@ -87,6 +100,10 @@ enum AccessibilityIdentifiers {
 
     static func smartSearchRemoveRoot(_ index: Int) -> String {
         "smartSearch.root.remove.\(index)"
+    }
+
+    static func fileTableOpenWithApplication(_ index: Int) -> String {
+        "fileTable.openWithApplication.\(index)"
     }
     static let smartSearchQuickLook = "smartSearch.quickLook"
     static let smartSearchReveal = "smartSearch.reveal"

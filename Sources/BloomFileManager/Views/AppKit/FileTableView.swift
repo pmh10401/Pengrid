@@ -1,6 +1,35 @@
 import AppKit
 import SwiftUI
 
+struct FileContextMenuPresentation: Equatable {
+    let policy: FileContextMenuPolicy
+    let openWithApplications: [OpenWithApplication]
+
+    init(
+        policy: FileContextMenuPolicy,
+        openWithApplications: [OpenWithApplication] = []
+    ) {
+        self.policy = policy
+        self.openWithApplications = openWithApplications
+    }
+
+    static let hidden = FileContextMenuPresentation(
+        policy: FileContextMenuPolicy(.init(
+            workspaceCommandPolicy: WorkspaceCommandPolicy(
+                selectionCount: 0,
+                isOperationRunning: false,
+                pasteboardHasFileURLs: false
+            ),
+            selectedItems: [],
+            sourceDirectory: URL(filePath: "/", directoryHint: .isDirectory),
+            oppositeDirectory: nil,
+            sourceCapability: .unknown,
+            oppositeCapability: .unknown,
+            isExclusiveOperationActive: false
+        ))
+    )
+}
+
 struct FileTableView: NSViewRepresentable {
     let items: [FileItem]
     @Binding var selection: Set<URL>
@@ -17,6 +46,8 @@ struct FileTableView: NSViewRepresentable {
     let onActivatePane: () -> Void
     let onOpen: (FileItem) -> Void
     let onOpenSelection: ([FileItem]) -> Void
+    let contextMenuPresentation: ([FileItem]) -> FileContextMenuPresentation
+    let onContextAction: (ContextActionKind, [FileItem]) -> Void
     let onSortChange: (FileSort) -> Void
     /// Receives every non-nil token before coordinator freshness filtering.
     /// The default is intentionally a no-op for ordinary UI updates.
@@ -61,6 +92,8 @@ struct FileTableView: NSViewRepresentable {
         onOpen: @escaping (FileItem) -> Void,
         onOpenSelection: @escaping ([FileItem]) -> Void = { _ in },
         onSortChange: @escaping (FileSort) -> Void,
+        contextMenuPresentation: @escaping ([FileItem]) -> FileContextMenuPresentation = { _ in .hidden },
+        onContextAction: @escaping (ContextActionKind, [FileItem]) -> Void = { _, _ in },
         onProjectionApplicationAttempt: @escaping (PaneProjectionToken) -> Void = { _ in },
         onProjectionApplied: @escaping (PaneProjectionToken) -> Void = { _ in },
         onCancel: @escaping () -> Bool = { false },
@@ -98,6 +131,8 @@ struct FileTableView: NSViewRepresentable {
         self.onActivatePane = onActivatePane
         self.onOpen = onOpen
         self.onOpenSelection = onOpenSelection
+        self.contextMenuPresentation = contextMenuPresentation
+        self.onContextAction = onContextAction
         self.onSortChange = onSortChange
         self.onProjectionApplicationAttempt = onProjectionApplicationAttempt
         self.onProjectionApplied = onProjectionApplied
@@ -292,6 +327,8 @@ extension FileTableView {
         private var inlineEditingToken: UUID?
         private var isPreservingInlineEditing = false
         private var lastAppliedProjectionToken: PaneProjectionToken?
+        private var contextMenuItems: [FileItem] = []
+        private var capturedContextMenuPresentation = FileContextMenuPresentation.hidden
 
         private struct InlineEditingSnapshot {
             let identity: URL
@@ -625,23 +662,79 @@ extension FileTableView {
 
         func menuNeedsUpdate(_ menu: NSMenu) {
             prepareSelectionForContextMenu()
-            let selectedItems = items.filter { parent.selection.contains($0.url) }
+            contextMenuItems = items.filter { parent.selection.contains($0.url) }
+            capturedContextMenuPresentation = parent.contextMenuPresentation(contextMenuItems)
             let policy = WorkspaceCommandPolicy(
                 selectionCount: parent.selection.count,
                 isOperationRunning: parent.isOperationRunning,
                 pasteboardHasFileURLs: FileURLPasteboard.containsFileURLs(in: .general),
-                selectedItems: selectedItems,
+                selectedItems: contextMenuItems,
                 isTextEditing: parent.isTextEditing
             )
             menu.removeAllItems()
             addMenuItem("Open", action: #selector(openFromMenu), enabled: policy.canOpen, to: menu)
+            addContextMenuItem(
+                "Quick Look",
+                action: #selector(quickLookFromMenu),
+                availability: capturedContextMenuPresentation.policy.quickLook,
+                to: menu,
+                identifier: AccessibilityIdentifiers.fileTableQuickLook
+            )
+            addOpenWithSubmenu(to: menu)
+            addContextMenuItem(
+                "Open in Other Pane",
+                action: #selector(openInOtherPaneFromMenu),
+                availability: capturedContextMenuPresentation.policy.openInOtherPane,
+                to: menu,
+                identifier: AccessibilityIdentifiers.fileTableOpenInOtherPane
+            )
             menu.addItem(.separator())
+            var addedOptionalContextMenuItem = addContextMenuItem(
+                "Copy to Other Pane",
+                action: #selector(copyToOtherPaneFromMenu),
+                availability: capturedContextMenuPresentation.policy.copyToOtherPane,
+                to: menu,
+                identifier: AccessibilityIdentifiers.fileTableCopyToOtherPane
+            )
+            addedOptionalContextMenuItem = addContextMenuItem(
+                "Move to Other Pane",
+                action: #selector(moveToOtherPaneFromMenu),
+                availability: capturedContextMenuPresentation.policy.moveToOtherPane,
+                to: menu,
+                identifier: AccessibilityIdentifiers.fileTableMoveToOtherPane
+            ) || addedOptionalContextMenuItem
+            addedOptionalContextMenuItem = addContextMenuItem(
+                "Show in Finder",
+                action: #selector(showInFinderFromMenu),
+                availability: capturedContextMenuPresentation.policy.showInFinder,
+                to: menu,
+                identifier: AccessibilityIdentifiers.fileTableShowInFinder
+            ) || addedOptionalContextMenuItem
+            addedOptionalContextMenuItem = addCopyPathSubmenu(to: menu) || addedOptionalContextMenuItem
+            if addedOptionalContextMenuItem {
+                menu.addItem(.separator())
+            }
             addMenuItem("New Folder", action: #selector(createFolderFromMenu), enabled: policy.canCreateFolder, to: menu)
+            let encloseSelection = capturedContextMenuPresentation.policy.encloseSelection
+            addContextMenuItem(
+                "New Folder with Selection (\(contextMenuItems.count) Items)…",
+                action: #selector(encloseSelectionFromMenu),
+                availability: encloseSelection,
+                to: menu,
+                identifier: AccessibilityIdentifiers.fileTableEncloseSelection
+            )
             addMenuItem(
                 "Add to Favorites",
                 action: #selector(addFavoriteFromMenu),
                 enabled: favoriteForContextMenu != nil,
                 to: menu
+            )
+            addContextMenuItem(
+                "Duplicate",
+                action: #selector(duplicateFromMenu),
+                availability: capturedContextMenuPresentation.policy.duplicate,
+                to: menu,
+                identifier: AccessibilityIdentifiers.fileTableDuplicate
             )
             addMenuItem("Rename", action: #selector(renameFromMenu), enabled: policy.canRename, to: menu)
             addMenuItem(
@@ -680,9 +773,24 @@ extension FileTableView {
         }
 
         @objc private func openFromMenu() {
-            let selectedItems = items.filter { parent.selection.contains($0.url) }
-            parent.onOpenSelection(selectedItems)
+            parent.onOpenSelection(contextMenuItems)
         }
+        @objc private func quickLookFromMenu() { dispatchContextAction(.quickLook) }
+        @objc private func openWithFromMenu(_ sender: NSMenuItem) {
+            guard capturedContextMenuPresentation.openWithApplications.indices.contains(sender.tag) else { return }
+            let application = capturedContextMenuPresentation.openWithApplications[sender.tag]
+            dispatchContextAction(.openWith(applicationURL: application.applicationURL))
+        }
+        @objc private func openInOtherPaneFromMenu() { dispatchContextAction(.openInOtherPane) }
+        @objc private func copyToOtherPaneFromMenu() { dispatchContextAction(.transferToOtherPane(.copy)) }
+        @objc private func moveToOtherPaneFromMenu() { dispatchContextAction(.transferToOtherPane(.move)) }
+        @objc private func showInFinderFromMenu() { dispatchContextAction(.showInFinder) }
+        @objc private func copyFullPathFromMenu() { dispatchContextAction(.copyPath(.fullPath)) }
+        @objc private func copyNameFromMenu() { dispatchContextAction(.copyPath(.name)) }
+        @objc private func copyParentPathFromMenu() { dispatchContextAction(.copyPath(.parentPath)) }
+        @objc private func copyFileURLFromMenu() { dispatchContextAction(.copyPath(.fileURL)) }
+        @objc private func duplicateFromMenu() { dispatchContextAction(.duplicate) }
+        @objc private func encloseSelectionFromMenu() { dispatchContextAction(.encloseSelection) }
         @objc private func createFolderFromMenu() { parent.onCreateFolder() }
         @objc private func addFavoriteFromMenu() {
             guard let favoriteForContextMenu else { return }
@@ -700,6 +808,10 @@ extension FileTableView {
         }
         @objc private func extractFromMenu() { parent.onExtract() }
         @objc private func trashFromMenu() { parent.onRequestTrashConfirmation() }
+
+        private func dispatchContextAction(_ action: ContextActionKind) {
+            parent.onContextAction(action, contextMenuItems)
+        }
 
         private func makeCell(
             for column: Column,
@@ -993,15 +1105,99 @@ extension FileTableView {
             action: Selector,
             enabled: Bool,
             to menu: NSMenu,
-            identifier: String? = nil
+            identifier: String? = nil,
+            toolTip: String? = nil
         ) {
             let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
             item.target = self
             item.isEnabled = enabled
+            item.toolTip = toolTip
             if let identifier {
                 item.identifier = NSUserInterfaceItemIdentifier(identifier)
             }
             menu.addItem(item)
+        }
+
+        @discardableResult
+        private func addContextMenuItem(
+            _ title: String,
+            action: Selector,
+            availability: ContextActionAvailability,
+            to menu: NSMenu,
+            identifier: String
+        ) -> Bool {
+            guard availability.isVisible else { return false }
+            addMenuItem(
+                title,
+                action: action,
+                enabled: availability.isEnabled,
+                to: menu,
+                identifier: identifier,
+                toolTip: availability.isEnabled ? nil : availability.disabledReason
+            )
+            return true
+        }
+
+        private func addOpenWithSubmenu(to menu: NSMenu) {
+            let availability = capturedContextMenuPresentation.policy.openWith
+            guard availability.isVisible else { return }
+
+            let applications = capturedContextMenuPresentation.openWithApplications
+            let submenu = NSMenu(title: "Open With")
+            for (index, application) in applications.enumerated() {
+                let item = NSMenuItem(
+                    title: application.displayName,
+                    action: #selector(openWithFromMenu(_:)),
+                    keyEquivalent: ""
+                )
+                item.target = self
+                item.tag = index
+                item.image = NSWorkspace.shared.icon(forFile: application.applicationURL.path)
+                item.isEnabled = availability.isEnabled
+                item.toolTip = availability.isEnabled ? nil : availability.disabledReason
+                item.identifier = NSUserInterfaceItemIdentifier(
+                    AccessibilityIdentifiers.fileTableOpenWithApplication(index)
+                )
+                submenu.addItem(item)
+            }
+
+            let parentItem = NSMenuItem(title: "Open With", action: nil, keyEquivalent: "")
+            parentItem.submenu = submenu
+            parentItem.identifier = NSUserInterfaceItemIdentifier(AccessibilityIdentifiers.fileTableOpenWith)
+            parentItem.isEnabled = availability.isEnabled && !applications.isEmpty
+            parentItem.toolTip = parentItem.isEnabled
+                ? nil
+                : availability.disabledReason ?? "No compatible applications found."
+            menu.addItem(parentItem)
+        }
+
+        private func addCopyPathSubmenu(to menu: NSMenu) -> Bool {
+            let availability = capturedContextMenuPresentation.policy.copyPath
+            guard availability.isVisible else { return false }
+
+            let submenu = NSMenu(title: "Copy Path")
+            let entries: [(String, Selector, String)] = [
+                ("Copy Full Path", #selector(copyFullPathFromMenu), AccessibilityIdentifiers.fileTableCopyFullPath),
+                ("Copy Name", #selector(copyNameFromMenu), AccessibilityIdentifiers.fileTableCopyName),
+                ("Copy Parent Path", #selector(copyParentPathFromMenu), AccessibilityIdentifiers.fileTableCopyParentPath),
+                ("Copy File URL", #selector(copyFileURLFromMenu), AccessibilityIdentifiers.fileTableCopyFileURL)
+            ]
+            for (title, action, identifier) in entries {
+                let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+                item.target = self
+                item.isEnabled = availability.isEnabled
+                item.toolTip = availability.isEnabled ? nil : availability.disabledReason
+                item.identifier = NSUserInterfaceItemIdentifier(identifier)
+                submenu.addItem(item)
+            }
+
+            let parentItem = NSMenuItem(title: "Copy Path", action: nil, keyEquivalent: "")
+            parentItem.submenu = submenu
+            parentItem.identifier = NSUserInterfaceItemIdentifier(AccessibilityIdentifiers.fileTableCopyPath)
+            parentItem.isEnabled = availability.isEnabled
+            parentItem.toolTip = availability.isEnabled ? nil : availability.disabledReason
+            menu.addItem(parentItem)
+            return true
         }
 
         private func addCompressSubmenu(enabled: Bool, to menu: NSMenu) {
