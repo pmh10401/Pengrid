@@ -168,3 +168,29 @@ import Testing
         #expect(presentation.progressLabel == "Encrypting archive")
     }
 }
+
+@Test func batchRenamePhasesHaveBoundedSecretFreeAccessibilityLabels() {
+    let expectations: [(BatchRenameTransactionPhase, String)] = [
+        (.staging, "Preparing Names"),
+        (.publishing, "Renaming Items"),
+        (.rollingBack, "Restoring Names")
+    ]
+
+    for (phase, title) in expectations {
+        let presentation = BatchRenameOperationStatusPresentation(
+            progress: BatchRenameTransactionProgress(
+                phase: phase,
+                completedCount: 9,
+                totalCount: 2,
+                currentName: "/private/Secret\nName.txt"
+            )
+        )
+        #expect(presentation.title == title)
+        #expect(presentation.completedCount == 2)
+        #expect(presentation.totalCount == 2)
+        #expect(presentation.currentItemName == "Secret Name.txt")
+        #expect(presentation.accessibilityLabel ==
+            "\(title), 2 of 2, current item Secret Name.txt")
+        #expect(!presentation.accessibilityLabel.contains("/private"))
+    }
+}

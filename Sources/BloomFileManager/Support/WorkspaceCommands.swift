@@ -26,6 +26,12 @@ struct WorkspaceCommandPolicy: Equatable {
 
     var canCreateFolder: Bool { !isTextEditing }
     var canRename: Bool { !isOperationRunning && !isTextEditing && selectionCount == 1 }
+    var canBatchRename: Bool {
+        !isOperationRunning
+            && !isTextEditing
+            && selectionCount >= 2
+            && selectedItems.count == selectionCount
+    }
     var canCopy: Bool { !isTextEditing && selectionCount > 0 }
     var canPaste: Bool { !isTextEditing && pasteboardHasFileURLs }
     var canTrash: Bool { !isTextEditing && selectionCount > 0 }
@@ -115,6 +121,25 @@ enum WorkspaceFilterCommandActions {
 enum WorkspaceSearchCommandActions {
     static func showSmartSearch(in workspace: WorkspaceState, store: SmartSearchStore) {
         store.present(initialRoot: workspace.activePane.currentDirectory)
+    }
+}
+
+@MainActor
+enum WorkspaceBatchRenameCommandActions {
+    static func showBatchRename(
+        in workspace: WorkspaceState,
+        model: BatchRenameModel,
+        capability: BatchRenameLocationCapability
+    ) async {
+        let pane = workspace.activePane
+        let selected = pane.selection
+        let items = pane.visibleItems.filter { selected.contains($0.url) }
+        guard items.count == selected.count, items.count >= 2 else { return }
+        await model.present(
+            items: items,
+            in: pane.currentDirectory,
+            capability: capability
+        )
     }
 }
 
@@ -454,6 +479,8 @@ struct WorkspaceCommands: Commands {
     var fileSystem: any FileSystemAccess
     var workspaceOpener: any WorkspaceOpening = LiveWorkspaceOpener()
     var accessCoordinator: CloudLocationScopedAccessCoordinator = .init()
+    var batchRename: BatchRenameModel? = nil
+    var cloudLocations: CloudLocationsStore? = nil
 
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
@@ -550,6 +577,25 @@ struct WorkspaceCommands: Commands {
         }
 
         CommandMenu("File Operations") {
+            Button("Batch Rename…") {
+                guard let workspace, let batchRename, policy.canBatchRename else { return }
+                let capability = cloudLocations?.batchRenameCapability(
+                    for: workspace.activePane.currentDirectory
+                ) ?? .writable
+                Task {
+                    await WorkspaceBatchRenameCommandActions.showBatchRename(
+                        in: workspace,
+                        model: batchRename,
+                        capability: capability
+                    )
+                }
+            }
+            .keyboardShortcut("r", modifiers: [.command, .control])
+            .disabled(!policy.canBatchRename)
+            .accessibilityIdentifier(AccessibilityIdentifiers.workspaceBatchRename)
+
+            Divider()
+
             Button("Compress to ZIP") {
                 guard let workspace, policy.canCompress else { return }
                 Task {

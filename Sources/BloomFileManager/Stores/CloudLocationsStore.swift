@@ -134,6 +134,26 @@ final class CloudLocationsStore {
         hasCompletedInitialDiscovery = true
     }
 
+    func batchRenameCapability(for directory: URL) -> BatchRenameLocationCapability {
+        let candidate = directory.standardizedFileURL
+        let locations = (visibleLocations + hiddenLocations).filter {
+            Self.contains(candidate, within: $0.rootURL)
+        }
+        if let location = locations.max(by: {
+            $0.rootURL.standardizedFileURL.path.count
+                < $1.rootURL.standardizedFileURL.path.count
+        }) {
+            guard location.isAvailable else { return .unknown }
+            return location.capabilities.contains(.localFileOperations)
+                ? .writable
+                : .readOnly
+        }
+
+        let cloudStorageRoot = FileManager.default.homeDirectoryForCurrentUser
+            .appending(path: "Library/CloudStorage", directoryHint: .isDirectory)
+        return Self.contains(candidate, within: cloudStorageRoot) ? .unknown : .writable
+    }
+
     func addManualLocation(_ url: URL) throws {
         let requestedURL = url.standardizedFileURL
         var bookmarkData = try bookmarking.create(for: requestedURL)
@@ -387,6 +407,16 @@ final class CloudLocationsStore {
             }
         }
         return Presentation(visible: visible, hidden: hidden)
+    }
+
+    private static func contains(_ candidate: URL, within root: URL) -> Bool {
+        let candidatePath = candidate.standardizedFileURL.path
+        var rootPath = root.standardizedFileURL.path
+        while rootPath.count > 1, rootPath.hasSuffix("/") {
+            rootPath.removeLast()
+        }
+        return candidatePath == rootPath
+            || candidatePath.hasPrefix(rootPath == "/" ? "/" : rootPath + "/")
     }
 
     private static func displayName(for url: URL) -> String {

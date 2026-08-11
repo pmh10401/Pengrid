@@ -65,6 +65,8 @@ struct FilePaneView: View {
     let state: FilePaneState
     let workspace: WorkspaceState
     let operationController: FileOperationController
+    let batchRename: BatchRenameModel
+    let cloudLocations: CloudLocationsStore
     let favorites: FavoritesStore
     let materializer: any CloudMaterializing
     let accessCoordinator: CloudLocationScopedAccessCoordinator
@@ -242,6 +244,7 @@ struct FilePaneView: View {
                 onRequestRename: {
                     Task { _ = await operationController.requestRename(in: workspace) }
                 },
+                onRequestBatchRename: requestBatchRename,
                 onCopy: copySelection,
                 onPaste: paste,
                 onCompress: compressSelection,
@@ -405,6 +408,22 @@ struct FilePaneView: View {
             to: name,
             workspace: workspace
         )
+    }
+
+    private func requestBatchRename() {
+        onActivate()
+        let selected = state.selection
+        let items = state.visibleItems.filter { selected.contains($0.url) }
+        guard items.count == selected.count, items.count >= 2 else { return }
+        let directory = state.currentDirectory
+        let capability = cloudLocations.batchRenameCapability(for: directory)
+        Task {
+            await batchRename.present(
+                items: items,
+                in: directory,
+                capability: capability
+            )
+        }
     }
 
     private func copySelection() {

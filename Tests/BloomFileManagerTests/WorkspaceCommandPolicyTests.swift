@@ -133,6 +133,43 @@ import Testing
     #expect(!policy.canRename)
 }
 
+@Test func batchRenameRequiresTwoCompleteItemsAndNoOperationOrTextEdit() {
+    let first = commandPolicyItem(named: "A.txt")
+    let second = commandPolicyItem(named: "B.txt")
+
+    #expect(WorkspaceCommandPolicy(
+        selectionCount: 2,
+        isOperationRunning: false,
+        pasteboardHasFileURLs: false,
+        selectedItems: [first, second]
+    ).canBatchRename)
+    #expect(!WorkspaceCommandPolicy(
+        selectionCount: 1,
+        isOperationRunning: false,
+        pasteboardHasFileURLs: false,
+        selectedItems: [first]
+    ).canBatchRename)
+    #expect(!WorkspaceCommandPolicy(
+        selectionCount: 2,
+        isOperationRunning: true,
+        pasteboardHasFileURLs: false,
+        selectedItems: [first, second]
+    ).canBatchRename)
+    #expect(!WorkspaceCommandPolicy(
+        selectionCount: 2,
+        isOperationRunning: false,
+        pasteboardHasFileURLs: false,
+        selectedItems: [first, second],
+        isTextEditing: true
+    ).canBatchRename)
+    #expect(!WorkspaceCommandPolicy(
+        selectionCount: 2,
+        isOperationRunning: false,
+        pasteboardHasFileURLs: false,
+        selectedItems: [first]
+    ).canBatchRename)
+}
+
 @Test func smartSearchShortcutDoesNotReplacePaneFilterShortcut() throws {
     let commands = try commandSource()
     #expect(commands.contains("Button(\"Filter Files\")"))
@@ -168,6 +205,19 @@ import Testing
     let pane = try filePaneSource()
     #expect(pane.contains("onCompressProtected: compressProtectedSelection"))
     #expect(pane.contains("WorkspaceArchiveCommandActions.compressProtectedZIP"))
+}
+
+@Test func batchRenameUsesOneMenuAndContextRoute() throws {
+    let commands = try commandSource()
+    #expect(commands.contains("Button(\"Batch Rename…\")"))
+    #expect(commands.contains("WorkspaceBatchRenameCommandActions.showBatchRename"))
+    #expect(commands.contains(".disabled(!policy.canBatchRename)"))
+
+    let table = try fileTableSource()
+    #expect(table.contains("\"Batch Rename…\""))
+    #expect(table.contains("action: #selector(batchRenameFromMenu)"))
+    #expect(table.contains("enabled: policy.canBatchRename"))
+    #expect(table.contains("onRequestBatchRename"))
 }
 
 @Test func extractionAcceptsEverySupportedRegularArchiveSuffix() {

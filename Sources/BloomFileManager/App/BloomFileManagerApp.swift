@@ -76,6 +76,7 @@ struct BloomFileManagerApp: App {
     @State private var quickLookController: QuickLookController
     @State private var previewCoordinator: WorkspacePreviewCoordinator
     @State private var operationController: FileOperationController
+    @State private var batchRename: BatchRenameModel
     @State private var passwordCoordinator: ArchivePasswordPromptCoordinator
     @State private var smartSearch: SmartSearchStore
     @State private var smartSearchRouter: SmartSearchActionRouter
@@ -108,6 +109,10 @@ struct BloomFileManagerApp: App {
             archiveService: archiveService
         )
         _operationController = State(initialValue: operationController)
+        _batchRename = State(initialValue: BatchRenameModel(
+            fileSystem: cloudDependencies.fileSystem,
+            accessCoordinator: cloudDependencies.accessCoordinator
+        ))
         _smartSearch = State(initialValue: SmartSearchStore(
             service: LocalSmartSearchService(
                 fileSystem: cloudDependencies.fileSystem,
@@ -197,6 +202,7 @@ struct BloomFileManagerApp: App {
             WorkspaceView(
                 workspace: workspace,
                 operationController: operationController,
+                batchRename: batchRename,
                 smartSearch: smartSearch,
                 smartSearchRouter: smartSearchRouter,
                 favorites: favorites,
@@ -227,7 +233,9 @@ struct BloomFileManagerApp: App {
                 storageCleanupController: storageCleanupController,
                 materializer: cloudDependencies.materializer,
                 fileSystem: cloudDependencies.fileSystem,
-                accessCoordinator: cloudDependencies.accessCoordinator
+                accessCoordinator: cloudDependencies.accessCoordinator,
+                batchRename: batchRename,
+                cloudLocations: cloudLocations
             )
         }
 

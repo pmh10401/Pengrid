@@ -34,6 +34,7 @@ struct FileTableView: NSViewRepresentable {
     let onAddToFavorites: (URL) -> Void
     let onCreateFolder: () -> Void
     let onRequestRename: () -> Void
+    let onRequestBatchRename: () -> Void
     let onCopy: () -> Void
     let onPaste: () -> Void
     let onCompress: (ArchiveFormat) -> Void
@@ -74,6 +75,7 @@ struct FileTableView: NSViewRepresentable {
         onAddToFavorites: @escaping (URL) -> Void = { _ in },
         onCreateFolder: @escaping () -> Void = {},
         onRequestRename: @escaping () -> Void = {},
+        onRequestBatchRename: @escaping () -> Void = {},
         onCopy: @escaping () -> Void = {},
         onPaste: @escaping () -> Void = {},
         onCompress: @escaping (ArchiveFormat) -> Void = { _ in },
@@ -111,6 +113,7 @@ struct FileTableView: NSViewRepresentable {
         self.onAddToFavorites = onAddToFavorites
         self.onCreateFolder = onCreateFolder
         self.onRequestRename = onRequestRename
+        self.onRequestBatchRename = onRequestBatchRename
         self.onCopy = onCopy
         self.onPaste = onPaste
         self.onCompress = onCompress
@@ -641,6 +644,13 @@ extension FileTableView {
                 to: menu
             )
             addMenuItem("Rename", action: #selector(renameFromMenu), enabled: policy.canRename, to: menu)
+            addMenuItem(
+                "Batch Rename…",
+                action: #selector(batchRenameFromMenu),
+                enabled: policy.canBatchRename,
+                to: menu,
+                identifier: AccessibilityIdentifiers.fileTableBatchRename
+            )
             menu.addItem(.separator())
             addMenuItem("Copy", action: #selector(copyFromMenu), enabled: policy.canCopy, to: menu)
             addMenuItem("Paste", action: #selector(pasteFromMenu), enabled: policy.canPaste, to: menu)
@@ -679,6 +689,7 @@ extension FileTableView {
             parent.onAddToFavorites(favoriteForContextMenu.url)
         }
         @objc private func renameFromMenu() { parent.onRequestRename() }
+        @objc func batchRenameFromMenu() { parent.onRequestBatchRename() }
         @objc private func copyFromMenu() { parent.onCopy() }
         @objc private func pasteFromMenu() { parent.onPaste() }
         @objc private func compressFromMenu() { parent.onCompress(.zip) }

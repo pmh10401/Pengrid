@@ -1265,6 +1265,42 @@ struct FileTableViewLifecycleTests {
         #expect(menu.items.first { $0.title == "Open" }?.isEnabled == false)
     }
 
+    @Test func contextMenuBatchRenameUsesStableSelectionAndSharedEnablement() throws {
+        let directory = URL(filePath: "/tmp/table-batch", directoryHint: .isDirectory)
+        let first = makeTableItem(named: "first.txt", in: directory)
+        let second = makeTableItem(named: "second.txt", in: directory)
+        let selection = SelectionRecorder(value: [first.url, second.url])
+        var requestCount = 0
+        let view = FileTableView(
+            items: [first, second],
+            selection: selection.binding,
+            onActivatePane: {},
+            onOpen: { _ in },
+            onSortChange: { _ in },
+            onRequestBatchRename: { requestCount += 1 }
+        )
+        let coordinator = view.makeCoordinator()
+        let scrollView = view.makeScrollView(coordinator: coordinator)
+        let tableView = try #require(scrollView.documentView as? NSTableView)
+        coordinator.apply(items: view.items, selection: selection.value, to: tableView)
+        let menu = try #require(tableView.menu)
+
+        coordinator.menuNeedsUpdate(menu)
+        let item = try #require(menu.items.first { $0.title == "Batch Rename…" })
+
+        #expect(item.isEnabled)
+        #expect(item.identifier == NSUserInterfaceItemIdentifier(
+            AccessibilityIdentifiers.fileTableBatchRename
+        ))
+        #expect(item.action == #selector(FileTableView.Coordinator.batchRenameFromMenu))
+        #expect(NSApp.sendAction(item.action!, to: item.target, from: item))
+        #expect(requestCount == 1)
+
+        selection.value = [first.url]
+        coordinator.menuNeedsUpdate(menu)
+        #expect(menu.items.first { $0.title == "Batch Rename…" }?.isEnabled == false)
+    }
+
     @Test func plainSpaceRoutesToTheQuickLookMenuEquivalentBeforeTheTableConsumesIt() throws {
         let application = NSApplication.shared
         let originalMainMenu = application.mainMenu

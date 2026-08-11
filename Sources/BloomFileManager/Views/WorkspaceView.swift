@@ -29,13 +29,14 @@ struct WorkspaceModalPresentationState: Equatable {
     func passwordRequestToPresent(
         pending: ArchivePasswordRequest?,
         conflictPresented: Bool,
-        searchPresented: Bool
+        searchPresented: Bool,
+        batchRenamePresented: Bool = false
     ) -> ArchivePasswordRequest? {
         guard let pending else { return nil }
         if let presentedPasswordRequestID {
             return pending.id == presentedPasswordRequestID ? pending : nil
         }
-        guard !conflictPresented, !searchPresented else { return nil }
+        guard !conflictPresented, !searchPresented, !batchRenamePresented else { return nil }
         return pending
     }
 }
@@ -43,6 +44,7 @@ struct WorkspaceModalPresentationState: Equatable {
 struct WorkspaceView: View {
     let workspace: WorkspaceState
     let operationController: FileOperationController
+    let batchRename: BatchRenameModel
     let smartSearch: SmartSearchStore
     let smartSearchRouter: SmartSearchActionRouter
     let favorites: FavoritesStore
@@ -135,6 +137,11 @@ struct WorkspaceView: View {
                 materializer: materializer
             )
         }
+        .sheet(isPresented: batchRenamePresentation) {
+            BatchRenameSheet(model: batchRename) { plan in
+                operationController.batchRename(plan, workspace: workspace)
+            }
+        }
         .sheet(item: pendingPasswordRequest) { request in
             ArchivePasswordSheet(
                 request: request,
@@ -185,6 +192,8 @@ struct WorkspaceView: View {
                     state: workspace.left,
                     workspace: workspace,
                     operationController: operationController,
+                    batchRename: batchRename,
+                    cloudLocations: cloudLocations,
                     favorites: favorites,
                     materializer: materializer,
                     accessCoordinator: cloudAccessCoordinator,
@@ -198,6 +207,8 @@ struct WorkspaceView: View {
                     state: workspace.right,
                     workspace: workspace,
                     operationController: operationController,
+                    batchRename: batchRename,
+                    cloudLocations: cloudLocations,
                     favorites: favorites,
                     materializer: materializer,
                     accessCoordinator: cloudAccessCoordinator,
@@ -238,11 +249,16 @@ struct WorkspaceView: View {
 
     private var pendingConflict: Binding<IdentifiedFileConflict?> {
         Binding {
-            guard modalPresentationState.allowsOtherModalPresentation else { return nil }
+            guard modalPresentationState.allowsOtherModalPresentation,
+                  !smartSearch.isPresented,
+                  !batchRename.isPresented
+            else { return nil }
             return operationController.pendingConflict.map(IdentifiedFileConflict.init)
         } set: { item in
             if item == nil,
                modalPresentationState.allowsOtherModalPresentation,
+               !smartSearch.isPresented,
+               !batchRename.isPresented,
                operationController.pendingConflict != nil {
                 operationController.resolvePendingConflict(.cancel, applyToAll: false)
             }
@@ -251,11 +267,32 @@ struct WorkspaceView: View {
 
     private var smartSearchPresentation: Binding<Bool> {
         Binding {
-            modalPresentationState.allowsOtherModalPresentation && smartSearch.isPresented
+            modalPresentationState.allowsOtherModalPresentation
+                && operationController.pendingConflict == nil
+                && !batchRename.isPresented
+                && smartSearch.isPresented
         } set: { isPresented in
             if !isPresented,
-               modalPresentationState.allowsOtherModalPresentation {
+               modalPresentationState.allowsOtherModalPresentation,
+               operationController.pendingConflict == nil,
+               !batchRename.isPresented {
                 smartSearch.dismiss()
+            }
+        }
+    }
+
+    private var batchRenamePresentation: Binding<Bool> {
+        Binding {
+            modalPresentationState.allowsOtherModalPresentation
+                && operationController.pendingConflict == nil
+                && !smartSearch.isPresented
+                && batchRename.isPresented
+        } set: { isPresented in
+            if !isPresented,
+               modalPresentationState.allowsOtherModalPresentation,
+               operationController.pendingConflict == nil,
+               !smartSearch.isPresented {
+                batchRename.dismiss()
             }
         }
     }
@@ -265,7 +302,8 @@ struct WorkspaceView: View {
             modalPresentationState.passwordRequestToPresent(
                 pending: passwordCoordinator.pendingRequest,
                 conflictPresented: operationController.pendingConflict != nil,
-                searchPresented: smartSearch.isPresented
+                searchPresented: smartSearch.isPresented,
+                batchRenamePresented: batchRename.isPresented
             )
         } set: { request in
             // The sheet's content captures the request ID and handles its own

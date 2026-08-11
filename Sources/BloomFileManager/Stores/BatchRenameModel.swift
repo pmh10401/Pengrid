@@ -62,6 +62,7 @@ final class BatchRenameModel {
     private(set) var preview = BatchRenamePreview(entries: [], plan: nil)
     private(set) var validationSummary: BatchRenameValidationSummary = .preparing
     private(set) var rule: BatchRenameRule = .prefix("")
+    private(set) var itemCount = 0
 
     var canSubmit: Bool {
         isPresented && phase == .ready && preview.plan != nil
@@ -108,6 +109,7 @@ final class BatchRenameModel {
     ) async {
         resetTransientStateForPresentation()
         isPresented = true
+        itemCount = items.count
         phase = .capturing
         validationSummary = .preparing
         let presentationGeneration = generation
@@ -232,6 +234,7 @@ final class BatchRenameModel {
         capture = nil
         preview = BatchRenamePreview(entries: [], plan: nil)
         validationSummary = .preparing
+        itemCount = 0
         isPresented = false
         phase = .idle
     }
@@ -243,6 +246,7 @@ final class BatchRenameModel {
         capture = nil
         preview = BatchRenamePreview(entries: [], plan: nil)
         validationSummary = .preparing
+        itemCount = 0
         rule = .prefix("")
         phase = .idle
     }

@@ -50,6 +50,24 @@ import Testing
         #expect(await fixture.fileSystem.events.isEmpty)
     }
 
+    @Test func deniedSecurityScopeSurfacesOneErrorWithoutRetrying() async {
+        let fixture = BatchRenameModelFixture(names: ["A.txt", "B.txt"])
+        let driver = DeniedBatchRenameAccessDriver()
+        let coordinator = CloudLocationScopedAccessCoordinator(driver: driver)
+        coordinator.replaceManualRoots([fixture.parent])
+        let model = BatchRenameModel(
+            fileSystem: fixture.fileSystem,
+            accessCoordinator: coordinator
+        )
+
+        await model.present(items: fixture.items, in: fixture.parent)
+        await Task.yield()
+
+        #expect(model.phase == .failed("The selected cloud folder is not currently accessible."))
+        #expect(driver.startCount == 1)
+        #expect(driver.stopCount == 0)
+    }
+
     @Test func validationSummaryTracksNoChangeInvalidAndReadyDrafts() async {
         let fixture = BatchRenameModelFixture(names: ["A.txt", "B.txt"])
         let model = fixture.model()
@@ -137,6 +155,25 @@ import Testing
         model.finishSubmission(didStart: true)
         #expect(!model.isPresented)
         #expect(model.phase == .idle)
+    }
+}
+
+private final class DeniedBatchRenameAccessDriver: SecurityScopedResourceAccessing,
+    @unchecked Sendable {
+    private let lock = NSLock()
+    private var starts = 0
+    private var stops = 0
+
+    var startCount: Int { lock.withLock { starts } }
+    var stopCount: Int { lock.withLock { stops } }
+
+    func startAccessing(_ url: URL) -> Bool {
+        lock.withLock { starts += 1 }
+        return false
+    }
+
+    func stopAccessing(_ url: URL) {
+        lock.withLock { stops += 1 }
     }
 }
 

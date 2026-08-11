@@ -15,6 +15,51 @@ private actor EmptySmartSearchService: SmartSearching {
 
 @MainActor
 struct WorkspaceCommandTests {
+    @Test func batchRenameCommandCapturesOnlyActivePaneSelectionInVisibleOrder() async throws {
+        let left = URL(filePath: "/left", directoryHint: .isDirectory)
+        let right = URL(filePath: "/right", directoryHint: .isDirectory)
+        let leftItems = [
+            commandItem("z.txt", in: left),
+            commandItem("a.txt", in: left)
+        ]
+        let rightItems = [
+            commandItem("other-1.txt", in: right),
+            commandItem("other-2.txt", in: right)
+        ]
+        let workspace = WorkspaceState(
+            leftURL: left,
+            rightURL: right,
+            listingService: StubDirectoryListingService(values: [
+                left: leftItems,
+                right: rightItems
+            ])
+        )
+        await workspace.loadInitialDirectories()
+        workspace.left.selection = Set(leftItems.map(\.url))
+        workspace.right.selection = Set(rightItems.map(\.url))
+        workspace.activate(.left)
+        let expectedVisibleOrder = workspace.left.visibleItems.filter {
+            workspace.left.selection.contains($0.url)
+        }
+        let existing = Set([left, right] + leftItems.map(\.url) + rightItems.map(\.url))
+        let model = BatchRenameModel(fileSystem: RecordingFileSystem(
+            existingURLs: existing,
+            caseInsensitivePaths: true
+        ))
+
+        await WorkspaceBatchRenameCommandActions.showBatchRename(
+            in: workspace,
+            model: model,
+            capability: .writable
+        )
+        model.updateRule(.sequence(baseName: "Item", start: 1, digits: 2))
+        while model.phase == .planning { await Task.yield() }
+
+        #expect(model.preview.entries.map(\.source.url) == expectedVisibleOrder.map(\.url))
+        #expect(model.preview.entries.map(\.proposedName) == ["Item 01.txt", "Item 02.txt"])
+        #expect(model.preview.entries.allSatisfy { !$0.source.url.path.hasPrefix(right.path) })
+    }
+
     @Test func smartSearchStartsAtActivePaneRoot() {
         let workspace = WorkspaceState(
             leftURL: URL(filePath: "/left"),
@@ -438,6 +483,18 @@ struct WorkspaceCommandTests {
             #expect(policy.canCancel)
         }
     }
+}
+
+private func commandItem(_ name: String, in directory: URL) -> FileItem {
+    FileItem(
+        url: directory.appending(path: name),
+        name: name,
+        isDirectory: false,
+        isPackage: false,
+        modifiedAt: nil,
+        byteSize: nil,
+        typeDescription: "Document"
+    )
 }
 
 private func menuItemsRecursively(in menu: NSMenu) -> [NSMenuItem] {
