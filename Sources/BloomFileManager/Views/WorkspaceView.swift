@@ -196,7 +196,9 @@ struct WorkspaceView: View {
                     cloudLocations: cloudLocations,
                     favorites: favorites,
                     materializer: materializer,
+                    fileSystem: fileSystem,
                     accessCoordinator: cloudAccessCoordinator,
+                    previewCoordinator: previewCoordinator,
                     isActive: workspace.activePaneID == .left,
                     onActivate: { workspace.activate(.left) },
                     onRequestTrashConfirmation: workspace.requestTrashConfirmation
@@ -211,7 +213,9 @@ struct WorkspaceView: View {
                     cloudLocations: cloudLocations,
                     favorites: favorites,
                     materializer: materializer,
+                    fileSystem: fileSystem,
                     accessCoordinator: cloudAccessCoordinator,
+                    previewCoordinator: previewCoordinator,
                     isActive: workspace.activePaneID == .right,
                     onActivate: { workspace.activate(.right) },
                     onRequestTrashConfirmation: workspace.requestTrashConfirmation

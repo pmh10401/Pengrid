@@ -276,6 +276,304 @@ struct FileContextActionRouterTests {
         })
         #expect(await fileSystem.events.isEmpty)
     }
+
+    @Test func quickLookPreservesCapturedVisibleOrderForMultipleSources() async {
+        let directory = URL(filePath: "/preview", directoryHint: .isDirectory)
+        let opposite = URL(filePath: "/other", directoryHint: .isDirectory)
+        let first = directory.appending(path: "first.txt")
+        let second = directory.appending(path: "second.txt")
+        let fileSystem = RecordingFileSystem(identities: [
+            first: identity("first"),
+            second: identity("second")
+        ])
+        let presenter = RouterQuickLookPresenter()
+        let coordinator = WorkspacePreviewCoordinator(
+            fileSystem: fileSystem,
+            quickLookController: QuickLookController(onPresent: presenter.present),
+            folderPresenter: RouterFolderPreviewPresenter(),
+            materializer: InMemoryCloudMaterializer(),
+            restoreFocus: {}
+        )
+        let router = FileContextActionRouter(fileSystem: fileSystem)
+
+        #expect(await router.quickLook(
+            snapshot(
+                sources: [item(at: second), item(at: first)],
+                directory: directory,
+                oppositeDirectory: opposite,
+                identities: [identity("second"), identity("first")]
+            ),
+            previewCoordinator: coordinator
+        ))
+        #expect(presenter.history == [[second, first]])
+    }
+
+    @Test func quickLookReusesFolderPreviewCoordinatorWithoutMaterialization() async {
+        let directory = URL(filePath: "/preview", directoryHint: .isDirectory)
+        let opposite = URL(filePath: "/other", directoryHint: .isDirectory)
+        let folder = directory.appending(path: "Folder", directoryHint: .isDirectory)
+        let folderIdentity = identity("folder")
+        let request = FolderPreviewRequest(
+            paneID: .left,
+            url: folder,
+            identity: folderIdentity,
+            kind: .ordinaryDirectory
+        )
+        let fileSystem = RecordingFileSystem(
+            identities: [folder: folderIdentity],
+            folderPreviewRequests: [folder: request]
+        )
+        let materializer = InMemoryCloudMaterializer()
+        let folders = RouterFolderPreviewPresenter()
+        let coordinator = WorkspacePreviewCoordinator(
+            fileSystem: fileSystem,
+            quickLookController: QuickLookController(onPresent: { _ in }),
+            folderPresenter: folders,
+            materializer: materializer,
+            restoreFocus: {}
+        )
+        let router = FileContextActionRouter(fileSystem: fileSystem)
+
+        #expect(await router.quickLook(
+            snapshot(
+                sources: [contextItem(at: folder, isDirectory: true)],
+                directory: directory,
+                oppositeDirectory: opposite,
+                identities: [folderIdentity]
+            ),
+            previewCoordinator: coordinator
+        ))
+        #expect(folders.requests == [request])
+        #expect(await materializer.recordedCalls().isEmpty)
+    }
+
+    @Test func quickLookRejectsCancelledOrStaleCapturedSources() async {
+        let directory = URL(filePath: "/preview", directoryHint: .isDirectory)
+        let opposite = URL(filePath: "/other", directoryHint: .isDirectory)
+        let source = directory.appending(path: "source.txt")
+        let presenter = RouterQuickLookPresenter()
+        let staleFileSystem = RecordingFileSystem(identities: [source: identity("replacement")])
+        let staleCoordinator = WorkspacePreviewCoordinator(
+            fileSystem: staleFileSystem,
+            quickLookController: QuickLookController(onPresent: presenter.present),
+            folderPresenter: RouterFolderPreviewPresenter(),
+            materializer: InMemoryCloudMaterializer(),
+            restoreFocus: {}
+        )
+        let staleRouter = FileContextActionRouter(fileSystem: staleFileSystem)
+
+        #expect(!(await staleRouter.quickLook(
+            snapshot(
+                sources: [item(at: source)],
+                directory: directory,
+                oppositeDirectory: opposite,
+                identities: [identity("original")]
+            ),
+            previewCoordinator: staleCoordinator
+        )))
+        #expect(presenter.history.isEmpty)
+
+        let cancelledFileSystem = RecordingFileSystem(
+            identities: [source: identity("source")],
+            cancelAfterIdentityOf: source
+        )
+        let cancelledCoordinator = WorkspacePreviewCoordinator(
+            fileSystem: cancelledFileSystem,
+            quickLookController: QuickLookController(onPresent: presenter.present),
+            folderPresenter: RouterFolderPreviewPresenter(),
+            materializer: InMemoryCloudMaterializer(),
+            restoreFocus: {}
+        )
+        let cancelledRouter = FileContextActionRouter(fileSystem: cancelledFileSystem)
+
+        let cancelledRoute = Task { @MainActor in
+            await cancelledRouter.quickLook(
+                snapshot(
+                    sources: [item(at: source)],
+                    directory: directory,
+                    oppositeDirectory: opposite,
+                    identities: [identity("source")]
+                ),
+                previewCoordinator: cancelledCoordinator
+            )
+        }
+        #expect(!(await cancelledRoute.value))
+        #expect(presenter.history.isEmpty)
+    }
+
+    @Test func openInOtherPaneNavigatesCapturedDirectoryForFolderWithoutExternalPreparation() async {
+        let sourceDirectory = URL(filePath: "/source", directoryHint: .isDirectory)
+        let oppositeDirectory = URL(filePath: "/other", directoryHint: .isDirectory)
+        let initialTargetDirectory = URL(filePath: "/initial", directoryHint: .isDirectory)
+        let changedTargetDirectory = URL(filePath: "/changed", directoryHint: .isDirectory)
+        let folder = sourceDirectory.appending(path: "Folder", directoryHint: .isDirectory)
+        let folderIdentity = identity("folder")
+        let fileSystem = RecordingFileSystem(identities: [
+            folder: folderIdentity,
+            sourceDirectory: identity("directory")
+        ])
+        let target = FilePaneState(
+            directory: initialTargetDirectory,
+            listingService: StubDirectoryListingService(values: [
+                changedTargetDirectory: [],
+                folder: []
+            ])
+        )
+        let router = FileContextActionRouter(fileSystem: fileSystem)
+        let actionSnapshot = snapshot(
+            sources: [contextItem(at: folder, isDirectory: true)],
+            directory: sourceDirectory,
+            oppositeDirectory: oppositeDirectory,
+            identities: [folderIdentity]
+        )
+
+        await target.navigate(to: changedTargetDirectory)
+
+        #expect(await router.openInOtherPane(actionSnapshot, targetPane: target))
+        #expect(target.currentDirectory == folder)
+        #expect(target.selection.isEmpty)
+        #expect(await fileSystem.events.allSatisfy { $0.hasPrefix("identity:") })
+    }
+
+    @Test func openInOtherPaneNavigatesCapturedParentAndSelectsOnlyMatchingFile() async {
+        let sourceDirectory = URL(filePath: "/source", directoryHint: .isDirectory)
+        let oppositeDirectory = URL(filePath: "/other", directoryHint: .isDirectory)
+        let initialTargetDirectory = URL(filePath: "/initial", directoryHint: .isDirectory)
+        let source = sourceDirectory.appending(path: "report.txt")
+        let sourceIdentity = identity("report")
+        let fileSystem = RecordingFileSystem(identities: [
+            source: sourceIdentity,
+            sourceDirectory: identity("directory")
+        ])
+        let target = FilePaneState(
+            directory: initialTargetDirectory,
+            listingService: StubDirectoryListingService(values: [sourceDirectory: [contextItem(at: source)]])
+        )
+        let router = FileContextActionRouter(fileSystem: fileSystem)
+
+        #expect(await router.openInOtherPane(
+            snapshot(
+                sources: [contextItem(at: source)],
+                directory: sourceDirectory,
+                oppositeDirectory: oppositeDirectory,
+                identities: [sourceIdentity]
+            ),
+            targetPane: target
+        ))
+        #expect(target.currentDirectory == sourceDirectory)
+        #expect(target.selection == [source])
+        #expect(await fileSystem.events.allSatisfy { $0.hasPrefix("identity:") })
+    }
+
+    @Test func openInOtherPaneUsesCapturedParentForPackagesAndSymbolicLinks() async {
+        let sourceDirectory = URL(filePath: "/source", directoryHint: .isDirectory)
+        let oppositeDirectory = URL(filePath: "/other", directoryHint: .isDirectory)
+        let package = sourceDirectory.appending(path: "App.app", directoryHint: .isDirectory)
+        let symlink = sourceDirectory.appending(path: "linked-folder", directoryHint: .isDirectory)
+        let packageIdentity = identity("package")
+        let symlinkIdentity = identity("symlink")
+        let fileSystem = RecordingFileSystem(identities: [
+            package: packageIdentity,
+            symlink: symlinkIdentity,
+            sourceDirectory: identity("directory")
+        ])
+        let target = FilePaneState(
+            directory: URL(filePath: "/initial", directoryHint: .isDirectory),
+            listingService: StubDirectoryListingService(values: [
+                sourceDirectory: [
+                    contextItem(at: package, isDirectory: true, isPackage: true),
+                    contextItem(at: symlink, isDirectory: true, isSymbolicLink: true)
+                ]
+            ])
+        )
+        let router = FileContextActionRouter(fileSystem: fileSystem)
+
+        #expect(await router.openInOtherPane(
+            snapshot(
+                sources: [contextItem(at: package, isDirectory: true, isPackage: true)],
+                directory: sourceDirectory,
+                oppositeDirectory: oppositeDirectory,
+                identities: [packageIdentity]
+            ),
+            targetPane: target
+        ))
+        #expect(target.currentDirectory == sourceDirectory)
+        #expect(target.selection == [package])
+
+        #expect(await router.openInOtherPane(
+            snapshot(
+                sources: [contextItem(at: symlink, isDirectory: true, isSymbolicLink: true)],
+                directory: sourceDirectory,
+                oppositeDirectory: oppositeDirectory,
+                identities: [symlinkIdentity]
+            ),
+            targetPane: target
+        ))
+        #expect(target.currentDirectory == sourceDirectory)
+        #expect(target.selection == [symlink])
+    }
+
+    @Test func openInOtherPaneRejectsStaleSourceAndFailedNavigationWithoutChangingTarget() async {
+        let sourceDirectory = URL(filePath: "/source", directoryHint: .isDirectory)
+        let oppositeDirectory = URL(filePath: "/other", directoryHint: .isDirectory)
+        let initialTargetDirectory = URL(filePath: "/initial", directoryHint: .isDirectory)
+        let source = sourceDirectory.appending(path: "report.txt")
+        let original = identity("original")
+        let target = FilePaneState(
+            directory: initialTargetDirectory,
+            listingService: ContextActionFailingListingService(failing: [sourceDirectory])
+        )
+        let staleRouter = FileContextActionRouter(
+            fileSystem: RecordingFileSystem(identities: [source: identity("replacement")])
+        )
+        let actionSnapshot = snapshot(
+            sources: [contextItem(at: source)],
+            directory: sourceDirectory,
+            oppositeDirectory: oppositeDirectory,
+            identities: [original]
+        )
+
+        #expect(!(await staleRouter.openInOtherPane(actionSnapshot, targetPane: target)))
+        #expect(target.currentDirectory == initialTargetDirectory)
+
+        let navigationRouter = FileContextActionRouter(
+            fileSystem: RecordingFileSystem(identities: [
+                source: original,
+                sourceDirectory: identity("directory")
+            ])
+        )
+        #expect(!(await navigationRouter.openInOtherPane(actionSnapshot, targetPane: target)))
+        #expect(target.currentDirectory == initialTargetDirectory)
+        #expect(target.selection.isEmpty)
+    }
+
+    @Test func otherPaneTargetRoutingUsesCapturedPaneIDAfterTheActivePaneChanges() async {
+        let leftDirectory = URL(filePath: "/left", directoryHint: .isDirectory)
+        let rightDirectory = URL(filePath: "/right", directoryHint: .isDirectory)
+        let workspace = WorkspaceState(
+            leftURL: leftDirectory,
+            rightURL: rightDirectory,
+            listingService: StubDirectoryListingService(values: [:])
+        )
+        let actionDraft = ContextActionDraft(
+            sources: [contextItem(at: rightDirectory.appending(path: "report.txt"))],
+            sourcePaneID: .right,
+            oppositePaneID: .left,
+            sourceDirectory: rightDirectory,
+            oppositeDirectory: leftDirectory,
+            sourceCapability: .writable,
+            oppositeCapability: .writable
+        )!
+        let capturedTarget = FileContextActionTargetRouting.pane(
+            with: actionDraft.oppositePaneID,
+            in: workspace
+        )
+
+        workspace.activate(.left)
+
+        #expect(capturedTarget === workspace.left)
+        #expect(capturedTarget !== workspace.right)
+    }
 }
 
 private func identity(_ name: String) -> FileIdentity {
@@ -291,6 +589,24 @@ private func item(at url: URL, name: String? = nil) -> FileItem {
         modifiedAt: .distantPast,
         byteSize: 12,
         typeDescription: "Text"
+    )
+}
+
+private func contextItem(
+    at url: URL,
+    isDirectory: Bool = false,
+    isPackage: Bool = false,
+    isSymbolicLink: Bool = false
+) -> FileItem {
+    FileItem(
+        url: url,
+        name: url.lastPathComponent,
+        isDirectory: isDirectory,
+        isPackage: isPackage,
+        isSymbolicLink: isSymbolicLink,
+        modifiedAt: .distantPast,
+        byteSize: isDirectory ? nil : 12,
+        typeDescription: isDirectory ? "Folder" : "Text"
     )
 }
 
@@ -376,5 +692,39 @@ private final class ContextActionSecurityScopeDriver: SecurityScopedResourceAcce
 
     func stopAccessing(_ url: URL) {
         stoppedURLs.append(url)
+    }
+}
+
+@MainActor
+private final class RouterQuickLookPresenter {
+    private(set) var history: [[URL]] = []
+
+    func present(_ urls: [URL]) {
+        history.append(urls)
+    }
+}
+
+@MainActor
+private final class RouterFolderPreviewPresenter: FolderPreviewPresenting {
+    private(set) var requests: [FolderPreviewRequest] = []
+
+    func present(request: FolderPreviewRequest) {
+        requests.append(request)
+    }
+
+    func close() {}
+}
+
+private struct ContextActionFailingListingService: DirectoryListingService {
+    let failing: Set<URL>
+
+    func batches(in directory: URL) -> AsyncThrowingStream<[FileItem], Error> {
+        AsyncThrowingStream { continuation in
+            if failing.contains(directory) {
+                continuation.finish(throwing: CocoaError(.fileNoSuchFile))
+            } else {
+                continuation.finish()
+            }
+        }
     }
 }

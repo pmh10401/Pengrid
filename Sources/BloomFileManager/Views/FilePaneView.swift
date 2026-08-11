@@ -60,6 +60,13 @@ enum PaneFilterDismissalRouting {
     }
 }
 
+@MainActor
+enum FileContextActionTargetRouting {
+    static func pane(with paneID: PaneID, in workspace: WorkspaceState) -> FilePaneState {
+        paneID == .left ? workspace.left : workspace.right
+    }
+}
+
 struct FilePaneView: View {
     let paneID: PaneID
     let state: FilePaneState
@@ -69,7 +76,9 @@ struct FilePaneView: View {
     let cloudLocations: CloudLocationsStore
     let favorites: FavoritesStore
     let materializer: any CloudMaterializing
+    let fileSystem: any FileSystemAccess
     let accessCoordinator: CloudLocationScopedAccessCoordinator
+    let previewCoordinator: WorkspacePreviewCoordinator
     let isActive: Bool
     let onActivate: () -> Void
     let onRequestTrashConfirmation: ([URL]) -> Void
@@ -207,51 +216,7 @@ struct FilePaneView: View {
                 .overlay(alignment: .bottom) { Divider() }
             }
 
-            FileTableView(
-                items: state.visibleItems,
-                selection: $state.selection,
-                projectionToken: state.acceptedProjectionToken,
-                itemIndexByURL: state.visibleIndexByURL,
-                sort: state.sort,
-                directory: state.currentDirectory,
-                focusRequestID: state.focusRequestID,
-                renameRequestID: state.renameRequestID,
-                scrollRequest: state.scrollRestoreRequest,
-                isOperationRunning: operationController.isRunning,
-                isTextEditing: workspace.activeTextEditingSession != nil,
-                onActivatePane: onActivate,
-                onOpen: open,
-                onOpenSelection: open,
-                onSortChange: { state.sort = $0 },
-                onProjectionApplicationAttempt: state.recordTableApplicationAttempt,
-                onProjectionApplied: state.recordTableApplicationCompleted,
-                onCancel: { handleEscape() },
-                onFirstVisibleItemChange: state.recordFirstVisibleItem,
-                onConsumeScrollRequest: state.consumeScrollRestoreRequest,
-                onConsumeRenameRequest: state.consumeInlineRenameRequest,
-                onInlineEditingEvent: handleInlineEditingEvent,
-                onDiscardRename: state.cancelPendingRename,
-                onCommitRename: commitRename,
-                onDrop: performDrop,
-                canAddToFavorites: { item in
-                    FavoriteAddPolicy.canAdd(
-                        item,
-                        containsExactURL: favorites.containsExactURL
-                    )
-                },
-                onAddToFavorites: addFavorite,
-                onCreateFolder: createFolder,
-                onRequestRename: {
-                    Task { _ = await operationController.requestRename(in: workspace) }
-                },
-                onRequestBatchRename: requestBatchRename,
-                onCopy: copySelection,
-                onPaste: paste,
-                onCompress: compressSelection,
-                onCompressProtected: compressProtectedSelection,
-                onExtract: extractSelection,
-                onRequestTrashConfirmation: requestTrashConfirmation
-            )
+            fileTable
         }
         .overlay {
             Rectangle()
@@ -341,6 +306,55 @@ struct FilePaneView: View {
         }
     }
 
+    private var fileTable: some View {
+        @Bindable var state = state
+
+        return FileTableView(
+            items: state.visibleItems,
+            selection: $state.selection,
+            projectionToken: state.acceptedProjectionToken,
+            itemIndexByURL: state.visibleIndexByURL,
+            sort: state.sort,
+            directory: state.currentDirectory,
+            focusRequestID: state.focusRequestID,
+            renameRequestID: state.renameRequestID,
+            scrollRequest: state.scrollRestoreRequest,
+            isOperationRunning: operationController.isRunning,
+            isTextEditing: workspace.activeTextEditingSession != nil,
+            onActivatePane: onActivate,
+            onOpen: open,
+            onOpenSelection: open,
+            onSortChange: { state.sort = $0 },
+            contextMenuPresentation: { contextMenuPresentation(for: $0) },
+            onContextAction: { routeContextAction($0, items: $1) },
+            onProjectionApplicationAttempt: state.recordTableApplicationAttempt,
+            onProjectionApplied: state.recordTableApplicationCompleted,
+            onCancel: { handleEscape() },
+            onFirstVisibleItemChange: state.recordFirstVisibleItem,
+            onConsumeScrollRequest: state.consumeScrollRestoreRequest,
+            onConsumeRenameRequest: state.consumeInlineRenameRequest,
+            onInlineEditingEvent: handleInlineEditingEvent,
+            onDiscardRename: state.cancelPendingRename,
+            onCommitRename: commitRename,
+            onDrop: performDrop,
+            canAddToFavorites: { item in
+                FavoriteAddPolicy.canAdd(item, containsExactURL: favorites.containsExactURL)
+            },
+            onAddToFavorites: addFavorite,
+            onCreateFolder: createFolder,
+            onRequestRename: {
+                Task { _ = await operationController.requestRename(in: workspace) }
+            },
+            onRequestBatchRename: requestBatchRename,
+            onCopy: copySelection,
+            onPaste: paste,
+            onCompress: compressSelection,
+            onCompressProtected: compressProtectedSelection,
+            onExtract: extractSelection,
+            onRequestTrashConfirmation: requestTrashConfirmation
+        )
+    }
+
     private func beginPathEditing() {
         onActivate()
         state.isEditingPath = true
@@ -376,6 +390,64 @@ struct FilePaneView: View {
 
     private func open(_ item: FileItem) {
         open([item])
+    }
+
+    private func contextMenuPresentation(for items: [FileItem]) -> FileContextMenuPresentation {
+        let oppositePane = FileContextActionTargetRouting.pane(
+            with: oppositePaneID,
+            in: workspace
+        )
+        return FileContextMenuPresentation(policy: FileContextMenuPolicy(.init(
+            workspaceCommandPolicy: WorkspaceCommandPolicy(
+                selectionCount: items.count,
+                isOperationRunning: operationController.isRunning,
+                pasteboardHasFileURLs: FileURLPasteboard.containsFileURLs(in: .general),
+                selectedItems: items,
+                isTextEditing: workspace.activeTextEditingSession != nil
+            ),
+            selectedItems: items,
+            sourceDirectory: state.currentDirectory,
+            oppositeDirectory: oppositePane.currentDirectory,
+            sourceCapability: cloudLocations.localFileOperationCapability(for: state.currentDirectory),
+            oppositeCapability: cloudLocations.localFileOperationCapability(for: oppositePane.currentDirectory),
+            isExclusiveOperationActive: false
+        )))
+    }
+
+    private func routeContextAction(_ action: ContextActionKind, items: [FileItem]) {
+        guard action == .quickLook || action == .openInOtherPane else { return }
+        let targetPane = FileContextActionTargetRouting.pane(with: oppositePaneID, in: workspace)
+        let sourceDirectory = state.currentDirectory
+        let oppositeDirectory = targetPane.currentDirectory
+        guard let draft = ContextActionDraft(
+            sources: items,
+            sourcePaneID: paneID,
+            oppositePaneID: oppositePaneID,
+            sourceDirectory: sourceDirectory,
+            oppositeDirectory: oppositeDirectory,
+            sourceCapability: cloudLocations.localFileOperationCapability(for: sourceDirectory),
+            oppositeCapability: cloudLocations.localFileOperationCapability(for: oppositeDirectory)
+        ) else { return }
+        let router = FileContextActionRouter(
+            fileSystem: fileSystem,
+            accessCoordinator: accessCoordinator
+        )
+
+        Task { @MainActor in
+            guard let snapshot = await router.capture(draft) else { return }
+            switch action {
+            case .quickLook:
+                _ = await router.quickLook(snapshot, previewCoordinator: previewCoordinator)
+            case .openInOtherPane:
+                _ = await router.openInOtherPane(snapshot, targetPane: targetPane)
+            default:
+                return
+            }
+        }
+    }
+
+    private var oppositePaneID: PaneID {
+        paneID == .left ? .right : .left
     }
 
     private func open(_ items: [FileItem]) {

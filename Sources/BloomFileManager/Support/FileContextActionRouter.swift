@@ -184,6 +184,95 @@ final class FileContextActionRouter {
         return values.count
     }
 
+    func quickLook(
+        _ snapshot: ContextActionSnapshot,
+        previewCoordinator: WorkspacePreviewCoordinator
+    ) async -> Bool {
+        error = nil
+        guard !Task.isCancelled else { return false }
+
+        let accessLeases: [CloudLocationScopedAccessLease]
+        do {
+            accessLeases = try accessCoordinator.acquireAccess(for: snapshot.sources.map(\.item.url))
+        } catch {
+            guard !Task.isCancelled else { return false }
+            self.error = .accessDenied
+            return false
+        }
+        defer { accessLeases.forEach { $0.finish() } }
+
+        guard await sourcesStillMatch(snapshot.sources), !Task.isCancelled else { return false }
+        await previewCoordinator.toggle(
+            selection: WorkspacePreviewSelection(
+                paneID: snapshot.sourcePaneID,
+                items: snapshot.sources.map(\.item)
+            )
+        )
+        return !Task.isCancelled && previewCoordinator.mode != .closed
+    }
+
+    func openInOtherPane(
+        _ snapshot: ContextActionSnapshot,
+        targetPane: FilePaneState
+    ) async -> Bool {
+        error = nil
+        guard !Task.isCancelled,
+              snapshot.sources.count == 1,
+              let source = snapshot.sources.first
+        else {
+            error = .itemChanged
+            return false
+        }
+
+        let accessLeases: [CloudLocationScopedAccessLease]
+        do {
+            accessLeases = try accessCoordinator.acquireAccess(for: [
+                source.item.url,
+                snapshot.sourceDirectory.url
+            ])
+        } catch {
+            guard !Task.isCancelled else { return false }
+            self.error = .accessDenied
+            return false
+        }
+        defer { accessLeases.forEach { $0.finish() } }
+
+        guard await sourceStillMatches(source),
+              await requestStillMatches(snapshot.sourceDirectory),
+              !Task.isCancelled
+        else { return false }
+
+        let isOrdinaryDirectory = source.item.isDirectory
+            && !source.item.isPackage
+            && !source.item.isSymbolicLink
+        let destination = isOrdinaryDirectory
+            ? source.item.url.standardizedFileURL
+            : snapshot.sourceDirectory.url.standardizedFileURL
+
+        await targetPane.navigate(to: destination)
+        guard !Task.isCancelled,
+              targetPane.currentDirectory.standardizedFileURL == destination,
+              targetPane.errorMessage == nil,
+              !targetPane.isLoading
+        else { return false }
+
+        guard !isOrdinaryDirectory else { return true }
+        guard let listedItem = targetPane.visibleItems.first(where: {
+            $0.url.standardizedFileURL == source.item.url.standardizedFileURL
+        }),
+        await sourceStillMatches(source),
+        let listedIdentity = await currentIdentity(at: listedItem.url),
+        listedIdentity.refersToSameItem(as: source.identity),
+        !Task.isCancelled
+        else {
+            error = .itemChanged
+            return false
+        }
+
+        targetPane.selection = [listedItem.url]
+        return true
+    }
+
     private func identity(at url: URL) async -> FileIdentity? {
         do {
             try Task.checkCancellation()
@@ -207,5 +296,32 @@ final class FileContextActionRouter {
         } catch {
             return nil
         }
+    }
+
+    private func sourcesStillMatch(_ sources: [ContextActionSource]) async -> Bool {
+        for source in sources {
+            guard await sourceStillMatches(source), !Task.isCancelled else { return false }
+        }
+        return true
+    }
+
+    private func sourceStillMatches(_ source: ContextActionSource) async -> Bool {
+        guard let currentIdentity = await currentIdentity(at: source.item.url),
+              currentIdentity.refersToSameItem(as: source.identity)
+        else {
+            error = .itemChanged
+            return false
+        }
+        return true
+    }
+
+    private func requestStillMatches(_ request: IdentifiedFileRequest) async -> Bool {
+        guard let currentIdentity = await currentIdentity(at: request.url),
+              currentIdentity.refersToSameItem(as: request.identity)
+        else {
+            error = .itemChanged
+            return false
+        }
+        return true
     }
 }
