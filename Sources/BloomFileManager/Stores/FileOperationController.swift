@@ -5,6 +5,8 @@ enum FileOperationStage: Equatable {
     case preparing(CloudMaterializationProgress)
     case operating(FileOperationProgress)
     case archiving(ArchiveOperationProgress)
+    case batchRenaming(BatchRenameTransactionProgress)
+    case enclosingSelection(SelectionFolderTransactionProgress)
 }
 
 enum CloudOperationRequestGate {
@@ -78,6 +80,8 @@ final class FileOperationController {
     private let service: FileOperationService
     private let materializer: any CloudMaterializing
     private let archiveService: any ArchiveOperating
+    private let batchRenameService: BatchRenameTransactionService
+    private let selectionFolderTransactionService: SelectionFolderTransactionService
     private let undoService: FileOperationUndoService
 
     private(set) var stage: FileOperationStage?
@@ -113,9 +117,30 @@ final class FileOperationController {
             || !pendingOperations.isEmpty
     }
 
+    var hasExclusiveOperationActive: Bool {
+        activeOperation?.requiresExclusiveQueue == true
+            || pendingOperations.contains(where: \.requiresExclusiveQueue)
+    }
+
     var progress: FileOperationProgress? {
-        guard case let .operating(progress) = stage else { return nil }
-        return progress
+        switch stage {
+        case let .operating(progress):
+            return progress
+        case let .batchRenaming(progress):
+            return FileOperationProgress(
+                completedCount: progress.completedCount,
+                totalCount: progress.totalCount,
+                currentName: progress.currentName
+            )
+        case let .enclosingSelection(progress):
+            return FileOperationProgress(
+                completedCount: progress.completedCount,
+                totalCount: progress.totalCount,
+                currentName: progress.currentName
+            )
+        case .preparing, .archiving, nil:
+            return nil
+        }
     }
 
     @ObservationIgnored private var operationTask: Task<Void, Never>?
@@ -138,13 +163,24 @@ final class FileOperationController {
         service: FileOperationService,
         materializer: any CloudMaterializing,
         archiveService: (any ArchiveOperating)? = nil,
+        batchRenameService: BatchRenameTransactionService? = nil,
+        selectionFolderTransactionService: SelectionFolderTransactionService? = nil,
         historyLimit: Int = 100
     ) {
         self.service = service
         self.materializer = materializer
         self.archiveService = archiveService
             ?? service.makeArchiveOperationService()
-        self.undoService = service.makeUndoService()
+        let resolvedBatchRenameService = batchRenameService
+            ?? service.makeBatchRenameTransactionService()
+        self.batchRenameService = resolvedBatchRenameService
+        let resolvedSelectionFolderTransactionService = selectionFolderTransactionService
+            ?? service.makeSelectionFolderTransactionService()
+        self.selectionFolderTransactionService = resolvedSelectionFolderTransactionService
+        self.undoService = service.makeUndoService(
+            batchRenameService: resolvedBatchRenameService,
+            selectionFolderTransactionService: resolvedSelectionFolderTransactionService
+        )
         self.historyLimit = max(historyLimit, 1)
     }
 
@@ -339,6 +375,12 @@ final class FileOperationController {
         ) { [weak self] in
             guard let self else {
                 return FileOperationResult(outcomes: [])
+            }
+            if case let .selectionFolder(plan) = recipe {
+                return await self.undoService.performSelectionFolderUndo(plan) { [weak self] progress in
+                    guard let self else { return }
+                    await self.publish(stage: .enclosingSelection(progress))
+                }
             }
             return await self.undoService.perform(recipe) { [weak self] progress in
                 guard let self else { return }
@@ -716,6 +758,84 @@ final class FileOperationController {
         }
     }
 
+    @discardableResult
+    func transferToCapturedDirectory(
+        _ requests: [IdentifiedTransferRequest],
+        mode: TransferMode,
+        workspace: WorkspaceState
+    ) -> Bool {
+        guard !requests.isEmpty else { return false }
+        return runIdentifiedTransfer(
+            requests,
+            mode: mode,
+            workspace: workspace,
+            onCompletion: nil,
+            includeSafeRelativePaths: false
+        )
+    }
+
+    /// Queues a keep-both duplicate in the parent captured at invocation.
+    /// The execution closure deliberately does not read active-pane state.
+    @discardableResult
+    func duplicate(
+        _ snapshot: ContextActionSnapshot,
+        in pane: FilePaneState,
+        workspace: WorkspaceState
+    ) -> Bool {
+        guard !snapshot.sources.isEmpty,
+              snapshot.sourceCapability == .writable
+        else { return false }
+
+        let requests = snapshot.sources.map {
+            IdentifiedTransferRequest(
+                source: $0.item.url,
+                sourceIdentity: $0.identity,
+                destinationRoot: snapshot.sourceDirectory.url,
+                destinationRootIdentity: snapshot.sourceDirectory.identity,
+                relativeParentComponents: []
+            )
+        }
+        let sources = requests.map(\.source)
+        let capturedParent = snapshot.sourceDirectory.url.standardizedFileURL
+        return beginOperation(
+            kind: .duplicate,
+            totalCount: requests.count,
+            initialName: sources.first?.lastPathComponent ?? "Item",
+            initialStage: .preparing(CloudMaterializationProgress(
+                completedCount: 0,
+                totalCount: requests.count,
+                currentName: Self.sanitizedBasename(sources.first)
+            )),
+            touchedDirectories: [capturedParent],
+            workspace: workspace,
+            cancellationSources: sources,
+            onCompletion: { result in
+                guard !result.hasFailures,
+                      pane.currentDirectory.standardizedFileURL == capturedParent
+                else { return }
+                pane.selection = Set(result.outcomes.compactMap { outcome in
+                    guard case let .succeeded(_, destination?) = outcome else { return nil }
+                    return destination.standardizedFileURL
+                })
+            }
+        ) { [weak self, materializer, service] in
+            guard let self else {
+                return FileOperationResult(outcomes: sources.map { .cancelled(source: $0) })
+            }
+            let preparedRequests: [IdentifiedTransferRequest]
+            switch await self.prepareTransferRequests(requests, materializer: materializer) {
+            case let .rejected(result):
+                return result
+            case let .ready(prepared):
+                preparedRequests = prepared
+            }
+            return await service.duplicate(preparedRequests) { [weak self] progress in
+                guard let self else { return }
+                await self.publish(stage: .operating(progress))
+            }
+        }
+    }
+
     private enum PreparedTransferRequests {
         case ready([IdentifiedTransferRequest])
         case rejected(FileOperationResult)
@@ -1009,6 +1129,87 @@ final class FileOperationController {
                 return FileOperationResult(outcomes: [
                     .failed(source: source, message: error.localizedDescription)
                 ])
+            }
+        }
+    }
+
+    @discardableResult
+    func batchRename(
+        _ plan: BatchRenamePlan,
+        workspace: WorkspaceState
+    ) -> Bool {
+        guard let first = plan.entries.first else { return false }
+        let finalURLs = Set(plan.entries.map(\.destinationURL))
+        return beginOperation(
+            kind: .rename,
+            totalCount: plan.entries.count,
+            initialName: first.source.name,
+            initialStage: .batchRenaming(BatchRenameTransactionProgress(
+                phase: .staging,
+                completedCount: 0,
+                totalCount: plan.entries.count,
+                currentName: first.source.name
+            )),
+            touchedDirectories: [plan.parentURL],
+            workspace: workspace,
+            cancellationSources: plan.entries.map(\.source.url),
+            requiresExclusiveQueue: true,
+            onCompletion: { result in
+                guard !result.hasFailures,
+                      result.outcomes.count == plan.entries.count
+                else { return }
+                for pane in [workspace.left, workspace.right]
+                where pane.currentDirectory.standardizedFileURL
+                    == plan.parentURL.standardizedFileURL {
+                    pane.selection = finalURLs
+                }
+            }
+        ) { [weak self, batchRenameService] in
+            guard let self else { return FileOperationResult(outcomes: []) }
+            return await batchRenameService.execute(plan) { [weak self] progress in
+                guard let self else { return }
+                await self.publish(stage: .batchRenaming(progress))
+            }
+        }
+    }
+
+    @discardableResult
+    func encloseSelection(
+        _ plan: SelectionFolderPlan,
+        in pane: FilePaneState,
+        workspace: WorkspaceState
+    ) -> Bool {
+        guard plan.sources.count >= 2 else { return false }
+        return beginOperation(
+            kind: .encloseSelection,
+            totalCount: plan.sources.count,
+            initialName: plan.folderName,
+            initialStage: .enclosingSelection(SelectionFolderTransactionProgress(
+                phase: .creatingFolder,
+                completedCount: 0,
+                totalCount: plan.sources.count,
+                currentName: plan.folderName
+            )),
+            touchedDirectories: [plan.parentURL, plan.folderURL],
+            workspace: workspace,
+            cancellationSources: plan.sources.map(\.item.url),
+            requiresExclusiveQueue: true,
+            onCompletion: { result in
+                guard result.outcomes.count == plan.sources.count,
+                      result.outcomes.allSatisfy({
+                          if case .succeeded = $0 { return true }
+                          return false
+                      }),
+                      pane.currentDirectory.standardizedFileURL
+                        == plan.parentURL.standardizedFileURL
+                else { return }
+                pane.selection = [plan.folderURL]
+            }
+        ) { [weak self, selectionFolderTransactionService] in
+            guard let self else { return FileOperationResult(outcomes: []) }
+            return await selectionFolderTransactionService.execute(plan) { [weak self] progress in
+                guard let self else { return }
+                await self.publish(stage: .enclosingSelection(progress))
             }
         }
     }
@@ -1366,6 +1567,28 @@ final class FileOperationController {
                     detail: "Finishing archive"
                 )
             }
+        case let .batchRenaming(progress):
+            let detail = switch progress.phase {
+            case .staging: "Staging names"
+            case .publishing: "Publishing names"
+            case .rollingBack: "Rolling back names"
+            }
+            return FileOperationJobProgress(
+                completedCount: progress.completedCount,
+                totalCount: progress.totalCount,
+                detail: detail
+            )
+        case let .enclosingSelection(progress):
+            let detail = switch progress.phase {
+            case .creatingFolder: "Creating folder"
+            case .movingItems: "Moving selected items"
+            case .rollingBack: "Rolling back selection"
+            }
+            return FileOperationJobProgress(
+                completedCount: progress.completedCount,
+                totalCount: progress.totalCount,
+                detail: detail
+            )
         }
     }
 

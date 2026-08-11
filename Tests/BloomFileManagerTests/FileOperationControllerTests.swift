@@ -4,6 +4,121 @@ import Testing
 
 @MainActor
 struct FileOperationControllerTests {
+    @Test func duplicateQueuesASeparateKeepBothJobAndSelectsOnlyCapturedParentOutputs() async throws {
+        let parent = URL(filePath: "/workspace", directoryHint: .isDirectory)
+        let opposite = URL(filePath: "/other", directoryHint: .isDirectory)
+        let source = parent.appending(path: "Report.txt")
+        let item = FileItem(
+            url: source,
+            name: "Report.txt",
+            isDirectory: false,
+            isPackage: false,
+            modifiedAt: .distantPast,
+            byteSize: 12,
+            typeDescription: "Text"
+        )
+        let fileSystem = RecordingFileSystem(existingURLs: [parent, opposite, source])
+        let workspace = WorkspaceState(
+            leftURL: parent,
+            rightURL: opposite,
+            listingService: StubDirectoryListingService(values: [parent: [item], opposite: []])
+        )
+        await workspace.loadInitialDirectories()
+        let sourceIdentity = try #require(await fileSystem.identity(of: source))
+        let parentIdentity = try #require(await fileSystem.identity(of: parent))
+        let oppositeIdentity = try #require(await fileSystem.identity(of: opposite))
+        let snapshot = ContextActionSnapshot(
+            draft: ContextActionDraft(
+                sources: [item],
+                sourcePaneID: .left,
+                oppositePaneID: .right,
+                sourceDirectory: parent,
+                oppositeDirectory: opposite,
+                sourceCapability: .writable,
+                oppositeCapability: .readOnly
+            )!,
+            sources: [ContextActionSource(item: item, identity: sourceIdentity)],
+            sourceDirectory: IdentifiedFileRequest(url: parent, identity: parentIdentity),
+            oppositeDirectory: IdentifiedFileRequest(url: opposite, identity: oppositeIdentity)
+        )!
+        let controller = FileOperationController(
+            service: FileOperationService(fileSystem: fileSystem),
+            materializer: InMemoryCloudMaterializer()
+        )
+
+        #expect(controller.duplicate(snapshot, in: workspace.left, workspace: workspace))
+        #expect(controller.activeJob?.kind == .duplicate)
+        #expect(controller.activeJob?.title == "Duplicate")
+        await waitUntilQueueIsIdle(controller)
+
+        let destination = parent.appending(path: "Report 2.txt")
+        let job = try #require(controller.operationHistory.first)
+        #expect(job.state == .succeeded)
+        #expect(job.canUndo)
+        #expect(workspace.left.selection == [destination])
+        #expect(await fileSystem.existingURLs.contains(destination))
+    }
+
+    @Test func duplicatePartialFailureKeepsStableOrderAndNeverOffersGroupUndo() async throws {
+        let parent = URL(filePath: "/workspace", directoryHint: .isDirectory)
+        let opposite = URL(filePath: "/other", directoryHint: .isDirectory)
+        let first = parent.appending(path: "First.txt")
+        let second = parent.appending(path: "Second.txt")
+        let firstItem = FileItem(
+            url: first, name: "First.txt", isDirectory: false, isPackage: false,
+            modifiedAt: .distantPast, byteSize: 1, typeDescription: "Text"
+        )
+        let secondItem = FileItem(
+            url: second, name: "Second.txt", isDirectory: false, isPackage: false,
+            modifiedAt: .distantPast, byteSize: 1, typeDescription: "Text"
+        )
+        let copyFailure = CocoaError(.fileWriteUnknown)
+        let fileSystem = RecordingFileSystem(
+            existingURLs: [parent, opposite, first, second],
+            copyErrorsBySource: [first: copyFailure]
+        )
+        let workspace = WorkspaceState(
+            leftURL: parent,
+            rightURL: opposite,
+            listingService: StubDirectoryListingService(values: [
+                parent: [firstItem, secondItem], opposite: []
+            ])
+        )
+        await workspace.loadInitialDirectories()
+        let parentIdentity = try #require(await fileSystem.identity(of: parent))
+        let oppositeIdentity = try #require(await fileSystem.identity(of: opposite))
+        let snapshot = ContextActionSnapshot(
+            draft: ContextActionDraft(
+                sources: [firstItem, secondItem], sourcePaneID: .left, oppositePaneID: .right,
+                sourceDirectory: parent, oppositeDirectory: opposite,
+                sourceCapability: .writable, oppositeCapability: .readOnly
+            )!,
+            sources: [
+                ContextActionSource(item: firstItem, identity: try #require(await fileSystem.identity(of: first))),
+                ContextActionSource(item: secondItem, identity: try #require(await fileSystem.identity(of: second)))
+            ],
+            sourceDirectory: IdentifiedFileRequest(url: parent, identity: parentIdentity),
+            oppositeDirectory: IdentifiedFileRequest(url: opposite, identity: oppositeIdentity)
+        )!
+        let controller = FileOperationController(
+            service: FileOperationService(fileSystem: fileSystem),
+            materializer: InMemoryCloudMaterializer()
+        )
+
+        #expect(controller.duplicate(snapshot, in: workspace.left, workspace: workspace))
+        await waitUntilQueueIsIdle(controller)
+
+        let completedSecond = parent.appending(path: "Second 2.txt")
+        #expect(controller.lastResult?.outcomes == [
+            .failed(source: first, message: copyFailure.localizedDescription),
+            .succeeded(source: second, destination: completedSecond)
+        ])
+        let job = try #require(controller.operationHistory.first)
+        #expect(job.state == .failed)
+        #expect(job.canUndo == false)
+        #expect(controller.undoJob(job.id) == false)
+    }
+
     @Test func legacyCompressionMethodValueRemainsTwoArgumentCallable() async throws {
         let fixture = await makeProtectedWorkspace()
         let archiveService = RecordingArchiveOperator()
@@ -905,6 +1020,59 @@ struct FileOperationControllerTests {
         ]))
         #expect(await listingService.requestCount(for: destinationDirectory) == 2)
         #expect(await listingService.requestCount(for: untouchedDirectory) == 1)
+    }
+
+    @Test func capturedTransferUsesItsImmutableDestinationAndOrdinaryCopyPipeline() async {
+        let source = URL(filePath: "/source/report.txt")
+        let capturedDestination = URL(filePath: "/captured-destination", directoryHint: .isDirectory)
+        let initialOtherPaneDestination = URL(filePath: "/initial-other-pane", directoryHint: .isDirectory)
+        let liveOtherPaneDestination = URL(filePath: "/later-navigation", directoryHint: .isDirectory)
+        let sourceIdentity = FileIdentity(entryIdentifier: "source", resolvedIdentifier: "source")
+        let destinationIdentity = FileIdentity(
+            entryIdentifier: "captured-destination",
+            resolvedIdentifier: "captured-destination"
+        )
+        let fileSystem = RecordingFileSystem(
+            existingURLs: [
+                source, capturedDestination, initialOtherPaneDestination, liveOtherPaneDestination
+            ],
+            identities: [
+                source: sourceIdentity,
+                capturedDestination: destinationIdentity
+            ]
+        )
+        let controller = FileOperationController(
+            service: FileOperationService(fileSystem: fileSystem)
+        )
+        let listingService = RequestRecordingListingService()
+        let workspace = WorkspaceState(
+            leftURL: capturedDestination,
+            rightURL: initialOtherPaneDestination,
+            listingService: listingService
+        )
+        await workspace.loadInitialDirectories()
+        let request = IdentifiedTransferRequest(
+            source: source,
+            sourceIdentity: sourceIdentity,
+            destinationRoot: capturedDestination,
+            destinationRootIdentity: destinationIdentity,
+            relativeParentComponents: []
+        )
+        await workspace.right.navigate(to: liveOtherPaneDestination)
+
+        #expect(controller.transferToCapturedDirectory([request], mode: .copy, workspace: workspace))
+        await waitUntilIdle(controller)
+
+        let copied = capturedDestination.appending(path: "report.txt")
+        #expect(await fileSystem.existingURLs.contains(copied))
+        #expect(await !fileSystem.existingURLs.contains(
+            liveOtherPaneDestination.appending(path: "report.txt")
+        ))
+        #expect(await listingService.requestCount(for: capturedDestination) == 2)
+        #expect(controller.operationHistory.first?.canUndo == true)
+        #expect(controller.undoJob(controller.operationHistory.first!.id))
+        await waitUntilIdle(controller)
+        #expect(await !fileSystem.existingURLs.contains(copied))
     }
 
     @Test func transferCollisionRemainsRunningUntilThePendingConflictIsResolved() async {
@@ -2123,6 +2291,173 @@ struct FileOperationControllerTests {
         #expect(details.items.first?.guidance == "Connect to the internet, then try the download again.")
     }
 
+    @Test func batchRenameRunsAsOneExclusiveJobAndSelectsFinalItems() async throws {
+        let fixture = try await BatchRenameControllerFixture(
+            suspendCheckedExclusiveMoveAttempt: 2
+        )
+
+        #expect(fixture.controller.batchRename(fixture.plan, workspace: fixture.workspace))
+        await fixture.fileSystem.waitForSuspendedCheckedExclusiveMove()
+        #expect(fixture.controller.activeJob?.kind == .rename)
+        #expect(fixture.controller.activeJob?.title == "Rename 2 Items")
+        #expect(fixture.controller.activeJob?.progress == FileOperationJobProgress(
+            completedCount: 1,
+            totalCount: 2,
+            detail: "Staging names"
+        ))
+        await fixture.fileSystem.releaseSuspendedCheckedExclusiveMove()
+        await waitUntilQueueIsIdle(fixture.controller)
+
+        let job = try #require(fixture.controller.operationHistory.first)
+        #expect(job.state == .succeeded)
+        #expect(job.canUndo)
+        #expect(fixture.workspace.left.selection == [
+            fixture.url("new-A.txt"),
+            fixture.url("new-B.txt")
+        ])
+    }
+
+    @Test func selectionEnclosureRunsExclusivelyPublishesProgressAndSelectsOnlyItsCapturedPane() async throws {
+        let fixture = try await SelectionFolderControllerFixture(
+            suspendCheckedExclusiveMoveAttempt: 1
+        )
+        fixture.workspace.activate(.right)
+
+        #expect(fixture.controller.encloseSelection(
+            fixture.plan,
+            in: fixture.workspace.left,
+            workspace: fixture.workspace
+        ))
+        await fixture.fileSystem.waitForSuspendedCheckedExclusiveMove()
+
+        #expect(fixture.controller.activeJob?.kind == .encloseSelection)
+        #expect(fixture.controller.activeJob?.title == "New Folder with Selection")
+        #expect(fixture.controller.activeJob?.progress == FileOperationJobProgress(
+            completedCount: 0,
+            totalCount: 2,
+            detail: "Creating folder"
+        ))
+        #expect(await fixture.controller.createFolder(
+            in: fixture.parent,
+            named: "Blocked",
+            workspace: fixture.workspace
+        ) == false)
+
+        await fixture.fileSystem.releaseSuspendedCheckedExclusiveMove()
+        await waitUntilQueueIsIdle(fixture.controller)
+
+        let job = try #require(fixture.controller.operationHistory.first)
+        #expect(job.state == .succeeded)
+        #expect(job.canUndo)
+        #expect(fixture.workspace.activePaneID == .right)
+        #expect(fixture.workspace.left.selection == [fixture.folder])
+        #expect(fixture.workspace.right.selection.isEmpty)
+    }
+
+    @Test func activeSelectionEnclosurePublishesExclusiveOperationState() async throws {
+        let fixture = try await SelectionFolderControllerFixture(
+            suspendCheckedExclusiveMoveAttempt: 1
+        )
+
+        #expect(fixture.controller.encloseSelection(
+            fixture.plan,
+            in: fixture.workspace.left,
+            workspace: fixture.workspace
+        ))
+        await fixture.fileSystem.waitForSuspendedCheckedExclusiveMove()
+
+        #expect(fixture.controller.hasExclusiveOperationActive)
+        await fixture.fileSystem.releaseSuspendedCheckedExclusiveMove()
+        await waitUntilQueueIsIdle(fixture.controller)
+        #expect(!fixture.controller.hasExclusiveOperationActive)
+    }
+
+    @Test func failedSelectionEnclosureRemainsRetryableWithoutOfferingUndo() async throws {
+        let fixture = try await SelectionFolderControllerFixture()
+        let stalePlan = SelectionFolderPlan(
+            parentURL: fixture.plan.parentURL,
+            parentIdentity: FileIdentity(
+                entryIdentifier: "replaced-parent",
+                resolvedIdentifier: "replaced-parent"
+            ),
+            folderName: fixture.plan.folderName,
+            folderURL: fixture.plan.folderURL,
+            sources: fixture.plan.sources
+        )
+
+        #expect(fixture.controller.encloseSelection(
+            stalePlan,
+            in: fixture.workspace.left,
+            workspace: fixture.workspace
+        ))
+        await waitUntilQueueIsIdle(fixture.controller)
+        let failed = try #require(fixture.controller.operationHistory.first)
+        #expect(failed.state == .failed)
+        #expect(failed.canRetry)
+        #expect(!failed.canUndo)
+
+        #expect(fixture.controller.retryJob(failed.id))
+        await waitUntilQueueIsIdle(fixture.controller)
+        #expect(fixture.controller.operationHistory.first?.state == .failed)
+    }
+
+    @Test func selectionEnclosureRecoveryBlocksLaterQueuedWorkUntilAcknowledged() async throws {
+        let fixture = try await SelectionFolderControllerFixture(
+            failCheckedExclusiveMoveAttempts: [1]
+        )
+
+        #expect(fixture.controller.encloseSelection(
+            fixture.plan,
+            in: fixture.workspace.left,
+            workspace: fixture.workspace
+        ))
+        await waitUntilQueueIsIdle(fixture.controller)
+
+        #expect(fixture.controller.isQueueBlockedByRecovery)
+        #expect(fixture.controller.operationHistory.first?.canUndo == false)
+        #expect(await fixture.controller.createFolder(
+            in: fixture.parent,
+            named: "Deferred",
+            workspace: fixture.workspace
+        ))
+        #expect(fixture.controller.isRunning == false)
+        #expect(fixture.controller.queuedJobs.count == 1)
+    }
+
+    @Test func batchRenameUndoRunsThroughTheSameExclusiveQueue() async throws {
+        let fixture = try await BatchRenameControllerFixture()
+        #expect(fixture.controller.batchRename(fixture.plan, workspace: fixture.workspace))
+        await waitUntilQueueIsIdle(fixture.controller)
+        let renameJob = try #require(fixture.controller.operationHistory.first)
+
+        #expect(fixture.controller.undoJob(renameJob.id))
+        #expect(fixture.controller.activeJob?.kind == .undo)
+        await waitUntilQueueIsIdle(fixture.controller)
+
+        #expect(fixture.controller.operationHistory.first?.state == .succeeded)
+        #expect(await fixture.fileSystem.existingURLs.contains(fixture.url("A.txt")))
+        #expect(await fixture.fileSystem.existingURLs.contains(fixture.url("B.txt")))
+    }
+
+    @Test func failedBatchRenameRetryReusesTheCapturedImmutablePlan() async throws {
+        let fixture = try await BatchRenameControllerFixture(
+            failCheckedExclusiveMoveAttempts: [1]
+        )
+        #expect(fixture.controller.batchRename(fixture.plan, workspace: fixture.workspace))
+        await waitUntilQueueIsIdle(fixture.controller)
+        let failed = try #require(fixture.controller.operationHistory.first)
+        #expect(failed.state == .failed)
+        #expect(failed.canRetry)
+
+        fixture.workspace.left.selection = []
+        #expect(fixture.controller.retryJob(failed.id))
+        await waitUntilQueueIsIdle(fixture.controller)
+
+        #expect(fixture.controller.operationHistory.first?.state == .succeeded)
+        #expect(await fixture.fileSystem.existingURLs.contains(fixture.url("new-A.txt")))
+        #expect(await fixture.fileSystem.existingURLs.contains(fixture.url("new-B.txt")))
+    }
+
     @Test func identifiedConflictUsesStableContentIdentity() {
         let conflict = FileConflict(
             source: URL(filePath: "/source/a"),
@@ -2221,6 +2556,128 @@ struct FileOperationControllerTests {
             workspace: workspace,
             fileSystem: fileSystem
         )
+    }
+}
+
+@MainActor
+private struct BatchRenameControllerFixture {
+    let parent = URL(filePath: "/workspace", directoryHint: .isDirectory)
+    let fileSystem: RecordingFileSystem
+    let controller: FileOperationController
+    let workspace: WorkspaceState
+    let plan: BatchRenamePlan
+
+    init(
+        suspendCheckedExclusiveMoveAttempt: Int? = nil,
+        failCheckedExclusiveMoveAttempts: Set<Int> = []
+    ) async throws {
+        let parentURL = URL(filePath: "/workspace", directoryHint: .isDirectory)
+        let sourceNames = ["A.txt", "B.txt"]
+        let sourceURLs = sourceNames.map { parentURL.appending(path: $0) }
+        fileSystem = RecordingFileSystem(
+            existingURLs: Set([parentURL] + sourceURLs),
+            caseInsensitivePaths: true,
+            suspendCheckedExclusiveMoveAttempt: suspendCheckedExclusiveMoveAttempt,
+            failCheckedExclusiveMoveAttempts: failCheckedExclusiveMoveAttempts
+        )
+        let transaction = BatchRenameTransactionService(
+            fileSystem: fileSystem,
+            temporaryName: { ".pengrid-rename-controller-\($0)" }
+        )
+        controller = FileOperationController(
+            service: FileOperationService(fileSystem: fileSystem),
+            batchRenameService: transaction
+        )
+        workspace = WorkspaceState(
+            leftURL: parentURL,
+            rightURL: URL(filePath: "/elsewhere"),
+            listingService: StubDirectoryListingService(values: [:])
+        )
+        workspace.left.selection = Set(sourceURLs)
+        var sources: [BatchRenameSource] = []
+        for name in sourceNames {
+            let url = parentURL.appending(path: name)
+            sources.append(BatchRenameSource(
+                url: url,
+                identity: try #require(await fileSystem.identity(of: url)),
+                name: name,
+                isDirectory: false,
+                isPackage: false
+            ))
+        }
+        let request = BatchRenamePlanningRequest(
+            parentURL: parentURL,
+            parentIdentity: try #require(await fileSystem.identity(of: parentURL)),
+            sources: sources
+        )
+        plan = try #require(BatchRenamePlanner.preview(
+            request: request,
+            proposedNames: ["new-A.txt", "new-B.txt"],
+            occupiedNames: Set(sourceNames),
+            comparisonPolicy: .caseInsensitiveCanonical
+        ).plan)
+        await fileSystem.clearEvents()
+    }
+
+    func url(_ name: String) -> URL { parent.appending(path: name) }
+}
+
+@MainActor
+private struct SelectionFolderControllerFixture {
+    let parent = URL(filePath: "/workspace", directoryHint: .isDirectory)
+    let folder = URL(filePath: "/workspace/Collected", directoryHint: .isDirectory)
+    let fileSystem: RecordingFileSystem
+    let controller: FileOperationController
+    let workspace: WorkspaceState
+    let plan: SelectionFolderPlan
+
+    init(
+        suspendCheckedExclusiveMoveAttempt: Int? = nil,
+        failCheckedExclusiveMoveAttempts: Set<Int> = []
+    ) async throws {
+        let parentURL = URL(filePath: "/workspace", directoryHint: .isDirectory)
+        let folderURL = parentURL.appending(path: "Collected", directoryHint: .isDirectory)
+        let sourceURLs = ["A.txt", "B.txt"].map { parentURL.appending(path: $0) }
+        fileSystem = RecordingFileSystem(
+            existingURLs: Set([parentURL] + sourceURLs),
+            suspendCheckedExclusiveMoveAttempt: suspendCheckedExclusiveMoveAttempt,
+            failCheckedExclusiveMoveAttempts: failCheckedExclusiveMoveAttempts
+        )
+        let transaction = SelectionFolderTransactionService(fileSystem: fileSystem)
+        controller = FileOperationController(
+            service: FileOperationService(fileSystem: fileSystem),
+            materializer: InMemoryCloudMaterializer(),
+            selectionFolderTransactionService: transaction
+        )
+        workspace = WorkspaceState(
+            leftURL: parentURL,
+            rightURL: URL(filePath: "/other", directoryHint: .isDirectory),
+            listingService: StubDirectoryListingService(values: [:])
+        )
+        let parentIdentity = try #require(await fileSystem.identity(of: parentURL))
+        var sources: [ContextActionSource] = []
+        for url in sourceURLs {
+            sources.append(ContextActionSource(
+                item: FileItem(
+                    url: url,
+                    name: url.lastPathComponent,
+                    isDirectory: false,
+                    isPackage: false,
+                    modifiedAt: nil,
+                    byteSize: nil,
+                    typeDescription: "Document"
+                ),
+                identity: try #require(await fileSystem.identity(of: url))
+            ))
+        }
+        plan = SelectionFolderPlan(
+            parentURL: parentURL,
+            parentIdentity: parentIdentity,
+            folderName: "Collected",
+            folderURL: folderURL,
+            sources: sources
+        )
+        await fileSystem.clearEvents()
     }
 }
 

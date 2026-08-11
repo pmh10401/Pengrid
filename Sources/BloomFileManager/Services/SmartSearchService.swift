@@ -117,7 +117,12 @@ final class LocalSmartSearchService: SmartSearching, @unchecked Sendable {
         examinedEntries: Int,
         progress: @escaping @Sendable (Int) -> Void
     ) async throws -> (candidates: [PreparedSmartSearchCandidate], examinedEntries: Int) {
-        let boundaryKeys: Set<URLResourceKey> = [.isDirectoryKey, .isPackageKey, .isHiddenKey]
+        let boundaryKeys: Set<URLResourceKey> = [
+            .isDirectoryKey,
+            .isPackageKey,
+            .isHiddenKey,
+            .isSymbolicLinkKey
+        ]
         let filterKeys: Set<URLResourceKey> = [.contentModificationDateKey, .fileSizeKey]
         guard let enumerator = fileManager.enumerator(
             at: root,
@@ -181,6 +186,7 @@ final class LocalSmartSearchService: SmartSearching, @unchecked Sendable {
                 let metadata = try url.resourceValues(forKeys: boundaryKeys.union(filterKeys))
                 let isDirectory = metadata.isDirectory == true
                 let isPackage = metadata.isPackage == true
+                let isSymbolicLink = metadata.isSymbolicLink == true
                 let isHidden = metadata.isHidden == true || url.lastPathComponent.hasPrefix(".")
                 let byteSize = metadata.fileSize.map(Int64.init)
                 guard !(isDirectory && isPackage),
@@ -212,6 +218,7 @@ final class LocalSmartSearchService: SmartSearching, @unchecked Sendable {
                                 name: url.lastPathComponent,
                                 isDirectory: isDirectory,
                                 isPackage: isPackage,
+                                isSymbolicLink: isSymbolicLink,
                                 modifiedAt: metadata.contentModificationDate,
                                 byteSize: byteSize,
                                 typeDescription: typeDescription,

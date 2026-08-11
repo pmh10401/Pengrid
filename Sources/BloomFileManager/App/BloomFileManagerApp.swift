@@ -76,6 +76,7 @@ struct BloomFileManagerApp: App {
     @State private var quickLookController: QuickLookController
     @State private var previewCoordinator: WorkspacePreviewCoordinator
     @State private var operationController: FileOperationController
+    @State private var batchRename: BatchRenameModel
     @State private var passwordCoordinator: ArchivePasswordPromptCoordinator
     @State private var smartSearch: SmartSearchStore
     @State private var smartSearchRouter: SmartSearchActionRouter
@@ -85,6 +86,9 @@ struct BloomFileManagerApp: App {
     @State private var storage: StorageAnalysisStore
     @State private var storageCleanupController: StorageCleanupController
     @State private var workspace: WorkspaceState
+    @State private var contextActionRouter: FileContextActionRouter
+    @State private var openWithProvider: OpenWithApplicationProvider
+    @State private var selectionFolder: SelectionFolderModel
     private let cloudDependencies: CloudRuntimeDependencies
     private let storageDependencies: StorageInspectorRuntimeDependencies
     private let cloudWorkspaceActions: LiveCloudLocationWorkspaceActions
@@ -108,6 +112,20 @@ struct BloomFileManagerApp: App {
             archiveService: archiveService
         )
         _operationController = State(initialValue: operationController)
+        _contextActionRouter = State(initialValue: FileContextActionRouter(
+            fileSystem: cloudDependencies.fileSystem,
+            accessCoordinator: cloudDependencies.accessCoordinator,
+            materializer: cloudDependencies.materializer
+        ))
+        _openWithProvider = State(initialValue: OpenWithApplicationProvider())
+        _selectionFolder = State(initialValue: SelectionFolderModel(
+            fileSystem: cloudDependencies.fileSystem,
+            accessCoordinator: cloudDependencies.accessCoordinator
+        ))
+        _batchRename = State(initialValue: BatchRenameModel(
+            fileSystem: cloudDependencies.fileSystem,
+            accessCoordinator: cloudDependencies.accessCoordinator
+        ))
         _smartSearch = State(initialValue: SmartSearchStore(
             service: LocalSmartSearchService(
                 fileSystem: cloudDependencies.fileSystem,
@@ -197,6 +215,7 @@ struct BloomFileManagerApp: App {
             WorkspaceView(
                 workspace: workspace,
                 operationController: operationController,
+                batchRename: batchRename,
                 smartSearch: smartSearch,
                 smartSearchRouter: smartSearchRouter,
                 favorites: favorites,
@@ -210,7 +229,10 @@ struct BloomFileManagerApp: App {
                 fileSystem: cloudDependencies.fileSystem,
                 cloudWorkspaceActions: cloudWorkspaceActions,
                 cloudAccessCoordinator: cloudDependencies.accessCoordinator,
-                passwordCoordinator: passwordCoordinator
+                passwordCoordinator: passwordCoordinator,
+                contextActionRouter: contextActionRouter,
+                openWithProvider: openWithProvider,
+                selectionFolder: selectionFolder
             )
             .task {
                 try? await cloudLocations.scanInitially()
@@ -222,12 +244,17 @@ struct BloomFileManagerApp: App {
                 quickLookController: quickLookController,
                 previewCoordinator: previewCoordinator,
                 operationController: operationController,
+                contextActionRouter: contextActionRouter,
+                openWithProvider: openWithProvider,
+                selectionFolder: selectionFolder,
                 smartSearch: smartSearch,
                 storage: storage,
                 storageCleanupController: storageCleanupController,
                 materializer: cloudDependencies.materializer,
                 fileSystem: cloudDependencies.fileSystem,
-                accessCoordinator: cloudDependencies.accessCoordinator
+                accessCoordinator: cloudDependencies.accessCoordinator,
+                batchRename: batchRename,
+                cloudLocations: cloudLocations
             )
         }
 

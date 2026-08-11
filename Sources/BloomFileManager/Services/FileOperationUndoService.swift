@@ -15,11 +15,15 @@ struct FileOperationUndoCreatedEntry: Sendable, Equatable {
 enum FileOperationUndoRecipe: Sendable, Equatable {
     case moveBack([FileOperationUndoMoveEntry])
     case removeCreated([FileOperationUndoCreatedEntry])
+    case batchRename(BatchRenameUndoPlan)
+    case selectionFolder(SelectionFolderUndoPlan)
 
     var itemCount: Int {
         switch self {
         case let .moveBack(entries): entries.count
         case let .removeCreated(entries): entries.count
+        case let .batchRename(plan): plan.entries.count
+        case let .selectionFolder(plan): plan.entries.count
         }
     }
 
@@ -27,6 +31,8 @@ enum FileOperationUndoRecipe: Sendable, Equatable {
         switch self {
         case let .moveBack(entries): entries.first?.currentURL.lastPathComponent ?? "Item"
         case let .removeCreated(entries): entries.first?.url.lastPathComponent ?? "Item"
+        case let .batchRename(plan): plan.entries.first?.finalURL.lastPathComponent ?? "Item"
+        case let .selectionFolder(plan): plan.folderURL.lastPathComponent
         }
     }
 
@@ -38,6 +44,10 @@ enum FileOperationUndoRecipe: Sendable, Equatable {
             })
         case let .removeCreated(entries):
             Set(entries.map { $0.url.deletingLastPathComponent() })
+        case let .batchRename(plan):
+            [plan.parentURL]
+        case let .selectionFolder(plan):
+            [plan.parentURL, plan.folderURL]
         }
     }
 }
@@ -49,13 +59,26 @@ actor FileOperationUndoService {
 
     private let fileSystem: any FileSystemAccess
     private let accessCoordinator: CloudLocationScopedAccessCoordinator
+    private let batchRenameService: BatchRenameTransactionService
+    private let selectionFolderTransactionService: SelectionFolderTransactionService
 
     init(
         fileSystem: any FileSystemAccess,
-        accessCoordinator: CloudLocationScopedAccessCoordinator = .init()
+        accessCoordinator: CloudLocationScopedAccessCoordinator = .init(),
+        batchRenameService: BatchRenameTransactionService? = nil,
+        selectionFolderTransactionService: SelectionFolderTransactionService? = nil
     ) {
         self.fileSystem = fileSystem
         self.accessCoordinator = accessCoordinator
+        self.batchRenameService = batchRenameService ?? BatchRenameTransactionService(
+            fileSystem: fileSystem,
+            accessCoordinator: accessCoordinator
+        )
+        self.selectionFolderTransactionService = selectionFolderTransactionService
+            ?? SelectionFolderTransactionService(
+                fileSystem: fileSystem,
+                accessCoordinator: accessCoordinator
+            )
     }
 
     func makeRecipe(
@@ -64,6 +87,9 @@ actor FileOperationUndoService {
         allowsUndo: Bool
     ) async -> FileOperationUndoRecipe? {
         guard allowsUndo, !result.outcomes.isEmpty else { return nil }
+        if kind == .encloseSelection {
+            return await makeSelectionFolderRecipe(result: result)
+        }
         let completed: [(source: URL, destination: URL)] = result.outcomes.compactMap {
             guard case let .succeeded(source, destination?) = $0 else { return nil }
             return (source, destination)
@@ -81,6 +107,20 @@ actor FileOperationUndoService {
         defer { leases.forEach { $0.finish() } }
 
         do {
+            if kind == .rename, let plan = result.batchRenameUndoMetadata() {
+                guard plan.entries.count == completed.count else { return nil }
+                for entry in plan.entries {
+                    try Task.checkCancellation()
+                    guard try await fileSystem.identity(of: entry.finalURL)
+                        == entry.finalIdentity,
+                        try await fileSystem.fingerprint(of: entry.finalURL)
+                            == entry.finalFingerprint,
+                        try await fileSystem.identity(of: entry.finalURL)
+                            == entry.finalIdentity
+                    else { return nil }
+                }
+                return .batchRename(plan)
+            }
             switch kind {
             case .move, .rename, .trash:
                 var entries: [FileOperationUndoMoveEntry] = []
@@ -100,7 +140,7 @@ actor FileOperationUndoService {
                 }
                 return entries.isEmpty ? nil : .moveBack(entries)
 
-            case .copy, .createFolder, .compress, .extract:
+            case .copy, .duplicate, .createFolder, .compress, .extract:
                 var entries: [FileOperationUndoCreatedEntry] = []
                 for item in completed {
                     try Task.checkCancellation()
@@ -126,6 +166,9 @@ actor FileOperationUndoService {
             case .compressProtectedZIP:
                 return nil
 
+            case .encloseSelection:
+                return nil
+
             case .undo:
                 return nil
             }
@@ -136,7 +179,7 @@ actor FileOperationUndoService {
 
     func perform(
         _ recipe: FileOperationUndoRecipe,
-        progress: OperationProgressHandler = { _ in }
+        progress: @escaping OperationProgressHandler = { _ in }
     ) async -> FileOperationResult {
         let urls: [URL]
         switch recipe {
@@ -144,6 +187,14 @@ actor FileOperationUndoService {
             urls = entries.flatMap { [$0.currentURL, $0.originalURL] }
         case let .removeCreated(entries):
             urls = entries.map(\.url)
+        case let .batchRename(plan):
+            urls = [plan.parentURL] + plan.entries.flatMap {
+                [$0.finalURL, $0.originalSource.url]
+            }
+        case let .selectionFolder(plan):
+            urls = [plan.parentURL, plan.folderURL] + plan.entries.flatMap {
+                [$0.originalSource.item.url, $0.folderURL]
+            }
         }
 
         let leases: [CloudLocationScopedAccessLease]
@@ -159,6 +210,104 @@ actor FileOperationUndoService {
             return await moveBack(entries, progress: progress)
         case let .removeCreated(entries):
             return await removeCreated(entries, progress: progress)
+        case let .batchRename(plan):
+            return await reverseBatchRename(plan, progress: progress)
+        case let .selectionFolder(plan):
+            return await performSelectionFolderUndo(plan) { update in
+                await progress(FileOperationProgress(
+                    completedCount: update.completedCount,
+                    totalCount: update.totalCount,
+                    currentName: update.currentName
+                ))
+            }
+        }
+    }
+
+    func performSelectionFolderUndo(
+        _ plan: SelectionFolderUndoPlan,
+        progress: @escaping @Sendable (SelectionFolderTransactionProgress) async -> Void
+    ) async -> FileOperationResult {
+        await selectionFolderTransactionService.reverse(plan, progress: progress)
+    }
+
+    private func makeSelectionFolderRecipe(
+        result: FileOperationResult
+    ) async -> FileOperationUndoRecipe? {
+        guard let plan = result.selectionFolderUndoMetadata(),
+              plan.entries.count == result.outcomes.count,
+              result.outcomes.allSatisfy({ outcome in
+                  guard case .succeeded = outcome else { return false }
+                  return true
+              }),
+              Set(result.outcomes.compactMap { outcome -> URL? in
+                  guard case let .succeeded(_, destination?) = outcome else { return nil }
+                  return destination.standardizedFileURL
+              }) == Set(plan.entries.map { $0.folderURL.standardizedFileURL })
+        else { return nil }
+
+        let leases: [CloudLocationScopedAccessLease]
+        do {
+            leases = try accessCoordinator.acquireAccess(for: [plan.parentURL, plan.folderURL]
+                + plan.entries.flatMap { [$0.originalSource.item.url, $0.folderURL] })
+        } catch {
+            return nil
+        }
+        defer { leases.forEach { $0.finish() } }
+
+        do {
+            guard try await fileSystem.identity(of: plan.parentURL) == plan.parentIdentity,
+                  try await fileSystem.identity(of: plan.folderURL) == plan.folderIdentity,
+                  try await fileSystem.names(in: plan.folderURL)
+                    == Set(plan.entries.map(\.folderURL.lastPathComponent))
+            else { return nil }
+            for entry in plan.entries {
+                try Task.checkCancellation()
+                guard await !fileSystem.exists(entry.originalSource.item.url),
+                      try await fileSystem.identity(of: entry.folderURL) == entry.folderIdentity,
+                      try await fileSystem.fingerprint(of: entry.folderURL) == entry.fingerprint
+                else { return nil }
+            }
+            return .selectionFolder(plan)
+        } catch {
+            return nil
+        }
+    }
+
+    private func reverseBatchRename(
+        _ plan: BatchRenameUndoPlan,
+        progress: @escaping OperationProgressHandler
+    ) async -> FileOperationResult {
+        do {
+            for entry in plan.entries {
+                try Task.checkCancellation()
+                guard try await fileSystem.identity(of: entry.finalURL)
+                    == entry.finalIdentity,
+                    try await fileSystem.fingerprint(of: entry.finalURL)
+                        == entry.finalFingerprint,
+                    try await fileSystem.identity(of: entry.finalURL)
+                        == entry.finalIdentity
+                else { throw UndoSafetyError.unavailable }
+            }
+        } catch is CancellationError {
+            return FileOperationResult(outcomes: plan.entries.map {
+                .cancelled(source: $0.finalURL)
+            })
+        } catch {
+            return failureResult(for: .batchRename(plan))
+        }
+
+        let expectedFingerprints = Dictionary(uniqueKeysWithValues: plan.entries.map {
+            ($0.finalURL, $0.finalFingerprint)
+        })
+        return await batchRenameService.execute(
+            plan.reversePlan,
+            expectedSourceFingerprints: expectedFingerprints
+        ) { update in
+            await progress(FileOperationProgress(
+                completedCount: update.completedCount,
+                totalCount: update.totalCount,
+                currentName: update.currentName
+            ))
         }
     }
 
@@ -367,26 +516,14 @@ actor FileOperationUndoService {
             return FileOperationResult(outcomes: entries.map {
                 .failed(source: $0.url, message: message)
             })
-        }
-    }
-}
-
-private extension SourceFingerprint {
-    func matchesAfterRelocation(_ original: SourceFingerprint) -> Bool {
-        guard entries.count == original.entries.count else { return false }
-        return zip(entries, original.entries).allSatisfy { current, captured in
-            guard current.relativePath == captured.relativePath,
-                  current.device == captured.device,
-                  current.inode == captured.inode,
-                  current.mode == captured.mode,
-                  current.size == captured.size,
-                  current.modificationSeconds == captured.modificationSeconds,
-                  current.modificationNanoseconds == captured.modificationNanoseconds
-            else { return false }
-            return current.relativePath == "." || (
-                current.changeSeconds == captured.changeSeconds
-                    && current.changeNanoseconds == captured.changeNanoseconds
-            )
+        case let .batchRename(plan):
+            return FileOperationResult(outcomes: plan.entries.map {
+                .failed(source: $0.finalURL, message: message)
+            })
+        case let .selectionFolder(plan):
+            return FileOperationResult(outcomes: plan.entries.map {
+                .failed(source: $0.folderURL, message: message)
+            })
         }
     }
 }

@@ -616,17 +616,10 @@ private final class SpawnedArchiveProcess: @unchecked Sendable {
         }
         defer { posix_spawn_file_actions_destroy(&actions) }
 
-        if #available(macOS 26.0, *) {
-            status = posix_spawn_file_actions_addfchdir(
-                &actions,
-                currentDirectoryDescriptor
-            )
-        } else {
-            status = posix_spawn_file_actions_addfchdir_np(
-                &actions,
-                currentDirectoryDescriptor
-            )
-        }
+        status = posix_spawn_file_actions_addfchdir_np(
+            &actions,
+            currentDirectoryDescriptor
+        )
         guard status == 0 else {
             throw POSIXError(POSIXErrorCode(rawValue: status) ?? .EIO)
         }

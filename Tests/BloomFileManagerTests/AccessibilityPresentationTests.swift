@@ -41,6 +41,32 @@ import Testing
     #expect(AccessibilityIdentifiers.archivePasswordSheet == "archivePasswordSheet")
     #expect(AccessibilityIdentifiers.archivePasswordField == "archivePassword.field")
     #expect(AccessibilityIdentifiers.archivePasswordCancel == "archivePassword.cancel")
+    #expect(AccessibilityIdentifiers.workspaceQuickLook == "workspace.quickLook")
+    #expect(AccessibilityIdentifiers.workspaceCopyFullPath == "workspace.copyFullPath")
+    #expect(AccessibilityIdentifiers.workspaceDuplicate == "workspace.duplicate")
+    #expect(AccessibilityIdentifiers.workspaceContextActionStatus == "workspace.contextActionStatus")
+}
+
+@Test func contextActionAppWiringUsesSharedDependenciesAndAccessibleState() throws {
+    let app = try source(named: "App/BloomFileManagerApp.swift")
+    #expect(app.occurrences(of: "FileContextActionRouter(") == 1)
+    #expect(app.occurrences(of: "OpenWithApplicationProvider()") == 1)
+    #expect(app.occurrences(of: "SelectionFolderModel(") == 1)
+    #expect(app.contains("fileSystem: cloudDependencies.fileSystem"))
+    #expect(app.contains("accessCoordinator: cloudDependencies.accessCoordinator"))
+
+    let workspace = try source(named: "Views/WorkspaceView.swift")
+    #expect(workspace.contains("let contextActionRouter: FileContextActionRouter"))
+    #expect(workspace.contains("let openWithProvider: any OpenWithApplicationProviding"))
+    #expect(workspace.contains("let selectionFolder: SelectionFolderModel"))
+    #expect(workspace.contains("AccessibilityIdentifiers.workspaceContextActionStatus"))
+
+    let pane = try source(named: "Views/FilePaneView.swift")
+    #expect(pane.contains("let contextActionRouter: FileContextActionRouter"))
+    #expect(pane.contains("let openWithProvider: any OpenWithApplicationProviding"))
+    #expect(pane.contains("let selectionFolder: SelectionFolderModel"))
+    #expect(!pane.contains("@State private var openWithProvider"))
+    #expect(!pane.contains("let router = FileContextActionRouter("))
 }
 
 @Test @MainActor

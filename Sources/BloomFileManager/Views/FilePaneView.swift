@@ -60,14 +60,64 @@ enum PaneFilterDismissalRouting {
     }
 }
 
+@MainActor
+enum FileContextActionTargetRouting {
+    static func pane(with paneID: PaneID, in workspace: WorkspaceState) -> FilePaneState {
+        paneID == .left ? workspace.left : workspace.right
+    }
+}
+
+@MainActor
+enum OpenWithMenuPresentation {
+    static func make(
+        policy: FileContextMenuPolicy,
+        selectedItems: [FileItem],
+        provider: any OpenWithApplicationProviding
+    ) -> FileContextMenuPresentation {
+        guard policy.openWith.isVisible,
+              selectedItems.count == 1,
+              let item = selectedItems.first
+        else {
+            return FileContextMenuPresentation(policy: policy)
+        }
+        guard policy.openWith.isEnabled else {
+            return FileContextMenuPresentation(
+                policy: policy,
+                openWithAvailability: policy.openWith
+            )
+        }
+        guard let applications = provider.cachedApplications(for: item) else {
+            provider.requestApplications(for: item)
+            return FileContextMenuPresentation(
+                policy: policy,
+                openWithAvailability: .disabled(reason: "Compatible applications are loading.")
+            )
+        }
+        return FileContextMenuPresentation(
+            policy: policy,
+            openWithApplications: applications,
+            openWithAvailability: applications.isEmpty
+                ? .disabled(reason: "No compatible applications found.")
+                : .enabled
+        )
+    }
+}
+
 struct FilePaneView: View {
     let paneID: PaneID
     let state: FilePaneState
     let workspace: WorkspaceState
     let operationController: FileOperationController
+    let batchRename: BatchRenameModel
+    let cloudLocations: CloudLocationsStore
     let favorites: FavoritesStore
     let materializer: any CloudMaterializing
+    let fileSystem: any FileSystemAccess
     let accessCoordinator: CloudLocationScopedAccessCoordinator
+    let previewCoordinator: WorkspacePreviewCoordinator
+    let contextActionRouter: FileContextActionRouter
+    let openWithProvider: any OpenWithApplicationProviding
+    let selectionFolder: SelectionFolderModel
     let isActive: Bool
     let onActivate: () -> Void
     let onRequestTrashConfirmation: ([URL]) -> Void
@@ -205,49 +255,7 @@ struct FilePaneView: View {
                 .overlay(alignment: .bottom) { Divider() }
             }
 
-            FileTableView(
-                items: state.visibleItems,
-                selection: $state.selection,
-                projectionToken: state.acceptedProjectionToken,
-                itemIndexByURL: state.visibleIndexByURL,
-                sort: state.sort,
-                directory: state.currentDirectory,
-                focusRequestID: state.focusRequestID,
-                renameRequestID: state.renameRequestID,
-                scrollRequest: state.scrollRestoreRequest,
-                isOperationRunning: operationController.isRunning,
-                isTextEditing: workspace.activeTextEditingSession != nil,
-                onActivatePane: onActivate,
-                onOpen: open,
-                onSortChange: { state.sort = $0 },
-                onProjectionApplicationAttempt: state.recordTableApplicationAttempt,
-                onProjectionApplied: state.recordTableApplicationCompleted,
-                onCancel: { handleEscape() },
-                onFirstVisibleItemChange: state.recordFirstVisibleItem,
-                onConsumeScrollRequest: state.consumeScrollRestoreRequest,
-                onConsumeRenameRequest: state.consumeInlineRenameRequest,
-                onInlineEditingEvent: handleInlineEditingEvent,
-                onDiscardRename: state.cancelPendingRename,
-                onCommitRename: commitRename,
-                onDrop: performDrop,
-                canAddToFavorites: { item in
-                    FavoriteAddPolicy.canAdd(
-                        item,
-                        containsExactURL: favorites.containsExactURL
-                    )
-                },
-                onAddToFavorites: addFavorite,
-                onCreateFolder: createFolder,
-                onRequestRename: {
-                    Task { _ = await operationController.requestRename(in: workspace) }
-                },
-                onCopy: copySelection,
-                onPaste: paste,
-                onCompress: compressSelection,
-                onCompressProtected: compressProtectedSelection,
-                onExtract: extractSelection,
-                onRequestTrashConfirmation: requestTrashConfirmation
-            )
+            fileTable
         }
         .overlay {
             Rectangle()
@@ -337,6 +345,55 @@ struct FilePaneView: View {
         }
     }
 
+    private var fileTable: some View {
+        @Bindable var state = state
+
+        return FileTableView(
+            items: state.visibleItems,
+            selection: $state.selection,
+            projectionToken: state.acceptedProjectionToken,
+            itemIndexByURL: state.visibleIndexByURL,
+            sort: state.sort,
+            directory: state.currentDirectory,
+            focusRequestID: state.focusRequestID,
+            renameRequestID: state.renameRequestID,
+            scrollRequest: state.scrollRestoreRequest,
+            isOperationRunning: operationController.isRunning,
+            isTextEditing: workspace.activeTextEditingSession != nil,
+            onActivatePane: onActivate,
+            onOpen: open,
+            onOpenSelection: open,
+            onSortChange: { state.sort = $0 },
+            contextMenuPresentation: { contextMenuPresentation(for: $0) },
+            onContextAction: { routeContextAction($0, items: $1) },
+            onProjectionApplicationAttempt: state.recordTableApplicationAttempt,
+            onProjectionApplied: state.recordTableApplicationCompleted,
+            onCancel: { handleEscape() },
+            onFirstVisibleItemChange: state.recordFirstVisibleItem,
+            onConsumeScrollRequest: state.consumeScrollRestoreRequest,
+            onConsumeRenameRequest: state.consumeInlineRenameRequest,
+            onInlineEditingEvent: handleInlineEditingEvent,
+            onDiscardRename: state.cancelPendingRename,
+            onCommitRename: commitRename,
+            onDrop: performDrop,
+            canAddToFavorites: { item in
+                FavoriteAddPolicy.canAdd(item, containsExactURL: favorites.containsExactURL)
+            },
+            onAddToFavorites: addFavorite,
+            onCreateFolder: createFolder,
+            onRequestRename: {
+                Task { _ = await operationController.requestRename(in: workspace) }
+            },
+            onRequestBatchRename: requestBatchRename,
+            onCopy: copySelection,
+            onPaste: paste,
+            onCompress: compressSelection,
+            onCompressProtected: compressProtectedSelection,
+            onExtract: extractSelection,
+            onRequestTrashConfirmation: requestTrashConfirmation
+        )
+    }
+
     private func beginPathEditing() {
         onActivate()
         state.isEditingPath = true
@@ -371,10 +428,87 @@ struct FilePaneView: View {
     }
 
     private func open(_ item: FileItem) {
+        open([item])
+    }
+
+    private func contextMenuPresentation(for items: [FileItem]) -> FileContextMenuPresentation {
+        let policy = WorkspaceContextActionRouting.policy(
+            items: items,
+            capturedSelectionCount: items.count,
+            sourcePaneID: paneID,
+            workspace: workspace,
+            operationController: operationController,
+            cloudLocations: cloudLocations
+        )
+        return OpenWithMenuPresentation.make(
+            policy: policy,
+            selectedItems: items,
+            provider: openWithProvider
+        )
+    }
+
+    private func routeContextAction(_ action: ContextActionKind, items: [FileItem]) {
+        let capturedAction = action
+        let policy = WorkspaceContextActionRouting.policy(
+            items: items,
+            capturedSelectionCount: items.count,
+            sourcePaneID: paneID,
+            workspace: workspace,
+            operationController: operationController,
+            cloudLocations: cloudLocations
+        )
+        guard capturedAction.availability(in: policy).isEnabled,
+              let draft = WorkspaceContextActionRouting.draft(
+                  items: items,
+                  capturedSelectionCount: items.count,
+                  sourcePaneID: paneID,
+                  workspace: workspace,
+                  cloudLocations: cloudLocations
+              )
+        else { return }
+        let targetPane = FileContextActionTargetRouting.pane(
+            with: draft.oppositePaneID,
+            in: workspace
+        )
+
+        Task { @MainActor in
+            guard let snapshot = await contextActionRouter.capture(draft) else { return }
+            switch capturedAction {
+            case .quickLook:
+                _ = await contextActionRouter.quickLook(snapshot, previewCoordinator: previewCoordinator)
+            case .openInOtherPane:
+                _ = await contextActionRouter.openInOtherPane(snapshot, targetPane: targetPane)
+            case let .openWith(applicationURL):
+                _ = await contextActionRouter.openWith(snapshot, applicationURL: applicationURL)
+            case let .transferToOtherPane(mode):
+                guard let requests = await contextActionRouter.identifiedTransferRequests(from: snapshot)
+                else { return }
+                _ = operationController.transferToCapturedDirectory(
+                    requests,
+                    mode: mode,
+                    workspace: workspace
+                )
+            case .showInFinder:
+                _ = await contextActionRouter.showInFinder(snapshot)
+            case let .copyPath(kind):
+                _ = contextActionRouter.copyPath(kind, from: snapshot)
+            case .duplicate:
+                _ = operationController.duplicate(snapshot, in: state, workspace: workspace)
+            case .encloseSelection:
+                await selectionFolder.present(snapshot)
+            }
+        }
+    }
+
+    private var oppositePaneID: PaneID {
+        paneID == .left ? .right : .left
+    }
+
+    private func open(_ items: [FileItem]) {
         onActivate()
         Task {
             await WorkspaceOpenActions.open(
-                [item],
+                items,
                 in: state,
                 materializer: materializer,
                 accessCoordinator: accessCoordinator
@@ -400,6 +534,22 @@ struct FilePaneView: View {
             to: name,
             workspace: workspace
         )
+    }
+
+    private func requestBatchRename() {
+        onActivate()
+        let selected = state.selection
+        let items = state.visibleItems.filter { selected.contains($0.url) }
+        guard items.count == selected.count, items.count >= 2 else { return }
+        let directory = state.currentDirectory
+        let capability = cloudLocations.batchRenameCapability(for: directory)
+        Task {
+            await batchRename.present(
+                items: items,
+                in: directory,
+                capability: capability
+            )
+        }
     }
 
     private func copySelection() {

@@ -2,9 +2,11 @@ import Foundation
 
 enum FileOperationJobKind: Sendable, Equatable {
     case copy
+    case duplicate
     case move
     case trash
     case createFolder
+    case encloseSelection
     case rename
     case compress(ArchiveFormat)
     case compressProtectedZIP
@@ -14,9 +16,11 @@ enum FileOperationJobKind: Sendable, Equatable {
     var title: String {
         switch self {
         case .copy: "Copy"
+        case .duplicate: "Duplicate"
         case .move: "Move"
         case .trash: "Move to Trash"
         case .createFolder: "Create Folder"
+        case .encloseSelection: "New Folder with Selection"
         case .rename: "Rename"
         case let .compress(format): "Compress \(format.displayName)"
         case .compressProtectedZIP: "Compress Encrypted ZIP"
@@ -93,7 +97,12 @@ struct FileOperationJobSnapshot: Identifiable, Sendable, Equatable {
         undoEligible = canUndo
     }
 
-    var title: String { kind.title }
+    var title: String {
+        if kind == .rename, itemCount > 1 {
+            return "Rename \(itemCount) Items"
+        }
+        return kind.title
+    }
 
     var canRetry: Bool {
         retryEligible && kind != .undo && (state == .failed || state == .cancelled)

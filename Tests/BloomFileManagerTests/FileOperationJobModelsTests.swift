@@ -128,4 +128,63 @@ struct FileOperationJobModelsTests {
         #expect(snapshot.canRetry == false)
         #expect(snapshot.canUndo == false)
     }
+
+    @Test func multiItemRenameUsesAnExplicitBatchTitle() {
+        let batch = FileOperationJobSnapshot(
+            id: UUID(),
+            kind: .rename,
+            itemDisplayName: "A.txt",
+            itemCount: 3,
+            state: .running,
+            progress: nil,
+            canUndo: false
+        )
+        let single = FileOperationJobSnapshot(
+            id: UUID(),
+            kind: .rename,
+            itemDisplayName: "A.txt",
+            itemCount: 1,
+            state: .running,
+            progress: nil,
+            canUndo: false
+        )
+
+        #expect(batch.title == "Rename 3 Items")
+        #expect(single.title == "Rename")
+        #expect(batch.accessibilityLabel.hasPrefix("Rename 3 Items, Running"))
+    }
+
+    @Test func duplicateUsesItsOwnQueueTitleAndKeepsRetryPresentation() {
+        let snapshot = FileOperationJobSnapshot(
+            id: UUID(),
+            kind: .duplicate,
+            itemDisplayName: "Report.txt",
+            itemCount: 2,
+            state: .failed,
+            progress: FileOperationJobProgress(
+                completedCount: 1,
+                totalCount: 2,
+                detail: "Report.txt"
+            ),
+            canUndo: false
+        )
+
+        #expect(snapshot.title == "Duplicate")
+        #expect(snapshot.canRetry)
+        #expect(snapshot.accessibilityLabel.contains("1 of 2, Report.txt"))
+    }
+
+    @Test func selectionEnclosureUsesItsOwnQueueTitle() {
+        let snapshot = FileOperationJobSnapshot(
+            id: UUID(),
+            kind: .encloseSelection,
+            itemDisplayName: "Collected",
+            itemCount: 2,
+            state: .running,
+            progress: nil,
+            canUndo: false
+        )
+
+        #expect(snapshot.title == "New Folder with Selection")
+    }
 }

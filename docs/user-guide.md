@@ -2,16 +2,15 @@
 
 [한국어](user-guide.ko.md) · **English** · [README](../README.md)
 
-This guide describes the user-visible behavior of Pengrid 1.3.0 Developer
-Preview 5, including its safety boundaries and deliberately omitted features.
-Preview 5 retains protected ZIP while improving large-folder and pane-search
-responsiveness.
+This guide describes Pengrid 1.3.0 Developer Preview 6 and the current source
+tree, including safety boundaries and deliberately omitted behavior. The file
+context actions and batch rename described below are included in Preview 6.
 
 ## Requirements and installation
 
 Pengrid currently supports Apple Silicon Macs running macOS 15 or later.
 Download the DMG from the
-[Developer Preview 5 release](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.5),
+[Developer Preview 6 release](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.6),
 open it, and copy `Pengrid.app` to `Applications`.
 
 The free DMG is ad-hoc signed, not Developer ID signed, and not notarized.
@@ -40,6 +39,7 @@ Useful navigation and file commands include:
 | --- | --- |
 | Open selected item | **Command-O** |
 | Rename one selected item | **Return** or **F2** |
+| Batch rename selected items | **Command-Control-R** |
 | New folder | **Command-Shift-N** |
 | Copy and paste | **Command-C**, **Command-V** |
 | Back and Forward | **Command-[**, **Command-]** |
@@ -47,6 +47,10 @@ Useful navigation and file commands include:
 | Edit location | **Command-L** |
 | Move to Trash with confirmation | **Delete** |
 | Move to Trash immediately | **Command-Delete** |
+
+Double-click a row, press **Command-O**, or choose **Open** from the context menu.
+Folders navigate in the current pane, while files and application or document
+packages open through macOS.
 
 Commands are disabled while the selection or current editing state makes them
 unsafe. Rename, location editing, and filtering retain normal text-editing
@@ -137,6 +141,126 @@ Press Space again or Escape to close the current preview. When a system Quick
 Look panel is open, selection changes update it through the same identity and
 cloud-materialization gates used for the original selection.
 
+## File-row context-menu productivity
+
+The row context menu uses the same command policy as **File Operations** in the
+menu bar. Its stable groups are:
+
+1. **Open**, **Quick Look**, **Open With >**, **Open in Other Pane**
+2. **Copy to Other Pane**, **Move to Other Pane**, **Show in Finder**,
+   **Copy Path >**
+3. **New Folder**, **New Folder with Selection…**, **Add to Favorites**,
+   **Duplicate**, **Rename**, and **Batch Rename…**
+4. Existing **Copy** and **Paste**, existing archive actions, then **Move to
+   Trash…**
+
+Items without a meaningful selection are omitted. A temporarily unavailable
+action remains visible but disabled with a reason. Right-clicking inside the
+current selection preserves the complete selection. Right-clicking an
+unselected row selects that row before the menu is built. Every action consumes
+the selected entries in stable visible table order.
+
+At invocation, Pengrid captures the ordered source URLs and identities, active
+and opposite pane IDs, source directory, and applicable opposite-pane
+directory. Changing the active pane, navigating either pane, or changing the
+selection later cannot redirect a captured action. Byte-dependent actions
+revalidate their sources before acting; path-only presentation actions do not
+materialize contents.
+
+### Preview, opening, and navigation
+
+- **Quick Look** keeps the **Space** shortcut and uses the preview rules above.
+  One ordinary folder receives Pengrid's folder preview; files, packages,
+  symbolic links, and multiple selections use system Quick Look.
+- **Open With** is shown only for exactly one regular file, package, or symbolic link. Its
+  compatible applications have deterministic localized name order and their
+  application icons. An empty compatible-app list leaves the visible submenu
+  disabled. Selecting an app prepares the captured item for open, checks its
+  identity, and launches only the validated item. Cancellation, failed
+  preparation, replacement, or an incompatible app prevents launch.
+- **Open in Other Pane** accepts exactly one item. A directory navigates the
+  captured opposite pane to that directory. A file, package, or symbolic link
+  navigates that pane to the captured parent and selects the identity-matched
+  item. It does not launch externally or materialize bytes; a navigation failure
+  leaves the other pane at its last committed directory.
+
+### Transfers, Finder, and path text
+
+**Copy to Other Pane** and **Move to Other Pane** accept one or more selected
+entries. Their destination is the opposite-pane directory captured when the
+command was invoked, not the directory currently displayed after a later pane
+change. The destination identity is checked before queue admission and again
+before mutation. Writability capability is evaluated when the command is
+presented and captured; a later permission change is reported by the operation.
+A same-directory destination is disabled;
+use **Duplicate** for a same-directory copy. These actions initially have no
+shortcuts.
+
+**Show in Finder** reveals all still identity-matching captured file URLs
+together. It neither reads bytes, materializes cloud content, nor follows a
+symbolic link. If some entries were replaced or removed, Pengrid reveals the
+remaining valid entries; if none remain, it reports one bounded error.
+
+**Copy Path >** has four plain UTF-8 text commands and does not replace the
+existing file-URL **Copy** command:
+
+| Command | Clipboard result | Shortcut |
+| --- | --- | --- |
+| **Copy Full Path** | One captured full path per line, in visible order | **Option-Command-C** |
+| **Copy Name** | One captured basename per line, in visible order | None |
+| **Copy Parent Path** | The shared captured parent path once | None |
+| **Copy File URL** | One captured file URL per line, in visible order | None |
+
+Accessibility values report the selected-item count, relevant other-pane
+destination, disabled reason, and operation status without exposing absolute
+paths. The Copy Path commands do not add a path-bearing accessibility outcome.
+
+### Duplicate and New Folder with Selection
+
+**Duplicate** accepts one or more complete siblings in a writable current
+folder and uses **Command-D**. One queued job preserves source order and uses
+the existing extension-preserving **Keep Both** planner with exclusive,
+no-overwrite publication. Symbolic links are copied as links; packages remain
+opaque package entries. After refresh, successful duplicates are selected. Undo
+is available only for unchanged duplicates whose recorded final identity and
+fingerprint still match.
+
+**New Folder with Selection (N Items)…** appears for two or more complete
+siblings. Its sheet starts with **New Folder with Items**. The name is trimmed
+and rejected when empty, dot, dot-dot, contains slash or NUL, or collides with a
+sibling. Submission creates an identity-captured folder and moves the selected
+entries into it sequentially with no overwrite. On cancellation or failure,
+Pengrid returns moved items in reverse order and removes the created folder only
+when it still owns that empty folder. A rollback it cannot prove safe becomes
+**Recovery Needed** rather than deleting an uncertain entry. Success selects the
+new folder. Undo first revalidates the folder, every child, and every original
+destination; any failed precondition causes no Undo mutation.
+
+### Editing, cloud boundaries, and operation feedback
+
+Visible new actions are disabled while any text editor is active, including the
+path field, filename filter, and inline rename editor, so text editing keeps
+its normal responder behavior. The only new shortcuts are
+**Space** for Quick Look, **Option-Command-C** for Copy Full Path, and
+**Command-D** for Duplicate; no other new context action has an initial
+shortcut.
+
+Quick Look and Open With may use existing scoped access and File Provider
+materialization after captured-identity checks. Open in Other Pane, Show in
+Finder, and Copy Path never intentionally materialize bytes. Copy/Move to Other
+Pane, Duplicate, and New Folder with Selection require a location that
+advertises local file operations and is writable when the command is presented;
+unknown or read-only capability disables mutation. Pengrid has no direct Google Drive
+or OneDrive API path.
+
+Transfers, Duplicate, and enclosure run through the operation center and retain
+its ordered progress, cancellation, retry, recovery, and conservative Undo
+rules. Conflicts use the existing **Keep Both** behavior where that operation
+supports it; no action overwrites an existing or later external entry. A
+permission denial is reported once rather than creating a prompt loop. See the
+next section for queue, cancellation, recovery, retry, and Undo details.
+
+
 ## Safe file operation center
 
 Copy, move, Trash, new-folder, rename, compression, extraction, and undo are
@@ -196,6 +320,83 @@ Undo is available only when Pengrid can reverse its own unchanged mutation:
   or uncertain ownership disables or refuses Undo.
 
 Undo does not overwrite a later item and does not remove a modified output.
+
+## Preview-first batch rename
+
+Select at least two complete rows in one pane and choose **File Operations >
+Batch Rename…**, press **Command-Control-R**, or use **Batch Rename…** in the
+file-row context menu. The command always captures the active pane only, in the
+same visible order as its table. It is disabled during any active text editing
+(path field, filename filter, or inline rename) or
+while another exclusive file operation is running.
+
+### Rules and extension preservation
+
+The sheet provides four non-recursive rules:
+
+- **Find & Replace** replaces literal text, either case-sensitively or with
+  localized case-insensitive matching.
+- **Prefix** inserts text before the editable filename stem.
+- **Suffix** inserts text after the editable filename stem.
+- **Sequence** generates one base name plus a number using the captured table
+  order, configurable start value, and zero-padding width.
+
+Rules edit names only; they do not edit paths or file contents. Ordinary files
+retain their final extension, packages retain their package extension, and
+recognized archive names retain their exact compound suffix, including
+`.tar.gz`, `.tar.bz2`, and `.tar.xz`. Ordinary directories are treated as whole
+names. A leading-dot file with no second dot is also treated as a whole name.
+
+Regex, recursive subfolder renaming, manual extension editing, case-only policy
+overrides, and per-row custom replacements are intentionally out of scope.
+
+### Preview and capability gates
+
+Every selected row appears with its old name, proposed name, and a status. The
+preview refuses submission when there are fewer than two items, mixed parent
+folders, an invalid generated name, duplicate proposed names, a collision with
+an unselected sibling, or a plan in which no row changes. Names currently held
+by another selected source remain available, which allows swaps and longer
+cycles.
+
+Only the latest asynchronous preview may publish results; stale generations are
+discarded. Automated regression coverage requires a 10,000-row preview to
+finish within five seconds. This five-second value is a ceiling for detecting a
+large regression, not a promise that ordinary previews should take that long.
+
+Local writable folders are supported. A configured File Provider location is
+supported only when discovery advertises local file operations and the selected
+directory passes a live filesystem writability check. Read-only providers are
+refused, and an unregistered path under `~/Library/CloudStorage` fails closed as
+an unknown capability. Pengrid acquires scoped access once for the captured
+request; a denial reports one error rather than repeatedly prompting.
+
+### Transaction, progress, cancellation, retry, and Undo
+
+Press Return or choose **Rename N Items** only after the preview is executable.
+The submitted plan is immutable and fields remain locked until the operation is
+handed to the operation center. Before the first mutation, Pengrid revalidates
+the parent, every source identity, filesystem name-comparison policy, sibling
+names, and final destinations.
+
+Execution is serial and same-directory. Changed sources first move to reserved
+temporary names, then publish to their final names. This two-phase transaction
+supports `A -> B, B -> A` swaps and longer cycles without overwriting content.
+The operation center reports **Staging names**, **Publishing names**, and, when
+needed, **Rolling back names**, with bounded item counts and no parent-path
+disclosure.
+
+Cancellation after mutation begins attempts a dependency-safe rollback. A job
+succeeds only when all final names exist and no reserved temporary name remains.
+If restoration cannot be proven, the result is marked for recovery review and
+the queue stops rather than deleting an uncertain item.
+
+Retry creates a new attempt from the exact captured plan after all preflight
+checks run again. Undo reverses the complete transaction through the same
+two-phase engine, but only while every final item retains its recorded identity
+and fingerprint and every original name remains available. Changed or replaced
+outputs, missing items, and newly occupied original names disable or refuse
+Undo.
 
 ## Archive creation, extraction, and progress
 
@@ -350,7 +551,7 @@ documents.
 
 ## Current limitations
 
-Developer Preview 5 deliberately does not provide:
+Developer Preview 6 and the current source tree deliberately do not provide:
 
 - Intel Mac or macOS 14-and-earlier support;
 - Developer ID signing or Apple notarization;
@@ -360,7 +561,9 @@ Developer Preview 5 deliberately does not provide:
 - reliable per-byte progress from native archive tools;
 - 7z, RAR, or password-protected TAR support;
 - permanent deletion;
-- automatic removal when ownership or identity cannot be proven.
+- automatic removal when ownership or identity cannot be proven;
+- batch-rename regexes, recursive subfolder renaming, manual extension editing,
+  or per-row custom names.
 
 See [release and packaging](release.md) and the
 [verification documents](verification/) for candidate-specific evidence and

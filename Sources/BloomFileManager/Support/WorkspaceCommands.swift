@@ -26,6 +26,12 @@ struct WorkspaceCommandPolicy: Equatable {
 
     var canCreateFolder: Bool { !isTextEditing }
     var canRename: Bool { !isOperationRunning && !isTextEditing && selectionCount == 1 }
+    var canBatchRename: Bool {
+        !isOperationRunning
+            && !isTextEditing
+            && selectionCount >= 2
+            && selectedItems.count == selectionCount
+    }
     var canCopy: Bool { !isTextEditing && selectionCount > 0 }
     var canPaste: Bool { !isTextEditing && pasteboardHasFileURLs }
     var canTrash: Bool { !isTextEditing && selectionCount > 0 }
@@ -67,6 +73,114 @@ enum PasteboardCommandRoute: Equatable {
     case textResponder
     case fileSelection
     case unavailable
+}
+
+/// Shared, privacy-safe VoiceOver wording for context actions. The action
+/// snapshot owns paths, so command presentation deliberately describes only
+/// the selection count, pane role, and policy state.
+enum ContextActionAccessibilityPresentation {
+    static func value(
+        action: ContextActionKind,
+        itemCount: Int,
+        destinationPaneID: PaneID,
+        availability: ContextActionAvailability
+    ) -> String {
+        var parts = [itemCount == 1 ? "1 selected item" : "\(itemCount) selected items"]
+        if usesOtherPane(action) {
+            parts.append("Destination: \(paneName(destinationPaneID)) pane")
+        }
+        if !availability.isEnabled, let reason = availability.disabledReason {
+            parts.append("Unavailable: \(reason)")
+        }
+        return parts.joined(separator: ". ")
+    }
+
+    private static func usesOtherPane(_ action: ContextActionKind) -> Bool {
+        switch action {
+        case .openInOtherPane, .transferToOtherPane: true
+        default: false
+        }
+    }
+
+    private static func paneName(_ paneID: PaneID) -> String {
+        paneID == .left ? "left" : "right"
+    }
+}
+
+@MainActor
+enum WorkspaceContextActionRouting {
+    static func policy(
+        items: [FileItem],
+        capturedSelectionCount: Int,
+        sourcePaneID: PaneID,
+        workspace: WorkspaceState,
+        operationController: FileOperationController,
+        cloudLocations: CloudLocationsStore?
+    ) -> FileContextMenuPolicy {
+        let sourcePane = sourcePaneID == .left ? workspace.left : workspace.right
+        let oppositePane = sourcePaneID == .left ? workspace.right : workspace.left
+        return FileContextMenuPolicy(.init(
+            workspaceCommandPolicy: WorkspaceCommandPolicy(
+                selectionCount: capturedSelectionCount,
+                isOperationRunning: operationController.isRunning,
+                pasteboardHasFileURLs: FileURLPasteboard.containsFileURLs(in: .general),
+                selectedItems: items,
+                isTextEditing: workspace.activeTextEditingSession != nil
+            ),
+            selectedItems: items,
+            sourceDirectory: sourcePane.currentDirectory,
+            oppositeDirectory: oppositePane.currentDirectory,
+            sourceCapability: cloudLocations?.localFileOperationCapability(
+                for: sourcePane.currentDirectory
+            ) ?? .unknown,
+            oppositeCapability: cloudLocations?.localFileOperationCapability(
+                for: oppositePane.currentDirectory
+            ) ?? .unknown,
+            isExclusiveOperationActive: operationController.hasExclusiveOperationActive
+        ))
+    }
+
+    static func draft(
+        items: [FileItem],
+        capturedSelectionCount: Int,
+        sourcePaneID: PaneID,
+        workspace: WorkspaceState,
+        cloudLocations: CloudLocationsStore?
+    ) -> ContextActionDraft? {
+        guard items.count == capturedSelectionCount else { return nil }
+        let sourcePane = sourcePaneID == .left ? workspace.left : workspace.right
+        let oppositePaneID: PaneID = sourcePaneID == .left ? .right : .left
+        let oppositePane = oppositePaneID == .left ? workspace.left : workspace.right
+        return ContextActionDraft(
+            sources: items,
+            sourcePaneID: sourcePaneID,
+            oppositePaneID: oppositePaneID,
+            sourceDirectory: sourcePane.currentDirectory,
+            oppositeDirectory: oppositePane.currentDirectory,
+            sourceCapability: cloudLocations?.localFileOperationCapability(
+                for: sourcePane.currentDirectory
+            ) ?? .unknown,
+            oppositeCapability: cloudLocations?.localFileOperationCapability(
+                for: oppositePane.currentDirectory
+            ) ?? .unknown
+        )
+    }
+}
+
+extension ContextActionKind {
+    func availability(in policy: FileContextMenuPolicy) -> ContextActionAvailability {
+        switch self {
+        case .quickLook: policy.quickLook
+        case .openWith: policy.openWith
+        case .openInOtherPane: policy.openInOtherPane
+        case .transferToOtherPane(.copy): policy.copyToOtherPane
+        case .transferToOtherPane(.move): policy.moveToOtherPane
+        case .showInFinder: policy.showInFinder
+        case .copyPath: policy.copyPath
+        case .duplicate: policy.duplicate
+        case .encloseSelection: policy.encloseSelection
+        }
+    }
 }
 
 @MainActor
@@ -115,6 +229,25 @@ enum WorkspaceFilterCommandActions {
 enum WorkspaceSearchCommandActions {
     static func showSmartSearch(in workspace: WorkspaceState, store: SmartSearchStore) {
         store.present(initialRoot: workspace.activePane.currentDirectory)
+    }
+}
+
+@MainActor
+enum WorkspaceBatchRenameCommandActions {
+    static func showBatchRename(
+        in workspace: WorkspaceState,
+        model: BatchRenameModel,
+        capability: BatchRenameLocationCapability
+    ) async {
+        let pane = workspace.activePane
+        let selected = pane.selection
+        let items = pane.visibleItems.filter { selected.contains($0.url) }
+        guard items.count == selected.count, items.count >= 2 else { return }
+        await model.present(
+            items: items,
+            in: pane.currentDirectory,
+            capability: capability
+        )
     }
 }
 
@@ -447,6 +580,9 @@ struct WorkspaceCommands: Commands {
     let quickLookController: QuickLookController
     var previewCoordinator: WorkspacePreviewCoordinator? = nil
     let operationController: FileOperationController
+    var contextActionRouter: FileContextActionRouter? = nil
+    var openWithProvider: (any OpenWithApplicationProviding)? = nil
+    var selectionFolder: SelectionFolderModel? = nil
     var smartSearch: SmartSearchStore?
     let storage: StorageAnalysisStore
     let storageCleanupController: StorageCleanupController
@@ -454,6 +590,8 @@ struct WorkspaceCommands: Commands {
     var fileSystem: any FileSystemAccess
     var workspaceOpener: any WorkspaceOpening = LiveWorkspaceOpener()
     var accessCoordinator: CloudLocationScopedAccessCoordinator = .init()
+    var batchRename: BatchRenameModel? = nil
+    var cloudLocations: CloudLocationsStore? = nil
 
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
@@ -472,20 +610,10 @@ struct WorkspaceCommands: Commands {
             .disabled(!policy.canOpen)
 
             Button("Quick Look") {
-                guard policy.canQuickLook,
-                      let workspace,
-                      let previewCoordinator
-                else { return }
-                let selection = WorkspacePreviewSelection(
-                    paneID: workspace.activePaneID,
-                    items: selectedItemsForCommands
-                )
-                Task {
-                    await previewCoordinator.toggle(selection: selection)
-                }
+                dispatchContextAction(.quickLook)
             }
             .keyboardShortcut(.space, modifiers: [])
-            .disabled(!policy.canQuickLook || previewCoordinator == nil)
+            .disabled(!contextPolicy.quickLook.isEnabled || previewCoordinator == nil)
 
             Button("Close Preview") {
                 guard let previewCoordinator else { return }
@@ -550,6 +678,29 @@ struct WorkspaceCommands: Commands {
         }
 
         CommandMenu("File Operations") {
+            contextActionCommands
+
+            Divider()
+
+            Button("Batch Rename…") {
+                guard let workspace, let batchRename, policy.canBatchRename else { return }
+                let capability = cloudLocations?.batchRenameCapability(
+                    for: workspace.activePane.currentDirectory
+                ) ?? .writable
+                Task {
+                    await WorkspaceBatchRenameCommandActions.showBatchRename(
+                        in: workspace,
+                        model: batchRename,
+                        capability: capability
+                    )
+                }
+            }
+            .keyboardShortcut("r", modifiers: [.command, .control])
+            .disabled(!policy.canBatchRename)
+            .accessibilityIdentifier(AccessibilityIdentifiers.workspaceBatchRename)
+
+            Divider()
+
             Button("Compress to ZIP") {
                 guard let workspace, policy.canCompress else { return }
                 Task {
@@ -755,6 +906,182 @@ struct WorkspaceCommands: Commands {
         }
     }
 
+    @ViewBuilder
+    private var contextActionCommands: some View {
+        if contextPresentation.openWithAvailability?.isVisible == true
+            || contextPresentation.policy.openWith.isVisible {
+            Menu("Open With") {
+                ForEach(contextPresentation.openWithApplications) { application in
+                    Button(application.displayName) {
+                        dispatchContextAction(.openWith(applicationURL: application.applicationURL))
+                    }
+                }
+            }
+            .disabled(!(contextPresentation.openWithAvailability?.isEnabled
+                ?? contextPresentation.policy.openWith.isEnabled)
+                || contextPresentation.openWithApplications.isEmpty)
+            .accessibilityIdentifier(AccessibilityIdentifiers.workspaceOpenWith)
+            .accessibilityValue(contextAccessibilityValue(for: .openWith(applicationURL: URL(fileURLWithPath: "/"))))
+        }
+
+        if contextPolicy.openInOtherPane.isVisible {
+            Button("Open in Other Pane") {
+                dispatchContextAction(.openInOtherPane)
+            }
+            .disabled(!contextPolicy.openInOtherPane.isEnabled)
+            .accessibilityIdentifier(AccessibilityIdentifiers.workspaceOpenInOtherPane)
+            .accessibilityValue(contextAccessibilityValue(for: .openInOtherPane))
+        }
+
+        if contextPolicy.copyToOtherPane.isVisible {
+            Button("Copy to Other Pane") {
+                dispatchContextAction(.transferToOtherPane(.copy))
+            }
+            .disabled(!contextPolicy.copyToOtherPane.isEnabled)
+            .accessibilityIdentifier(AccessibilityIdentifiers.workspaceCopyToOtherPane)
+            .accessibilityValue(contextAccessibilityValue(for: .transferToOtherPane(.copy)))
+        }
+
+        if contextPolicy.moveToOtherPane.isVisible {
+            Button("Move to Other Pane") {
+                dispatchContextAction(.transferToOtherPane(.move))
+            }
+            .disabled(!contextPolicy.moveToOtherPane.isEnabled)
+            .accessibilityIdentifier(AccessibilityIdentifiers.workspaceMoveToOtherPane)
+            .accessibilityValue(contextAccessibilityValue(for: .transferToOtherPane(.move)))
+        }
+
+        if contextPolicy.showInFinder.isVisible {
+            Button("Show in Finder") {
+                dispatchContextAction(.showInFinder)
+            }
+            .disabled(!contextPolicy.showInFinder.isEnabled)
+            .accessibilityIdentifier(AccessibilityIdentifiers.workspaceShowInFinder)
+            .accessibilityValue(contextAccessibilityValue(for: .showInFinder))
+        }
+
+        if contextPolicy.copyPath.isVisible {
+            Menu("Copy Path") {
+                Button("Copy Full Path") { dispatchContextAction(.copyPath(.fullPath)) }
+                    .keyboardShortcut("c", modifiers: [.command, .option])
+                    .accessibilityIdentifier(AccessibilityIdentifiers.workspaceCopyFullPath)
+                Button("Copy Name") { dispatchContextAction(.copyPath(.name)) }
+                    .accessibilityIdentifier(AccessibilityIdentifiers.workspaceCopyName)
+                Button("Copy Parent Path") { dispatchContextAction(.copyPath(.parentPath)) }
+                    .accessibilityIdentifier(AccessibilityIdentifiers.workspaceCopyParentPath)
+                Button("Copy File URL") { dispatchContextAction(.copyPath(.fileURL)) }
+                    .accessibilityIdentifier(AccessibilityIdentifiers.workspaceCopyFileURL)
+            }
+            .disabled(!contextPolicy.copyPath.isEnabled)
+            .accessibilityIdentifier(AccessibilityIdentifiers.workspaceCopyPath)
+            .accessibilityValue(contextAccessibilityValue(for: .copyPath(.fullPath)))
+        }
+
+        if contextPolicy.encloseSelection.isVisible {
+            Button("New Folder with Selection (\(selectedItemsForCommands.count) Items)…") {
+                dispatchContextAction(.encloseSelection)
+            }
+            .disabled(!contextPolicy.encloseSelection.isEnabled)
+            .accessibilityIdentifier(AccessibilityIdentifiers.workspaceEncloseSelection)
+            .accessibilityValue(contextAccessibilityValue(for: .encloseSelection))
+        }
+
+        if contextPolicy.duplicate.isVisible {
+            Button("Duplicate") { dispatchContextAction(.duplicate) }
+                .keyboardShortcut("d", modifiers: .command)
+                .disabled(!contextPolicy.duplicate.isEnabled)
+                .accessibilityIdentifier(AccessibilityIdentifiers.workspaceDuplicate)
+                .accessibilityValue(contextAccessibilityValue(for: .duplicate))
+        }
+    }
+
+    private var contextPresentation: FileContextMenuPresentation {
+        guard let openWithProvider else {
+            return FileContextMenuPresentation(policy: contextPolicy)
+        }
+        return OpenWithMenuPresentation.make(
+            policy: contextPolicy,
+            selectedItems: selectedItemsForCommands,
+            provider: openWithProvider
+        )
+    }
+
+    private var contextPolicy: FileContextMenuPolicy {
+        guard let workspace else {
+            return FileContextMenuPolicy(.init(
+                workspaceCommandPolicy: WorkspaceCommandPolicy(
+                    selectionCount: 0,
+                    isOperationRunning: operationController.isRunning,
+                    pasteboardHasFileURLs: false
+                ),
+                selectedItems: [],
+                sourceDirectory: URL(fileURLWithPath: "/"),
+                oppositeDirectory: nil,
+                sourceCapability: .unknown,
+                oppositeCapability: .unknown,
+                isExclusiveOperationActive: operationController.hasExclusiveOperationActive
+            ))
+        }
+        return WorkspaceContextActionRouting.policy(
+            items: selectedItemsForCommands,
+            capturedSelectionCount: workspace.selectedURLsForCommands.count,
+            sourcePaneID: workspace.activePaneID,
+            workspace: workspace,
+            operationController: operationController,
+            cloudLocations: cloudLocations
+        )
+    }
+
+    private func contextAccessibilityValue(for action: ContextActionKind) -> String {
+        ContextActionAccessibilityPresentation.value(
+            action: action,
+            itemCount: selectedItemsForCommands.count,
+            destinationPaneID: workspace?.activePaneID == .left ? .right : .left,
+            availability: action.availability(in: contextPolicy)
+        )
+    }
+
+    private func dispatchContextAction(_ action: ContextActionKind) {
+        guard let workspace,
+              let contextActionRouter,
+              action.availability(in: contextPolicy).isEnabled,
+              let draft = WorkspaceContextActionRouting.draft(
+                  items: selectedItemsForCommands,
+                  capturedSelectionCount: workspace.selectedURLsForCommands.count,
+                  sourcePaneID: workspace.activePaneID,
+                  workspace: workspace,
+                  cloudLocations: cloudLocations
+              )
+        else { return }
+        let targetPane = draft.oppositePaneID == .left ? workspace.left : workspace.right
+        let capturedAction = action
+        Task { @MainActor in
+            guard let snapshot = await contextActionRouter.capture(draft) else { return }
+            switch capturedAction {
+            case .quickLook:
+                guard let previewCoordinator else { return }
+                _ = await contextActionRouter.quickLook(snapshot, previewCoordinator: previewCoordinator)
+            case .openWith(let applicationURL):
+                _ = await contextActionRouter.openWith(snapshot, applicationURL: applicationURL)
+            case .openInOtherPane:
+                _ = await contextActionRouter.openInOtherPane(snapshot, targetPane: targetPane)
+            case .transferToOtherPane(let mode):
+                guard let requests = await contextActionRouter.identifiedTransferRequests(from: snapshot) else {
+                    return
+                }
+                _ = operationController.transferToCapturedDirectory(requests, mode: mode, workspace: workspace)
+            case .showInFinder:
+                _ = await contextActionRouter.showInFinder(snapshot)
+            case .copyPath(let kind):
+                _ = contextActionRouter.copyPath(kind, from: snapshot)
+            case .duplicate:
+                _ = operationController.duplicate(snapshot, in: draft.sourcePaneID == .left ? workspace.left : workspace.right, workspace: workspace)
+            case .encloseSelection:
+                await selectionFolder?.present(snapshot)
+            }
+        }
+    }
+
     private var policy: WorkspaceCommandPolicy {
         WorkspaceCommandPolicy(
             selectionCount: workspace?.selectedURLsForCommands.count ?? 0,
@@ -767,10 +1094,8 @@ struct WorkspaceCommands: Commands {
 
     private var selectedItemsForCommands: [FileItem] {
         guard let workspace else { return [] }
-        let itemsByURL = Dictionary(
-            uniqueKeysWithValues: workspace.activePane.items.map { ($0.url, $0) }
-        )
-        return workspace.selectedURLsForCommands.compactMap { itemsByURL[$0] }
+        let selectedURLs = Set(workspace.selectedURLsForCommands)
+        return workspace.activePane.visibleItems.filter { selectedURLs.contains($0.url) }
     }
 
     private var comparisonPolicy: ComparisonCommandPolicy {

@@ -65,6 +65,125 @@ private func openFileDescriptorCount() throws -> Int {
 
 @Suite("FileSystemAccessTests", .serialized)
 struct FileSystemAccessTests {
+    @Test func removeEmptyDirectoryDeletesOnlyTheCapturedEmptyDirectory() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let folder = root.url.appending(path: "owned", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+        let fileSystem = LiveFileSystemAccess()
+        let identity = try #require(await fileSystem.identity(of: folder))
+
+        try await fileSystem.removeEmptyDirectory(folder, identifiedBy: identity)
+
+        #expect(FileManager.default.fileExists(atPath: folder.path) == false)
+    }
+
+    @Test func removeEmptyDirectoryRefusesWrongIdentityAndPreservesTheFolder() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let folder = root.url.appending(path: "owned", directoryHint: .isDirectory)
+        let other = root.url.appending(path: "other", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+        try FileManager.default.createDirectory(at: other, withIntermediateDirectories: false)
+        let fileSystem = LiveFileSystemAccess()
+        let wrongIdentity = try #require(await fileSystem.identity(of: other))
+
+        await #expect(throws: FileSystemAccessError.identityMismatch(folder)) {
+            try await fileSystem.removeEmptyDirectory(folder, identifiedBy: wrongIdentity)
+        }
+
+        #expect(FileManager.default.fileExists(atPath: folder.path))
+    }
+
+    @Test func removeEmptyDirectoryRejectsASymlinkAndPreservesItsTarget() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let target = root.url.appending(path: "target", directoryHint: .isDirectory)
+        let link = root.url.appending(path: "link")
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: false)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+        let fileSystem = LiveFileSystemAccess()
+        let targetIdentity = try #require(await fileSystem.identity(of: target))
+
+        await #expect(throws: FileSystemAccessError.identityMismatch(link)) {
+            try await fileSystem.removeEmptyDirectory(link, identifiedBy: targetIdentity)
+        }
+
+        #expect(FileManager.default.fileExists(atPath: link.path))
+        #expect(FileManager.default.fileExists(atPath: target.path))
+    }
+
+    @Test func removeEmptyDirectoryRejectsARegularFileAndPreservesIt() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let file = root.url.appending(path: "file")
+        let contents = Data("external contents".utf8)
+        try contents.write(to: file)
+        let fileSystem = LiveFileSystemAccess()
+        let identity = try #require(await fileSystem.identity(of: file))
+
+        await #expect(throws: POSIXError(.ENOTDIR)) {
+            try await fileSystem.removeEmptyDirectory(file, identifiedBy: identity)
+        }
+
+        #expect(try Data(contentsOf: file) == contents)
+    }
+
+    @Test func removeEmptyDirectoryRejectsNonemptyFolderWithoutRecursing() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let folder = root.url.appending(path: "owned", directoryHint: .isDirectory)
+        let child = folder.appending(path: "external-child")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+        try Data("external child".utf8).write(to: child)
+        let fileSystem = LiveFileSystemAccess()
+        let identity = try #require(await fileSystem.identity(of: folder))
+
+        await #expect(throws: POSIXError(.ENOTEMPTY)) {
+            try await fileSystem.removeEmptyDirectory(folder, identifiedBy: identity)
+        }
+
+        #expect(try Data(contentsOf: child) == Data("external child".utf8))
+    }
+
+    @Test func removeEmptyDirectoryRefusesAChildRacedInAfterDescriptorValidation() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let folder = root.url.appending(path: "owned", directoryHint: .isDirectory)
+        let child = folder.appending(path: "raced-child")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+        let fileSystem = LiveFileSystemAccess(onBeforeEmptyDirectoryUnlink: { url in
+            try Data("external race".utf8).write(to: url.appending(path: "raced-child"))
+        })
+        let identity = try #require(await fileSystem.identity(of: folder))
+
+        await #expect(throws: POSIXError(.ENOTEMPTY)) {
+            try await fileSystem.removeEmptyDirectory(folder, identifiedBy: identity)
+        }
+
+        #expect(try Data(contentsOf: child) == Data("external race".utf8))
+    }
+
+    @Test func removeEmptyDirectoryRefusesAReplacementRacedInBeforeUnlink() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let folder = root.url.appending(path: "owned", directoryHint: .isDirectory)
+        let displaced = root.url.appending(path: "displaced", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+        let fileSystem = LiveFileSystemAccess(onBeforeEmptyDirectoryUnlink: { url in
+            try FileManager.default.moveItem(at: url, to: displaced)
+            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: false)
+        })
+        let identity = try #require(await fileSystem.identity(of: folder))
+
+        await #expect(throws: FileSystemAccessError.identityMismatch(folder)) {
+            try await fileSystem.removeEmptyDirectory(folder, identifiedBy: identity)
+        }
+
+        #expect(FileManager.default.fileExists(atPath: folder.path))
+        #expect(FileManager.default.fileExists(atPath: displaced.path))
+    }
+
     @Test func folderSnapshotRejectsSymlinkAndReplacement() async throws {
         let root = try TemporaryDirectory()
         defer { root.remove() }
@@ -373,7 +492,13 @@ struct FileSystemAccessTests {
         })
         let cancellationRequest = try #require(await cancellation.captureFolderPreviewRequest(paneID: .left, url: folder))
         await #expect(throws: CancellationError.self) {
-            try await cancellation.snapshotFolder(cancellationRequest, visibility: .baseline, progress: { _ in })
+            try await Task {
+                try await cancellation.snapshotFolder(
+                    cancellationRequest,
+                    visibility: .baseline,
+                    progress: { _ in }
+                )
+            }.value
         }
         let hookFailure = LiveFileSystemAccess(onAfterFolderPreviewOpen: { _ in
             throw FolderPreviewFixtureError.expected

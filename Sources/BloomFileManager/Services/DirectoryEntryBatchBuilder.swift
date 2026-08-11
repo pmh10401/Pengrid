@@ -5,9 +5,30 @@ struct DirectoryEntryMetadata: Sendable {
     let name: String
     let isDirectory: Bool
     let isPackage: Bool
+    let isSymbolicLink: Bool
     let modifiedAt: Date?
     let byteSize: Int64?
     let typeDescription: String
+
+    init(
+        url: URL,
+        name: String,
+        isDirectory: Bool,
+        isPackage: Bool,
+        isSymbolicLink: Bool = false,
+        modifiedAt: Date?,
+        byteSize: Int64?,
+        typeDescription: String
+    ) {
+        self.url = url
+        self.name = name
+        self.isDirectory = isDirectory
+        self.isPackage = isPackage
+        self.isSymbolicLink = isSymbolicLink
+        self.modifiedAt = modifiedAt
+        self.byteSize = byteSize
+        self.typeDescription = typeDescription
+    }
 
     func fileItem(availability: CloudItemAvailability) -> FileItem {
         FileItem(
@@ -15,6 +36,7 @@ struct DirectoryEntryMetadata: Sendable {
             name: name,
             isDirectory: isDirectory,
             isPackage: isPackage,
+            isSymbolicLink: isSymbolicLink,
             modifiedAt: modifiedAt,
             byteSize: byteSize,
             typeDescription: typeDescription,
@@ -31,6 +53,7 @@ struct LiveDirectoryEntryMetadataReader: DirectoryEntryMetadataReading {
     static let resourceKeys: Set<URLResourceKey> = [
         .isDirectoryKey,
         .isPackageKey,
+        .isSymbolicLinkKey,
         .contentModificationDateKey,
         .fileSizeKey,
         .localizedTypeDescriptionKey
@@ -45,6 +68,7 @@ struct LiveDirectoryEntryMetadataReader: DirectoryEntryMetadataReading {
             name: standardizedURL.lastPathComponent,
             isDirectory: isDirectory,
             isPackage: values.isPackage == true,
+            isSymbolicLink: values.isSymbolicLink == true,
             modifiedAt: values.contentModificationDate,
             byteSize: isDirectory ? nil : values.fileSize.map(Int64.init),
             typeDescription: values.localizedTypeDescription ?? "File"

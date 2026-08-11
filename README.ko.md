@@ -12,16 +12,17 @@ Pengrid는 macOS용 무료 오픈소스 듀얼 패널 파일 관리자입니다.
 ## 다운로드
 
 현재 배포 버전은
-[Pengrid 1.3.0 Developer Preview 5](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.5)입니다.
-Preview 4의 암호 보호 ZIP과 파일 관리 기능을 유지하면서 대규모 폴더 로딩,
-패널 필터, 정렬 및 취소 성능을 개선했습니다.
+[Pengrid 1.3.0 Developer Preview 6](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.6)입니다.
+기존의 대규모 폴더, 검색, 미리보기 및 압축 개선을 유지하면서 캡처된 선택을
+사용하는 컨텍스트 작업, 안전한 반대쪽 패널 전송, Duplicate 및 선택 항목을
+새 폴더로 묶는 트랜잭션 기능을 추가했습니다.
 
-- [Pengrid.dmg 다운로드](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.5/Pengrid.dmg)
-- 앱 버전: **1.3.0 (빌드 7)**
+- [Pengrid.dmg 다운로드](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.6/Pengrid.dmg)
+- 앱 버전: **1.3.0 (빌드 8)**
 - 요구 사항: **Apple Silicon Mac, macOS 15 이상**
-- 검증 결과: **80개 스위트의 자동 테스트 1,223개 통과**
+- 검증 결과: **92개 스위트의 자동 테스트 1,407개 통과**
 - DMG SHA-256:
-  `3db4c0bd18b7001fe93d83ea92baf7928527d393bc5310e4ba40f7e9d75148e6`
+  `ece6212bd5f80d21bc64ef2059839db8a79a416b3706b140b1c4155dbe801b32`
 
 > **Developer Preview 신뢰 안내**
 >
@@ -58,6 +59,49 @@ Pengrid의 읽기 전용 폴더 미리보기가 열립니다. 파일, 패키지,
 여러 항목 선택에는 시스템 Quick Look을 그대로 사용합니다. 클라우드 폴더
 미리보기는 현재 제공된 메타데이터만 읽으며 콘텐츠를 의도적으로 다운로드하지
 않습니다.
+
+### 컨텍스트 메뉴 생산성 기능 (Preview 6)
+
+선택된 행을 오른쪽 클릭하면 전체 선택을 유지하고, 선택되지 않은 행을 오른쪽
+클릭하면 먼저 그 행을 선택합니다. 명령은 나중의 패널·선택 상태가 아니라 이때
+캡처한 선택을 표의 표시 순서대로 사용합니다. 컨텍스트 메뉴는 **Open** 다음에
+**Quick Look**, **Open With**, **Open in Other Pane** 그룹, **Copy/Move to Other
+Pane**, **Show in Finder**, **Copy Path** 그룹, 그리고 **New Folder**, **New Folder
+with Selection**, 즐겨찾기, **Duplicate**, 이름 변경, 기존 복사/붙여넣기·압축
+작업, 휴지통 순서를 유지합니다.
+
+Quick Look은 **Space**를 그대로 사용합니다. Open With는 일반 파일, 패키지 또는
+심볼릭 링크 하나에 제공되고, Open in Other Pane은 폴더 하나를 반대쪽 패널에서 열거나 폴더가
+아닌 항목 하나를 캡처한 상위 폴더에서 동일성 일치 항목으로 선택합니다. Copy/Move
+to Other Pane은 실행 시점에 캡처한 반대쪽 패널 폴더를 사용하므로 이후 탐색으로
+작업 대상이 바뀌지 않습니다. Show in Finder는 바이트를 읽지 않고 캡처한 항목을
+Finder에서 표시합니다. **Copy Path**에는 Full Path(**Option-Command-C**), Name,
+Parent Path, File URL이 있고 표시 순서의 UTF-8 텍스트를 복사합니다. **Duplicate**는
+**Command-D**로 실행하며 확장자를 보존한 **Keep Both** 이름과 덮어쓰지 않는
+게시 방식을 사용합니다. **New Folder with Selection**은 같은 부모의 항목 두 개
+이상을 받아 유효성 검사한 새 폴더로 트랜잭션 방식으로 이동합니다.
+
+이 작업은 텍스트 편집 상태, 현재 쓰기 가능 여부, File Provider 기능, 진행률,
+취소, 재시도, 복구 및 보수적인 Undo 규칙을 따릅니다. Quick Look과 Open With는
+클라우드 항목을 materialize할 수 있지만 경로 복사, Finder 표시, 반대쪽 패널 탐색은
+콘텐츠를 의도적으로 읽지 않습니다. 복사, 이동, Duplicate, 선택 항목 폴더화에는
+현재 쓰기 가능한 로컬 파일 작업 위치가 필요합니다.
+
+### 미리보기 우선 일괄 이름 변경 (Preview 6)
+
+활성 패널에서 두 항목 이상을 선택한 뒤 **File Operations > Batch Rename…**
+또는 행 컨텍스트 메뉴를 선택합니다. 일반 문자열 찾기/바꾸기, 접두사, 접미사,
+안정된 선택 순서를 따르는 일련번호 규칙을 제공합니다. 일반 파일과 패키지의
+확장자 및 `.tar.gz` 같은 알려진 복합 압축 확장자는 보존하고 편집 가능한 이름
+부분만 변경합니다. 전체 미리보기에서 변경 없음, 잘못된 이름, 중복 및 같은
+폴더의 기존 항목 충돌을 실제 변경 전에 확인할 수 있습니다.
+
+실행은 같은 폴더 안에서 2단계 트랜잭션으로 처리하므로 이름 교환과 순환 변경도
+지원합니다. 작업 센터는 임시 이동, 최종 게시 및 롤백 단계를 표시하며, 취소 시
+안전함을 증명할 수 있으면 원래 이름으로 복구합니다. 재시도는 캡처한 불변 계획을
+사용하고, 되돌리기는 최종 동일성·지문과 원래 이름의 사용 가능성이 모두 유지된
+경우에만 제공합니다. 미리보기 경로에는 10,000개 행을 5초 이내에 처리하는 자동
+회귀 기준이 있습니다.
 
 ### 안전한 파일 작업 센터
 
@@ -138,11 +182,15 @@ open dist/Pengrid.app
 ## 문서
 
 - [상세 기능 안내서](docs/user-guide.ko.md)
+- [아키텍처 안내](docs/architecture.md)
+- [현재 제한 사항](docs/current-limitations.ko.md)
 - [릴리스 및 패키징 안내서](docs/release.ko.md)
-- [Developer Preview 5 릴리스 노트](docs/release-notes-v1.3.0-developer-preview.5.md#한국어)
+- [Developer Preview 6 릴리스 노트](docs/release-notes-v1.3.0-developer-preview.6.md#한국어)
 - [버전 1.3 압축 검증 기록](docs/verification/version-1.3-archive-checklist.md)
 - [Smart Search 검증 기록](docs/verification/2026-08-04-smart-search.md)
 - [폴더 미리보기 검증 기록](docs/verification/2026-08-04-folder-preview.md)
+- [일괄 이름 변경 검증 기록](docs/verification/2026-08-11-batch-rename.md)
+- [파일 컨텍스트 작업 검증 기록](docs/verification/2026-08-11-file-context-actions.md)
 - [Storage Inspector 검증 기록](docs/verification/storage-inspector-checklist.md)
 
 Pengrid는 계속 개발 중입니다. 아직 실행하지 않은 후보별 수동 검증 항목은

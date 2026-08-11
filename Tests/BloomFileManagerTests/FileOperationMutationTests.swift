@@ -4,6 +4,226 @@ import Testing
 
 @Suite("FileOperationMutationTests")
 struct FileOperationMutationTests {
+    @Test func duplicateUsesTheNextKeepBothNameWithoutReplacingExistingEntries() async throws {
+        let parent = URL(filePath: "/workspace", directoryHint: .isDirectory)
+        let source = parent.appending(path: "Report.txt")
+        let firstCopy = parent.appending(path: "Report 2.txt")
+        let fileSystem = RecordingFileSystem(existingURLs: [parent, source, firstCopy])
+        let service = FileOperationService(fileSystem: fileSystem)
+        let sourceIdentity = try #require(await fileSystem.identity(of: source))
+        let parentIdentity = try #require(await fileSystem.identity(of: parent))
+
+        let result = await service.duplicate([
+            IdentifiedTransferRequest(
+                source: source,
+                sourceIdentity: sourceIdentity,
+                destinationRoot: parent,
+                destinationRootIdentity: parentIdentity,
+                relativeParentComponents: []
+            )
+        ]) { _ in }
+
+        let secondCopy = parent.appending(path: "Report 3.txt")
+        #expect(result.outcomes == [.succeeded(source: source, destination: secondCopy)])
+        #expect(await fileSystem.existingURLs.contains(firstCopy))
+        #expect(await fileSystem.existingURLs.contains(secondCopy))
+    }
+
+    @Test func duplicateDiscardsOwnedStageAndRetriesWhenPublicationRaces() async throws {
+        let parent = URL(filePath: "/workspace", directoryHint: .isDirectory)
+        let source = parent.appending(path: "Report.txt")
+        let racedDestination = parent.appending(path: "Report 2.txt")
+        let fileSystem = RecordingFileSystem(
+            existingURLs: [parent, source],
+            raceDestinationBeforeExclusiveMove: racedDestination
+        )
+        let service = FileOperationService(fileSystem: fileSystem)
+        let sourceIdentity = try #require(await fileSystem.identity(of: source))
+        let parentIdentity = try #require(await fileSystem.identity(of: parent))
+
+        let result = await service.duplicate([
+            IdentifiedTransferRequest(
+                source: source,
+                sourceIdentity: sourceIdentity,
+                destinationRoot: parent,
+                destinationRootIdentity: parentIdentity,
+                relativeParentComponents: []
+            )
+        ]) { _ in }
+
+        let secondCopy = parent.appending(path: "Report 3.txt")
+        #expect(result.outcomes == [.succeeded(source: source, destination: secondCopy)])
+        #expect(await fileSystem.existingURLs.contains(racedDestination))
+        #expect(await fileSystem.existingURLs.contains(secondCopy))
+    }
+
+    @Test func duplicateRefusesSameIdentitySourceContentMutationBeforePublication() async throws {
+        let parent = URL(filePath: "/workspace", directoryHint: .isDirectory)
+        let source = parent.appending(path: "Report.txt")
+        let fileSystem = RecordingFileSystem(
+            existingURLs: [parent, source],
+            mutatesSourcesAfterCopy: [source]
+        )
+        let service = FileOperationService(fileSystem: fileSystem)
+        let sourceIdentity = try #require(await fileSystem.identity(of: source))
+        let parentIdentity = try #require(await fileSystem.identity(of: parent))
+
+        let result = await service.duplicate([
+            IdentifiedTransferRequest(
+                source: source,
+                sourceIdentity: sourceIdentity,
+                destinationRoot: parent,
+                destinationRootIdentity: parentIdentity,
+                relativeParentComponents: []
+            )
+        ]) { _ in }
+
+        #expect(result.hasFailures)
+        #expect(await fileSystem.existingURLs.contains(parent.appending(path: "Report 2.txt")) == false)
+        #expect(await fileSystem.existingURLs.contains { $0.lastPathComponent.hasPrefix(".bloom-staging-") } == false)
+    }
+
+    @Test func duplicateCancellationDiscardsTheOwnedStageAndCancelsEveryUnpublishedSource() async throws {
+        let parent = URL(filePath: "/workspace", directoryHint: .isDirectory)
+        let first = parent.appending(path: "First.txt")
+        let second = parent.appending(path: "Second.txt")
+        let fileSystem = RecordingFileSystem(
+            existingURLs: [parent, first, second],
+            cancelAfterCopy: true
+        )
+        let service = FileOperationService(fileSystem: fileSystem)
+        let parentIdentity = try #require(await fileSystem.identity(of: parent))
+        let firstIdentity = try #require(await fileSystem.identity(of: first))
+        let secondIdentity = try #require(await fileSystem.identity(of: second))
+        let requests = [
+            IdentifiedTransferRequest(
+                source: first,
+                sourceIdentity: firstIdentity,
+                destinationRoot: parent,
+                destinationRootIdentity: parentIdentity,
+                relativeParentComponents: []
+            ),
+            IdentifiedTransferRequest(
+                source: second,
+                sourceIdentity: secondIdentity,
+                destinationRoot: parent,
+                destinationRootIdentity: parentIdentity,
+                relativeParentComponents: []
+            )
+        ]
+
+        let operation = Task {
+            await service.duplicate(requests) { _ in }
+        }
+        let result = await operation.value
+
+        #expect(result.outcomes == [.cancelled(source: first), .cancelled(source: second)])
+        #expect(await fileSystem.existingURLs.contains(parent.appending(path: "First 2.txt")) == false)
+        #expect(await fileSystem.existingURLs.contains { $0.lastPathComponent.hasPrefix(".bloom-staging-") } == false)
+    }
+
+    @Test func duplicateCancellationDuringPublishedIdentityVerificationRemovesOnlyTheOwnedDuplicate() async throws {
+        let parent = URL(filePath: "/workspace", directoryHint: .isDirectory)
+        let source = parent.appending(path: "Report.txt")
+        let destination = parent.appending(path: "Report 2.txt")
+        let fileSystem = RecordingFileSystem(
+            existingURLs: [parent, source],
+            failures: [.identity(destination): CancellationError()]
+        )
+        let service = FileOperationService(fileSystem: fileSystem)
+        let sourceIdentity = try #require(await fileSystem.identity(of: source))
+        let parentIdentity = try #require(await fileSystem.identity(of: parent))
+
+        let operation = Task {
+            await service.duplicate([
+                IdentifiedTransferRequest(
+                    source: source,
+                    sourceIdentity: sourceIdentity,
+                    destinationRoot: parent,
+                    destinationRootIdentity: parentIdentity,
+                    relativeParentComponents: []
+                )
+            ]) { _ in }
+        }
+        let result = await operation.value
+
+        #expect(result.outcomes == [.cancelled(source: source)])
+        #expect(await fileSystem.exists(source))
+        #expect(await fileSystem.exists(destination) == false)
+        #expect(await fileSystem.existingURLs.contains {
+            $0.lastPathComponent.hasPrefix(".bloom-staging-")
+        } == false)
+    }
+
+    @Test func duplicatePreservesDirectoriesPackagesAndSymlinks() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let folder = root.url.appending(path: "Folder", directoryHint: .isDirectory)
+        let package = root.url.appending(path: "Widget.app", directoryHint: .isDirectory)
+        let symlinkTarget = root.url.appending(path: "symlink-target.txt")
+        let link = root.url.appending(path: "Folder Link")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+        try Data("folder".utf8).write(to: folder.appending(path: "note.txt"))
+        try FileManager.default.createDirectory(at: package, withIntermediateDirectories: false)
+        try Data("package".utf8).write(to: package.appending(path: "Contents.txt"))
+        try Data("target".utf8).write(to: symlinkTarget)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: symlinkTarget)
+        let fileSystem = LiveFileSystemAccess()
+        let parentIdentity = try #require(await fileSystem.identity(of: root.url))
+        let requests = try await duplicateRequests(
+            [link, folder, package],
+            parent: root.url,
+            parentIdentity: parentIdentity,
+            fileSystem: fileSystem
+        )
+
+        let result = await FileOperationService(fileSystem: fileSystem).duplicate(requests) { _ in }
+
+        let duplicatedFolder = root.url.appending(path: "Folder 2")
+        let duplicatedPackage = root.url.appending(path: "Widget 2.app")
+        let duplicatedLink = root.url.appending(path: "Folder Link 2")
+        #expect(result.outcomes == [
+            .succeeded(source: link, destination: duplicatedLink),
+            .succeeded(source: folder, destination: duplicatedFolder),
+            .succeeded(source: package, destination: duplicatedPackage)
+        ])
+        #expect(try String(
+            contentsOf: duplicatedFolder.appending(path: "note.txt"), encoding: .utf8
+        ) == "folder")
+        #expect(try String(
+            contentsOf: duplicatedPackage.appending(path: "Contents.txt"), encoding: .utf8
+        ) == "package")
+        #expect(try FileManager.default.destinationOfSymbolicLink(atPath: duplicatedLink.path)
+            == FileManager.default.destinationOfSymbolicLink(atPath: link.path))
+    }
+
+    @Test func duplicateRejectsACapturedParentReplacementWithoutCreatingAStage() async throws {
+        let parent = URL(filePath: "/workspace", directoryHint: .isDirectory)
+        let source = parent.appending(path: "Report.txt")
+        let fileSystem = RecordingFileSystem(existingURLs: [parent, source])
+        let parentIdentity = try #require(await fileSystem.identity(of: parent))
+        let sourceIdentity = try #require(await fileSystem.identity(of: source))
+        await fileSystem.replaceIdentity(
+            at: parent,
+            with: FileIdentity(entryIdentifier: "replacement", resolvedIdentifier: "replacement")
+        )
+
+        let result = await FileOperationService(fileSystem: fileSystem).duplicate([
+            IdentifiedTransferRequest(
+                source: source,
+                sourceIdentity: sourceIdentity,
+                destinationRoot: parent,
+                destinationRootIdentity: parentIdentity,
+                relativeParentComponents: []
+            )
+        ]) { _ in }
+
+        #expect(result.hasFailures)
+        #expect(await fileSystem.existingURLs.contains(parent.appending(path: "Report 2.txt")) == false)
+        #expect(await fileSystem.events.contains(where: { $0.hasPrefix("copy:") }) == false)
+        #expect(await fileSystem.existingURLs.contains { $0.lastPathComponent.hasPrefix(".bloom-staging-") } == false)
+    }
+
     @Test func identifiedCreateFolderRefusesAReplacedQueuedDirectory() async throws {
         let directory = URL(filePath: "/workspace", directoryHint: .isDirectory)
         let fileSystem = RecordingFileSystem(existingURLs: [directory])
@@ -808,4 +1028,26 @@ private struct AnchoredTrashTemporaryDirectory {
     func remove() {
         try? FileManager.default.removeItem(at: url)
     }
+}
+
+private func duplicateRequests(
+    _ sources: [URL],
+    parent: URL,
+    parentIdentity: FileIdentity,
+    fileSystem: any FileSystemAccess
+) async throws -> [IdentifiedTransferRequest] {
+    var requests: [IdentifiedTransferRequest] = []
+    for source in sources {
+        guard let sourceIdentity = try await fileSystem.identity(of: source) else {
+            throw CocoaError(.fileReadNoSuchFile)
+        }
+        requests.append(IdentifiedTransferRequest(
+            source: source,
+            sourceIdentity: sourceIdentity,
+            destinationRoot: parent,
+            destinationRootIdentity: parentIdentity,
+            relativeParentComponents: []
+        ))
+    }
+    return requests
 }

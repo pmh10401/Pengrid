@@ -5,6 +5,7 @@ import Testing
 @Test func filenameValidationRejectsUnsafeNames() {
     #expect(throws: FilenameError.empty) { try FilenameValidator.validate("   ") }
     #expect(throws: FilenameError.containsPathSeparator) { try FilenameValidator.validate("a/b") }
+    #expect(throws: FilenameError.containsNUL) { try FilenameValidator.validate("safe\0hidden") }
     #expect(throws: FilenameError.dotEntry) { try FilenameValidator.validate(".") }
     #expect(throws: FilenameError.dotEntry) { try FilenameValidator.validate("..") }
 }

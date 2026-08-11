@@ -15,6 +15,51 @@ private actor EmptySmartSearchService: SmartSearching {
 
 @MainActor
 struct WorkspaceCommandTests {
+    @Test func batchRenameCommandCapturesOnlyActivePaneSelectionInVisibleOrder() async throws {
+        let left = URL(filePath: "/left", directoryHint: .isDirectory)
+        let right = URL(filePath: "/right", directoryHint: .isDirectory)
+        let leftItems = [
+            commandItem("z.txt", in: left),
+            commandItem("a.txt", in: left)
+        ]
+        let rightItems = [
+            commandItem("other-1.txt", in: right),
+            commandItem("other-2.txt", in: right)
+        ]
+        let workspace = WorkspaceState(
+            leftURL: left,
+            rightURL: right,
+            listingService: StubDirectoryListingService(values: [
+                left: leftItems,
+                right: rightItems
+            ])
+        )
+        await workspace.loadInitialDirectories()
+        workspace.left.selection = Set(leftItems.map(\.url))
+        workspace.right.selection = Set(rightItems.map(\.url))
+        workspace.activate(.left)
+        let expectedVisibleOrder = workspace.left.visibleItems.filter {
+            workspace.left.selection.contains($0.url)
+        }
+        let existing = Set([left, right] + leftItems.map(\.url) + rightItems.map(\.url))
+        let model = BatchRenameModel(fileSystem: RecordingFileSystem(
+            existingURLs: existing,
+            caseInsensitivePaths: true
+        ))
+
+        await WorkspaceBatchRenameCommandActions.showBatchRename(
+            in: workspace,
+            model: model,
+            capability: .writable
+        )
+        model.updateRule(.sequence(baseName: "Item", start: 1, digits: 2))
+        while model.phase == .planning { await Task.yield() }
+
+        #expect(model.preview.entries.map(\.source.url) == expectedVisibleOrder.map(\.url))
+        #expect(model.preview.entries.map(\.proposedName) == ["Item 01.txt", "Item 02.txt"])
+        #expect(model.preview.entries.allSatisfy { !$0.source.url.path.hasPrefix(right.path) })
+    }
+
     @Test func smartSearchStartsAtActivePaneRoot() {
         let workspace = WorkspaceState(
             leftURL: URL(filePath: "/left"),
@@ -373,6 +418,97 @@ struct WorkspaceCommandTests {
         }
     }
 
+    @Test func contextActionAccessibilityExplainsDestinationCountAndDisabledReasonWithoutPaths() {
+        let privatePath = "/Users/example/Confidential/Report.txt"
+        let value = ContextActionAccessibilityPresentation.value(
+            action: .transferToOtherPane(.copy),
+            itemCount: 2,
+            destinationPaneID: .right,
+            availability: .disabled(reason: "Finish editing first.")
+        )
+
+        #expect(value == "2 selected items. Destination: right pane. Unavailable: Finish editing first.")
+        #expect(!value.contains(privatePath))
+    }
+
+    @Test @MainActor
+    func incompleteCommandSelectionFailsClosedBeforePolicyOrDraftCapture() {
+        let sourceDirectory = URL(filePath: "/left", directoryHint: .isDirectory)
+        let selectedItem = commandItem("visible.txt", in: sourceDirectory)
+        let workspace = WorkspaceState(
+            leftURL: sourceDirectory,
+            rightURL: URL(filePath: "/right", directoryHint: .isDirectory),
+            listingService: StubDirectoryListingService(values: [:])
+        )
+
+        let controller = FileOperationController(
+            service: FileOperationService(fileSystem: LiveFileSystemAccess())
+        )
+        let policy = WorkspaceContextActionRouting.policy(
+            items: [selectedItem],
+            capturedSelectionCount: 2,
+            sourcePaneID: .left,
+            workspace: workspace,
+            operationController: controller,
+            cloudLocations: nil
+        )
+        let draft = WorkspaceContextActionRouting.draft(
+            items: [selectedItem],
+            capturedSelectionCount: 2,
+            sourcePaneID: .left,
+            workspace: workspace,
+            cloudLocations: nil
+        )
+
+        #expect(!policy.quickLook.isEnabled)
+        #expect(policy.quickLook.disabledReason == "Selection is still loading.")
+        #expect(draft == nil)
+    }
+
+    @Test func contextCommandsKeepApprovedShortcutsAndSharedCapturedAuthority() throws {
+        let commands = try workspaceSource(named: "Support/WorkspaceCommands.swift")
+        let pane = try workspaceSource(named: "Views/FilePaneView.swift")
+        let contextActionSection = try #require(commands.slice(
+            from: "@ViewBuilder\n    private var contextActionCommands",
+            until: "    private var contextPresentation"
+        ))
+
+        #expect(commands.contains(".keyboardShortcut(.space, modifiers: [])"))
+        #expect(contextActionSection.contains(
+            "Button(\"Copy Full Path\") { dispatchContextAction(.copyPath(.fullPath)) }\n                    .keyboardShortcut(\"c\", modifiers: [.command, .option])"
+        ))
+        #expect(contextActionSection.contains(
+            "Button(\"Duplicate\") { dispatchContextAction(.duplicate) }\n                .keyboardShortcut(\"d\", modifiers: .command)"
+        ))
+        #expect(contextActionSection.components(separatedBy: ".keyboardShortcut(").count - 1 == 2)
+        #expect(commands.contains("WorkspaceContextActionRouting.policy("))
+        #expect(commands.contains("WorkspaceContextActionRouting.draft("))
+        #expect(pane.contains("WorkspaceContextActionRouting.policy("))
+        #expect(pane.contains("WorkspaceContextActionRouting.draft("))
+        #expect(commands.contains("return workspace.activePane.visibleItems.filter"))
+
+        let textEditingPolicy = WorkspaceCommandPolicy(
+            selectionCount: 1,
+            isOperationRunning: false,
+            pasteboardHasFileURLs: true,
+            selectedItems: [commandItem("report.txt", in: URL(filePath: "/left"))],
+            isTextEditing: true
+        )
+        #expect(textEditingPolicy.copyRoute == .textResponder)
+        #expect(!textEditingPolicy.canQuickLook)
+        let pathCopyPolicy = FileContextMenuPolicy(.init(
+            workspaceCommandPolicy: textEditingPolicy,
+            selectedItems: textEditingPolicy.selectedItems,
+            sourceDirectory: URL(filePath: "/left", directoryHint: .isDirectory),
+            oppositeDirectory: URL(filePath: "/right", directoryHint: .isDirectory),
+            sourceCapability: .writable,
+            oppositeCapability: .writable,
+            isExclusiveOperationActive: false
+        ))
+        #expect(!pathCopyPolicy.copyPath.isEnabled)
+        #expect(pathCopyPolicy.copyPath.disabledReason == "Finish editing first.")
+    }
+
     @Test func filterEditingIsATextSessionAndCommandFTargetsOnlyTheActivePane() {
         let workspace = WorkspaceState(
             leftURL: URL(filePath: "/left"),
@@ -440,6 +576,18 @@ struct WorkspaceCommandTests {
     }
 }
 
+private func commandItem(_ name: String, in directory: URL) -> FileItem {
+    FileItem(
+        url: directory.appending(path: name),
+        name: name,
+        isDirectory: false,
+        isPackage: false,
+        modifiedAt: nil,
+        byteSize: nil,
+        typeDescription: "Document"
+    )
+}
+
 private func menuItemsRecursively(in menu: NSMenu) -> [NSMenuItem] {
     var items = menu.items
     for item in menu.items {
@@ -447,6 +595,26 @@ private func menuItemsRecursively(in menu: NSMenu) -> [NSMenuItem] {
         items.append(contentsOf: menuItemsRecursively(in: submenu))
     }
     return items
+}
+
+private func workspaceSource(named relativePath: String) throws -> String {
+    let testsDirectory = URL(filePath: #filePath).deletingLastPathComponent()
+    let packageRoot = testsDirectory
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    return try String(
+        contentsOf: packageRoot.appending(path: "Sources/BloomFileManager/\(relativePath)"),
+        encoding: .utf8
+    )
+}
+
+private extension String {
+    func slice(from start: String, until end: String) -> String? {
+        guard let startRange = range(of: start),
+              let endRange = range(of: end, range: startRange.upperBound..<endIndex)
+        else { return nil }
+        return String(self[startRange.lowerBound..<endRange.lowerBound])
+    }
 }
 
 @MainActor

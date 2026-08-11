@@ -7,6 +7,23 @@ struct CloudLocationCandidate: Sendable {
     let rootIdentity: Data
     let domainIdentifier: String?
     let systemDisplayName: String
+    let supportsLocalFileOperations: Bool
+
+    init(
+        url: URL,
+        canonicalURL: URL,
+        rootIdentity: Data,
+        domainIdentifier: String?,
+        systemDisplayName: String,
+        supportsLocalFileOperations: Bool = true
+    ) {
+        self.url = url
+        self.canonicalURL = canonicalURL
+        self.rootIdentity = rootIdentity
+        self.domainIdentifier = domainIdentifier
+        self.systemDisplayName = systemDisplayName
+        self.supportsLocalFileOperations = supportsLocalFileOperations
+    }
 }
 
 protocol CloudLocationFileSystem: Sendable {
@@ -26,7 +43,8 @@ struct LiveCloudLocationFileSystem: CloudLocationFileSystem {
             .isDirectoryKey,
             .fileResourceIdentifierKey,
             .canonicalPathKey,
-            .nameKey
+            .nameKey,
+            .volumeIsReadOnlyKey
         ]
 
         guard let urls = try? fileManager.contentsOfDirectory(
@@ -57,7 +75,10 @@ struct LiveCloudLocationFileSystem: CloudLocationFileSystem {
                 canonicalURL: canonicalURL,
                 rootIdentity: rootIdentity,
                 domainIdentifier: await domainIdentifier(for: url),
-                systemDisplayName: values.name ?? url.lastPathComponent
+                systemDisplayName: values.name ?? url.lastPathComponent,
+                supportsLocalFileOperations: fileManager.isWritableFile(
+                    atPath: canonicalURL.path
+                ) && values.volumeIsReadOnly != true
             ))
         }
         return candidates
@@ -96,7 +117,11 @@ struct LiveCloudLocationDiscovery: CloudLocationDiscovering {
     }
 
     private func location(for candidate: CloudLocationCandidate) -> StorageLocation {
-        StorageLocation(
+        var capabilities: StorageCapabilities = [.browse, .materialize]
+        if candidate.supportsLocalFileOperations {
+            capabilities.insert(.localFileOperations)
+        }
+        return StorageLocation(
             id: .fileProvider(
                 domainIdentifier: candidate.domainIdentifier ?? "",
                 rootIdentity: candidate.rootIdentity
@@ -105,7 +130,7 @@ struct LiveCloudLocationDiscovery: CloudLocationDiscovering {
             displayName: candidate.systemDisplayName,
             rootURL: candidate.canonicalURL,
             isAvailable: true,
-            capabilities: [.browse, .materialize, .localFileOperations],
+            capabilities: capabilities,
             source: .discovered
         )
     }

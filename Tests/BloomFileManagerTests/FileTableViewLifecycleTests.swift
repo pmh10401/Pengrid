@@ -1213,6 +1213,559 @@ struct FileTableViewLifecycleTests {
         #expect(coordinator.control(NSTextField(string: item.name), textShouldBeginEditing: NSTextView()) == false)
     }
 
+    @Test func contextMenuOpenRoutesTheStableTableOrderSelection() throws {
+        let directory = URL(filePath: "/tmp/table-open", directoryHint: .isDirectory)
+        let first = makeTableItem(named: "first.txt", in: directory)
+        let middle = makeTableItem(named: "middle.txt", in: directory)
+        let last = makeTableItem(named: "last.txt", in: directory)
+        let selection = SelectionRecorder(value: [last.url, first.url])
+        var opened: [FileItem] = []
+        let view = FileTableView(
+            items: [first, middle, last],
+            selection: selection.binding,
+            onActivatePane: {},
+            onOpen: { _ in },
+            onOpenSelection: { opened = $0 },
+            onSortChange: { _ in }
+        )
+        let coordinator = view.makeCoordinator()
+        let scrollView = view.makeScrollView(coordinator: coordinator)
+        let tableView = try #require(scrollView.documentView as? NSTableView)
+        coordinator.apply(items: view.items, selection: selection.value, to: tableView)
+        let menu = try #require(tableView.menu)
+
+        coordinator.menuNeedsUpdate(menu)
+        let openItem = try #require(menu.items.first { $0.title == "Open" })
+        #expect(openItem.isEnabled)
+        #expect(NSApp.sendAction(openItem.action!, to: openItem.target, from: openItem))
+
+        #expect(opened == [first, last])
+    }
+
+    @Test func contextMenuOpenIsDisabledDuringTextEditing() throws {
+        let item = makeTableItem(named: "draft.txt", in: URL(filePath: "/tmp/table-open"))
+        let selection = SelectionRecorder(value: [item.url])
+        let view = FileTableView(
+            items: [item],
+            selection: selection.binding,
+            isTextEditing: true,
+            onActivatePane: {},
+            onOpen: { _ in },
+            onOpenSelection: { _ in },
+            onSortChange: { _ in }
+        )
+        let coordinator = view.makeCoordinator()
+        let scrollView = view.makeScrollView(coordinator: coordinator)
+        let tableView = try #require(scrollView.documentView as? NSTableView)
+        coordinator.apply(items: view.items, selection: selection.value, to: tableView)
+        let menu = try #require(tableView.menu)
+
+        coordinator.menuNeedsUpdate(menu)
+
+        #expect(menu.items.first { $0.title == "Open" }?.isEnabled == false)
+    }
+
+    @Test func defaultContextMenuPresentationRetainsTheLegacyOrderAndSeparators() throws {
+        let directory = URL(filePath: "/tmp/legacy-context-menu", directoryHint: .isDirectory)
+        let item = makeTableItem(named: "legacy.txt", in: directory)
+        let selection = SelectionRecorder(value: [item.url])
+        let view = FileTableView(
+            items: [item],
+            selection: selection.binding,
+            onActivatePane: {},
+            onOpen: { _ in },
+            onSortChange: { _ in }
+        )
+        let coordinator = view.makeCoordinator()
+        let scrollView = view.makeScrollView(coordinator: coordinator)
+        let tableView = try #require(scrollView.documentView as? NSTableView)
+        coordinator.apply(items: view.items, selection: selection.value, to: tableView)
+        let menu = try #require(tableView.menu)
+
+        coordinator.menuNeedsUpdate(menu)
+
+        #expect(menu.items.map(\.title) == [
+            "Open", "", "New Folder", "Add to Favorites", "Rename", "Batch Rename…", "",
+            "Copy", "Paste", "", "Compress to ZIP", "Compress as Password-Protected ZIP…",
+            "Compress as…", "Extract Archive", "", "Move to Trash…"
+        ])
+    }
+
+    @Test func openWithWithoutApplicationsIsDisabledWithAStableReason() throws {
+        let directory = URL(filePath: "/tmp/empty-open-with", directoryHint: .isDirectory)
+        let item = makeTableItem(named: "report.txt", in: directory)
+        let selection = SelectionRecorder(value: [item.url])
+        let view = FileTableView(
+            items: [item],
+            selection: selection.binding,
+            onActivatePane: {},
+            onOpen: { _ in },
+            onSortChange: { _ in },
+            contextMenuPresentation: { selectedItems in
+                FileContextMenuPresentation(policy: self.contextMenuPolicy(for: selectedItems))
+            }
+        )
+        let coordinator = view.makeCoordinator()
+        let scrollView = view.makeScrollView(coordinator: coordinator)
+        let tableView = try #require(scrollView.documentView as? NSTableView)
+        coordinator.apply(items: view.items, selection: selection.value, to: tableView)
+        let menu = try #require(tableView.menu)
+
+        coordinator.menuNeedsUpdate(menu)
+
+        let openWith = try #require(menu.items.first { $0.title == "Open With" })
+        #expect(!openWith.isEnabled)
+        #expect(openWith.toolTip == "No compatible applications found.")
+    }
+
+    @Test func openWithIsHiddenForDirectoriesAndMultipleSelectionThenPopulatesWithoutChangingSelection() throws {
+        let directory = URL(filePath: "/tmp/open-with-visibility", directoryHint: .isDirectory)
+        let ordinaryDirectory = FileItem(
+            url: directory.appending(path: "Folder", directoryHint: .isDirectory),
+            name: "Folder",
+            isDirectory: true,
+            isPackage: false,
+            modifiedAt: nil,
+            byteSize: nil,
+            typeDescription: "Folder"
+        )
+        let first = makeTableItem(named: "first.txt", in: directory)
+        let second = makeTableItem(named: "second.txt", in: directory)
+        let directorySelection = SelectionRecorder(value: [ordinaryDirectory.url])
+        let directoryView = FileTableView(
+            items: [ordinaryDirectory],
+            selection: directorySelection.binding,
+            onActivatePane: {},
+            onOpen: { _ in },
+            onSortChange: { _ in },
+            contextMenuPresentation: { selectedItems in
+                FileContextMenuPresentation(policy: self.contextMenuPolicy(for: selectedItems))
+            }
+        )
+        let directoryCoordinator = directoryView.makeCoordinator()
+        let directoryScroll = directoryView.makeScrollView(coordinator: directoryCoordinator)
+        let directoryTable = try #require(directoryScroll.documentView as? NSTableView)
+        directoryCoordinator.apply(items: directoryView.items, selection: directorySelection.value, to: directoryTable)
+        let directoryMenu = try #require(directoryTable.menu)
+        directoryCoordinator.menuNeedsUpdate(directoryMenu)
+        #expect(directoryMenu.items.contains { $0.title == "Open With" } == false)
+
+        let selection = SelectionRecorder(value: [first.url])
+        let loadingView = FileTableView(
+            items: [first, second],
+            selection: selection.binding,
+            onActivatePane: {},
+            onOpen: { _ in },
+            onSortChange: { _ in },
+            contextMenuPresentation: { selectedItems in
+                FileContextMenuPresentation(
+                    policy: self.contextMenuPolicy(for: selectedItems),
+                    openWithAvailability: .disabled(reason: "Compatible applications are loading.")
+                )
+            }
+        )
+        let coordinator = loadingView.makeCoordinator()
+        let scroll = loadingView.makeScrollView(coordinator: coordinator)
+        let table = try #require(scroll.documentView as? NSTableView)
+        coordinator.apply(items: loadingView.items, selection: selection.value, to: table)
+        let menu = try #require(table.menu)
+        coordinator.menuNeedsUpdate(menu)
+        let loadingOpenWith = try #require(menu.items.first { $0.title == "Open With" })
+        #expect(!loadingOpenWith.isEnabled)
+        #expect(loadingOpenWith.toolTip == "Compatible applications are loading.")
+        #expect(selection.value == [first.url])
+
+        let textEdit = OpenWithApplication(
+            applicationURL: URL(filePath: "/Applications/TextEdit.app", directoryHint: .isDirectory),
+            displayName: "TextEdit"
+        )
+        coordinator.parent = FileTableView(
+            items: [first, second],
+            selection: selection.binding,
+            onActivatePane: {},
+            onOpen: { _ in },
+            onSortChange: { _ in },
+            contextMenuPresentation: { selectedItems in
+                FileContextMenuPresentation(
+                    policy: self.contextMenuPolicy(for: selectedItems),
+                    openWithApplications: [textEdit],
+                    openWithAvailability: .enabled
+                )
+            }
+        )
+        coordinator.menuNeedsUpdate(menu)
+        let populatedOpenWith = try #require(menu.items.first { $0.title == "Open With" })
+        #expect(populatedOpenWith.isEnabled)
+        #expect(populatedOpenWith.submenu?.items.map(\.title) == ["TextEdit"])
+        #expect(selection.value == [first.url])
+
+        let multipleSelection = SelectionRecorder(value: [first.url, second.url])
+        let multipleView = FileTableView(
+            items: [first, second],
+            selection: multipleSelection.binding,
+            onActivatePane: {},
+            onOpen: { _ in },
+            onSortChange: { _ in },
+            contextMenuPresentation: { selectedItems in
+                FileContextMenuPresentation(policy: self.contextMenuPolicy(for: selectedItems))
+            }
+        )
+        let multipleCoordinator = multipleView.makeCoordinator()
+        let multipleScroll = multipleView.makeScrollView(coordinator: multipleCoordinator)
+        let multipleTable = try #require(multipleScroll.documentView as? NSTableView)
+        multipleCoordinator.apply(items: multipleView.items, selection: multipleSelection.value, to: multipleTable)
+        let multipleMenu = try #require(multipleTable.menu)
+        multipleCoordinator.menuNeedsUpdate(multipleMenu)
+        #expect(multipleMenu.items.contains { $0.title == "Open With" } == false)
+    }
+
+    @Test func openWithPresentationRequestsOnlyEligibleUncachedItemsAndUsesStableCachedReasons() {
+        let directory = URL(filePath: "/tmp/open-with-presentation", directoryHint: .isDirectory)
+        let item = makeTableItem(named: "report.txt", in: directory)
+        let policy = contextMenuPolicy(for: [item])
+        let provider = OpenWithPresentationProvider()
+
+        let loading = OpenWithMenuPresentation.make(
+            policy: policy,
+            selectedItems: [item],
+            provider: provider
+        )
+        #expect(loading.openWithApplications.isEmpty)
+        #expect(loading.openWithAvailability == .disabled(reason: "Compatible applications are loading."))
+        #expect(provider.requestedItems == [item])
+
+        provider.cached = []
+        let empty = OpenWithMenuPresentation.make(
+            policy: policy,
+            selectedItems: [item],
+            provider: provider
+        )
+        #expect(empty.openWithAvailability == .disabled(reason: "No compatible applications found."))
+        #expect(provider.requestedItems == [item])
+
+        let textEdit = OpenWithApplication(
+            applicationURL: URL(filePath: "/Applications/TextEdit.app", directoryHint: .isDirectory),
+            displayName: "TextEdit"
+        )
+        provider.cached = [textEdit]
+        let populated = OpenWithMenuPresentation.make(
+            policy: policy,
+            selectedItems: [item],
+            provider: provider
+        )
+        #expect(populated.openWithApplications == [textEdit])
+        #expect(populated.openWithAvailability == .enabled)
+        #expect(provider.requestedItems == [item])
+
+        let ordinaryDirectory = FileItem(
+            url: directory.appending(path: "Folder", directoryHint: .isDirectory),
+            name: "Folder",
+            isDirectory: true,
+            isPackage: false,
+            modifiedAt: nil,
+            byteSize: nil,
+            typeDescription: "Folder"
+        )
+        let hidden = OpenWithMenuPresentation.make(
+            policy: contextMenuPolicy(for: [ordinaryDirectory]),
+            selectedItems: [ordinaryDirectory],
+            provider: provider
+        )
+        #expect(hidden.openWithAvailability == nil)
+        #expect(provider.requestedItems == [item])
+    }
+
+    @Test func contextMenuBuildsTheApprovedHybridOrderAndCopyPathSubmenu() throws {
+        let directory = URL(filePath: "/tmp/context-menu", directoryHint: .isDirectory)
+        let first = makeTableItem(named: "first.txt", in: directory)
+        let middle = makeTableItem(named: "middle.txt", in: directory)
+        let last = makeTableItem(named: "last.txt", in: directory)
+        let selection = SelectionRecorder(value: [last.url, first.url])
+        let view = FileTableView(
+            items: [first, middle, last],
+            selection: selection.binding,
+            onActivatePane: {},
+            onOpen: { _ in },
+            onSortChange: { _ in },
+            contextMenuPresentation: { selectedItems in
+                FileContextMenuPresentation(policy: self.contextMenuPolicy(for: selectedItems))
+            }
+        )
+        let coordinator = view.makeCoordinator()
+        let scrollView = view.makeScrollView(coordinator: coordinator)
+        let tableView = try #require(scrollView.documentView as? NSTableView)
+        coordinator.apply(items: view.items, selection: selection.value, to: tableView)
+        let menu = try #require(tableView.menu)
+
+        coordinator.menuNeedsUpdate(menu)
+
+        #expect(menu.items.map(\.title) == [
+            "Open", "Quick Look", "",
+            "Copy to Other Pane", "Move to Other Pane", "Show in Finder", "Copy Path", "",
+            "New Folder", "New Folder with Selection (2 Items)…", "Add to Favorites", "Duplicate",
+            "Rename", "Batch Rename…", "", "Copy", "Paste", "",
+            "Compress to ZIP", "Compress as Password-Protected ZIP…", "Compress as…", "Extract Archive", "",
+            "Move to Trash…"
+        ])
+        let copyPath = try #require(menu.items.first { $0.title == "Copy Path" })
+        #expect(copyPath.identifier == NSUserInterfaceItemIdentifier(AccessibilityIdentifiers.fileTableCopyPath))
+        #expect(copyPath.submenu?.items.map(\.title) == [
+            "Copy Full Path", "Copy Name", "Copy Parent Path", "Copy File URL"
+        ])
+        #expect(copyPath.submenu?.items.map(\.identifier) == [
+            NSUserInterfaceItemIdentifier(AccessibilityIdentifiers.fileTableCopyFullPath),
+            NSUserInterfaceItemIdentifier(AccessibilityIdentifiers.fileTableCopyName),
+            NSUserInterfaceItemIdentifier(AccessibilityIdentifiers.fileTableCopyParentPath),
+            NSUserInterfaceItemIdentifier(AccessibilityIdentifiers.fileTableCopyFileURL)
+        ])
+    }
+
+    @Test func contextMenuOpenWithPreservesApplicationsAndDispatchesTheCapturedURL() throws {
+        let directory = URL(filePath: "/tmp/open-with", directoryHint: .isDirectory)
+        let item = makeTableItem(named: "report.txt", in: directory)
+        let selection = SelectionRecorder(value: [item.url])
+        let preview = OpenWithApplication(
+            applicationURL: URL(filePath: "/Applications/Preview.app", directoryHint: .isDirectory),
+            displayName: "Preview"
+        )
+        let textEdit = OpenWithApplication(
+            applicationURL: URL(filePath: "/Applications/TextEdit.app", directoryHint: .isDirectory),
+            displayName: "TextEdit"
+        )
+        var actions: [(ContextActionKind, [FileItem])] = []
+        let view = FileTableView(
+            items: [item],
+            selection: selection.binding,
+            onActivatePane: {},
+            onOpen: { _ in },
+            onSortChange: { _ in },
+            contextMenuPresentation: { selectedItems in
+                FileContextMenuPresentation(
+                    policy: self.contextMenuPolicy(for: selectedItems),
+                    openWithApplications: [preview, textEdit]
+                )
+            },
+            onContextAction: { actions.append(($0, $1)) }
+        )
+        let coordinator = view.makeCoordinator()
+        let scrollView = view.makeScrollView(coordinator: coordinator)
+        let tableView = try #require(scrollView.documentView as? NSTableView)
+        coordinator.apply(items: view.items, selection: selection.value, to: tableView)
+        let menu = try #require(tableView.menu)
+
+        coordinator.menuNeedsUpdate(menu)
+
+        let openWith = try #require(menu.items.first { $0.title == "Open With" })
+        #expect(openWith.identifier == NSUserInterfaceItemIdentifier(AccessibilityIdentifiers.fileTableOpenWith))
+        #expect(openWith.isEnabled)
+        let applications = try #require(openWith.submenu)
+        #expect(applications.items.map(\.title) == ["Preview", "TextEdit"])
+        #expect(applications.items.allSatisfy { $0.image != nil })
+        #expect(applications.items.map(\.identifier) == [
+            NSUserInterfaceItemIdentifier(AccessibilityIdentifiers.fileTableOpenWithApplication(0)),
+            NSUserInterfaceItemIdentifier(AccessibilityIdentifiers.fileTableOpenWithApplication(1))
+        ])
+
+        let textEditItem = applications.items[1]
+        #expect(NSApp.sendAction(textEditItem.action!, to: textEditItem.target, from: textEditItem))
+        #expect(actions.count == 1)
+        #expect(actions[0].0 == .openWith(applicationURL: textEdit.applicationURL))
+        #expect(actions[0].1 == [item])
+    }
+
+    @Test func contextMenuVisibleDisabledContextActionsExposeTheirReasons() throws {
+        let directory = URL(filePath: "/tmp/disabled-context-menu", directoryHint: .isDirectory)
+        let item = makeTableItem(named: "draft.txt", in: directory)
+        let selection = SelectionRecorder(value: [item.url])
+        let preview = OpenWithApplication(
+            applicationURL: URL(filePath: "/Applications/Preview.app", directoryHint: .isDirectory),
+            displayName: "Preview"
+        )
+        let view = FileTableView(
+            items: [item],
+            selection: selection.binding,
+            isTextEditing: true,
+            onActivatePane: {},
+            onOpen: { _ in },
+            onSortChange: { _ in },
+            contextMenuPresentation: { selectedItems in
+                FileContextMenuPresentation(
+                    policy: self.contextMenuPolicy(for: selectedItems, isTextEditing: true),
+                    openWithApplications: [preview]
+                )
+            }
+        )
+        let coordinator = view.makeCoordinator()
+        let scrollView = view.makeScrollView(coordinator: coordinator)
+        let tableView = try #require(scrollView.documentView as? NSTableView)
+        coordinator.apply(items: view.items, selection: selection.value, to: tableView)
+        let menu = try #require(tableView.menu)
+
+        coordinator.menuNeedsUpdate(menu)
+
+        for title in ["Quick Look", "Open With", "Open in Other Pane", "Copy to Other Pane", "Move to Other Pane", "Show in Finder", "Copy Path", "Duplicate"] {
+            let menuItem = try #require(menu.items.first { $0.title == title })
+            #expect(!menuItem.isEnabled)
+            #expect(menuItem.toolTip == "Finish editing first.")
+        }
+    }
+
+    @Test func contextMenuDispatchesEveryNewActionWithIdentifiersAndCapturedOrder() throws {
+        let directory = URL(filePath: "/tmp/context-action-dispatch", directoryHint: .isDirectory)
+        let first = makeTableItem(named: "first.txt", in: directory)
+        let second = makeTableItem(named: "second.txt", in: directory)
+        var actions: [(ContextActionKind, [FileItem])] = []
+        let singleSelection = SelectionRecorder(value: [first.url])
+        let singleView = FileTableView(
+            items: [first, second],
+            selection: singleSelection.binding,
+            onActivatePane: {},
+            onOpen: { _ in },
+            onSortChange: { _ in },
+            contextMenuPresentation: { selectedItems in
+                FileContextMenuPresentation(policy: self.contextMenuPolicy(for: selectedItems))
+            },
+            onContextAction: { actions.append(($0, $1)) }
+        )
+        let singleCoordinator = singleView.makeCoordinator()
+        let singleScrollView = singleView.makeScrollView(coordinator: singleCoordinator)
+        let singleTable = try #require(singleScrollView.documentView as? NSTableView)
+        singleCoordinator.apply(items: singleView.items, selection: singleSelection.value, to: singleTable)
+        let singleMenu = try #require(singleTable.menu)
+        singleCoordinator.menuNeedsUpdate(singleMenu)
+
+        let singleActions: [(String, String, ContextActionKind)] = [
+            ("Quick Look", AccessibilityIdentifiers.fileTableQuickLook, .quickLook),
+            ("Open in Other Pane", AccessibilityIdentifiers.fileTableOpenInOtherPane, .openInOtherPane),
+            ("Copy to Other Pane", AccessibilityIdentifiers.fileTableCopyToOtherPane, .transferToOtherPane(.copy)),
+            ("Move to Other Pane", AccessibilityIdentifiers.fileTableMoveToOtherPane, .transferToOtherPane(.move)),
+            ("Show in Finder", AccessibilityIdentifiers.fileTableShowInFinder, .showInFinder),
+            ("Duplicate", AccessibilityIdentifiers.fileTableDuplicate, .duplicate)
+        ]
+        for (title, identifier, action) in singleActions {
+            let item = try #require(singleMenu.items.first { $0.title == title })
+            #expect(item.identifier == NSUserInterfaceItemIdentifier(identifier))
+            #expect(NSApp.sendAction(item.action!, to: item.target, from: item))
+            #expect(actions.last?.0 == action)
+            #expect(actions.last?.1 == [first])
+        }
+        let copyPath = try #require(singleMenu.items.first { $0.title == "Copy Path" })
+        #expect(copyPath.identifier == NSUserInterfaceItemIdentifier(AccessibilityIdentifiers.fileTableCopyPath))
+        let copyPathActions: [(String, String, ContextActionKind)] = [
+            ("Copy Full Path", AccessibilityIdentifiers.fileTableCopyFullPath, .copyPath(.fullPath)),
+            ("Copy Name", AccessibilityIdentifiers.fileTableCopyName, .copyPath(.name)),
+            ("Copy Parent Path", AccessibilityIdentifiers.fileTableCopyParentPath, .copyPath(.parentPath)),
+            ("Copy File URL", AccessibilityIdentifiers.fileTableCopyFileURL, .copyPath(.fileURL))
+        ]
+        let copyPathMenu = try #require(copyPath.submenu)
+        for (title, identifier, action) in copyPathActions {
+            let item = try #require(copyPathMenu.items.first { $0.title == title })
+            #expect(item.identifier == NSUserInterfaceItemIdentifier(identifier))
+            #expect(NSApp.sendAction(item.action!, to: item.target, from: item))
+            #expect(actions.last?.0 == action)
+            #expect(actions.last?.1 == [first])
+        }
+
+        let doubleSelection = SelectionRecorder(value: [second.url, first.url])
+        let doubleView = FileTableView(
+            items: [first, second],
+            selection: doubleSelection.binding,
+            onActivatePane: {},
+            onOpen: { _ in },
+            onSortChange: { _ in },
+            contextMenuPresentation: { selectedItems in
+                FileContextMenuPresentation(policy: self.contextMenuPolicy(for: selectedItems))
+            },
+            onContextAction: { actions.append(($0, $1)) }
+        )
+        let doubleCoordinator = doubleView.makeCoordinator()
+        let doubleScrollView = doubleView.makeScrollView(coordinator: doubleCoordinator)
+        let doubleTable = try #require(doubleScrollView.documentView as? NSTableView)
+        doubleCoordinator.apply(items: doubleView.items, selection: doubleSelection.value, to: doubleTable)
+        let doubleMenu = try #require(doubleTable.menu)
+        doubleCoordinator.menuNeedsUpdate(doubleMenu)
+
+        let enclose = try #require(doubleMenu.items.first {
+            $0.identifier == NSUserInterfaceItemIdentifier(AccessibilityIdentifiers.fileTableEncloseSelection)
+        })
+        #expect(NSApp.sendAction(enclose.action!, to: enclose.target, from: enclose))
+        #expect(actions.last?.0 == .encloseSelection)
+        #expect(actions.last?.1 == [first, second])
+    }
+
+    @Test func contextMenuRightClickPreservesInsideSelectionAndReplacesOutsideSelection() {
+        let directory = URL(filePath: "/tmp/context-click-selection", directoryHint: .isDirectory)
+        let first = makeTableItem(named: "first.txt", in: directory)
+        let second = makeTableItem(named: "second.txt", in: directory)
+        let third = makeTableItem(named: "third.txt", in: directory)
+        let selection = SelectionRecorder(value: [second.url, first.url])
+        var captures: [[FileItem]] = []
+        let view = FileTableView(
+            items: [first, second, third],
+            selection: selection.binding,
+            onActivatePane: {},
+            onOpen: { _ in },
+            onSortChange: { _ in },
+            contextMenuPresentation: {
+                captures.append($0)
+                return FileContextMenuPresentation.hidden
+            }
+        )
+        let coordinator = view.makeCoordinator()
+        let table = ClickedRowTableView(clickedRow: 1)
+        table.dataSource = coordinator
+        table.delegate = coordinator
+        coordinator.tableView = table
+        table.selectRowIndexes(IndexSet([0, 1]), byExtendingSelection: false)
+
+        coordinator.menuNeedsUpdate(NSMenu())
+
+        #expect(selection.value == [first.url, second.url])
+        #expect(captures == [[first, second]])
+
+        table.setClickedRow(2)
+        coordinator.menuNeedsUpdate(NSMenu())
+
+        #expect(selection.value == [third.url])
+        #expect(captures.last == [third])
+    }
+
+    @Test func contextMenuBatchRenameUsesStableSelectionAndSharedEnablement() throws {
+        let directory = URL(filePath: "/tmp/table-batch", directoryHint: .isDirectory)
+        let first = makeTableItem(named: "first.txt", in: directory)
+        let second = makeTableItem(named: "second.txt", in: directory)
+        let selection = SelectionRecorder(value: [first.url, second.url])
+        var requestCount = 0
+        let view = FileTableView(
+            items: [first, second],
+            selection: selection.binding,
+            onActivatePane: {},
+            onOpen: { _ in },
+            onSortChange: { _ in },
+            onRequestBatchRename: { requestCount += 1 }
+        )
+        let coordinator = view.makeCoordinator()
+        let scrollView = view.makeScrollView(coordinator: coordinator)
+        let tableView = try #require(scrollView.documentView as? NSTableView)
+        coordinator.apply(items: view.items, selection: selection.value, to: tableView)
+        let menu = try #require(tableView.menu)
+
+        coordinator.menuNeedsUpdate(menu)
+        let item = try #require(menu.items.first { $0.title == "Batch Rename…" })
+
+        #expect(item.isEnabled)
+        #expect(item.identifier == NSUserInterfaceItemIdentifier(
+            AccessibilityIdentifiers.fileTableBatchRename
+        ))
+        #expect(item.action == #selector(FileTableView.Coordinator.batchRenameFromMenu))
+        #expect(NSApp.sendAction(item.action!, to: item.target, from: item))
+        #expect(requestCount == 1)
+
+        selection.value = [first.url]
+        coordinator.menuNeedsUpdate(menu)
+        #expect(menu.items.first { $0.title == "Batch Rename…" }?.isEnabled == false)
+    }
+
     @Test func plainSpaceRoutesToTheQuickLookMenuEquivalentBeforeTheTableConsumesIt() throws {
         let application = NSApplication.shared
         let originalMainMenu = application.mainMenu
@@ -1736,6 +2289,29 @@ struct FileTableViewLifecycleTests {
         )
     }
 
+    private func contextMenuPolicy(
+        for selectedItems: [FileItem],
+        isTextEditing: Bool = false
+    ) -> FileContextMenuPolicy {
+        let directory = selectedItems.first?.url.deletingLastPathComponent()
+            ?? URL(filePath: "/tmp/context-menu", directoryHint: .isDirectory)
+        return FileContextMenuPolicy(.init(
+            workspaceCommandPolicy: WorkspaceCommandPolicy(
+                selectionCount: selectedItems.count,
+                isOperationRunning: false,
+                pasteboardHasFileURLs: false,
+                selectedItems: selectedItems,
+                isTextEditing: isTextEditing
+            ),
+            selectedItems: selectedItems,
+            sourceDirectory: directory,
+            oppositeDirectory: URL(filePath: "/tmp/opposite", directoryHint: .isDirectory),
+            sourceCapability: .writable,
+            oppositeCapability: .writable,
+            isExclusiveOperationActive: false
+        ))
+    }
+
     private func makeIncrementalCoordinator(
         items: [FileItem],
         selection: SelectionRecorder
@@ -2097,7 +2673,7 @@ private final class RenameRecordingTableView: NSTableView {
 
 @MainActor
 private final class ClickedRowTableView: NSTableView {
-    private let row: Int
+    private var row: Int
 
     init(clickedRow: Int) {
         row = clickedRow
@@ -2109,6 +2685,10 @@ private final class ClickedRowTableView: NSTableView {
     }
 
     override var clickedRow: Int { row }
+
+    func setClickedRow(_ row: Int) {
+        self.row = row
+    }
 }
 
 private struct RenameEditRequest: Equatable {
@@ -2360,4 +2940,18 @@ private func makeTableItem(named name: String, in directory: URL) -> FileItem {
         byteSize: 1,
         typeDescription: "File"
     )
+}
+
+@MainActor
+private final class OpenWithPresentationProvider: OpenWithApplicationProviding {
+    var cached: [OpenWithApplication]?
+    private(set) var requestedItems: [FileItem] = []
+
+    func cachedApplications(for item: FileItem) -> [OpenWithApplication]? {
+        cached
+    }
+
+    func requestApplications(for item: FileItem) {
+        requestedItems.append(item)
+    }
 }

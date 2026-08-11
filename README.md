@@ -13,16 +13,17 @@ compatibility.
 ## Download
 
 The current build is
-[Pengrid 1.3.0 Developer Preview 5](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.5).
-It improves large-folder loading, pane filtering, sorting, and cancellation
-while retaining Preview 4's protected-ZIP and file-manager features.
+[Pengrid 1.3.0 Developer Preview 6](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.6).
+It adds captured-selection context actions, safe opposite-pane transfers,
+Duplicate, and transactional New Folder with Selection while retaining the
+large-folder, search, preview, and archive improvements from earlier previews.
 
-- [Download Pengrid.dmg](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.5/Pengrid.dmg)
-- App version: **1.3.0 (build 7)**
+- [Download Pengrid.dmg](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.6/Pengrid.dmg)
+- App version: **1.3.0 (build 8)**
 - Requirements: **Apple Silicon Mac, macOS 15 or later**
-- Verification: **1,223 automated tests in 80 suites**
+- Verification: **1,407 automated tests in 92 suites**
 - DMG SHA-256:
-  `3db4c0bd18b7001fe93d83ea92baf7928527d393bc5310e4ba40f7e9d75148e6`
+  `ece6212bd5f80d21bc64ef2059839db8a79a416b3706b140b1c4155dbe801b32`
 
 > **Developer Preview trust notice**
 >
@@ -57,6 +58,49 @@ Press **Space** on one ordinary folder to open Pengrid's read-only, one-level
 folder-contents preview. Files, packages, symbolic links, and multiple
 selections continue to use system Quick Look. Cloud folder preview reads
 available metadata only and does not intentionally download contents.
+
+### Context-menu productivity (Preview 6)
+
+Right-clicking a selected row preserves the whole selection; right-clicking an
+unselected row selects that row first. Commands consume that captured selection
+in visible table order, not in a later pane or selection state. The context menu
+keeps **Open** first, then groups **Quick Look**, **Open With**, and **Open in
+Other Pane**; **Copy/Move to Other Pane**, **Show in Finder**, and **Copy Path**;
+then **New Folder**, **New Folder with Selection**, favorites, **Duplicate**,
+rename, existing copy/paste and archive actions, and Trash.
+
+Quick Look keeps **Space**. Open With is available for one regular file,
+package, or symbolic link; Open in Other Pane opens one directory there, or selects one
+identity-matched non-directory from its captured parent. Copy/Move to Other
+Pane use the other pane directory captured at invocation, so later navigation
+cannot redirect the job. Show in Finder reveals captured entries without
+reading bytes. **Copy Path** offers Full Path (**Option-Command-C**), Name,
+Parent Path, and File URL as UTF-8 text in visible order. **Duplicate** uses
+**Command-D**, extension-preserving **Keep Both** names, and no-overwrite
+publication. **New Folder with Selection** accepts two or more siblings and
+moves them transactionally into a validated new folder.
+
+These actions respect text editing, current writability, File Provider
+capabilities, progress, cancellation, retry, recovery, and conservative Undo.
+Quick Look and Open With can request cloud materialization; path, Finder, and
+other-pane navigation do not intentionally read content. Copy, Move, Duplicate,
+and enclosure require a currently writable local-file-operation location.
+
+### Preview-first batch rename (Preview 6)
+
+Select at least two rows in the active pane, then choose **File Operations >
+Batch Rename…** or use the row context menu. Literal find/replace, prefix,
+suffix, and stable sequence numbering update editable filename stems while
+preserving ordinary extensions, package extensions, and recognized compound
+archive suffixes such as `.tar.gz`. A full preview reports unchanged names,
+invalid names, duplicates, and sibling collisions before any mutation starts.
+
+Execution is a same-directory, two-phase transaction that supports swaps and
+cycles. The operation center reports staging, publishing, and rollback phases;
+cancellation restores original names when that can be proven safe. Retry uses
+the captured immutable plan, while Undo is offered only when final identities,
+fingerprints, and original-name availability still match. The preview path has
+an automated 10,000-row regression ceiling of five seconds.
 
 ### Safe operation center
 
@@ -137,11 +181,15 @@ The development bundle is created at `dist/Pengrid.app`. Its executable remains
 ## Documentation
 
 - [Detailed feature guide](docs/user-guide.md)
+- [Architecture notes](docs/architecture.md)
+- [Current limitations](docs/current-limitations.md)
 - [Release and packaging guide](docs/release.md)
-- [Developer Preview 5 release notes](docs/release-notes-v1.3.0-developer-preview.5.md)
+- [Developer Preview 6 release notes](docs/release-notes-v1.3.0-developer-preview.6.md)
 - [Version 1.3 archive verification](docs/verification/version-1.3-archive-checklist.md)
 - [Smart Search verification](docs/verification/2026-08-04-smart-search.md)
 - [Folder preview verification](docs/verification/2026-08-04-folder-preview.md)
+- [Batch rename verification](docs/verification/2026-08-11-batch-rename.md)
+- [File context actions verification](docs/verification/2026-08-11-file-context-actions.md)
 - [Storage Inspector verification](docs/verification/storage-inspector-checklist.md)
 
 Pengrid is under active development. Candidate-specific manual checks that have
