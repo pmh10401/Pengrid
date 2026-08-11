@@ -11,16 +11,16 @@ is the current free binary release:
 
 - DMG: [Pengrid.dmg](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.6/Pengrid.dmg)
 - Tag: `v1.3.0-developer-preview.6`
-- Packaged source commit: `c508592b439743688fe0dc0c447c4c495355f8f4`
+- Packaged source commit: `cd24295bbe60390047985d4577b151aaaa74ad7c`
 - App version: `1.3.0`, build `8`
 - Platform: Apple Silicon, macOS 15 or later
-- Automated result: 1,406 tests in 92 suites
+- Automated result: 1,407 tests in 92 suites
 - Packaging: release contract tests and arm64 production build passed
 - Artifact checks: app signature, DMG checksum, mounted app build, local
   installation, and launch passed; public redownload verification follows
   publication
 - DMG SHA-256:
-  `d17bf6a9e37240629e6d309429e260c0c67bb9d71a3ebc30de349ece69f491c9`
+  `ece6212bd5f80d21bc64ef2059839db8a79a416b3706b140b1c4155dbe801b32`
 
 Preview 6 adds captured-selection context actions, opposite-pane transfers,
 Duplicate, and transactional New Folder with Selection. The exact packaged app

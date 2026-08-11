@@ -55,13 +55,13 @@ warning. Pengrid does not ask you to disable macOS security controls.
 ### Verification
 
 - App version: 1.3.0 (build 8)
-- Packaged source commit: `c508592b439743688fe0dc0c447c4c495355f8f4`
-- 1,406 automated tests passed in 92 suites
+- Packaged source commit: `cd24295bbe60390047985d4577b151aaaa74ad7c`
+- 1,407 automated tests passed in 92 suites
 - Release packaging contract tests and arm64 production build passed
 - Ad-hoc signature, DMG checksum, mounted-app validation, local installation,
   and launch checks passed
 - DMG SHA-256:
-  `d17bf6a9e37240629e6d309429e260c0c67bb9d71a3ebc30de349ece69f491c9`
+  `ece6212bd5f80d21bc64ef2059839db8a79a416b3706b140b1c4155dbe801b32`
 
 Manual Finder, Open With, Full Keyboard Access, VoiceOver, and signed-in
 OneDrive File Provider checks remain `NOT RUN`. Direct Google or Microsoft
@@ -121,12 +121,12 @@ GitHub 릴리스에서만 다운로드하고 경고를 이해하고 동의하는
 ### 검증
 
 - 앱 버전: 1.3.0 (빌드 8)
-- 패키징 소스 커밋: `c508592b439743688fe0dc0c447c4c495355f8f4`
-- 92개 스위트의 자동 테스트 1,406개 통과
+- 패키징 소스 커밋: `cd24295bbe60390047985d4577b151aaaa74ad7c`
+- 92개 스위트의 자동 테스트 1,407개 통과
 - 릴리스 패키징 계약 테스트와 arm64 프로덕션 빌드 통과
 - ad-hoc 서명, DMG 체크섬, 마운트 앱, 로컬 설치 및 실행 검증 통과
 - DMG SHA-256:
-  `d17bf6a9e37240629e6d309429e260c0c67bb9d71a3ebc30de349ece69f491c9`
+  `ece6212bd5f80d21bc64ef2059839db8a79a416b3706b140b1c4155dbe801b32`
 
 Finder, Open With, Full Keyboard Access, VoiceOver 및 로그인된 OneDrive File
 Provider 수동 검증은 아직 `NOT RUN`입니다. Google 또는 Microsoft 직접

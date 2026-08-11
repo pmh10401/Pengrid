@@ -21,9 +21,9 @@ large-folder, search, preview, and archive improvements from earlier previews.
 - [Download Pengrid.dmg](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.6/Pengrid.dmg)
 - App version: **1.3.0 (build 8)**
 - Requirements: **Apple Silicon Mac, macOS 15 or later**
-- Verification: **1,406 automated tests in 92 suites**
+- Verification: **1,407 automated tests in 92 suites**
 - DMG SHA-256:
-  `d17bf6a9e37240629e6d309429e260c0c67bb9d71a3ebc30de349ece69f491c9`
+  `ece6212bd5f80d21bc64ef2059839db8a79a416b3706b140b1c4155dbe801b32`
 
 > **Developer Preview trust notice**
 >
