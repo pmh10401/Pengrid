@@ -285,6 +285,20 @@ import Testing
         #expect(await fileSystem.removedOutputIdentities == [outputIdentity])
         #expect(await sourcePreparer.cleanupCount == 1)
     }
+
+    @Test func spawnWorkingDirectoryUsesTheMacOS15SDKCompatibleFunction() throws {
+        let packageRoot = URL(filePath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let sourceURL = packageRoot.appending(
+            path: "Sources/BloomFileManager/Services/ArchiveCommandRunner.swift"
+        )
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        #expect(source.contains("posix_spawn_file_actions_addfchdir_np("))
+        #expect(!source.contains("posix_spawn_file_actions_addfchdir("))
+    }
 }
 
 private enum RunnerVerificationError: Error, Equatable {
