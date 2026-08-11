@@ -183,6 +183,7 @@ actor SelectionFolderTransactionService {
                     currentName: entry.originalSource.item.name
                 ))
             }
+            try Task.checkCancellation()
             try await fileSystem.removeEmptyDirectory(plan.folderURL, identifiedBy: plan.folderIdentity)
             return FileOperationResult(outcomes: plan.entries.map {
                 .succeeded(source: $0.folderURL, destination: $0.originalSource.item.url)

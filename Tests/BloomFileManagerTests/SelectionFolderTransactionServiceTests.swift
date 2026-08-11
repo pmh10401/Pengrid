@@ -198,8 +198,11 @@ struct SelectionFolderTransactionServiceTests {
         #expect(result.outcomes.contains(.recoveryNeeded(source: fixture.second)))
     }
 
-    @Test func reverseCancellationRestoresTheFolderAndReportsCancellation() async throws {
-        let fixture = TransactionFixture(fault: .cancelReverseMove(1))
+    @Test(arguments: [1, 2])
+    func reverseCancellationRestoresTheFolderAndReportsCancellation(
+        afterReverseMove moveIndex: Int
+    ) async throws {
+        let fixture = TransactionFixture(fault: .cancelReverseMove(moveIndex))
         let forward = await fixture.service.execute(fixture.plan, progress: { _ in })
         let undo = try #require(forward.selectionFolderUndoMetadata())
         let task = Task { await fixture.service.reverse(undo, progress: { _ in }) }

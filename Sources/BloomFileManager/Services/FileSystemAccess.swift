@@ -2529,7 +2529,10 @@ actor LiveFileSystemAccess: FileSystemAccess {
         _ url: URL,
         identifiedBy expectedIdentity: FileIdentity
     ) async throws {
-        try Task.checkCancellation()
+        // Cleanup must run after a caller has observed cancellation: otherwise
+        // an owned staging reservation is left behind and cancellation is
+        // incorrectly escalated to recovery-required. The descriptor and
+        // no-follow identity checks below still constrain this unlink.
         let (parentDescriptor, name) = try openParentDirectory(of: url)
         defer { Darwin.close(parentDescriptor) }
 
@@ -2548,7 +2551,6 @@ actor LiveFileSystemAccess: FileSystemAccess {
         else {
             throw FileSystemAccessError.identityMismatch(url)
         }
-        try Task.checkCancellation()
         try onBeforeEmptyDirectoryUnlink(url)
         guard try identity(named: name, in: parentDescriptor, noFollow: true) == expectedIdentity,
               try identity(ofDescriptor: descriptor) == expectedIdentity
