@@ -354,7 +354,9 @@ import Testing
         let workspace = accessibilityWorkspace()
         comparison.start(workspace: workspace)
         #expect(await accessibilityWait { comparison.rows.count == 1 })
-        try await Task.sleep(for: .milliseconds(30))
+        #expect(await accessibilityWait {
+            poster.messages.last?.contains("1 item") == true
+        })
         let firstMessages = poster.messages
         #expect(!firstMessages.isEmpty)
         #expect(firstMessages.last?.contains("1 item") == true)
