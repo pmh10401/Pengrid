@@ -20,9 +20,9 @@ Pengrid는 macOS용 무료 오픈소스 듀얼 패널 파일 관리자입니다.
 - [Pengrid.dmg 다운로드](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.6/Pengrid.dmg)
 - 앱 버전: **1.3.0 (빌드 8)**
 - 요구 사항: **Apple Silicon Mac, macOS 15 이상**
-- 검증 결과: **92개 스위트의 자동 테스트 1,405개 통과**
+- 검증 결과: **92개 스위트의 자동 테스트 1,406개 통과**
 - DMG SHA-256:
-  `72d1e2a3e294c7fe3dd33d9665c4506bf4f2691d3fc1f3f55b175ae6c29c2f95`
+  `d17bf6a9e37240629e6d309429e260c0c67bb9d71a3ebc30de349ece69f491c9`
 
 > **Developer Preview 신뢰 안내**
 >

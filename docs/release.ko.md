@@ -13,15 +13,15 @@ App Sandbox entitlement를 사용하지 않습니다. 실행 파일명과 호환
 
 - DMG: [Pengrid.dmg](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.6/Pengrid.dmg)
 - 태그: `v1.3.0-developer-preview.6`
-- 패키징한 소스 커밋: `fc184d6ba4fda64d36cd6b4f382457b3da5df564`
+- 패키징한 소스 커밋: `c508592b439743688fe0dc0c447c4c495355f8f4`
 - 앱 버전: `1.3.0`, 빌드 `8`
 - 플랫폼: Apple Silicon, macOS 15 이상
-- 자동 검증: 92개 스위트의 테스트 1,405개 통과
+- 자동 검증: 92개 스위트의 테스트 1,406개 통과
 - 패키징: 릴리스 계약 테스트와 arm64 프로덕션 빌드 통과
 - 파일 검사: 앱 서명, DMG 체크섬, 마운트된 앱의 빌드 번호, 로컬 설치, 실행,
   검증 통과. GitHub 자산 digest와 공개 재다운로드 비교는 게시 후 진행
 - DMG SHA-256:
-  `72d1e2a3e294c7fe3dd33d9665c4506bf4f2691d3fc1f3f55b175ae6c29c2f95`
+  `d17bf6a9e37240629e6d309429e260c0c67bb9d71a3ebc30de349ece69f491c9`
 
 Preview 6는 캡처된 선택을 사용하는 컨텍스트 작업, 반대쪽 패널 전송,
 Duplicate 및 선택 항목을 새 폴더로 묶는 트랜잭션 기능을 추가한 릴리스입니다.
