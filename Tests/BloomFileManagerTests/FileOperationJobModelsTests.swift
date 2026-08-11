@@ -153,4 +153,24 @@ struct FileOperationJobModelsTests {
         #expect(single.title == "Rename")
         #expect(batch.accessibilityLabel.hasPrefix("Rename 3 Items, Running"))
     }
+
+    @Test func duplicateUsesItsOwnQueueTitleAndKeepsRetryPresentation() {
+        let snapshot = FileOperationJobSnapshot(
+            id: UUID(),
+            kind: .duplicate,
+            itemDisplayName: "Report.txt",
+            itemCount: 2,
+            state: .failed,
+            progress: FileOperationJobProgress(
+                completedCount: 1,
+                totalCount: 2,
+                detail: "Report.txt"
+            ),
+            canUndo: false
+        )
+
+        #expect(snapshot.title == "Duplicate")
+        #expect(snapshot.canRetry)
+        #expect(snapshot.accessibilityLabel.contains("1 of 2, Report.txt"))
+    }
 }

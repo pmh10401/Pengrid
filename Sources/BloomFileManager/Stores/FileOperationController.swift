@@ -750,6 +750,68 @@ final class FileOperationController {
         )
     }
 
+    /// Queues a keep-both duplicate in the parent captured at invocation.
+    /// The execution closure deliberately does not read active-pane state.
+    @discardableResult
+    func duplicate(
+        _ snapshot: ContextActionSnapshot,
+        in pane: FilePaneState,
+        workspace: WorkspaceState
+    ) -> Bool {
+        guard !snapshot.sources.isEmpty,
+              snapshot.sourceCapability == .writable
+        else { return false }
+
+        let requests = snapshot.sources.map {
+            IdentifiedTransferRequest(
+                source: $0.item.url,
+                sourceIdentity: $0.identity,
+                destinationRoot: snapshot.sourceDirectory.url,
+                destinationRootIdentity: snapshot.sourceDirectory.identity,
+                relativeParentComponents: []
+            )
+        }
+        let sources = requests.map(\.source)
+        let capturedParent = snapshot.sourceDirectory.url.standardizedFileURL
+        return beginOperation(
+            kind: .duplicate,
+            totalCount: requests.count,
+            initialName: sources.first?.lastPathComponent ?? "Item",
+            initialStage: .preparing(CloudMaterializationProgress(
+                completedCount: 0,
+                totalCount: requests.count,
+                currentName: Self.sanitizedBasename(sources.first)
+            )),
+            touchedDirectories: [capturedParent],
+            workspace: workspace,
+            cancellationSources: sources,
+            onCompletion: { result in
+                guard !result.hasFailures,
+                      pane.currentDirectory.standardizedFileURL == capturedParent
+                else { return }
+                pane.selection = Set(result.outcomes.compactMap { outcome in
+                    guard case let .succeeded(_, destination?) = outcome else { return nil }
+                    return destination.standardizedFileURL
+                })
+            }
+        ) { [weak self, materializer, service] in
+            guard let self else {
+                return FileOperationResult(outcomes: sources.map { .cancelled(source: $0) })
+            }
+            let preparedRequests: [IdentifiedTransferRequest]
+            switch await self.prepareTransferRequests(requests, materializer: materializer) {
+            case let .rejected(result):
+                return result
+            case let .ready(prepared):
+                preparedRequests = prepared
+            }
+            return await service.duplicate(preparedRequests) { [weak self] progress in
+                guard let self else { return }
+                await self.publish(stage: .operating(progress))
+            }
+        }
+    }
+
     private enum PreparedTransferRequests {
         case ready([IdentifiedTransferRequest])
         case rejected(FileOperationResult)

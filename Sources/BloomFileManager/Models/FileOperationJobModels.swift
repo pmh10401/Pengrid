@@ -2,6 +2,7 @@ import Foundation
 
 enum FileOperationJobKind: Sendable, Equatable {
     case copy
+    case duplicate
     case move
     case trash
     case createFolder
@@ -14,6 +15,7 @@ enum FileOperationJobKind: Sendable, Equatable {
     var title: String {
         switch self {
         case .copy: "Copy"
+        case .duplicate: "Duplicate"
         case .move: "Move"
         case .trash: "Move to Trash"
         case .createFolder: "Create Folder"

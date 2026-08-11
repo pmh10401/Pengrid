@@ -4,6 +4,121 @@ import Testing
 
 @MainActor
 struct FileOperationControllerTests {
+    @Test func duplicateQueuesASeparateKeepBothJobAndSelectsOnlyCapturedParentOutputs() async throws {
+        let parent = URL(filePath: "/workspace", directoryHint: .isDirectory)
+        let opposite = URL(filePath: "/other", directoryHint: .isDirectory)
+        let source = parent.appending(path: "Report.txt")
+        let item = FileItem(
+            url: source,
+            name: "Report.txt",
+            isDirectory: false,
+            isPackage: false,
+            modifiedAt: .distantPast,
+            byteSize: 12,
+            typeDescription: "Text"
+        )
+        let fileSystem = RecordingFileSystem(existingURLs: [parent, opposite, source])
+        let workspace = WorkspaceState(
+            leftURL: parent,
+            rightURL: opposite,
+            listingService: StubDirectoryListingService(values: [parent: [item], opposite: []])
+        )
+        await workspace.loadInitialDirectories()
+        let sourceIdentity = try #require(await fileSystem.identity(of: source))
+        let parentIdentity = try #require(await fileSystem.identity(of: parent))
+        let oppositeIdentity = try #require(await fileSystem.identity(of: opposite))
+        let snapshot = ContextActionSnapshot(
+            draft: ContextActionDraft(
+                sources: [item],
+                sourcePaneID: .left,
+                oppositePaneID: .right,
+                sourceDirectory: parent,
+                oppositeDirectory: opposite,
+                sourceCapability: .writable,
+                oppositeCapability: .readOnly
+            )!,
+            sources: [ContextActionSource(item: item, identity: sourceIdentity)],
+            sourceDirectory: IdentifiedFileRequest(url: parent, identity: parentIdentity),
+            oppositeDirectory: IdentifiedFileRequest(url: opposite, identity: oppositeIdentity)
+        )!
+        let controller = FileOperationController(
+            service: FileOperationService(fileSystem: fileSystem),
+            materializer: InMemoryCloudMaterializer()
+        )
+
+        #expect(controller.duplicate(snapshot, in: workspace.left, workspace: workspace))
+        #expect(controller.activeJob?.kind == .duplicate)
+        #expect(controller.activeJob?.title == "Duplicate")
+        await waitUntilQueueIsIdle(controller)
+
+        let destination = parent.appending(path: "Report 2.txt")
+        let job = try #require(controller.operationHistory.first)
+        #expect(job.state == .succeeded)
+        #expect(job.canUndo)
+        #expect(workspace.left.selection == [destination])
+        #expect(await fileSystem.existingURLs.contains(destination))
+    }
+
+    @Test func duplicatePartialFailureKeepsStableOrderAndNeverOffersGroupUndo() async throws {
+        let parent = URL(filePath: "/workspace", directoryHint: .isDirectory)
+        let opposite = URL(filePath: "/other", directoryHint: .isDirectory)
+        let first = parent.appending(path: "First.txt")
+        let second = parent.appending(path: "Second.txt")
+        let firstItem = FileItem(
+            url: first, name: "First.txt", isDirectory: false, isPackage: false,
+            modifiedAt: .distantPast, byteSize: 1, typeDescription: "Text"
+        )
+        let secondItem = FileItem(
+            url: second, name: "Second.txt", isDirectory: false, isPackage: false,
+            modifiedAt: .distantPast, byteSize: 1, typeDescription: "Text"
+        )
+        let copyFailure = CocoaError(.fileWriteUnknown)
+        let fileSystem = RecordingFileSystem(
+            existingURLs: [parent, opposite, first, second],
+            copyErrorsBySource: [first: copyFailure]
+        )
+        let workspace = WorkspaceState(
+            leftURL: parent,
+            rightURL: opposite,
+            listingService: StubDirectoryListingService(values: [
+                parent: [firstItem, secondItem], opposite: []
+            ])
+        )
+        await workspace.loadInitialDirectories()
+        let parentIdentity = try #require(await fileSystem.identity(of: parent))
+        let oppositeIdentity = try #require(await fileSystem.identity(of: opposite))
+        let snapshot = ContextActionSnapshot(
+            draft: ContextActionDraft(
+                sources: [firstItem, secondItem], sourcePaneID: .left, oppositePaneID: .right,
+                sourceDirectory: parent, oppositeDirectory: opposite,
+                sourceCapability: .writable, oppositeCapability: .readOnly
+            )!,
+            sources: [
+                ContextActionSource(item: firstItem, identity: try #require(await fileSystem.identity(of: first))),
+                ContextActionSource(item: secondItem, identity: try #require(await fileSystem.identity(of: second)))
+            ],
+            sourceDirectory: IdentifiedFileRequest(url: parent, identity: parentIdentity),
+            oppositeDirectory: IdentifiedFileRequest(url: opposite, identity: oppositeIdentity)
+        )!
+        let controller = FileOperationController(
+            service: FileOperationService(fileSystem: fileSystem),
+            materializer: InMemoryCloudMaterializer()
+        )
+
+        #expect(controller.duplicate(snapshot, in: workspace.left, workspace: workspace))
+        await waitUntilQueueIsIdle(controller)
+
+        let completedSecond = parent.appending(path: "Second 2.txt")
+        #expect(controller.lastResult?.outcomes == [
+            .failed(source: first, message: copyFailure.localizedDescription),
+            .succeeded(source: second, destination: completedSecond)
+        ])
+        let job = try #require(controller.operationHistory.first)
+        #expect(job.state == .failed)
+        #expect(job.canUndo == false)
+        #expect(controller.undoJob(job.id) == false)
+    }
+
     @Test func legacyCompressionMethodValueRemainsTwoArgumentCallable() async throws {
         let fixture = await makeProtectedWorkspace()
         let archiveService = RecordingArchiveOperator()

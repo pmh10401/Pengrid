@@ -617,6 +617,225 @@ actor FileOperationService {
         )
     }
 
+    /// Copies each captured source into its captured parent without ever
+    /// consulting the interactive copy conflict policy. A private staging
+    /// payload is the only item this operation may discard on a name race.
+    func duplicate(
+        _ requests: [IdentifiedTransferRequest],
+        progress: OperationProgressHandler = { _ in }
+    ) async -> FileOperationResult {
+        let accessLeases: [CloudLocationScopedAccessLease]
+        do {
+            accessLeases = try accessCoordinator.acquireAccess(
+                for: requests.flatMap { [$0.source, $0.destinationRoot] }
+            )
+        } catch {
+            return FileOperationResult(outcomes: requests.map {
+                .failed(source: $0.source, message: error.localizedDescription)
+            })
+        }
+        defer { accessLeases.forEach { $0.finish() } }
+
+        let startedAt = Date()
+        var outcomes: [FileOperationItemOutcome] = []
+        var undoIdentities: [URL: FileIdentity] = [:]
+        var undoFingerprints: [URL: SourceFingerprint] = [:]
+        var succeeded = 0
+        var failed = 0
+
+        for (index, request) in requests.enumerated() {
+            do {
+                try Task.checkCancellation()
+                let completion = try await duplicateItem(request)
+                outcomes.append(.succeeded(source: request.source, destination: completion.url))
+                undoIdentities[completion.url] = completion.identity
+                undoFingerprints[completion.url] = completion.fingerprint
+                succeeded += 1
+            } catch is CancellationError {
+                outcomes.append(contentsOf: requests[index...].map { .cancelled(source: $0.source) })
+                break
+            } catch let failure as TransferFailure where failure.cleanup != nil {
+                outcomes.append(.recoveryNeeded(source: request.source))
+                failed += 1
+            } catch {
+                outcomes.append(.failed(source: request.source, message: error.localizedDescription))
+                failed += 1
+            }
+            await reportProgress(
+                completedCount: outcomes.count,
+                totalCount: requests.count,
+                source: request.source,
+                handler: progress
+            )
+        }
+
+        await logger.record(
+            kind: .copy,
+            duration: Date().timeIntervalSince(startedAt),
+            succeeded: succeeded,
+            failed: failed,
+            skipped: 0
+        )
+        return FileOperationResult(
+            outcomes: outcomes,
+            undoDestinationIdentities: undoIdentities,
+            undoDestinationFingerprints: undoFingerprints
+        )
+    }
+
+    private func duplicateItem(
+        _ request: IdentifiedTransferRequest
+    ) async throws -> DuplicateItemCompletion {
+        guard request.relativeParentComponents.isEmpty,
+              request.source.deletingLastPathComponent().standardizedFileURL
+                == request.destinationRoot.standardizedFileURL
+        else { throw FileTransferError.identityChanged }
+
+        guard try await fileSystem.identity(of: request.destinationRoot)
+                == request.destinationRootIdentity,
+              try await fileSystem.identity(of: request.source)?.entryIdentifier
+                == request.sourceIdentity.entryIdentifier
+        else { throw FileTransferError.identityChanged }
+        try await validateTransferDestination(
+            request.destinationRoot,
+            sourceIdentity: request.sourceIdentity
+        )
+        try await ensureCapacity(for: request.source, at: request.destinationRoot)
+        let sourceFingerprint = try await fileSystem.fingerprint(of: request.source)
+
+        while true {
+            try Task.checkCancellation()
+            guard try await fileSystem.identity(of: request.destinationRoot)
+                    == request.destinationRootIdentity,
+                  try await fileSystem.identity(of: request.source)?.entryIdentifier
+                    == request.sourceIdentity.entryIdentifier,
+                  try await fileSystem.fingerprint(of: request.source) == sourceFingerprint
+            else { throw FileTransferError.sourceChangedDuringTransfer }
+
+            let occupied = try await fileSystem.names(in: request.destinationRoot)
+            let name = KeepBothNamer.availableName(
+                for: request.source.lastPathComponent,
+                existing: occupied
+            )
+            let destination = request.destinationRoot.appending(path: name)
+            let reservation = try await fileSystem.reserveStagingDirectory(
+                beside: destination,
+                parentIdentifiedBy: request.destinationRootIdentity
+            )
+            var stagedIdentity: FileIdentity?
+            do {
+                try Task.checkCancellation()
+                stagedIdentity = try await fileSystem.copyAndCaptureIdentity(
+                    request.source,
+                    identifiedBy: request.sourceIdentity,
+                    to: reservation.item
+                )
+                guard let stagedIdentity else { throw FileTransferError.missingIdentity }
+                let stagedFingerprint = try await fileSystem.fingerprint(of: reservation.item)
+                guard try await fileSystem.identity(of: request.source)?.entryIdentifier
+                        == request.sourceIdentity.entryIdentifier,
+                      try await fileSystem.identity(of: request.destinationRoot)
+                        == request.destinationRootIdentity,
+                      try await fileSystem.fingerprint(of: request.source) == sourceFingerprint,
+                      try await fileSystem.identity(of: reservation.item)?.entryIdentifier
+                        == stagedIdentity.entryIdentifier,
+                      try await fileSystem.fingerprint(of: reservation.item) == stagedFingerprint
+                else { throw FileTransferError.sourceChangedDuringTransfer }
+
+                do {
+                    try Task.checkCancellation()
+                    try await fileSystem.moveExclusively(
+                        reservation.item,
+                        identifiedBy: stagedIdentity,
+                        to: destination,
+                        destinationParentIdentifiedBy: request.destinationRootIdentity
+                    )
+                } catch {
+                    if isAlreadyExists(error) {
+                        if let cleanupError = await cleanupStaging(
+                            reservation,
+                            itemIdentity: stagedIdentity
+                        ) {
+                            throw TransferFailure(primary: error, cleanup: cleanupError)
+                        }
+                        continue
+                    }
+                    throw error
+                }
+
+                guard try await fileSystem.identity(of: destination)?.entryIdentifier
+                    == stagedIdentity.entryIdentifier
+                else {
+                    let cleanupError = await cleanupPublishedDuplicate(
+                        destination,
+                        identity: stagedIdentity,
+                        reservation: reservation
+                    )
+                    throw TransferFailure(
+                        primary: FileTransferError.destinationVerificationFailed,
+                        cleanup: cleanupError
+                    )
+                }
+                let publishedFingerprint = try await fileSystem.fingerprint(of: destination)
+                guard publishedFingerprint.matchesAfterRelocation(stagedFingerprint) else {
+                    let cleanupError = await cleanupPublishedDuplicate(
+                        destination,
+                        identity: stagedIdentity,
+                        reservation: reservation
+                    )
+                    throw TransferFailure(
+                        primary: FileTransferError.destinationVerificationFailed,
+                        cleanup: cleanupError
+                    )
+                }
+                if let cleanupError = await cleanupStagingDirectory(reservation) {
+                    throw TransferFailure(primary: FileTransferError.cleanupFailed, cleanup: cleanupError)
+                }
+                guard try await fileSystem.identity(of: destination)?.entryIdentifier
+                        == stagedIdentity.entryIdentifier,
+                      try await fileSystem.fingerprint(of: destination) == publishedFingerprint
+                else {
+                    throw TransferFailure(
+                        primary: FileTransferError.destinationVerificationFailed,
+                        cleanup: FileTransferError.publicDestinationCommitted
+                    )
+                }
+                return DuplicateItemCompletion(
+                    url: destination,
+                    identity: stagedIdentity,
+                    fingerprint: publishedFingerprint
+                )
+            } catch let failure as TransferFailure {
+                throw failure
+            } catch {
+                let cleanupError = await cleanupStaging(reservation, itemIdentity: stagedIdentity)
+                if error is CancellationError, cleanupError == nil {
+                    throw error
+                }
+                throw TransferFailure(primary: error, cleanup: cleanupError)
+            }
+        }
+    }
+
+    private func cleanupPublishedDuplicate(
+        _ destination: URL,
+        identity: FileIdentity,
+        reservation: StagingReservation
+    ) async -> (any Error)? {
+        do {
+            try await fileSystem.remove(destination, identifiedBy: identity)
+        } catch {
+            return error
+        }
+        return await cleanupStagingDirectory(reservation)
+    }
+
+    private func isAlreadyExists(_ error: any Error) -> Bool {
+        if let error = error as? POSIXError { return error.code == .EEXIST }
+        if let error = error as? CocoaError { return error.code == .fileWriteFileExists }
+        return false
+    }
+
     func transfer(
         _ requests: [IdentifiedTransferRequest],
         mode: TransferMode,
@@ -1115,6 +1334,12 @@ actor FileOperationService {
 private struct PreparedStagedCopy: Sendable {
     let reservation: StagingReservation
     let itemIdentity: FileIdentity
+}
+
+private struct DuplicateItemCompletion: Sendable {
+    let url: URL
+    let identity: FileIdentity
+    let fingerprint: SourceFingerprint
 }
 
 private struct TransferFailure: LocalizedError {

@@ -4,6 +4,28 @@ import Testing
 
 @Suite("Identity checked file operation undo")
 struct FileOperationUndoServiceTests {
+    @Test func duplicateUndoRequiresTheCapturedCreatedIdentityAndFingerprint() async throws {
+        let source = URL(filePath: "/workspace/Report.txt")
+        let duplicate = URL(filePath: "/workspace/Report copy.txt")
+        let fileSystem = RecordingFileSystem(existingURLs: [duplicate])
+        let service = FileOperationUndoService(fileSystem: fileSystem)
+        let result = await authoritativeUndoResult(
+            outcomes: [.succeeded(source: source, destination: duplicate)],
+            fileSystem: fileSystem
+        )
+
+        let recipe = try #require(await service.makeRecipe(
+            kind: .duplicate,
+            result: result,
+            allowsUndo: true
+        ))
+        await fileSystem.mutateContents(at: duplicate)
+
+        let undo = await service.perform(recipe)
+        #expect(undo.hasFailures)
+        #expect(await fileSystem.existingURLs.contains(duplicate))
+    }
+
     @Test func recipeNeverAdoptsAReplacementThatAppearsAfterCompletion() async {
         let source = URL(filePath: "/source/Owned.txt")
         let destination = URL(filePath: "/destination/Owned.txt")
