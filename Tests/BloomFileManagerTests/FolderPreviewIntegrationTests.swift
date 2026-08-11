@@ -12,11 +12,20 @@ struct FolderPreviewIntegrationTests {
         #expect(!implementation.contains("WorkspaceQuickLookSelectionRouting.begin"))
     }
 
-    @Test func workspaceSpaceCommandRoutesOnlyThroughCoordinator() throws {
-        let implementation = try source(named: "Support/WorkspaceCommands.swift")
+    @Test func workspaceSpaceCommandRoutesThroughSharedContextActionRouterToCoordinator() throws {
+        let commands = try source(named: "Support/WorkspaceCommands.swift")
+        let router = try source(named: "Support/FileContextActionRouter.swift")
 
-        #expect(implementation.contains("await previewCoordinator.toggle(selection:"))
-        #expect(!implementation.contains("await WorkspaceQuickLookCommandRouting.prepareAndPresent("))
+        #expect(commands.contains("Button(\"Quick Look\") {\n                dispatchContextAction(.quickLook)\n            }"))
+        #expect(commands.contains("let snapshot = await contextActionRouter.capture(draft)"))
+        #expect(commands.contains(
+            "_ = await contextActionRouter.quickLook(snapshot, previewCoordinator: previewCoordinator)"
+        ))
+        #expect(!commands.contains("await previewCoordinator.toggle(selection:"))
+        #expect(!commands.contains("await WorkspaceQuickLookCommandRouting.prepareAndPresent("))
+        #expect(router.contains("previewCoordinator: WorkspacePreviewCoordinator"))
+        #expect(router.contains("await previewCoordinator.toggle(\n            selection: WorkspacePreviewSelection("))
+        #expect(!router.contains("QuickLookController"))
     }
 
     @Test func appComposesOneCoordinatorAndInjectsItIntoWorkspaceAndCommands() throws {
