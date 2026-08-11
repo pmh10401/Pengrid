@@ -10,9 +10,32 @@ private struct PreviewSelectionKey: Hashable {
 /// dismissal can only release the exact request captured by the sheet.
 struct WorkspaceModalPresentationState: Equatable {
     private(set) var presentedPasswordRequestID: UUID?
+    private(set) var isSelectionFolderPresented = false
 
     var allowsOtherModalPresentation: Bool {
-        presentedPasswordRequestID == nil
+        presentedPasswordRequestID == nil && !isSelectionFolderPresented
+    }
+
+    mutating func selectionFolderSheetDidAppear() {
+        guard presentedPasswordRequestID == nil else { return }
+        isSelectionFolderPresented = true
+    }
+
+    mutating func selectionFolderSheetDidDisappear() {
+        isSelectionFolderPresented = false
+    }
+
+    func allowsSelectionFolderPresentation(
+        conflictPresented: Bool,
+        searchPresented: Bool,
+        batchRenamePresented: Bool,
+        passwordPresented: Bool
+    ) -> Bool {
+        !isSelectionFolderPresented
+            && !conflictPresented
+            && !searchPresented
+            && !batchRenamePresented
+            && !passwordPresented
     }
 
     mutating func passwordSheetDidAppear(requestID: UUID) {
@@ -30,13 +53,18 @@ struct WorkspaceModalPresentationState: Equatable {
         pending: ArchivePasswordRequest?,
         conflictPresented: Bool,
         searchPresented: Bool,
-        batchRenamePresented: Bool = false
+        batchRenamePresented: Bool = false,
+        selectionFolderPresented: Bool = false
     ) -> ArchivePasswordRequest? {
         guard let pending else { return nil }
         if let presentedPasswordRequestID {
             return pending.id == presentedPasswordRequestID ? pending : nil
         }
-        guard !conflictPresented, !searchPresented, !batchRenamePresented else { return nil }
+        guard !conflictPresented,
+              !searchPresented,
+              !batchRenamePresented,
+              !selectionFolderPresented
+        else { return nil }
         return pending
     }
 }
@@ -62,6 +90,7 @@ struct WorkspaceView: View {
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var modalPresentationState = WorkspaceModalPresentationState()
+    @State private var selectionFolder = SelectionFolderModel()
 
     var body: some View {
         let hasOverlay = comparison.isActive || storage.isActive
@@ -141,6 +170,14 @@ struct WorkspaceView: View {
             BatchRenameSheet(model: batchRename) { plan in
                 operationController.batchRename(plan, workspace: workspace)
             }
+        }
+        .sheet(isPresented: selectionFolderPresentation) {
+            SelectionFolderSheet(model: selectionFolder) { _ in
+                // Tasks 10 and 11 own the exclusive transaction and queue handoff.
+                false
+            }
+            .onAppear { modalPresentationState.selectionFolderSheetDidAppear() }
+            .onDisappear { modalPresentationState.selectionFolderSheetDidDisappear() }
         }
         .sheet(item: pendingPasswordRequest) { request in
             ArchivePasswordSheet(
@@ -255,7 +292,8 @@ struct WorkspaceView: View {
         Binding {
             guard modalPresentationState.allowsOtherModalPresentation,
                   !smartSearch.isPresented,
-                  !batchRename.isPresented
+                  !batchRename.isPresented,
+                  !selectionFolder.isPresented
             else { return nil }
             return operationController.pendingConflict.map(IdentifiedFileConflict.init)
         } set: { item in
@@ -263,6 +301,7 @@ struct WorkspaceView: View {
                modalPresentationState.allowsOtherModalPresentation,
                !smartSearch.isPresented,
                !batchRename.isPresented,
+               !selectionFolder.isPresented,
                operationController.pendingConflict != nil {
                 operationController.resolvePendingConflict(.cancel, applyToAll: false)
             }
@@ -274,12 +313,14 @@ struct WorkspaceView: View {
             modalPresentationState.allowsOtherModalPresentation
                 && operationController.pendingConflict == nil
                 && !batchRename.isPresented
+                && !selectionFolder.isPresented
                 && smartSearch.isPresented
         } set: { isPresented in
             if !isPresented,
                modalPresentationState.allowsOtherModalPresentation,
                operationController.pendingConflict == nil,
-               !batchRename.isPresented {
+               !batchRename.isPresented,
+               !selectionFolder.isPresented {
                 smartSearch.dismiss()
             }
         }
@@ -290,12 +331,14 @@ struct WorkspaceView: View {
             modalPresentationState.allowsOtherModalPresentation
                 && operationController.pendingConflict == nil
                 && !smartSearch.isPresented
+                && !selectionFolder.isPresented
                 && batchRename.isPresented
         } set: { isPresented in
             if !isPresented,
                modalPresentationState.allowsOtherModalPresentation,
                operationController.pendingConflict == nil,
-               !smartSearch.isPresented {
+               !smartSearch.isPresented,
+               !selectionFolder.isPresented {
                 batchRename.dismiss()
             }
         }
@@ -307,13 +350,31 @@ struct WorkspaceView: View {
                 pending: passwordCoordinator.pendingRequest,
                 conflictPresented: operationController.pendingConflict != nil,
                 searchPresented: smartSearch.isPresented,
-                batchRenamePresented: batchRename.isPresented
+                batchRenamePresented: batchRename.isPresented,
+                selectionFolderPresented: selectionFolder.isPresented
             )
         } set: { request in
             // The sheet's content captures the request ID and handles its own
             // dismissal. A binding write has no identity and must not cancel a
             // newer coordinator request.
             guard request == nil else { return }
+        }
+    }
+
+    private var selectionFolderPresentation: Binding<Bool> {
+        Binding {
+            guard selectionFolder.isPresented else { return false }
+            return modalPresentationState.isSelectionFolderPresented
+                || modalPresentationState.allowsSelectionFolderPresentation(
+                    conflictPresented: operationController.pendingConflict != nil,
+                    searchPresented: smartSearch.isPresented,
+                    batchRenamePresented: batchRename.isPresented,
+                    passwordPresented: passwordCoordinator.pendingRequest != nil
+                )
+        } set: { isPresented in
+            if !isPresented {
+                selectionFolder.dismiss()
+            }
         }
     }
 
