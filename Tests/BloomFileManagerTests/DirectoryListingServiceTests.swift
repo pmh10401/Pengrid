@@ -21,6 +21,22 @@ import Testing
     #expect(batches.flatMap { $0 }.first(where: { $0.name == "Folder" })?.isDirectory == true)
 }
 
+@Test func listingMarksSymbolicLinksFromDirectoryMetadata() async throws {
+    let root = try TemporaryDirectory()
+    defer { root.remove() }
+    let target = root.url.appending(path: "target.txt")
+    let link = root.url.appending(path: "target-link.txt")
+    try Data("target".utf8).write(to: target)
+    try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+
+    let items = try await LiveDirectoryListingService(batchSize: 8)
+        .batches(in: root.url)
+        .reduce(into: [FileItem]()) { $0 += $1 }
+
+    #expect(items.first(where: { $0.name == "target-link.txt" })?.isSymbolicLink == true)
+    #expect(items.first(where: { $0.name == "target.txt" })?.isSymbolicLink == false)
+}
+
 @Test func baselineVisibilityIncludesHiddenEntries() async throws {
     let root = try TemporaryDirectory()
     defer { root.remove() }

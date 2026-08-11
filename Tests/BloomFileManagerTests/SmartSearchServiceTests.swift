@@ -213,6 +213,19 @@ import Testing
         #expect(results.first?.item.isPackage == false)
     }
 
+    @Test func retainedRegularResultsReportThatTheyAreNotSymbolicLinks() async throws {
+        let root = try ServiceTemporaryDirectory()
+        defer { root.remove() }
+        let file = root.url.appending(path: "report.txt")
+        try Data([1]).write(to: file)
+
+        let results = try await LocalSmartSearchService().search(
+            try SmartSearchQuery(text: "report", roots: [physicalURL(root.url)])
+        )
+
+        #expect(results.map(\.item.isSymbolicLink) == [false])
+    }
+
     @Test func symlinkRootsAndSymlinkAncestorsAreRejectedWithoutFollowingThem() async throws {
         let fixture = try ServiceTemporaryDirectory()
         defer { fixture.remove() }

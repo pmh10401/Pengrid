@@ -6,6 +6,7 @@ struct FileItem: Identifiable, Hashable, Sendable {
     let name: String
     let isDirectory: Bool
     let isPackage: Bool
+    let isSymbolicLink: Bool
     let modifiedAt: Date?
     let byteSize: Int64?
     let typeDescription: String
@@ -16,6 +17,7 @@ struct FileItem: Identifiable, Hashable, Sendable {
         name: String,
         isDirectory: Bool,
         isPackage: Bool,
+        isSymbolicLink: Bool = false,
         modifiedAt: Date?,
         byteSize: Int64?,
         typeDescription: String,
@@ -25,6 +27,7 @@ struct FileItem: Identifiable, Hashable, Sendable {
         self.name = name
         self.isDirectory = isDirectory
         self.isPackage = isPackage
+        self.isSymbolicLink = isSymbolicLink
         self.modifiedAt = modifiedAt
         self.byteSize = byteSize
         self.typeDescription = typeDescription
