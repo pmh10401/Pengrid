@@ -129,6 +129,8 @@ actor RecordingFileSystem: FileSystemAccess {
     private let suspendExistsOfLastPathComponent: String?
     private let cancelAfterTrashOf: URL?
     private let caseInsensitivePaths: Bool
+    private let cancelAfterCheckedExclusiveMoveAttempt: Int?
+    private let failCheckedExclusiveMoveAttempts: Set<Int>
     private let forceTrashQuarantineRecovery: Bool
     private let failTrashQuarantineCommitOnAttempt: Int?
     private let raceDestinationBeforeExclusiveMove: URL?
@@ -143,6 +145,7 @@ actor RecordingFileSystem: FileSystemAccess {
     private var didCancelStagingReservation = false
     private var nextIdentity = 0
     private var committedDestinations: Set<URL> = []
+    private var checkedExclusiveMoveAttempt = 0
 
     init(
         existingURLs: Set<URL> = [],
@@ -175,6 +178,8 @@ actor RecordingFileSystem: FileSystemAccess {
         suspendExistsOfLastPathComponent: String? = nil,
         cancelAfterTrashOf: URL? = nil,
         caseInsensitivePaths: Bool = false,
+        cancelAfterCheckedExclusiveMoveAttempt: Int? = nil,
+        failCheckedExclusiveMoveAttempts: Set<Int> = [],
         forceTrashQuarantineRecovery: Bool = false,
         failTrashQuarantineCommitOnAttempt: Int? = nil,
         raceDestinationBeforeExclusiveMove: URL? = nil,
@@ -218,6 +223,8 @@ actor RecordingFileSystem: FileSystemAccess {
         self.suspendExistsOfLastPathComponent = suspendExistsOfLastPathComponent
         self.cancelAfterTrashOf = cancelAfterTrashOf
         self.caseInsensitivePaths = caseInsensitivePaths
+        self.cancelAfterCheckedExclusiveMoveAttempt = cancelAfterCheckedExclusiveMoveAttempt
+        self.failCheckedExclusiveMoveAttempts = failCheckedExclusiveMoveAttempts
         self.forceTrashQuarantineRecovery = forceTrashQuarantineRecovery
         self.failTrashQuarantineCommitOnAttempt = failTrashQuarantineCommitOnAttempt
         self.raceDestinationBeforeExclusiveMove = raceDestinationBeforeExclusiveMove
@@ -397,6 +404,14 @@ actor RecordingFileSystem: FileSystemAccess {
         })
     }
 
+    func filenameComparisonPolicy(in directory: URL) async throws -> FilenameComparisonPolicy {
+        caseInsensitivePaths ? .caseInsensitiveCanonical : .caseSensitiveCanonical
+    }
+
+    func clearEvents() {
+        events = []
+    }
+
     func volumeIdentifier(for url: URL) async throws -> String {
         let operation = Operation.volumeIdentifier(url)
         try record(operation)
@@ -564,7 +579,12 @@ actor RecordingFileSystem: FileSystemAccess {
         identifiedBy identity: FileIdentity,
         to destination: URL
     ) async throws {
+        checkedExclusiveMoveAttempt += 1
+        let attempt = checkedExclusiveMoveAttempt
         try record(.checkedExclusiveMove(source, identity, destination))
+        if failCheckedExclusiveMoveAttempts.contains(attempt) {
+            throw CocoaError(.fileWriteUnknown)
+        }
         guard identities[source] == identity else {
             throw FileSystemAccessError.identityMismatch(source)
         }
@@ -580,6 +600,9 @@ actor RecordingFileSystem: FileSystemAccess {
         existingURLs.remove(source)
         existingURLs.insert(destination)
         identities[destination] = movedIdentity
+        if cancelAfterCheckedExclusiveMoveAttempt == attempt {
+            withUnsafeCurrentTask { $0?.cancel() }
+        }
     }
 
     func moveExclusively(

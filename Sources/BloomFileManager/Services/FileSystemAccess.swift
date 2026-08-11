@@ -192,6 +192,7 @@ protocol FileSystemAccess: Sendable {
         _ quarantine: StorageTrashQuarantine
     ) async throws -> URL
     func names(in directory: URL) async throws -> Set<String>
+    func filenameComparisonPolicy(in directory: URL) async throws -> FilenameComparisonPolicy
     func volumeIdentifier(for url: URL) async throws -> String
     func byteSize(of url: URL) async throws -> Int64?
     func availableCapacity(at url: URL) async throws -> Int64?
@@ -214,6 +215,10 @@ protocol FileSystemAccess: Sendable {
 }
 
 extension FileSystemAccess {
+    func filenameComparisonPolicy(in directory: URL) async throws -> FilenameComparisonPolicy {
+        .caseSensitiveCanonical
+    }
+
     func openItem(
         _ url: URL,
         kind: OpenedFileSystemItemKind,
@@ -1339,6 +1344,18 @@ actor LiveFileSystemAccess: FileSystemAccess {
             includingPropertiesForKeys: nil
         )
         return Set(children.map(\.lastPathComponent))
+    }
+
+    func filenameComparisonPolicy(in directory: URL) async throws -> FilenameComparisonPolicy {
+        let values = try directory.resourceValues(forKeys: [
+            .volumeSupportsCaseSensitiveNamesKey
+        ])
+        guard let supportsCaseSensitiveNames = values.volumeSupportsCaseSensitiveNames else {
+            throw FileSystemAccessError.unsupportedOperation(directory)
+        }
+        return supportsCaseSensitiveNames
+            ? .caseSensitiveCanonical
+            : .caseInsensitiveCanonical
     }
 
     func volumeIdentifier(for url: URL) throws -> String {
