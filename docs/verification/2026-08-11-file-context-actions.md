@@ -1,7 +1,7 @@
 # File context actions verification
 
-**Date:** 2026-08-11  
-**Worktree:** `codex/safe-operation-center` at `65230f7`  
+**Date:** 2026-08-11
+**Verified code/test baseline:** `e4e60dd` on `codex/safe-operation-center`
 **Scope:** context-menu productivity actions, documentation, and verification
 
 This record separates automated evidence from candidate-specific manual checks.
@@ -11,20 +11,21 @@ This record separates automated evidence from candidate-specific manual checks.
 
 | Gate | Status | Actual result |
 | --- | --- | --- |
-| 10,000-row policy measurement | PASS | `ContextMenuPerformanceTests`: 1 test in 1 suite passed in 0.047 s (test body). The measurement constructs `FileContextMenuPolicy` synchronously on the main actor from deterministic in-memory `FileItem` metadata. Static policy-source evidence found zero identity, content-read, and File Provider materialization dependencies; elapsed is evidence only and has no time ceiling. |
-| Full Swift test suite | PASS | `xcrun swift test --enable-swift-testing --no-parallel --filter BloomFileManagerTests` exited 0: 1,401 tests in 92 suites passed in 80.832 s. |
-| Release build | PASS | `xcrun swift build -c release` exited 0; production build completed in 44.03 s. |
-| Development-bundle verification | PASS | `./script/build_and_run.sh --verify` exited 0 in about 1.45 s; debug build completed in 0.23 s and `dist/Pengrid.app` was valid on disk and satisfied its designated requirement. |
+| 10,000-row ordered selection and policy descriptor construction | PASS | `ContextMenuPerformanceTests` constructs 10,000 deterministic in-memory `FileItem` values, filters a reverse-inserted selection into table order, then constructs `FileContextMenuPolicy` synchronously on the main actor. Focused test body: 0.055 s; final full-suite test body: 0.052 s. The boundary accepts only captured value inputs and no I/O-capable collaborator; it is not a full `NSMenu`/AppKit-adapter measurement and has no timing ceiling. |
+| Focused reviewer-fix suite | PASS | Primary focused run: 119 tests in 4 suites passed after 0.289 s. |
+| Full Swift test suite | PASS | `xcrun swift test --enable-swift-testing --no-parallel --filter BloomFileManagerTests` exited 0: 1,405 tests in 92 suites passed after 83.824 s. |
+| Release build | PASS | `xcrun swift build -c release` exited 0; production build completed in 45.73 s. |
+| Development-bundle verification | PASS | `./script/build_and_run.sh --verify` exited 0; debug build completed in 0.25 s, tool wall time was 1.54 s, and `dist/Pengrid.app` was valid on disk and satisfied its designated requirement. |
 
 The performance test intentionally has no 4- or 5-second assertion. It verifies
-the pure value-policy boundary and a single synchronous main-actor call; the
-recorded test-body elapsed is evidence rather than a pass/fail limit.
+ordered selection filtering and one synchronous, captured-value policy-descriptor
+construction; its reported body durations are observation only, not pass/fail limits.
 
 ### Corrected diagnostic evidence
 
 | Diagnostic stage | Actual result |
 | --- | --- | --- |
-| Cancellation-cleanup and Quick Look routing investigation | The earlier 15-issue suite result identified a cancellation-cleanup regression and a stale static Quick Look routing assertion. They were corrected by `de34cf9 fix: preserve cleanup after cancellation` and `65230f7 test: follow shared quick look routing`. The focused regression run then passed 184 tests in 11 suites in 5.582 s before the final full-suite pass. |
+| Sol fix-first review and correction | Sol found post-publish Duplicate cancellation, post-move enclosure cancellation, post-preflight Undo mutation, exclusive-state wiring, capability-documentation mismatch, performance-scope mismatch, and whitespace. Corrections were committed as `e4e60dd`; the focused reviewer-fix run passed 119 tests in 4 suites after 0.289 s, followed by the final full-suite pass. |
 
 ## Manual macOS evidence
 
@@ -69,5 +70,5 @@ recorded test-body elapsed is evidence rather than a pass/fail limit.
 | --- | --- |
 | `rg -n 'TODO|TBD|FIXME|fatalError\("not implemented"' Sources Tests README.md README.ko.md docs` | Two matches: this quoted audit command and the same command in `docs/superpowers/plans/2026-08-11-file-context-menu-productivity.md:595`; no implementation marker was reported. |
 | `git diff --check` | Exit 0; no whitespace errors. |
-| `git status --short` | The four owned documentation edits plus the new verification note and `ContextMenuPerformanceTests.swift` are the only uncommitted files. |
-| `git log --oneline --decorate -15` | HEAD: `65230f7 (HEAD -> codex/safe-operation-center) test: follow shared quick look routing`; preceding fix: `de34cf9 fix: preserve cleanup after cancellation`. |
+| `git status --short` | Immediately before the final documentation commit, only this verification note was modified. |
+| `git log --oneline --decorate -15` | Verified code/test baseline: `e4e60dd`; this identifies the evidence baseline only and does not promise the branch's later HEAD after this note is committed. |
