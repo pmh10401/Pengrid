@@ -225,6 +225,33 @@ struct ArchiveOperationStatusPresentation: Equatable, Sendable {
     }
 }
 
+struct BatchRenameOperationStatusPresentation: Equatable, Sendable {
+    let title: String
+    let currentItemName: String
+    let completedCount: Int
+    let totalCount: Int
+    let accessibilityLabel: String
+
+    init(progress: BatchRenameTransactionProgress) {
+        title = switch progress.phase {
+        case .staging: "Preparing Names"
+        case .publishing: "Renaming Items"
+        case .rollingBack: "Restoring Names"
+        }
+        completedCount = min(max(progress.completedCount, 0), max(progress.totalCount, 0))
+        totalCount = max(progress.totalCount, 0)
+        let sanitized = progress.currentName
+            .components(separatedBy: .newlines)
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        currentItemName = sanitized.isEmpty
+            ? "Item"
+            : URL(filePath: sanitized).lastPathComponent
+        accessibilityLabel = "\(title), \(completedCount) of \(totalCount), "
+            + "current item \(currentItemName)"
+    }
+}
+
 struct OperationStatusView: View {
     let controller: FileOperationController
 
@@ -247,9 +274,44 @@ struct OperationStatusView: View {
                 operationStatus(progress)
             case let .archiving(progress):
                 archiveStatus(progress)
+            case let .batchRenaming(progress):
+                batchRenameStatus(progress)
             }
         }
         .accessibilityIdentifier(AccessibilityIdentifiers.operationStatus)
+    }
+
+    private func batchRenameStatus(_ progress: BatchRenameTransactionProgress) -> some View {
+        let presentation = BatchRenameOperationStatusPresentation(progress: progress)
+        return HStack(spacing: 10) {
+            Text(presentation.title)
+                .font(.caption.weight(.semibold))
+
+            ProgressView(
+                value: Double(presentation.completedCount),
+                total: Double(max(presentation.totalCount, 1))
+            )
+            .frame(maxWidth: 180)
+
+            Text(presentation.currentItemName)
+                .font(.caption)
+                .lineLimit(1)
+                .truncationMode(.middle)
+
+            Spacer(minLength: 8)
+
+            Text("\(presentation.completedCount) of \(presentation.totalCount)")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+
+            Button("Cancel") {
+                controller.cancel()
+            }
+            .controlSize(.small)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(presentation.accessibilityLabel)
+        .modifier(StatusBarStyle())
     }
 
     private func preparationStatus(_ progress: CloudMaterializationProgress) -> some View {

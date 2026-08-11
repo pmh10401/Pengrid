@@ -130,6 +130,7 @@ actor RecordingFileSystem: FileSystemAccess {
     private let cancelAfterTrashOf: URL?
     private let caseInsensitivePaths: Bool
     private let cancelAfterCheckedExclusiveMoveAttempt: Int?
+    private let suspendCheckedExclusiveMoveAttempt: Int?
     private let failCheckedExclusiveMoveAttempts: Set<Int>
     private let forceTrashQuarantineRecovery: Bool
     private let failTrashQuarantineCommitOnAttempt: Int?
@@ -139,8 +140,11 @@ actor RecordingFileSystem: FileSystemAccess {
     private var trashQuarantineCommitAttempt = 0
     private var suspendedIdentityContinuation: CheckedContinuation<Void, Never>?
     private var suspendedExistsContinuation: CheckedContinuation<Void, Never>?
+    private var suspendedCheckedExclusiveMoveContinuation: CheckedContinuation<Void, Never>?
+    private var checkedExclusiveMoveSuspensionWaiters: [CheckedContinuation<Void, Never>] = []
     private(set) var hasSuspendedIdentity = false
     private(set) var hasSuspendedExists = false
+    private(set) var hasSuspendedCheckedExclusiveMove = false
     private var didSuspendExists = false
     private var didCancelStagingReservation = false
     private var nextIdentity = 0
@@ -179,6 +183,7 @@ actor RecordingFileSystem: FileSystemAccess {
         cancelAfterTrashOf: URL? = nil,
         caseInsensitivePaths: Bool = false,
         cancelAfterCheckedExclusiveMoveAttempt: Int? = nil,
+        suspendCheckedExclusiveMoveAttempt: Int? = nil,
         failCheckedExclusiveMoveAttempts: Set<Int> = [],
         forceTrashQuarantineRecovery: Bool = false,
         failTrashQuarantineCommitOnAttempt: Int? = nil,
@@ -224,6 +229,7 @@ actor RecordingFileSystem: FileSystemAccess {
         self.cancelAfterTrashOf = cancelAfterTrashOf
         self.caseInsensitivePaths = caseInsensitivePaths
         self.cancelAfterCheckedExclusiveMoveAttempt = cancelAfterCheckedExclusiveMoveAttempt
+        self.suspendCheckedExclusiveMoveAttempt = suspendCheckedExclusiveMoveAttempt
         self.failCheckedExclusiveMoveAttempts = failCheckedExclusiveMoveAttempts
         self.forceTrashQuarantineRecovery = forceTrashQuarantineRecovery
         self.failTrashQuarantineCommitOnAttempt = failTrashQuarantineCommitOnAttempt
@@ -554,6 +560,19 @@ actor RecordingFileSystem: FileSystemAccess {
         suspendedExistsContinuation = nil
     }
 
+    func waitForSuspendedCheckedExclusiveMove() async {
+        guard !hasSuspendedCheckedExclusiveMove else { return }
+        await withCheckedContinuation { continuation in
+            checkedExclusiveMoveSuspensionWaiters.append(continuation)
+        }
+    }
+
+    func releaseSuspendedCheckedExclusiveMove() {
+        hasSuspendedCheckedExclusiveMove = false
+        suspendedCheckedExclusiveMoveContinuation?.resume()
+        suspendedCheckedExclusiveMoveContinuation = nil
+    }
+
     func move(_ source: URL, identifiedBy identity: FileIdentity, to destination: URL) async throws {
         try record(.checkedMove(source, identity, destination))
         guard identities[source] == identity else {
@@ -582,6 +601,15 @@ actor RecordingFileSystem: FileSystemAccess {
         checkedExclusiveMoveAttempt += 1
         let attempt = checkedExclusiveMoveAttempt
         try record(.checkedExclusiveMove(source, identity, destination))
+        if suspendCheckedExclusiveMoveAttempt == attempt {
+            hasSuspendedCheckedExclusiveMove = true
+            let waiters = checkedExclusiveMoveSuspensionWaiters
+            checkedExclusiveMoveSuspensionWaiters.removeAll()
+            waiters.forEach { $0.resume() }
+            await withCheckedContinuation { continuation in
+                suspendedCheckedExclusiveMoveContinuation = continuation
+            }
+        }
         if failCheckedExclusiveMoveAttempts.contains(attempt) {
             throw CocoaError(.fileWriteUnknown)
         }

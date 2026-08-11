@@ -5,6 +5,7 @@ enum FileOperationStage: Equatable {
     case preparing(CloudMaterializationProgress)
     case operating(FileOperationProgress)
     case archiving(ArchiveOperationProgress)
+    case batchRenaming(BatchRenameTransactionProgress)
 }
 
 enum CloudOperationRequestGate {
@@ -78,6 +79,7 @@ final class FileOperationController {
     private let service: FileOperationService
     private let materializer: any CloudMaterializing
     private let archiveService: any ArchiveOperating
+    private let batchRenameService: BatchRenameTransactionService
     private let undoService: FileOperationUndoService
 
     private(set) var stage: FileOperationStage?
@@ -114,8 +116,18 @@ final class FileOperationController {
     }
 
     var progress: FileOperationProgress? {
-        guard case let .operating(progress) = stage else { return nil }
-        return progress
+        switch stage {
+        case let .operating(progress):
+            return progress
+        case let .batchRenaming(progress):
+            return FileOperationProgress(
+                completedCount: progress.completedCount,
+                totalCount: progress.totalCount,
+                currentName: progress.currentName
+            )
+        case .preparing, .archiving, nil:
+            return nil
+        }
     }
 
     @ObservationIgnored private var operationTask: Task<Void, Never>?
@@ -138,13 +150,19 @@ final class FileOperationController {
         service: FileOperationService,
         materializer: any CloudMaterializing,
         archiveService: (any ArchiveOperating)? = nil,
+        batchRenameService: BatchRenameTransactionService? = nil,
         historyLimit: Int = 100
     ) {
         self.service = service
         self.materializer = materializer
         self.archiveService = archiveService
             ?? service.makeArchiveOperationService()
-        self.undoService = service.makeUndoService()
+        let resolvedBatchRenameService = batchRenameService
+            ?? service.makeBatchRenameTransactionService()
+        self.batchRenameService = resolvedBatchRenameService
+        self.undoService = service.makeUndoService(
+            batchRenameService: resolvedBatchRenameService
+        )
         self.historyLimit = max(historyLimit, 1)
     }
 
@@ -1013,6 +1031,46 @@ final class FileOperationController {
         }
     }
 
+    @discardableResult
+    func batchRename(
+        _ plan: BatchRenamePlan,
+        workspace: WorkspaceState
+    ) -> Bool {
+        guard let first = plan.entries.first else { return false }
+        let finalURLs = Set(plan.entries.map(\.destinationURL))
+        return beginOperation(
+            kind: .rename,
+            totalCount: plan.entries.count,
+            initialName: first.source.name,
+            initialStage: .batchRenaming(BatchRenameTransactionProgress(
+                phase: .staging,
+                completedCount: 0,
+                totalCount: plan.entries.count,
+                currentName: first.source.name
+            )),
+            touchedDirectories: [plan.parentURL],
+            workspace: workspace,
+            cancellationSources: plan.entries.map(\.source.url),
+            requiresExclusiveQueue: true,
+            onCompletion: { result in
+                guard !result.hasFailures,
+                      result.outcomes.count == plan.entries.count
+                else { return }
+                for pane in [workspace.left, workspace.right]
+                where pane.currentDirectory.standardizedFileURL
+                    == plan.parentURL.standardizedFileURL {
+                    pane.selection = finalURLs
+                }
+            }
+        ) { [weak self, batchRenameService] in
+            guard let self else { return FileOperationResult(outcomes: []) }
+            return await batchRenameService.execute(plan) { [weak self] progress in
+                guard let self else { return }
+                await self.publish(stage: .batchRenaming(progress))
+            }
+        }
+    }
+
     func requestTrashConfirmation(for urls: [URL], workspace: WorkspaceState) async {
         let paneID = workspace.activePaneID
         let requestedSelection = Set(urls)
@@ -1366,6 +1424,17 @@ final class FileOperationController {
                     detail: "Finishing archive"
                 )
             }
+        case let .batchRenaming(progress):
+            let detail = switch progress.phase {
+            case .staging: "Staging names"
+            case .publishing: "Publishing names"
+            case .rollingBack: "Rolling back names"
+            }
+            return FileOperationJobProgress(
+                completedCount: progress.completedCount,
+                totalCount: progress.totalCount,
+                detail: detail
+            )
         }
     }
 

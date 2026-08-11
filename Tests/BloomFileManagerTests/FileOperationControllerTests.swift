@@ -2123,6 +2123,47 @@ struct FileOperationControllerTests {
         #expect(details.items.first?.guidance == "Connect to the internet, then try the download again.")
     }
 
+    @Test func batchRenameRunsAsOneExclusiveJobAndSelectsFinalItems() async throws {
+        let fixture = try await BatchRenameControllerFixture(
+            suspendCheckedExclusiveMoveAttempt: 2
+        )
+
+        #expect(fixture.controller.batchRename(fixture.plan, workspace: fixture.workspace))
+        await fixture.fileSystem.waitForSuspendedCheckedExclusiveMove()
+        #expect(fixture.controller.activeJob?.kind == .rename)
+        #expect(fixture.controller.activeJob?.title == "Rename 2 Items")
+        #expect(fixture.controller.activeJob?.progress == FileOperationJobProgress(
+            completedCount: 1,
+            totalCount: 2,
+            detail: "Staging names"
+        ))
+        await fixture.fileSystem.releaseSuspendedCheckedExclusiveMove()
+        await waitUntilQueueIsIdle(fixture.controller)
+
+        let job = try #require(fixture.controller.operationHistory.first)
+        #expect(job.state == .succeeded)
+        #expect(job.canUndo)
+        #expect(fixture.workspace.left.selection == [
+            fixture.url("new-A.txt"),
+            fixture.url("new-B.txt")
+        ])
+    }
+
+    @Test func batchRenameUndoRunsThroughTheSameExclusiveQueue() async throws {
+        let fixture = try await BatchRenameControllerFixture()
+        #expect(fixture.controller.batchRename(fixture.plan, workspace: fixture.workspace))
+        await waitUntilQueueIsIdle(fixture.controller)
+        let renameJob = try #require(fixture.controller.operationHistory.first)
+
+        #expect(fixture.controller.undoJob(renameJob.id))
+        #expect(fixture.controller.activeJob?.kind == .undo)
+        await waitUntilQueueIsIdle(fixture.controller)
+
+        #expect(fixture.controller.operationHistory.first?.state == .succeeded)
+        #expect(await fixture.fileSystem.existingURLs.contains(fixture.url("A.txt")))
+        #expect(await fixture.fileSystem.existingURLs.contains(fixture.url("B.txt")))
+    }
+
     @Test func identifiedConflictUsesStableContentIdentity() {
         let conflict = FileConflict(
             source: URL(filePath: "/source/a"),
@@ -2222,6 +2263,65 @@ struct FileOperationControllerTests {
             fileSystem: fileSystem
         )
     }
+}
+
+@MainActor
+private struct BatchRenameControllerFixture {
+    let parent = URL(filePath: "/workspace", directoryHint: .isDirectory)
+    let fileSystem: RecordingFileSystem
+    let controller: FileOperationController
+    let workspace: WorkspaceState
+    let plan: BatchRenamePlan
+
+    init(suspendCheckedExclusiveMoveAttempt: Int? = nil) async throws {
+        let parentURL = URL(filePath: "/workspace", directoryHint: .isDirectory)
+        let sourceNames = ["A.txt", "B.txt"]
+        let sourceURLs = sourceNames.map { parentURL.appending(path: $0) }
+        fileSystem = RecordingFileSystem(
+            existingURLs: Set([parentURL] + sourceURLs),
+            caseInsensitivePaths: true,
+            suspendCheckedExclusiveMoveAttempt: suspendCheckedExclusiveMoveAttempt
+        )
+        let transaction = BatchRenameTransactionService(
+            fileSystem: fileSystem,
+            temporaryName: { ".pengrid-rename-controller-\($0)" }
+        )
+        controller = FileOperationController(
+            service: FileOperationService(fileSystem: fileSystem),
+            batchRenameService: transaction
+        )
+        workspace = WorkspaceState(
+            leftURL: parentURL,
+            rightURL: URL(filePath: "/elsewhere"),
+            listingService: StubDirectoryListingService(values: [:])
+        )
+        workspace.left.selection = Set(sourceURLs)
+        var sources: [BatchRenameSource] = []
+        for name in sourceNames {
+            let url = parentURL.appending(path: name)
+            sources.append(BatchRenameSource(
+                url: url,
+                identity: try #require(await fileSystem.identity(of: url)),
+                name: name,
+                isDirectory: false,
+                isPackage: false
+            ))
+        }
+        let request = BatchRenamePlanningRequest(
+            parentURL: parentURL,
+            parentIdentity: try #require(await fileSystem.identity(of: parentURL)),
+            sources: sources
+        )
+        plan = try #require(BatchRenamePlanner.preview(
+            request: request,
+            proposedNames: ["new-A.txt", "new-B.txt"],
+            occupiedNames: Set(sourceNames),
+            comparisonPolicy: .caseInsensitiveCanonical
+        ).plan)
+        await fileSystem.clearEvents()
+    }
+
+    func url(_ name: String) -> URL { parent.appending(path: name) }
 }
 
 private struct ProtectedWorkspaceFixture {

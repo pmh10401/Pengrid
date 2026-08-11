@@ -261,12 +261,14 @@ struct FileOperationResult: Sendable, Equatable {
     private let safeRelativePathsBySource: [URL: ComparisonRelativePath]
     private let undoDestinationIdentities: [URL: FileIdentity]
     private let undoDestinationFingerprints: [URL: SourceFingerprint]
+    private let batchRenameUndoPlan: BatchRenameUndoPlan?
 
     init(
         outcomes: [FileOperationItemOutcome],
         safeRelativePathsBySource: [URL: ComparisonRelativePath] = [:],
         undoDestinationIdentities: [URL: FileIdentity] = [:],
-        undoDestinationFingerprints: [URL: SourceFingerprint] = [:]
+        undoDestinationFingerprints: [URL: SourceFingerprint] = [:],
+        batchRenameUndoPlan: BatchRenameUndoPlan? = nil
     ) {
         self.outcomes = outcomes
         var normalized: [URL: ComparisonRelativePath] = [:]
@@ -292,6 +294,7 @@ struct FileOperationResult: Sendable, Equatable {
             normalizedUndoFingerprints[destination.standardizedFileURL] = fingerprint
         }
         self.undoDestinationFingerprints = normalizedUndoFingerprints
+        self.batchRenameUndoPlan = batchRenameUndoPlan
     }
 
     func safeRelativePath(for source: URL) -> ComparisonRelativePath? {
@@ -306,6 +309,10 @@ struct FileOperationResult: Sendable, Equatable {
         undoDestinationFingerprints[destination.standardizedFileURL]
     }
 
+    func batchRenameUndoMetadata() -> BatchRenameUndoPlan? {
+        batchRenameUndoPlan
+    }
+
     func addingSafeRelativePaths(
         _ paths: [URL: ComparisonRelativePath]
     ) -> FileOperationResult {
@@ -317,7 +324,8 @@ struct FileOperationResult: Sendable, Equatable {
             outcomes: outcomes,
             safeRelativePathsBySource: mergedPaths,
             undoDestinationIdentities: undoDestinationIdentities,
-            undoDestinationFingerprints: undoDestinationFingerprints
+            undoDestinationFingerprints: undoDestinationFingerprints,
+            batchRenameUndoPlan: batchRenameUndoPlan
         )
     }
 
@@ -341,7 +349,8 @@ struct FileOperationResult: Sendable, Equatable {
             outcomes: outcomes + other.outcomes,
             safeRelativePathsBySource: paths,
             undoDestinationIdentities: identities,
-            undoDestinationFingerprints: fingerprints
+            undoDestinationFingerprints: fingerprints,
+            batchRenameUndoPlan: batchRenameUndoPlan ?? other.batchRenameUndoPlan
         )
     }
 

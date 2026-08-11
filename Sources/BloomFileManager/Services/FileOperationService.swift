@@ -63,10 +63,20 @@ actor FileOperationService {
         )
     }
 
-    nonisolated func makeUndoService() -> FileOperationUndoService {
-        FileOperationUndoService(
+    nonisolated func makeBatchRenameTransactionService() -> BatchRenameTransactionService {
+        BatchRenameTransactionService(
             fileSystem: fileSystem,
             accessCoordinator: accessCoordinator
+        )
+    }
+
+    nonisolated func makeUndoService(
+        batchRenameService: BatchRenameTransactionService? = nil
+    ) -> FileOperationUndoService {
+        FileOperationUndoService(
+            fileSystem: fileSystem,
+            accessCoordinator: accessCoordinator,
+            batchRenameService: batchRenameService
         )
     }
 

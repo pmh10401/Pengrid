@@ -132,6 +132,7 @@ actor BatchRenameTransactionService {
 
             var finalIdentities: [URL: FileIdentity] = [:]
             var finalFingerprints: [URL: SourceFingerprint] = [:]
+            var undoEntries: [BatchRenameUndoEntry] = []
             for index in workingEntries.indices {
                 try Task.checkCancellation()
                 let entry = workingEntries[index]
@@ -162,6 +163,12 @@ actor BatchRenameTransactionService {
                 )
                 finalIdentities[entry.planEntry.destinationURL] = finalIdentity
                 finalFingerprints[entry.planEntry.destinationURL] = fingerprint
+                undoEntries.append(BatchRenameUndoEntry(
+                    originalSource: entry.planEntry.source,
+                    finalURL: entry.planEntry.destinationURL,
+                    finalIdentity: finalIdentity,
+                    finalFingerprint: fingerprint
+                ))
                 workingEntries[index].currentIdentity = finalIdentity
             }
 
@@ -170,7 +177,13 @@ actor BatchRenameTransactionService {
                     .succeeded(source: $0.source.url, destination: $0.destinationURL)
                 },
                 undoDestinationIdentities: finalIdentities,
-                undoDestinationFingerprints: finalFingerprints
+                undoDestinationFingerprints: finalFingerprints,
+                batchRenameUndoPlan: BatchRenameUndoPlan(
+                    parentURL: plan.parentURL,
+                    parentIdentity: plan.parentIdentity,
+                    entries: undoEntries,
+                    comparisonPolicy: plan.comparisonPolicy
+                )
             )
         } catch {
             let wasCancelled = error is CancellationError || Task.isCancelled

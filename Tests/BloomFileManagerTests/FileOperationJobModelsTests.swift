@@ -128,4 +128,29 @@ struct FileOperationJobModelsTests {
         #expect(snapshot.canRetry == false)
         #expect(snapshot.canUndo == false)
     }
+
+    @Test func multiItemRenameUsesAnExplicitBatchTitle() {
+        let batch = FileOperationJobSnapshot(
+            id: UUID(),
+            kind: .rename,
+            itemDisplayName: "A.txt",
+            itemCount: 3,
+            state: .running,
+            progress: nil,
+            canUndo: false
+        )
+        let single = FileOperationJobSnapshot(
+            id: UUID(),
+            kind: .rename,
+            itemDisplayName: "A.txt",
+            itemCount: 1,
+            state: .running,
+            progress: nil,
+            canUndo: false
+        )
+
+        #expect(batch.title == "Rename 3 Items")
+        #expect(single.title == "Rename")
+        #expect(batch.accessibilityLabel.hasPrefix("Rename 3 Items, Running"))
+    }
 }

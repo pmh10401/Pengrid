@@ -339,6 +339,137 @@ struct FileOperationUndoServiceTests {
         #expect(FileManager.default.fileExists(atPath: created.path) == false)
         #expect(FileManager.default.fileExists(atPath: trashURL.appending(path: "child.txt").path))
     }
+
+    @Test func batchRenameUndoReversesASwapThroughTheTransactionEngine() async throws {
+        let fixture = try await BatchRenameUndoFixture(
+            mapping: ["A.txt": "B.txt", "B.txt": "A.txt"]
+        )
+        let operationResult = await fixture.transaction.execute(fixture.plan) { _ in }
+        let undoService = FileOperationUndoService(
+            fileSystem: fixture.fileSystem,
+            batchRenameService: fixture.transaction
+        )
+        let recipe = try #require(await undoService.makeRecipe(
+            kind: .rename,
+            result: operationResult,
+            allowsUndo: true
+        ))
+
+        let result = await undoService.perform(recipe)
+
+        #expect(!result.hasFailures)
+        #expect(try await fixture.identity("A.txt") == fixture.originalIdentities["A.txt"])
+        #expect(try await fixture.identity("B.txt") == fixture.originalIdentities["B.txt"])
+        #expect(await fixture.fileSystem.existingURLs == [
+            fixture.parent,
+            fixture.url("A.txt"),
+            fixture.url("B.txt")
+        ])
+    }
+
+    @Test func batchRenameUndoRefusesAChangedFinalFingerprint() async throws {
+        let fixture = try await BatchRenameUndoFixture(
+            mapping: ["A.txt": "C.txt", "B.txt": "D.txt"]
+        )
+        let operationResult = await fixture.transaction.execute(fixture.plan) { _ in }
+        let undoService = FileOperationUndoService(
+            fileSystem: fixture.fileSystem,
+            batchRenameService: fixture.transaction
+        )
+        let recipe = try #require(await undoService.makeRecipe(
+            kind: .rename,
+            result: operationResult,
+            allowsUndo: true
+        ))
+        await fixture.fileSystem.mutateContents(at: fixture.url("C.txt"))
+
+        let result = await undoService.perform(recipe)
+
+        #expect(result.hasFailures)
+        #expect(await fixture.fileSystem.existingURLs.contains(fixture.url("C.txt")))
+        #expect(await fixture.fileSystem.existingURLs.contains(fixture.url("D.txt")))
+    }
+
+    @Test func batchRenameUndoRefusesAnExternallyOccupiedOriginalName() async throws {
+        let fixture = try await BatchRenameUndoFixture(
+            mapping: ["A.txt": "C.txt", "B.txt": "D.txt"]
+        )
+        let operationResult = await fixture.transaction.execute(fixture.plan) { _ in }
+        let undoService = FileOperationUndoService(
+            fileSystem: fixture.fileSystem,
+            batchRenameService: fixture.transaction
+        )
+        let recipe = try #require(await undoService.makeRecipe(
+            kind: .rename,
+            result: operationResult,
+            allowsUndo: true
+        ))
+        await fixture.fileSystem.replaceIdentity(
+            at: fixture.url("A.txt"),
+            with: FileIdentity(entryIdentifier: "external", resolvedIdentifier: "external")
+        )
+
+        let result = await undoService.perform(recipe)
+
+        #expect(result.hasFailures)
+        #expect(await fixture.fileSystem.existingURLs.contains(fixture.url("A.txt")))
+        #expect(await fixture.fileSystem.existingURLs.contains(fixture.url("C.txt")))
+    }
+}
+
+private struct BatchRenameUndoFixture {
+    let parent = URL(filePath: "/workspace", directoryHint: .isDirectory)
+    let fileSystem: RecordingFileSystem
+    let transaction: BatchRenameTransactionService
+    let plan: BatchRenamePlan
+    let originalIdentities: [String: FileIdentity]
+
+    init(mapping: [String: String]) async throws {
+        let parentURL = URL(filePath: "/workspace", directoryHint: .isDirectory)
+        let names = mapping.keys.sorted()
+        let urls = names.map { parentURL.appending(path: $0) }
+        fileSystem = RecordingFileSystem(
+            existingURLs: Set([parentURL] + urls),
+            caseInsensitivePaths: true
+        )
+        transaction = BatchRenameTransactionService(
+            fileSystem: fileSystem,
+            temporaryName: { ".pengrid-rename-undo-\($0)" }
+        )
+        var identities: [String: FileIdentity] = [:]
+        var sources: [BatchRenameSource] = []
+        for name in names {
+            let url = parentURL.appending(path: name)
+            let identity = try #require(await fileSystem.identity(of: url))
+            identities[name] = identity
+            sources.append(BatchRenameSource(
+                url: url,
+                identity: identity,
+                name: name,
+                isDirectory: false,
+                isPackage: false
+            ))
+        }
+        originalIdentities = identities
+        let request = BatchRenamePlanningRequest(
+            parentURL: parentURL,
+            parentIdentity: try #require(await fileSystem.identity(of: parentURL)),
+            sources: sources
+        )
+        plan = try #require(BatchRenamePlanner.preview(
+            request: request,
+            proposedNames: names.map { mapping[$0]! },
+            occupiedNames: Set(names),
+            comparisonPolicy: .caseInsensitiveCanonical
+        ).plan)
+        await fileSystem.clearEvents()
+    }
+
+    func url(_ name: String) -> URL { parent.appending(path: name) }
+
+    func identity(_ name: String) async throws -> FileIdentity? {
+        try await fileSystem.identity(of: url(name))
+    }
 }
 
 private func authoritativeUndoResult(

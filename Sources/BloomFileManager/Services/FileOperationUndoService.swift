@@ -15,11 +15,13 @@ struct FileOperationUndoCreatedEntry: Sendable, Equatable {
 enum FileOperationUndoRecipe: Sendable, Equatable {
     case moveBack([FileOperationUndoMoveEntry])
     case removeCreated([FileOperationUndoCreatedEntry])
+    case batchRename(BatchRenameUndoPlan)
 
     var itemCount: Int {
         switch self {
         case let .moveBack(entries): entries.count
         case let .removeCreated(entries): entries.count
+        case let .batchRename(plan): plan.entries.count
         }
     }
 
@@ -27,6 +29,7 @@ enum FileOperationUndoRecipe: Sendable, Equatable {
         switch self {
         case let .moveBack(entries): entries.first?.currentURL.lastPathComponent ?? "Item"
         case let .removeCreated(entries): entries.first?.url.lastPathComponent ?? "Item"
+        case let .batchRename(plan): plan.entries.first?.finalURL.lastPathComponent ?? "Item"
         }
     }
 
@@ -38,6 +41,8 @@ enum FileOperationUndoRecipe: Sendable, Equatable {
             })
         case let .removeCreated(entries):
             Set(entries.map { $0.url.deletingLastPathComponent() })
+        case let .batchRename(plan):
+            [plan.parentURL]
         }
     }
 }
@@ -49,13 +54,19 @@ actor FileOperationUndoService {
 
     private let fileSystem: any FileSystemAccess
     private let accessCoordinator: CloudLocationScopedAccessCoordinator
+    private let batchRenameService: BatchRenameTransactionService
 
     init(
         fileSystem: any FileSystemAccess,
-        accessCoordinator: CloudLocationScopedAccessCoordinator = .init()
+        accessCoordinator: CloudLocationScopedAccessCoordinator = .init(),
+        batchRenameService: BatchRenameTransactionService? = nil
     ) {
         self.fileSystem = fileSystem
         self.accessCoordinator = accessCoordinator
+        self.batchRenameService = batchRenameService ?? BatchRenameTransactionService(
+            fileSystem: fileSystem,
+            accessCoordinator: accessCoordinator
+        )
     }
 
     func makeRecipe(
@@ -81,6 +92,20 @@ actor FileOperationUndoService {
         defer { leases.forEach { $0.finish() } }
 
         do {
+            if kind == .rename, let plan = result.batchRenameUndoMetadata() {
+                guard plan.entries.count == completed.count else { return nil }
+                for entry in plan.entries {
+                    try Task.checkCancellation()
+                    guard try await fileSystem.identity(of: entry.finalURL)
+                        == entry.finalIdentity,
+                        try await fileSystem.fingerprint(of: entry.finalURL)
+                            == entry.finalFingerprint,
+                        try await fileSystem.identity(of: entry.finalURL)
+                            == entry.finalIdentity
+                    else { return nil }
+                }
+                return .batchRename(plan)
+            }
             switch kind {
             case .move, .rename, .trash:
                 var entries: [FileOperationUndoMoveEntry] = []
@@ -136,7 +161,7 @@ actor FileOperationUndoService {
 
     func perform(
         _ recipe: FileOperationUndoRecipe,
-        progress: OperationProgressHandler = { _ in }
+        progress: @escaping OperationProgressHandler = { _ in }
     ) async -> FileOperationResult {
         let urls: [URL]
         switch recipe {
@@ -144,6 +169,10 @@ actor FileOperationUndoService {
             urls = entries.flatMap { [$0.currentURL, $0.originalURL] }
         case let .removeCreated(entries):
             urls = entries.map(\.url)
+        case let .batchRename(plan):
+            urls = [plan.parentURL] + plan.entries.flatMap {
+                [$0.finalURL, $0.originalSource.url]
+            }
         }
 
         let leases: [CloudLocationScopedAccessLease]
@@ -159,6 +188,40 @@ actor FileOperationUndoService {
             return await moveBack(entries, progress: progress)
         case let .removeCreated(entries):
             return await removeCreated(entries, progress: progress)
+        case let .batchRename(plan):
+            return await reverseBatchRename(plan, progress: progress)
+        }
+    }
+
+    private func reverseBatchRename(
+        _ plan: BatchRenameUndoPlan,
+        progress: @escaping OperationProgressHandler
+    ) async -> FileOperationResult {
+        do {
+            for entry in plan.entries {
+                try Task.checkCancellation()
+                guard try await fileSystem.identity(of: entry.finalURL)
+                    == entry.finalIdentity,
+                    try await fileSystem.fingerprint(of: entry.finalURL)
+                        == entry.finalFingerprint,
+                    try await fileSystem.identity(of: entry.finalURL)
+                        == entry.finalIdentity
+                else { throw UndoSafetyError.unavailable }
+            }
+        } catch is CancellationError {
+            return FileOperationResult(outcomes: plan.entries.map {
+                .cancelled(source: $0.finalURL)
+            })
+        } catch {
+            return failureResult(for: .batchRename(plan))
+        }
+
+        return await batchRenameService.execute(plan.reversePlan) { update in
+            await progress(FileOperationProgress(
+                completedCount: update.completedCount,
+                totalCount: update.totalCount,
+                currentName: update.currentName
+            ))
         }
     }
 
@@ -366,6 +429,10 @@ actor FileOperationUndoService {
         case let .removeCreated(entries):
             return FileOperationResult(outcomes: entries.map {
                 .failed(source: $0.url, message: message)
+            })
+        case let .batchRename(plan):
+            return FileOperationResult(outcomes: plan.entries.map {
+                .failed(source: $0.finalURL, message: message)
             })
         }
     }

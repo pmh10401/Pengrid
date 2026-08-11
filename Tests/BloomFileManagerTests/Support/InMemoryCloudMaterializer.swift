@@ -37,7 +37,14 @@ actor InMemoryCloudMaterializer: CloudMaterializing {
 
 @MainActor
 extension FileOperationController {
-    convenience init(service: FileOperationService) {
-        self.init(service: service, materializer: InMemoryCloudMaterializer())
+    convenience init(
+        service: FileOperationService,
+        batchRenameService: BatchRenameTransactionService? = nil
+    ) {
+        self.init(
+            service: service,
+            materializer: InMemoryCloudMaterializer(),
+            batchRenameService: batchRenameService
+        )
     }
 }

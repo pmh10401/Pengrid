@@ -93,7 +93,12 @@ struct FileOperationJobSnapshot: Identifiable, Sendable, Equatable {
         undoEligible = canUndo
     }
 
-    var title: String { kind.title }
+    var title: String {
+        if kind == .rename, itemCount > 1 {
+            return "Rename \(itemCount) Items"
+        }
+        return kind.title
+    }
 
     var canRetry: Bool {
         retryEligible && kind != .undo && (state == .failed || state == .cancelled)

@@ -66,6 +66,41 @@ struct BatchRenamePlan: Sendable, Equatable {
     let comparisonPolicy: FilenameComparisonPolicy
 }
 
+struct BatchRenameUndoEntry: Sendable, Equatable {
+    let originalSource: BatchRenameSource
+    let finalURL: URL
+    let finalIdentity: FileIdentity
+    let finalFingerprint: SourceFingerprint
+}
+
+struct BatchRenameUndoPlan: Sendable, Equatable {
+    let parentURL: URL
+    let parentIdentity: FileIdentity
+    let entries: [BatchRenameUndoEntry]
+    let comparisonPolicy: FilenameComparisonPolicy
+
+    var reversePlan: BatchRenamePlan {
+        BatchRenamePlan(
+            parentURL: parentURL,
+            parentIdentity: parentIdentity,
+            entries: entries.map { entry in
+                BatchRenamePlanEntry(
+                    source: BatchRenameSource(
+                        url: entry.finalURL,
+                        identity: entry.finalIdentity,
+                        name: entry.finalURL.lastPathComponent,
+                        isDirectory: entry.originalSource.isDirectory,
+                        isPackage: entry.originalSource.isPackage
+                    ),
+                    proposedName: entry.originalSource.name,
+                    destinationURL: entry.originalSource.url
+                )
+            },
+            comparisonPolicy: comparisonPolicy
+        )
+    }
+}
+
 struct BatchRenamePreview: Sendable, Equatable {
     let entries: [BatchRenamePreviewEntry]
     let plan: BatchRenamePlan?
