@@ -339,6 +339,7 @@ func transferToCapturedDirectory(
 **Files:**
 - Modify: `Sources/BloomFileManager/Models/FileOperationJobModels.swift`
 - Modify: `Sources/BloomFileManager/Stores/FileOperationController.swift`
+- Modify: `Sources/BloomFileManager/Services/FileOperationService.swift`
 - Modify: `Sources/BloomFileManager/Services/FileOperationUndoService.swift`
 - Modify: `Tests/BloomFileManagerTests/FileOperationJobModelsTests.swift`
 - Modify: `Tests/BloomFileManagerTests/FileOperationControllerTests.swift`
@@ -356,15 +357,25 @@ func duplicate(
     in pane: FilePaneState,
     workspace: WorkspaceState
 ) -> Bool
+
+extension FileOperationService {
+    func duplicate(
+        _ requests: [IdentifiedTransferRequest],
+        progress: OperationProgressHandler
+    ) async -> FileOperationResult
+}
 ```
 
 - [ ] Test title/progress/retry/Undo presentation.
 - [ ] Test files, directories, packages, symlinks, extension-preserving collisions, repeated collisions, replacement, cancellation, partial failure, and stable outcomes.
-- [ ] Enqueue one `.duplicate` job targeting captured source parent. Use existing identified transfer with resolver `{ _ in .keepBoth }`; never display replace conflict UI.
+- [ ] Add adversarial service tests for a destination raced in after keep-both name planning and for same-identity source content mutation during copy. Neither case may overwrite or publish an unverified duplicate.
+- [ ] Implement `FileOperationService.duplicate` as a distinct identified-copy policy: capture source fingerprint before copy, create the staged copy, verify source and staged fingerprints before publication, and publish with destination-parent-identity-checked `moveExclusively`.
+- [ ] If exclusive publication reports `EEXIST`, discard only the owned staged copy, refresh occupied names, choose the next extension-preserving keep-both name, and retry without replacing the raced-in entry. Any source fingerprint or identity mismatch fails that source without publication.
+- [ ] Enqueue one `.duplicate` job targeting the captured source parent and call the Duplicate-specific service method; never display replace conflict UI or route through the ordinary interactive copy resolver.
 - [ ] Reuse `.removeCreated` Undo for `.duplicate`, requiring final identity and fingerprint and denying group Undo after partial completion.
 - [ ] After successful refresh, select duplicate destinations only if the captured pane still displays captured parent.
 - [ ] Run `FileOperationJobModelsTests|FileOperationControllerTests|FileOperationMutationTests|FileOperationUndoServiceTests`.
-- [ ] Commit the three production files and four named test files only with `git commit -m "feat: add safe duplicate operation"`.
+- [ ] Commit the four production files and four named test files only with `git commit -m "feat: add safe duplicate operation"`.
 
 ---
 
