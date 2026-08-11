@@ -4,6 +4,8 @@ import Foundation
 enum FileContextActionError: Sendable, Equatable {
     case itemChanged
     case accessDenied
+    case preparationFailed
+    case launchFailed
 }
 
 @MainActor
@@ -14,6 +16,11 @@ protocol FinderRevealing {
 @MainActor
 protocol TextPasteboardWriting {
     func writePlainText(_ value: String)
+}
+
+@MainActor
+protocol ApplicationOpening {
+    func open(_ urls: [URL], with applicationURL: URL) async throws
 }
 
 @MainActor
@@ -33,6 +40,18 @@ struct LiveTextPasteboardWriter: TextPasteboardWriting {
     func writePlainText(_ value: String) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(value, forType: .string)
+    }
+}
+
+@MainActor
+struct LiveApplicationOpener: ApplicationOpening {
+    func open(_ urls: [URL], with applicationURL: URL) async throws {
+        let configuration = NSWorkspace.OpenConfiguration()
+        try await NSWorkspace.shared.open(
+            urls,
+            withApplicationAt: applicationURL,
+            configuration: configuration
+        )
     }
 }
 
@@ -58,6 +77,8 @@ final class FileContextActionRouter {
     private let finderRevealer: any FinderRevealing
     private let pasteboardWriter: any TextPasteboardWriting
     private let announcementPoster: any ContextActionAnnouncementPosting
+    private let materializer: any CloudMaterializing
+    private let applicationOpener: any ApplicationOpening
 
     private(set) var error: FileContextActionError?
 
@@ -66,13 +87,17 @@ final class FileContextActionRouter {
         accessCoordinator: CloudLocationScopedAccessCoordinator = .init(),
         finderRevealer: any FinderRevealing = LiveFinderRevealer(),
         pasteboardWriter: any TextPasteboardWriting = LiveTextPasteboardWriter(),
-        announcementPoster: any ContextActionAnnouncementPosting = LiveContextActionAnnouncementPoster()
+        announcementPoster: any ContextActionAnnouncementPosting = LiveContextActionAnnouncementPoster(),
+        materializer: any CloudMaterializing = LiveCloudMaterializationService(),
+        applicationOpener: any ApplicationOpening = LiveApplicationOpener()
     ) {
         self.fileSystem = fileSystem
         self.accessCoordinator = accessCoordinator
         self.finderRevealer = finderRevealer
         self.pasteboardWriter = pasteboardWriter
         self.announcementPoster = announcementPoster
+        self.materializer = materializer
+        self.applicationOpener = applicationOpener
     }
 
     func capture(_ draft: ContextActionDraft) async -> ContextActionSnapshot? {
@@ -209,6 +234,58 @@ final class FileContextActionRouter {
             )
         )
         return !Task.isCancelled && previewCoordinator.mode != .closed
+    }
+
+    func openWith(
+        _ snapshot: ContextActionSnapshot,
+        applicationURL: URL
+    ) async -> Bool {
+        error = nil
+        guard !Task.isCancelled, !snapshot.sources.isEmpty else { return false }
+
+        let accessLeases: [CloudLocationScopedAccessLease]
+        do {
+            accessLeases = try accessCoordinator.acquireAccess(for: snapshot.sources.map(\.item.url))
+        } catch {
+            guard !Task.isCancelled else { return false }
+            self.error = .accessDenied
+            return false
+        }
+        defer { accessLeases.forEach { $0.finish() } }
+
+        guard await sourcesStillMatch(snapshot.sources), !Task.isCancelled else { return false }
+        let requests = snapshot.sources.map {
+            IdentifiedFileRequest(url: $0.item.url, identity: $0.identity)
+        }
+        let result = await materializer.materialize(requests, purpose: .open) { _ in }
+        guard !Task.isCancelled else { return false }
+        guard result.isReady,
+              result.preparedRequests.count == requests.count,
+              zip(result.preparedRequests, requests).allSatisfy({ prepared, original in
+                  prepared.url.standardizedFileURL == original.url.standardizedFileURL
+                      && prepared.identity.refersToSameItem(as: original.identity)
+              })
+        else {
+            error = .preparationFailed
+            return false
+        }
+
+        for preparedRequest in result.preparedRequests {
+            guard await requestStillMatches(preparedRequest), !Task.isCancelled else { return false }
+        }
+
+        do {
+            try await applicationOpener.open(
+                result.preparedRequests.map(\.url),
+                with: applicationURL.standardizedFileURL
+            )
+            return !Task.isCancelled
+        } catch is CancellationError {
+            return false
+        } catch {
+            self.error = .launchFailed
+            return false
+        }
     }
 
     func openInOtherPane(

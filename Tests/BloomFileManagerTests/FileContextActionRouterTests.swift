@@ -574,6 +574,109 @@ struct FileContextActionRouterTests {
         #expect(capturedTarget === workspace.left)
         #expect(capturedTarget !== workspace.right)
     }
+    @Test func openWithScopesRevalidatesMaterializesAndLaunchesOnlyTheCapturedApplication() async {
+        let root = URL(filePath: "/cloud", directoryHint: .isDirectory)
+        let directory = root.appending(path: "source", directoryHint: .isDirectory)
+        let opposite = root.appending(path: "other", directoryHint: .isDirectory)
+        let source = directory.appending(path: "report.txt")
+        let sourceIdentity = identity("report")
+        let driver = ContextActionSecurityScopeDriver(permitsAccess: true)
+        let coordinator = CloudLocationScopedAccessCoordinator(driver: driver)
+        coordinator.replaceManualRoots([root])
+        let materializer = InMemoryCloudMaterializer()
+        let opener = OpenWithApplicationRecorder()
+        let applicationURL = URL(filePath: "/Applications/TextEdit.app", directoryHint: .isDirectory)
+        let router = FileContextActionRouter(
+            fileSystem: RecordingFileSystem(identities: [source: sourceIdentity]),
+            accessCoordinator: coordinator,
+            materializer: materializer,
+            applicationOpener: opener
+        )
+
+        #expect(await router.openWith(
+            snapshot(
+                sources: [item(at: source)],
+                directory: directory,
+                oppositeDirectory: opposite,
+                identities: [sourceIdentity]
+            ),
+            applicationURL: applicationURL
+        ))
+        let calls = await materializer.recordedCalls()
+        #expect(calls.count == 1)
+        if case .open = calls[0].purpose {
+        } else {
+            Issue.record("Open With must materialize with the open purpose.")
+        }
+        #expect(calls[0].requests == [IdentifiedFileRequest(url: source, identity: sourceIdentity)])
+        #expect(opener.calls == [[source, applicationURL.standardizedFileURL]])
+        #expect(driver.startedURLs == [root])
+        #expect(driver.stoppedURLs == [root])
+    }
+
+    @Test func openWithRejectsReplacedSourceCancelledWorkAndPreparationFailureWithoutLaunching() async {
+        let directory = URL(filePath: "/source", directoryHint: .isDirectory)
+        let opposite = URL(filePath: "/other", directoryHint: .isDirectory)
+        let source = directory.appending(path: "report.txt")
+        let sourceIdentity = identity("original")
+        let applicationURL = URL(filePath: "/Applications/TextEdit.app", directoryHint: .isDirectory)
+        let actionSnapshot = snapshot(
+            sources: [item(at: source)],
+            directory: directory,
+            oppositeDirectory: opposite,
+            identities: [sourceIdentity]
+        )
+
+        let staleMaterializer = InMemoryCloudMaterializer()
+        let staleOpener = OpenWithApplicationRecorder()
+        let staleRouter = FileContextActionRouter(
+            fileSystem: RecordingFileSystem(identities: [source: identity("replacement")]),
+            materializer: staleMaterializer,
+            applicationOpener: staleOpener
+        )
+        #expect(!(await staleRouter.openWith(actionSnapshot, applicationURL: applicationURL)))
+        #expect(await staleMaterializer.recordedCalls().isEmpty)
+        #expect(staleOpener.calls.isEmpty)
+
+        let failedMaterializer = InMemoryCloudMaterializer(result: CloudMaterializationResult(
+            preparedRequests: [],
+            failures: [CloudMaterializationFailure(name: "report.txt", reason: .offline)],
+            wasCancelled: false
+        ))
+        let failedOpener = OpenWithApplicationRecorder()
+        let failedRouter = FileContextActionRouter(
+            fileSystem: RecordingFileSystem(identities: [source: sourceIdentity]),
+            materializer: failedMaterializer,
+            applicationOpener: failedOpener
+        )
+        #expect(!(await failedRouter.openWith(actionSnapshot, applicationURL: applicationURL)))
+        #expect(failedOpener.calls.isEmpty)
+
+        let cancelledMaterializer = InMemoryCloudMaterializer()
+        let cancelledOpener = OpenWithApplicationRecorder()
+        let cancelledRouter = FileContextActionRouter(
+            fileSystem: RecordingFileSystem(
+                identities: [source: sourceIdentity],
+                cancelAfterIdentityOf: source
+            ),
+            materializer: cancelledMaterializer,
+            applicationOpener: cancelledOpener
+        )
+        #expect(!(await Task { @MainActor in
+            await cancelledRouter.openWith(actionSnapshot, applicationURL: applicationURL)
+        }.value))
+        #expect(await cancelledMaterializer.recordedCalls().isEmpty)
+        #expect(cancelledOpener.calls.isEmpty)
+    }
+}
+
+@MainActor
+private final class OpenWithApplicationRecorder: ApplicationOpening {
+    private(set) var calls: [[URL]] = []
+
+    func open(_ urls: [URL], with applicationURL: URL) async throws {
+        calls.append(urls + [applicationURL])
+    }
 }
 
 private func identity(_ name: String) -> FileIdentity {

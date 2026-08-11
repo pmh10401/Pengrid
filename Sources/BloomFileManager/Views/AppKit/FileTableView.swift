@@ -4,13 +4,16 @@ import SwiftUI
 struct FileContextMenuPresentation: Equatable {
     let policy: FileContextMenuPolicy
     let openWithApplications: [OpenWithApplication]
+    let openWithAvailability: ContextActionAvailability?
 
     init(
         policy: FileContextMenuPolicy,
-        openWithApplications: [OpenWithApplication] = []
+        openWithApplications: [OpenWithApplication] = [],
+        openWithAvailability: ContextActionAvailability? = nil
     ) {
         self.policy = policy
         self.openWithApplications = openWithApplications
+        self.openWithAvailability = openWithAvailability
     }
 
     static let hidden = FileContextMenuPresentation(
@@ -1139,7 +1142,8 @@ extension FileTableView {
         }
 
         private func addOpenWithSubmenu(to menu: NSMenu) {
-            let availability = capturedContextMenuPresentation.policy.openWith
+            let availability = capturedContextMenuPresentation.openWithAvailability
+                ?? capturedContextMenuPresentation.policy.openWith
             guard availability.isVisible else { return }
 
             let applications = capturedContextMenuPresentation.openWithApplications

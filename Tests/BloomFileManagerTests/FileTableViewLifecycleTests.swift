@@ -1318,6 +1318,163 @@ struct FileTableViewLifecycleTests {
         #expect(openWith.toolTip == "No compatible applications found.")
     }
 
+    @Test func openWithIsHiddenForDirectoriesAndMultipleSelectionThenPopulatesWithoutChangingSelection() throws {
+        let directory = URL(filePath: "/tmp/open-with-visibility", directoryHint: .isDirectory)
+        let ordinaryDirectory = FileItem(
+            url: directory.appending(path: "Folder", directoryHint: .isDirectory),
+            name: "Folder",
+            isDirectory: true,
+            isPackage: false,
+            modifiedAt: nil,
+            byteSize: nil,
+            typeDescription: "Folder"
+        )
+        let first = makeTableItem(named: "first.txt", in: directory)
+        let second = makeTableItem(named: "second.txt", in: directory)
+        let directorySelection = SelectionRecorder(value: [ordinaryDirectory.url])
+        let directoryView = FileTableView(
+            items: [ordinaryDirectory],
+            selection: directorySelection.binding,
+            onActivatePane: {},
+            onOpen: { _ in },
+            onSortChange: { _ in },
+            contextMenuPresentation: { selectedItems in
+                FileContextMenuPresentation(policy: self.contextMenuPolicy(for: selectedItems))
+            }
+        )
+        let directoryCoordinator = directoryView.makeCoordinator()
+        let directoryScroll = directoryView.makeScrollView(coordinator: directoryCoordinator)
+        let directoryTable = try #require(directoryScroll.documentView as? NSTableView)
+        directoryCoordinator.apply(items: directoryView.items, selection: directorySelection.value, to: directoryTable)
+        let directoryMenu = try #require(directoryTable.menu)
+        directoryCoordinator.menuNeedsUpdate(directoryMenu)
+        #expect(directoryMenu.items.contains { $0.title == "Open With" } == false)
+
+        let selection = SelectionRecorder(value: [first.url])
+        let loadingView = FileTableView(
+            items: [first, second],
+            selection: selection.binding,
+            onActivatePane: {},
+            onOpen: { _ in },
+            onSortChange: { _ in },
+            contextMenuPresentation: { selectedItems in
+                FileContextMenuPresentation(
+                    policy: self.contextMenuPolicy(for: selectedItems),
+                    openWithAvailability: .disabled(reason: "Compatible applications are loading.")
+                )
+            }
+        )
+        let coordinator = loadingView.makeCoordinator()
+        let scroll = loadingView.makeScrollView(coordinator: coordinator)
+        let table = try #require(scroll.documentView as? NSTableView)
+        coordinator.apply(items: loadingView.items, selection: selection.value, to: table)
+        let menu = try #require(table.menu)
+        coordinator.menuNeedsUpdate(menu)
+        let loadingOpenWith = try #require(menu.items.first { $0.title == "Open With" })
+        #expect(!loadingOpenWith.isEnabled)
+        #expect(loadingOpenWith.toolTip == "Compatible applications are loading.")
+        #expect(selection.value == [first.url])
+
+        let textEdit = OpenWithApplication(
+            applicationURL: URL(filePath: "/Applications/TextEdit.app", directoryHint: .isDirectory),
+            displayName: "TextEdit"
+        )
+        coordinator.parent = FileTableView(
+            items: [first, second],
+            selection: selection.binding,
+            onActivatePane: {},
+            onOpen: { _ in },
+            onSortChange: { _ in },
+            contextMenuPresentation: { selectedItems in
+                FileContextMenuPresentation(
+                    policy: self.contextMenuPolicy(for: selectedItems),
+                    openWithApplications: [textEdit],
+                    openWithAvailability: .enabled
+                )
+            }
+        )
+        coordinator.menuNeedsUpdate(menu)
+        let populatedOpenWith = try #require(menu.items.first { $0.title == "Open With" })
+        #expect(populatedOpenWith.isEnabled)
+        #expect(populatedOpenWith.submenu?.items.map(\.title) == ["TextEdit"])
+        #expect(selection.value == [first.url])
+
+        let multipleSelection = SelectionRecorder(value: [first.url, second.url])
+        let multipleView = FileTableView(
+            items: [first, second],
+            selection: multipleSelection.binding,
+            onActivatePane: {},
+            onOpen: { _ in },
+            onSortChange: { _ in },
+            contextMenuPresentation: { selectedItems in
+                FileContextMenuPresentation(policy: self.contextMenuPolicy(for: selectedItems))
+            }
+        )
+        let multipleCoordinator = multipleView.makeCoordinator()
+        let multipleScroll = multipleView.makeScrollView(coordinator: multipleCoordinator)
+        let multipleTable = try #require(multipleScroll.documentView as? NSTableView)
+        multipleCoordinator.apply(items: multipleView.items, selection: multipleSelection.value, to: multipleTable)
+        let multipleMenu = try #require(multipleTable.menu)
+        multipleCoordinator.menuNeedsUpdate(multipleMenu)
+        #expect(multipleMenu.items.contains { $0.title == "Open With" } == false)
+    }
+
+    @Test func openWithPresentationRequestsOnlyEligibleUncachedItemsAndUsesStableCachedReasons() {
+        let directory = URL(filePath: "/tmp/open-with-presentation", directoryHint: .isDirectory)
+        let item = makeTableItem(named: "report.txt", in: directory)
+        let policy = contextMenuPolicy(for: [item])
+        let provider = OpenWithPresentationProvider()
+
+        let loading = OpenWithMenuPresentation.make(
+            policy: policy,
+            selectedItems: [item],
+            provider: provider
+        )
+        #expect(loading.openWithApplications.isEmpty)
+        #expect(loading.openWithAvailability == .disabled(reason: "Compatible applications are loading."))
+        #expect(provider.requestedItems == [item])
+
+        provider.cached = []
+        let empty = OpenWithMenuPresentation.make(
+            policy: policy,
+            selectedItems: [item],
+            provider: provider
+        )
+        #expect(empty.openWithAvailability == .disabled(reason: "No compatible applications found."))
+        #expect(provider.requestedItems == [item])
+
+        let textEdit = OpenWithApplication(
+            applicationURL: URL(filePath: "/Applications/TextEdit.app", directoryHint: .isDirectory),
+            displayName: "TextEdit"
+        )
+        provider.cached = [textEdit]
+        let populated = OpenWithMenuPresentation.make(
+            policy: policy,
+            selectedItems: [item],
+            provider: provider
+        )
+        #expect(populated.openWithApplications == [textEdit])
+        #expect(populated.openWithAvailability == .enabled)
+        #expect(provider.requestedItems == [item])
+
+        let ordinaryDirectory = FileItem(
+            url: directory.appending(path: "Folder", directoryHint: .isDirectory),
+            name: "Folder",
+            isDirectory: true,
+            isPackage: false,
+            modifiedAt: nil,
+            byteSize: nil,
+            typeDescription: "Folder"
+        )
+        let hidden = OpenWithMenuPresentation.make(
+            policy: contextMenuPolicy(for: [ordinaryDirectory]),
+            selectedItems: [ordinaryDirectory],
+            provider: provider
+        )
+        #expect(hidden.openWithAvailability == nil)
+        #expect(provider.requestedItems == [item])
+    }
+
     @Test func contextMenuBuildsTheApprovedHybridOrderAndCopyPathSubmenu() throws {
         let directory = URL(filePath: "/tmp/context-menu", directoryHint: .isDirectory)
         let first = makeTableItem(named: "first.txt", in: directory)
@@ -1403,6 +1560,7 @@ struct FileTableViewLifecycleTests {
         #expect(openWith.isEnabled)
         let applications = try #require(openWith.submenu)
         #expect(applications.items.map(\.title) == ["Preview", "TextEdit"])
+        #expect(applications.items.allSatisfy { $0.image != nil })
         #expect(applications.items.map(\.identifier) == [
             NSUserInterfaceItemIdentifier(AccessibilityIdentifiers.fileTableOpenWithApplication(0)),
             NSUserInterfaceItemIdentifier(AccessibilityIdentifiers.fileTableOpenWithApplication(1))
@@ -2782,4 +2940,18 @@ private func makeTableItem(named name: String, in directory: URL) -> FileItem {
         byteSize: 1,
         typeDescription: "File"
     )
+}
+
+@MainActor
+private final class OpenWithPresentationProvider: OpenWithApplicationProviding {
+    var cached: [OpenWithApplication]?
+    private(set) var requestedItems: [FileItem] = []
+
+    func cachedApplications(for item: FileItem) -> [OpenWithApplication]? {
+        cached
+    }
+
+    func requestApplications(for item: FileItem) {
+        requestedItems.append(item)
+    }
 }

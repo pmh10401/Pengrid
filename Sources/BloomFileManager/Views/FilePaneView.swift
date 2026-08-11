@@ -67,6 +67,42 @@ enum FileContextActionTargetRouting {
     }
 }
 
+@MainActor
+enum OpenWithMenuPresentation {
+    static func make(
+        policy: FileContextMenuPolicy,
+        selectedItems: [FileItem],
+        provider: any OpenWithApplicationProviding
+    ) -> FileContextMenuPresentation {
+        guard policy.openWith.isVisible,
+              selectedItems.count == 1,
+              let item = selectedItems.first
+        else {
+            return FileContextMenuPresentation(policy: policy)
+        }
+        guard policy.openWith.isEnabled else {
+            return FileContextMenuPresentation(
+                policy: policy,
+                openWithAvailability: policy.openWith
+            )
+        }
+        guard let applications = provider.cachedApplications(for: item) else {
+            provider.requestApplications(for: item)
+            return FileContextMenuPresentation(
+                policy: policy,
+                openWithAvailability: .disabled(reason: "Compatible applications are loading.")
+            )
+        }
+        return FileContextMenuPresentation(
+            policy: policy,
+            openWithApplications: applications,
+            openWithAvailability: applications.isEmpty
+                ? .disabled(reason: "No compatible applications found.")
+                : .enabled
+        )
+    }
+}
+
 struct FilePaneView: View {
     let paneID: PaneID
     let state: FilePaneState
@@ -79,6 +115,8 @@ struct FilePaneView: View {
     let fileSystem: any FileSystemAccess
     let accessCoordinator: CloudLocationScopedAccessCoordinator
     let previewCoordinator: WorkspacePreviewCoordinator
+    @State private var openWithProvider: any OpenWithApplicationProviding = OpenWithApplicationProvider()
+    let applicationOpener: any ApplicationOpening = LiveApplicationOpener()
     let isActive: Bool
     let onActivate: () -> Void
     let onRequestTrashConfirmation: ([URL]) -> Void
@@ -397,7 +435,7 @@ struct FilePaneView: View {
             with: oppositePaneID,
             in: workspace
         )
-        return FileContextMenuPresentation(policy: FileContextMenuPolicy(.init(
+        let policy = FileContextMenuPolicy(.init(
             workspaceCommandPolicy: WorkspaceCommandPolicy(
                 selectionCount: items.count,
                 isOperationRunning: operationController.isRunning,
@@ -411,11 +449,24 @@ struct FilePaneView: View {
             sourceCapability: cloudLocations.localFileOperationCapability(for: state.currentDirectory),
             oppositeCapability: cloudLocations.localFileOperationCapability(for: oppositePane.currentDirectory),
             isExclusiveOperationActive: false
-        )))
+        ))
+        return OpenWithMenuPresentation.make(
+            policy: policy,
+            selectedItems: items,
+            provider: openWithProvider
+        )
     }
 
     private func routeContextAction(_ action: ContextActionKind, items: [FileItem]) {
-        guard action == .quickLook || action == .openInOtherPane else { return }
+        let capturedApplicationURL: URL?
+        switch action {
+        case let .openWith(applicationURL):
+            capturedApplicationURL = applicationURL.standardizedFileURL
+        case .quickLook, .openInOtherPane:
+            capturedApplicationURL = nil
+        default:
+            return
+        }
         let targetPane = FileContextActionTargetRouting.pane(with: oppositePaneID, in: workspace)
         let sourceDirectory = state.currentDirectory
         let oppositeDirectory = targetPane.currentDirectory
@@ -430,7 +481,9 @@ struct FilePaneView: View {
         ) else { return }
         let router = FileContextActionRouter(
             fileSystem: fileSystem,
-            accessCoordinator: accessCoordinator
+            accessCoordinator: accessCoordinator,
+            materializer: materializer,
+            applicationOpener: applicationOpener
         )
 
         Task { @MainActor in
@@ -440,6 +493,9 @@ struct FilePaneView: View {
                 _ = await router.quickLook(snapshot, previewCoordinator: previewCoordinator)
             case .openInOtherPane:
                 _ = await router.openInOtherPane(snapshot, targetPane: targetPane)
+            case .openWith:
+                guard let capturedApplicationURL else { return }
+                _ = await router.openWith(snapshot, applicationURL: capturedApplicationURL)
             default:
                 return
             }
