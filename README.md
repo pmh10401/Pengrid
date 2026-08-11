@@ -58,6 +58,33 @@ folder-contents preview. Files, packages, symbolic links, and multiple
 selections continue to use system Quick Look. Cloud folder preview reads
 available metadata only and does not intentionally download contents.
 
+### Context-menu productivity (current source builds)
+
+Right-clicking a selected row preserves the whole selection; right-clicking an
+unselected row selects that row first. Commands consume that captured selection
+in visible table order, not in a later pane or selection state. The context menu
+keeps **Open** first, then groups **Quick Look**, **Open With**, and **Open in
+Other Pane**; **Copy/Move to Other Pane**, **Show in Finder**, and **Copy Path**;
+then **New Folder**, **New Folder with Selection**, favorites, **Duplicate**,
+rename, existing copy/paste and archive actions, and Trash.
+
+Quick Look keeps **Space**. Open With is available for one regular file,
+package, or symbolic link; Open in Other Pane opens one directory there, or selects one
+identity-matched non-directory from its captured parent. Copy/Move to Other
+Pane use the other pane directory captured at invocation, so later navigation
+cannot redirect the job. Show in Finder reveals captured entries without
+reading bytes. **Copy Path** offers Full Path (**Option-Command-C**), Name,
+Parent Path, and File URL as UTF-8 text in visible order. **Duplicate** uses
+**Command-D**, extension-preserving **Keep Both** names, and no-overwrite
+publication. **New Folder with Selection** accepts two or more siblings and
+moves them transactionally into a validated new folder.
+
+These actions respect text editing, current writability, File Provider
+capabilities, progress, cancellation, retry, recovery, and conservative Undo.
+Quick Look and Open With can request cloud materialization; path, Finder, and
+other-pane navigation do not intentionally read content. Copy, Move, Duplicate,
+and enclosure require a currently writable local-file-operation location.
+
 ### Preview-first batch rename (current source builds)
 
 Select at least two rows in the active pane, then choose **File Operations >
@@ -161,6 +188,7 @@ The development bundle is created at `dist/Pengrid.app`. Its executable remains
 - [Smart Search verification](docs/verification/2026-08-04-smart-search.md)
 - [Folder preview verification](docs/verification/2026-08-04-folder-preview.md)
 - [Batch rename verification](docs/verification/2026-08-11-batch-rename.md)
+- [File context actions verification](docs/verification/2026-08-11-file-context-actions.md)
 - [Storage Inspector verification](docs/verification/storage-inspector-checklist.md)
 
 Pengrid is under active development. Candidate-specific manual checks that have

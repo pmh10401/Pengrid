@@ -142,6 +142,124 @@ Press Space again or Escape to close the current preview. When a system Quick
 Look panel is open, selection changes update it through the same identity and
 cloud-materialization gates used for the original selection.
 
+## File-row context-menu productivity
+
+The row context menu uses the same command policy as **File Operations** in the
+menu bar. Its stable groups are:
+
+1. **Open**, **Quick Look**, **Open With >**, **Open in Other Pane**
+2. **Copy to Other Pane**, **Move to Other Pane**, **Show in Finder**,
+   **Copy Path >**
+3. **New Folder**, **New Folder with Selection…**, **Add to Favorites**,
+   **Duplicate**, **Rename**, and **Batch Rename…**
+4. Existing **Copy** and **Paste**, existing archive actions, then **Move to
+   Trash…**
+
+Items without a meaningful selection are omitted. A temporarily unavailable
+action remains visible but disabled with a reason. Right-clicking inside the
+current selection preserves the complete selection. Right-clicking an
+unselected row selects that row before the menu is built. Every action consumes
+the selected entries in stable visible table order.
+
+At invocation, Pengrid captures the ordered source URLs and identities, active
+and opposite pane IDs, source directory, and applicable opposite-pane
+directory. Changing the active pane, navigating either pane, or changing the
+selection later cannot redirect a captured action. Byte-dependent actions
+revalidate their sources before acting; path-only presentation actions do not
+materialize contents.
+
+### Preview, opening, and navigation
+
+- **Quick Look** keeps the **Space** shortcut and uses the preview rules above.
+  One ordinary folder receives Pengrid's folder preview; files, packages,
+  symbolic links, and multiple selections use system Quick Look.
+- **Open With** is shown only for exactly one regular file, package, or symbolic link. Its
+  compatible applications have deterministic localized name order and their
+  application icons. An empty compatible-app list leaves the visible submenu
+  disabled. Selecting an app prepares the captured item for open, checks its
+  identity, and launches only the validated item. Cancellation, failed
+  preparation, replacement, or an incompatible app prevents launch.
+- **Open in Other Pane** accepts exactly one item. A directory navigates the
+  captured opposite pane to that directory. A file, package, or symbolic link
+  navigates that pane to the captured parent and selects the identity-matched
+  item. It does not launch externally or materialize bytes; a navigation failure
+  leaves the other pane at its last committed directory.
+
+### Transfers, Finder, and path text
+
+**Copy to Other Pane** and **Move to Other Pane** accept one or more selected
+entries. Their destination is the opposite-pane directory captured when the
+command was invoked, not the directory currently displayed after a later pane
+change. The destination identity and live writability are checked before queue
+admission and again before mutation. A same-directory destination is disabled;
+use **Duplicate** for a same-directory copy. These actions initially have no
+shortcuts.
+
+**Show in Finder** reveals all still identity-matching captured file URLs
+together. It neither reads bytes, materializes cloud content, nor follows a
+symbolic link. If some entries were replaced or removed, Pengrid reveals the
+remaining valid entries; if none remain, it reports one bounded error.
+
+**Copy Path >** has four plain UTF-8 text commands and does not replace the
+existing file-URL **Copy** command:
+
+| Command | Clipboard result | Shortcut |
+| --- | --- | --- |
+| **Copy Full Path** | One captured full path per line, in visible order | **Option-Command-C** |
+| **Copy Name** | One captured basename per line, in visible order | None |
+| **Copy Parent Path** | The shared captured parent path once | None |
+| **Copy File URL** | One captured file URL per line, in visible order | None |
+
+Accessibility values report the selected-item count, relevant other-pane
+destination, disabled reason, and operation status without exposing absolute
+paths. The Copy Path commands do not add a path-bearing accessibility outcome.
+
+### Duplicate and New Folder with Selection
+
+**Duplicate** accepts one or more complete siblings in a writable current
+folder and uses **Command-D**. One queued job preserves source order and uses
+the existing extension-preserving **Keep Both** planner with exclusive,
+no-overwrite publication. Symbolic links are copied as links; packages remain
+opaque package entries. After refresh, successful duplicates are selected. Undo
+is available only for unchanged duplicates whose recorded final identity and
+fingerprint still match.
+
+**New Folder with Selection (N Items)…** appears for two or more complete
+siblings. Its sheet starts with **New Folder with Items**. The name is trimmed
+and rejected when empty, dot, dot-dot, contains slash or NUL, or collides with a
+sibling. Submission creates an identity-captured folder and moves the selected
+entries into it sequentially with no overwrite. On cancellation or failure,
+Pengrid returns moved items in reverse order and removes the created folder only
+when it still owns that empty folder. A rollback it cannot prove safe becomes
+**Recovery Needed** rather than deleting an uncertain entry. Success selects the
+new folder. Undo first revalidates the folder, every child, and every original
+destination; any failed precondition causes no Undo mutation.
+
+### Editing, cloud boundaries, and operation feedback
+
+Visible new actions are disabled while any text editor is active, including the
+path field, filename filter, and inline rename editor, so text editing keeps
+its normal responder behavior. The only new shortcuts are
+**Space** for Quick Look, **Option-Command-C** for Copy Full Path, and
+**Command-D** for Duplicate; no other new context action has an initial
+shortcut.
+
+Quick Look and Open With may use existing scoped access and File Provider
+materialization after captured-identity checks. Open in Other Pane, Show in
+Finder, and Copy Path never intentionally materialize bytes. Copy/Move to Other
+Pane, Duplicate, and New Folder with Selection require a location that
+advertises local file operations and passes a live writability check; unknown
+or read-only capability disables mutation. Pengrid has no direct Google Drive
+or OneDrive API path.
+
+Transfers, Duplicate, and enclosure run through the operation center and retain
+its ordered progress, cancellation, retry, recovery, and conservative Undo
+rules. Conflicts use the existing **Keep Both** behavior where that operation
+supports it; no action overwrites an existing or later external entry. A
+permission denial is reported once rather than creating a prompt loop. See the
+next section for queue, cancellation, recovery, retry, and Undo details.
+
+
 ## Safe file operation center
 
 Copy, move, Trash, new-folder, rename, compression, extraction, and undo are
@@ -207,7 +325,8 @@ Undo does not overwrite a later item and does not remove a modified output.
 Select at least two complete rows in one pane and choose **File Operations >
 Batch Rename…**, press **Command-Control-R**, or use **Batch Rename…** in the
 file-row context menu. The command always captures the active pane only, in the
-same visible order as its table. It is disabled during inline text editing or
+same visible order as its table. It is disabled during any active text editing
+(path field, filename filter, or inline rename) or
 while another exclusive file operation is running.
 
 ### Rules and extension preservation
