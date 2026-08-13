@@ -2,21 +2,21 @@
 
 Status: **IMPLEMENTATION COMPLETE / AUTOMATED GATES RECORDED**
 
-This record applies to dedicated worktree
-`/Users/mac/Documents/Pengrid/.worktrees/grok-reviewed-sync-integration`
-on branch `grok/reviewed-sync-integration`. It is source verification for
-Tasks 4–7 of the review-first folder synchronization plan. The official
-worktree `/Users/mac/Documents/Pengrid/.worktrees/safe-operation-center`
-was not opened or written.
+This record applies to the official integration worktree
+`/Users/mac/Documents/Pengrid/.worktrees/safe-operation-center` on branch
+`codex/safe-operation-center`. It records the integrated implementation and
+final verification for Tasks 4–7 of the review-first folder synchronization
+plan, including Codex follow-up `bbf6e23`.
 
 Implementation commits:
 
 | Task | Commit | Message |
 | --- | --- | --- |
-| 4 | `718405f` | feat: queue reviewed folder synchronization |
-| 5 | `704818b` | feat: orchestrate reviewed folder synchronization |
-| 6 | `305ce82` | feat: present folder synchronization review |
-| 7 | this document | docs: document reviewed folder synchronization |
+| 4 | `30030c6` | feat: queue reviewed folder synchronization |
+| 5 | `51b6b71` | feat: orchestrate reviewed folder synchronization |
+| 6 | `0c1495c` | feat: present folder synchronization review |
+| 7 | `f49418a` | docs: document reviewed folder synchronization |
+| Follow-up | `bbf6e23` | fix: share synchronization review authority |
 
 Tasks 1–3 were already present as `a71db40`, `4e8b2bb`, and `b698f0f`.
 
@@ -28,11 +28,11 @@ Command:
 
 ```bash
 env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
-  xcrun swift test --disable-sandbox --enable-swift-testing --no-parallel \
-  --filter 'FolderSynchronizationIntegrationTests|FolderSynchronizationTransactionServiceTests|FileOperationControllerTests|ComparisonPresentationTests|ComparisonAccessibilityTests|WorkspaceTabPresentationTests|OperationStatusViewTests'
+  xcrun swift test --enable-swift-testing --no-parallel \
+  --filter 'FolderSynchronizationIntegrationTests|FolderSynchronizationTransactionServiceTests|FileOperationControllerTests|ComparisonPresentationTests|ComparisonAccessibilityTests|WorkspaceTabPresentationTests|OperationStatusViewTests|FolderSynchronizationPreparationServiceTests|FolderSynchronizationReviewModelTests|AccessibilityPresentationTests|WorkspaceModalPresentationStateTests'
 ```
 
-Result: **PASS — 177 tests in 7 suites, 0.564 seconds.**
+Result: **PASS — 239 tests in 11 suites, 0.573 seconds.**
 
 Covered behavior includes:
 
@@ -55,8 +55,10 @@ Covered behavior includes:
 - modal exclusivity and tab teardown that dismisses the review without
   cancelling an already admitted job.
 
-`--disable-sandbox` was required because this environment rejects
-`sandbox-exec` (`sandbox_apply: Operation not permitted`).
+Codex follow-up coverage additionally verifies that preparation and execution
+share the app-owned cloud security-scope coordinator, transition callbacks
+replace MainActor polling, stale callbacks are generation-gated, and captured
+workspace context is cleared before enqueue.
 
 ### Complete product suite
 
@@ -64,17 +66,14 @@ Command:
 
 ```bash
 env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
-  xcrun swift test --disable-sandbox --enable-swift-testing --no-parallel
+  xcrun swift test --enable-swift-testing --no-parallel
 ```
 
-Result: **1642 tests in 110 suites, 87.978 seconds; 1 pre-existing failing test.**
+Result: **PASS — 1645 tests in 110 suites, 81.194 seconds.**
 
-The only failure is
-`CloudLocationScopedAccessTests/cloudMaterializationCompletesBeforeProtectedPasswordPrompt`.
-It reports `The selected cloud folder is not currently accessible.` and does
-not create the protected ZIP. The same test fails on base `5e518f7` in an
-isolated worktree, so it is not introduced by Tasks 4–7. All other tests in
-that full run passed.
+An earlier Grok worktree run observed a cloud-scoped-access failure that also
+reproduced on base `5e518f7`. The final official-worktree run above passed that
+test and the complete suite; it is the primary completion evidence.
 
 ### Release configuration
 
@@ -85,23 +84,11 @@ env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
   xcrun swift build -c release
 ```
 
-The unmodified command failed in this session after `swift-plugin-server`
-returned a malformed Observation-macro response. A clean retry with the
-toolchain plugin path succeeded:
-
-```bash
-env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
-  xcrun swift build -c release --disable-sandbox \
-  -Xswiftc -plugin-path \
-  -Xswiftc /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins
-```
-
-Result: **PASS — `Build complete! (55.93s)`.** Production executable:
-`/tmp/pengrid-release-scratch4/arm64-apple-macosx/release/BloomFileManager`.
+Result: **PASS — `Build complete! (44.75s)`.**
 
 SwiftPM emitted the existing warning for 11 ProtectedZIP fixture files that are
 consumed by tests but are not declared as target resources. The warning did not
-fail the successful release build.
+fail the successful release build or full test suite.
 
 ### Development app bundle
 
@@ -112,10 +99,8 @@ env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
   ./script/build_and_run.sh --verify
 ```
 
-Result: **PASS.** `dist/Pengrid.app` was built, ad-hoc signed, validated on
-disk, and satisfied its designated requirement. Script `swift build` used the
-same plugin-path workaround required by the Observation plugin server in this
-environment. Build complete in **7.80 seconds**.
+Result: **PASS.** `dist/Pengrid.app` was built in **9.57 seconds**, ad-hoc
+signed, validated on disk, and satisfied its designated requirement.
 
 ### Diff and placeholder scan
 
@@ -136,11 +121,15 @@ rg -n 'T[B]D|T[O]DO|F[I]XME|implement la[t]er' Sources Tests README.md README.ko
 
 | Review | Status |
 | --- | --- |
-| Separate Grok reviewer pass | NOT RUN |
-| Separate Codex reviewer pass | NOT RUN |
+| Grok 4.6 High, read-only review of `5e518f7..bbf6e23` | **SHIP** — no Critical or Important findings |
+| Codex integration review and final automated gates | **PASS** |
 
-No independent reviewer subagent was launched in this session. Do not treat
-this implementation record as a posted code-review verdict.
+Grok ran with OS-level write denial for the official worktree and inspected the
+actual integrated branch. Its only non-blocking suggestion was to replace the
+stale Grok-worktree SHAs and verification results in this document; this update
+does so. Grok did not run tests because the read-only sandbox denied `.build`
+writes. Codex independently ran the focused, full, release, and bundle gates
+recorded above.
 
 ## Manual local GUI matrix
 
