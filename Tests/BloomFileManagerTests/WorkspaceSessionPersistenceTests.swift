@@ -26,15 +26,25 @@ struct WorkspaceSessionPersistenceTests {
                 splitRatio: 0.64
             )
         )
-        let profile = try WorkspaceProfileRecord(
+        let releaseProfile = try WorkspaceProfileRecord(
             id: WorkspaceProfileID(rawValue: UUID(uuidString: "10000000-0000-0000-0000-000000000001")!),
             name: "Release",
+            descriptor: second.descriptor
+        )
+        let workProfile = try WorkspaceProfileRecord(
+            id: WorkspaceProfileID(rawValue: UUID(uuidString: "10000000-0000-0000-0000-000000000002")!),
+            name: "Work",
+            descriptor: first.descriptor
+        )
+        let archiveProfile = try WorkspaceProfileRecord(
+            id: WorkspaceProfileID(rawValue: UUID(uuidString: "10000000-0000-0000-0000-000000000003")!),
+            name: "Archive",
             descriptor: second.descriptor
         )
         let envelope = try WorkspaceSessionEnvelope(
             tabs: [second, first],
             activeTabID: first.id,
-            profiles: [profile]
+            profiles: [archiveProfile, releaseProfile, workProfile]
         )
 
         #expect(persistence.save(envelope))
@@ -43,7 +53,61 @@ struct WorkspaceSessionPersistenceTests {
         #expect(loaded == envelope)
         #expect(loaded?.tabs.map(\.id) == [second.id, first.id])
         #expect(loaded?.activeTabID == first.id)
-        #expect(loaded?.profiles.map(\.name) == ["Release"])
+        #expect(loaded?.profiles.map(\.id) == [archiveProfile.id, releaseProfile.id, workProfile.id])
+        #expect(loaded?.profiles.map(\.name) == ["Archive", "Release", "Work"])
+    }
+
+    @Test func nonFiniteStoredRatiosDecodeAndReencodeAsCanonicalFiniteValues() throws {
+        let fixture = WorkspaceSessionDefaultsFixture()
+        defer { fixture.remove() }
+        let persistence = WorkspaceSessionPersistence(defaults: fixture.defaults)
+        fixture.defaults.set(
+            Data(
+                #"{"activeTabID":"00000000-0000-0000-0000-000000000001","profiles":[],"tabs":[{"descriptor":{"activePane":"left","leftPath":"/A","leftSort":{"direction":"ascending","key":"name"},"rightPath":"/B","rightSort":{"direction":"ascending","key":"name"},"splitRatio":"NaN"},"id":"00000000-0000-0000-0000-000000000001"},{"descriptor":{"activePane":"right","leftPath":"/C","leftSort":{"direction":"ascending","key":"name"},"rightPath":"/D","rightSort":{"direction":"ascending","key":"name"},"splitRatio":"Infinity"},"id":"00000000-0000-0000-0000-000000000002"},{"descriptor":{"activePane":"left","leftPath":"/E","leftSort":{"direction":"ascending","key":"name"},"rightPath":"/F","rightSort":{"direction":"ascending","key":"name"},"splitRatio":"-Infinity"},"id":"00000000-0000-0000-0000-000000000003"}],"version":2}"#.utf8
+            ),
+            forKey: WorkspaceSessionPersistence.storageKey
+        )
+
+        let loaded = try #require(persistence.load())
+        #expect(loaded.tabs.map(\.descriptor.splitRatio) == [0.5, 0.75, 0.25])
+        #expect(loaded.tabs.allSatisfy { $0.descriptor.splitRatio.isFinite })
+        #expect(persistence.save(loaded))
+
+        let savedData = try #require(
+            fixture.defaults.data(forKey: WorkspaceSessionPersistence.storageKey)
+        )
+        let root = try #require(
+            JSONSerialization.jsonObject(with: savedData) as? [String: Any]
+        )
+        let tabs = try #require(root["tabs"] as? [[String: Any]])
+        let ratios = tabs.compactMap { tab -> Double? in
+            let descriptor = tab["descriptor"] as? [String: Any]
+            return (descriptor?["splitRatio"] as? NSNumber)?.doubleValue
+        }
+        #expect(ratios == [0.5, 0.75, 0.25])
+    }
+
+    @Test func savePersistsARepairedActiveTabID() throws {
+        let fixture = WorkspaceSessionDefaultsFixture()
+        defer { fixture.remove() }
+        let persistence = WorkspaceSessionPersistence(defaults: fixture.defaults)
+        let first = WorkspaceTabRecord(
+            descriptor: try descriptor(left: "/First/Left", right: "/First/Right")
+        )
+        let second = WorkspaceTabRecord(
+            descriptor: try descriptor(left: "/Second/Left", right: "/Second/Right")
+        )
+        let unknownID = WorkspaceTabID()
+        let envelope = try WorkspaceSessionEnvelope(
+            tabs: [first, second],
+            activeTabID: unknownID,
+            profiles: []
+        )
+        #expect(envelope.activeTabID == unknownID)
+
+        #expect(persistence.save(envelope))
+
+        #expect(persistence.load()?.activeTabID == first.id)
     }
 
     @Test func v1MigratesToOneTabWhenV2IsAbsent() throws {
@@ -249,6 +313,42 @@ struct WorkspaceSessionPersistenceTests {
         invalid.tabs.append(tab)
 
         #expect(persistence.save(invalid) == false)
+        #expect(fixture.defaults.data(forKey: WorkspaceSessionPersistence.storageKey) == validBytes)
+    }
+
+    @Test func saveRejectsCorruptTabAndProfileDescriptorsWithoutReplacingStoredData() throws {
+        let fixture = WorkspaceSessionDefaultsFixture()
+        defer { fixture.remove() }
+        let persistence = WorkspaceSessionPersistence(defaults: fixture.defaults)
+        let validDescriptor = try descriptor(left: "/Left", right: "/Right")
+        let tab = WorkspaceTabRecord(descriptor: validDescriptor)
+        let profile = try WorkspaceProfileRecord(name: "Valid", descriptor: validDescriptor)
+        let valid = try WorkspaceSessionEnvelope(
+            tabs: [tab],
+            activeTabID: tab.id,
+            profiles: [profile]
+        )
+        #expect(persistence.save(valid))
+        let validBytes = fixture.defaults.data(forKey: WorkspaceSessionPersistence.storageKey)
+        var corruptDescriptor = validDescriptor
+        corruptDescriptor.leftPath = "relative/left"
+
+        var corruptTabEnvelope = valid
+        corruptTabEnvelope.tabs = [
+            WorkspaceTabRecord(id: tab.id, descriptor: corruptDescriptor)
+        ]
+        #expect(persistence.save(corruptTabEnvelope) == false)
+        #expect(fixture.defaults.data(forKey: WorkspaceSessionPersistence.storageKey) == validBytes)
+
+        var corruptProfileEnvelope = valid
+        corruptProfileEnvelope.profiles = [
+            try WorkspaceProfileRecord(
+                id: profile.id,
+                name: profile.name,
+                descriptor: corruptDescriptor
+            )
+        ]
+        #expect(persistence.save(corruptProfileEnvelope) == false)
         #expect(fixture.defaults.data(forKey: WorkspaceSessionPersistence.storageKey) == validBytes)
     }
 

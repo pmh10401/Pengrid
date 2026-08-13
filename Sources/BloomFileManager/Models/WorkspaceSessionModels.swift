@@ -114,6 +114,17 @@ struct WorkspaceDescriptor: Codable, Equatable, Sendable {
         )
     }
 
+    func validated() throws -> WorkspaceDescriptor {
+        try WorkspaceDescriptor(
+            leftPath: leftPath,
+            rightPath: rightPath,
+            leftSort: leftSort,
+            rightSort: rightSort,
+            splitRatio: splitRatio,
+            activePane: activePane
+        )
+    }
+
     private static func isAbsolutePath(_ path: String) -> Bool {
         !path.isEmpty && path.hasPrefix("/")
     }
@@ -230,11 +241,27 @@ struct WorkspaceSessionEnvelope: Codable, Equatable, Sendable {
     }
 
     func validated() throws -> WorkspaceSessionEnvelope {
-        try WorkspaceSessionEnvelope(
+        let validatedTabs = try tabs.map { tab in
+            WorkspaceTabRecord(
+                id: tab.id,
+                descriptor: try tab.descriptor.validated()
+            )
+        }
+        let validatedProfiles = try profiles.map { profile in
+            try WorkspaceProfileRecord(
+                id: profile.id,
+                name: profile.name,
+                descriptor: profile.descriptor.validated()
+            )
+        }
+        let validatedActiveTabID = validatedTabs.contains(where: { $0.id == activeTabID })
+            ? activeTabID
+            : validatedTabs.first?.id ?? activeTabID
+        return try WorkspaceSessionEnvelope(
             version: version,
-            tabs: tabs,
-            activeTabID: activeTabID,
-            profiles: profiles
+            tabs: validatedTabs,
+            activeTabID: validatedActiveTabID,
+            profiles: validatedProfiles
         )
     }
 
