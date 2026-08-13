@@ -500,7 +500,6 @@ final class ComparisonCoordinator {
     @ObservationIgnored private var capturedSynchronizationWorkspace: WorkspaceState?
     @ObservationIgnored private var capturedSynchronizationLeftRoot: URL?
     @ObservationIgnored private var capturedSynchronizationRightRoot: URL?
-    @ObservationIgnored private var reviewObservationTask: Task<Void, Never>?
     @ObservationIgnored private var reviewObservationGeneration: UInt64 = 0
 
     private(set) var session: ComparisonSession?
@@ -718,7 +717,6 @@ final class ComparisonCoordinator {
     }
 
     func requestFolderSynchronization(_ direction: ComparisonDirection) {
-        reviewObservationTask?.cancel()
         reviewObservationGeneration &+= 1
         let observationGeneration = reviewObservationGeneration
         let result = folderSynchronizationPlanner.plan(
@@ -744,13 +742,13 @@ final class ComparisonCoordinator {
                 direction: draft.direction,
                 comparisonGeneration: draft.comparisonGeneration
             )
-            synchronizationReview.prepare(draft)
-            observeReviewPreparation(observationGeneration)
+            synchronizationReview.prepare(draft) { [weak self] state in
+                self?.applyReviewTransition(state, generation: observationGeneration)
+            }
         }
     }
 
     func cancelFolderSynchronizationReview() {
-        reviewObservationTask?.cancel()
         reviewObservationGeneration &+= 1
         synchronizationReview.cancel()
         clearCapturedSynchronization()
@@ -768,6 +766,7 @@ final class ComparisonCoordinator {
         let capturedWorkspace = capturedSynchronizationWorkspace
         let capturedLeft = capturedSynchronizationLeftRoot
         let capturedRight = capturedSynchronizationRightRoot
+        clearCapturedSynchronization()
         return operationController.synchronizeFolder(
             plan: plan,
             workspace: workspace,
@@ -918,27 +917,20 @@ final class ComparisonCoordinator {
         )
     }
 
-    private func observeReviewPreparation(_ observationGeneration: UInt64) {
-        reviewObservationTask = Task { @MainActor [weak self] in
-            guard let self else { return }
-            while !Task.isCancelled,
-                  observationGeneration == self.reviewObservationGeneration,
-                  self.synchronizationReview.state.isPreparing {
-                await Task.yield()
-            }
-            guard !Task.isCancelled,
-                  observationGeneration == self.reviewObservationGeneration
-            else { return }
-            switch self.synchronizationReview.state {
-            case let .ready(review):
-                self.folderSynchronizationReview = .ready(review)
-            case let .blocked(blocker):
-                self.folderSynchronizationReview = .preparationBlocked(blocker)
-            case .idle:
-                self.folderSynchronizationReview = .idle
-            case .preparing:
-                break
-            }
+    private func applyReviewTransition(
+        _ state: FolderSynchronizationReviewState,
+        generation: UInt64
+    ) {
+        guard generation == reviewObservationGeneration else { return }
+        switch state {
+        case let .ready(review):
+            folderSynchronizationReview = .ready(review)
+        case let .blocked(blocker):
+            folderSynchronizationReview = .preparationBlocked(blocker)
+        case .idle:
+            folderSynchronizationReview = .idle
+        case .preparing:
+            break
         }
     }
 

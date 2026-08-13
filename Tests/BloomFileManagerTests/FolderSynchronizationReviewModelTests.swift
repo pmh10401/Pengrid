@@ -3,6 +3,20 @@ import Testing
 @testable import BloomFileManager
 
 @Suite @MainActor struct FolderSynchronizationReviewModelTests {
+    @Test func completionTransitionIsDeliveredWithoutPollingTheModel() async throws {
+        let fixture = try ReviewFixture()
+        let model = FolderSynchronizationReviewModel(preparer: fixture.preparer)
+        var transitions: [FolderSynchronizationReviewState] = []
+
+        model.prepare(fixture.draft) { transitions.append($0) }
+        await fixture.preparer.waitForRequestCount(1)
+        await fixture.preparer.releaseSuccess()
+        for _ in 0..<100 where transitions.isEmpty { await Task.yield() }
+
+        #expect(transitions == [model.state])
+        #expect(model.state.isReady)
+    }
+
     @Test func readyReviewCapturesDirectionGenerationSummaryAndRelativeRepresentativePaths() async throws {
         let fixture = try ReviewFixture()
         let model = FolderSynchronizationReviewModel(preparer: fixture.preparer)

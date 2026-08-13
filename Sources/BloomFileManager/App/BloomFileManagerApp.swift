@@ -53,6 +53,13 @@ struct CloudRuntimeDependencies {
     func makeComparisonTreeMonitor() -> LiveComparisonTreeMonitor {
         LiveComparisonTreeMonitor(accessCoordinator: accessCoordinator)
     }
+
+    func makeFolderSynchronizationPreparationService() -> FolderSynchronizationPreparationService {
+        FolderSynchronizationPreparationService(
+            fileSystem: fileSystem,
+            accessCoordinator: accessCoordinator
+        )
+    }
 }
 
 struct StorageInspectorRuntimeDependencies {
@@ -165,7 +172,10 @@ struct BloomFileManagerApp: App {
         _comparison = State(initialValue: ComparisonCoordinator(
             listings: cloudDependencies.makeComparisonListingService(),
             checksums: cloudDependencies.makeChecksumService(),
-            monitor: cloudDependencies.makeComparisonTreeMonitor()
+            monitor: cloudDependencies.makeComparisonTreeMonitor(),
+            folderSynchronizationReview: FolderSynchronizationReviewModel(
+                preparer: cloudDependencies.makeFolderSynchronizationPreparationService()
+            )
         ))
         let fingerprints: any StorageEntryFingerprintReading =
             LiveStorageEntryFingerprintReader()

@@ -218,6 +218,17 @@ func stalePasswordDismissalCannotCancelNewCoordinatorRequest() async throws {
     #expect(commands.contains(".keyboardShortcut(\"i\", modifiers: .command)"))
 }
 
+@Test func folderSynchronizationReviewUsesTheSharedCloudRuntimeDependencies() throws {
+    let app = try source(named: "App/BloomFileManagerApp.swift")
+
+    #expect(app.contains("func makeFolderSynchronizationPreparationService()"))
+    #expect(app.contains("fileSystem: fileSystem"))
+    #expect(app.contains("accessCoordinator: accessCoordinator"))
+    #expect(app.contains(
+        "preparer: cloudDependencies.makeFolderSynchronizationPreparationService()"
+    ))
+}
+
 @Test func folderPreviewAccessibilityIdentifiersAndAnnouncementsRemainStable() throws {
     #expect(AccessibilityIdentifiers.folderPreviewPanel == "folderPreview.panel")
     #expect(AccessibilityIdentifiers.folderPreviewTitle == "folderPreview.title")

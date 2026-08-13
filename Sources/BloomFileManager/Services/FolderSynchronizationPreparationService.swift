@@ -161,6 +161,18 @@ actor FolderSynchronizationPreparationService: FolderSynchronizationPreparing {
         self.availabilityReader = availabilityReader
     }
 
+    init(
+        fileSystem: any FileSystemAccess,
+        accessCoordinator: CloudLocationScopedAccessCoordinator,
+        availabilityReader: any CloudItemAvailabilityReading = LiveCloudItemAvailabilityService()
+    ) {
+        self.init(
+            fileSystem: fileSystem,
+            scopedAccess: CloudFolderSynchronizationScopedAccess(coordinator: accessCoordinator),
+            availabilityReader: availabilityReader
+        )
+    }
+
     func prepare(_ draft: FolderSynchronizationPlanDraft) async throws -> PreparedFolderSynchronizationPlan {
         let leases: [any FolderSynchronizationScopedAccessLease]
         do {

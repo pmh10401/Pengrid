@@ -3,6 +3,29 @@ import Testing
 @testable import BloomFileManager
 
 @Suite struct FolderSynchronizationPreparationServiceTests {
+    @Test func coordinatorInitializerUsesTheProvidedSharedSecurityScope() async throws {
+        let fixture = try PreparationFixture()
+        let driver = PreparationSecurityScopeDriver()
+        let coordinator = CloudLocationScopedAccessCoordinator(driver: driver)
+        coordinator.replaceManualRoots([fixture.sourceRoot, fixture.destinationRoot])
+        let service = FolderSynchronizationPreparationService(
+            fileSystem: fixture.fileSystem,
+            accessCoordinator: coordinator,
+            availabilityReader: PreparationAvailabilityReader(
+                defaultValue: .availableLocally,
+                values: [:]
+            )
+        )
+
+        _ = try await service.prepare(fixture.copyDraft)
+
+        #expect(driver.started == [fixture.destinationRoot, fixture.sourceRoot])
+        #expect(
+            driver.stopped.sorted { $0.path < $1.path }
+                == [fixture.destinationRoot, fixture.sourceRoot]
+        )
+    }
+
     @Test func prepareCapturesIdentityBoundFingerprintsAbsencesAndCapacity() async throws {
         let fixture = try PreparationFixture()
         let prepared = try await fixture.service.prepare(fixture.copyDraft)
@@ -351,6 +374,24 @@ private final class PreparationScopedAccess: FolderSynchronizationScopedAccessin
                 stopped.filter { $0 == root }.count == started.filter { $0 == root }.count
             }
         }
+    }
+}
+
+private final class PreparationSecurityScopeDriver: SecurityScopedResourceAccessing, @unchecked Sendable {
+    private let lock = NSLock()
+    private var recordedStarted: [URL] = []
+    private var recordedStopped: [URL] = []
+
+    var started: [URL] { lock.withLock { recordedStarted } }
+    var stopped: [URL] { lock.withLock { recordedStopped } }
+
+    func startAccessing(_ url: URL) -> Bool {
+        lock.withLock { recordedStarted.append(url) }
+        return true
+    }
+
+    func stopAccessing(_ url: URL) {
+        lock.withLock { recordedStopped.append(url) }
     }
 }
 

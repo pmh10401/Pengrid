@@ -71,7 +71,10 @@ final class FolderSynchronizationReviewModel {
         self.preparer = preparer
     }
 
-    func prepare(_ draft: FolderSynchronizationPlanDraft) {
+    func prepare(
+        _ draft: FolderSynchronizationPlanDraft,
+        onTransition: (@MainActor @Sendable (FolderSynchronizationReviewState) -> Void)? = nil
+    ) {
         reset()
         generation &+= 1
         let requestGeneration = generation
@@ -99,12 +102,12 @@ final class FolderSynchronizationReviewModel {
                 state = .ready(Self.review(for: prepared))
             case let .failure(error as FolderSynchronizationPreparationError):
                 state = .blocked(.init(error: error))
-            case let .failure(error as CancellationError):
-                _ = error
-                break
+            case .failure(_ as CancellationError):
+                state = .idle
             case .failure:
                 state = .blocked(.init(error: .itemUnavailable))
             }
+            onTransition?(state)
         }
     }
 
