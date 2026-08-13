@@ -150,6 +150,13 @@ remain **NOT RUN** and must not be inferred from automated tests:
 
 ## Signed-in File Provider matrix
 
+Host discovery on 2026-08-13 found redacted Google Drive and OneDrive roots
+under `~/Library/CloudStorage`. Both roots exposed a
+`com.apple.file-provider-domain-id` attribute. This read-only metadata check
+proves that File Provider domains are registered on this Mac; it does not prove
+that Pengrid can review or execute synchronization against their contents.
+No provider child was opened, previewed, hashed, compared, or materialized.
+
 | Check | Status |
 | --- | --- |
 | Signed-in OneDrive review/execution | NOT RUN |
