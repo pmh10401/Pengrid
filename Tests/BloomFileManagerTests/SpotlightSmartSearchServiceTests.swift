@@ -197,6 +197,28 @@ import Testing
         #expect(results.isEmpty)
         #expect(await availability.didRelink())
     }
+
+    @Test func queryRootRemovalDuringHydrationThrowsInvalidRoot() async throws {
+        let fixture = try SpotlightTemporaryDirectory()
+        defer { fixture.remove() }
+        let root = fixture.url.appending(path: "search-root", directoryHint: .isDirectory)
+        let file = try writeSpotlightFixture("report", named: "report.txt", in: root)
+        let availability = RemovingRootSpotlightAvailabilityReader(root: root)
+        let service = LiveSpotlightSmartSearchService(
+            runner: StubSpotlightMetadataRunner(urls: [file]),
+            availabilityReader: availability
+        )
+
+        await #expect(throws: SmartSearchServiceError.invalidRoot) {
+            try await service.searchIndexedContents(
+                try SmartSearchQuery(
+                    text: "report",
+                    roots: [physicalSpotlightURL(root)]
+                )
+            )
+        }
+        #expect(await availability.didRemoveRoot())
+    }
 }
 
 private actor StubSpotlightMetadataRunner: SpotlightMetadataQueryRunning {
@@ -287,6 +309,27 @@ private actor RelinkingSpotlightAvailabilityReader: CloudItemAvailabilityReading
 
     func didRelink() -> Bool {
         relinked
+    }
+}
+
+private actor RemovingRootSpotlightAvailabilityReader: CloudItemAvailabilityReading {
+    private let root: URL
+    private var removedRoot = false
+
+    init(root: URL) {
+        self.root = root
+    }
+
+    func availability(of _: URL) -> CloudItemAvailability {
+        if !removedRoot {
+            removedRoot = true
+            try? FileManager.default.removeItem(at: root)
+        }
+        return .availableLocally
+    }
+
+    func didRemoveRoot() -> Bool {
+        removedRoot
     }
 }
 

@@ -68,6 +68,7 @@ final class LiveSpotlightSmartSearchService: SpotlightContentSearching, @uncheck
             }
         }
 
+        try await validateRootAuthorities(rootAuthorities)
         return results
     }
 
