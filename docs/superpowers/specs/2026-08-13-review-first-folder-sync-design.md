@@ -72,13 +72,48 @@ mirror operation.
 
 ## Review UI
 
-The review sheet shows direction, root basenames, counts for copy/replace/Trash/skip,
-estimated copy size, and an ordered path list. Trash actions use explicit destructive
-wording and are never preselected independently—the plan is all-or-nothing. Confirm is
-disabled for stale, blocked, empty, or non-writable destination state.
+The comparison action bar offers `Sync Left to Right…` and `Sync Right to Left…` for the
+complete comparison scope. These actions never depend on table selection. Planning is
+admitted only from the exact current `ComparisonSession` while the comparison phase is
+`upToDate`.
+
+The same review sheet represents planner-blocked, already-synchronized, preparing,
+preparation-blocked, and ready states. Planner blockers and Already Synchronized do not
+invoke preparation. A ready review shows direction, root basenames, counts for
+copy/replace/Trash/skip, estimated copy size, and at most eight ordered representative
+relative paths. Trash actions use explicit destructive wording and are never selected
+independently—the plan is all-or-nothing. Confirm is disabled for stale, blocked, empty,
+or non-writable destination state.
 
 Accessibility labels expose direction and counts without announcing full root paths.
 Individual review rows intentionally expose relative paths.
+
+## Queue admission and lifecycle
+
+Synchronization is one exclusive `FileOperationController` job bound to the captured
+`WorkspaceState` and both captured roots. Before consuming the prepared plan, the UI
+checks the controller's authoritative exclusive-operation, Recovery Needed, and
+termination-preparation admission gates. Only an admissible request calls
+`FolderSynchronizationReviewModel.confirm()` and transfers its exact immutable authority
+once. A rejected admission leaves the ready review intact.
+
+The job is explicitly non-retryable and non-Undoable. Retrying a captured plan would
+reuse stale identity/fingerprint authority; Undo requires a separate post-completion
+inverse design for replacement and Trash actions. Cancellation and Recovery Needed use
+the existing queue and acknowledgement behavior.
+
+The review sheet participates in `WorkspaceModalPresentationState` exclusivity and the
+workspace tab modal policy. Switching or closing a tab dismisses the review and cancels
+only preparation; it never cancels an already admitted job. Because the running or
+queued job is bound to its exact workspace, the existing tab close gate refuses to close
+that workspace until the operation becomes terminal.
+
+Every `FolderSynchronizationTransactionPhase` maps to a stable operation-center stage,
+bounded item counts, and privacy-safe detail. After complete success, both captured
+comparison roots are explicitly reconciled even when their monitor events have advanced
+the comparison generation. After failure or cancellation, comparison invalidation and
+restart occur only when the captured workspace and roots are still active; a newer
+comparison session or another workspace is never overwritten.
 
 ## Excluded
 
@@ -94,7 +129,10 @@ Individual review rows intentionally expose relative paths.
 Pure planner tests cover every status, direction, tree coalescing, deterministic order,
 and blockers. Preparation tests cover exact fingerprints, capacity, roots, and absences.
 Transaction tests inject failure/cancellation at every phase and prove rollback or
-Recovery Needed. Controller/UI tests prove no mutation before confirmation, exclusive
-queueing, stale-plan rejection, progress, reconciliation, and no Undo exposure. Full
+Recovery Needed. Controller/UI tests prove admission before confirmation, rejected
+admission preserving the ready review, late preparation rejection, modal and tab
+teardown, exclusive non-retryable queueing, stale-plan rejection, every progress phase,
+success reconciliation, captured-session-only failure/cancellation refresh, and no Undo
+exposure. Full
 suite, release build, bundle verification, and live local-volume smoke testing are final
 gates; File Provider execution remains explicitly NOT RUN until signed-in verification.
