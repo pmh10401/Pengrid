@@ -164,7 +164,7 @@ GitHub 릴리스에서만 다운로드하고 경고를 이해하고 동의하는
   `d7060401f05bbaac7f1d64b76d5bce6b93708c75644c8c3737698e8a3144fd73`
 
 로컬 폴더 동기화 dry review, 취소/롤백, 활성 작업 탭 닫기 차단 및 검토 시트
-VoiceOver에는 부분 수동 검증이 있습니다. 완료된 양방향 실행, Recovery Needed
+VoiceOver에는 부분 수동 검증이 있습니다. 완료된 좌→우 및 우→좌 실행, Recovery Needed
 확인, 로그인된 Google Drive/OneDrive 실행, 사용할 수 없는 provider 항목,
 실제 이동식/대소문자 구분 볼륨 및 남은 압축 호환성 검사는 아직 `NOT RUN`입니다.
 Google Drive와 OneDrive는 macOS File Provider를 사용하며 Pengrid는 Google 또는
