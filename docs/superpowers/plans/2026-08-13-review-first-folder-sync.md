@@ -26,6 +26,12 @@
 
 ---
 
+## Execution status
+
+Tasks 1–3 are already implemented and integrated through commits `a71db40`, `4e8b2bb`,
+and `b698f0f`. Do not repeat or rewrite them. The remaining implementation scope is
+Tasks 4–7 only.
+
 ### Task 1: Pure synchronization plan models and planner
 
 **Files:**
@@ -195,8 +201,8 @@ git commit -m "feat: prepare folder synchronization reviews"
 **Files:**
 - Create: `Sources/BloomFileManager/Services/FolderSynchronizationTransactionService.swift`
 - Create: `Tests/BloomFileManagerTests/FolderSynchronizationTransactionServiceTests.swift`
-- Modify only when a narrow descriptor-safe primitive is proven necessary: `Sources/BloomFileManager/Services/FileSystemAccess.swift`
-- Modify matching tests only when that primitive is added: `Tests/BloomFileManagerTests/FileSystemAccessTests.swift`
+- Modify: `Sources/BloomFileManager/Services/FileSystemAccess.swift`
+- Test: `Tests/BloomFileManagerTests/FileSystemAccessTests.swift`
 
 - [ ] **Step 1: Add a deterministic phase/fault test double and RED tests**
 
@@ -250,44 +256,261 @@ git add Sources/BloomFileManager/Services/FolderSynchronizationTransactionServic
 git commit -m "feat: execute atomic folder synchronization"
 ```
 
-### Task 4: Comparison, queue, review UI, and documentation integration
+### Task 4: Exclusive queue contract and operation-center progress
 
 **Files:**
 - Modify: `Sources/BloomFileManager/Models/FileOperationJobModels.swift`
 - Modify: `Sources/BloomFileManager/Stores/FileOperationController.swift`
-- Modify: `Sources/BloomFileManager/Stores/ComparisonCoordinator.swift`
-- Modify: `Sources/BloomFileManager/Views/ComparisonActionBar.swift`
-- Modify: `Sources/BloomFileManager/Views/ComparisonView.swift`
 - Modify: `Sources/BloomFileManager/Views/OperationStatusView.swift`
 - Modify: `Sources/BloomFileManager/App/BloomFileManagerApp.swift`
-- Modify: matching controller/comparison/presentation/accessibility tests
-- Modify: `README.md`, `README.ko.md`, `docs/user-guide.md`, `docs/user-guide.ko.md`, `docs/current-limitations.md`, `docs/current-limitations.ko.md`
+- Test: `Tests/BloomFileManagerTests/FileOperationControllerTests.swift`
+- Test: `Tests/BloomFileManagerTests/OperationStatusViewTests.swift`
 
-- [ ] **Step 1: Add failing controller and presentation tests**
+**Interfaces:**
+- Consumes: `PreparedFolderSynchronizationPlan`, `FolderSynchronizationTransactionService.execute(_:progress:)`, and `WorkspaceState`.
+- Produces: `FileOperationJobKind.synchronizeFolder(ComparisonDirection)`, `FileOperationStage.synchronizing(FolderSynchronizationProgress)`, `FileOperationController.canAdmitFolderSynchronization`, and `FileOperationController.synchronizeFolder(plan:workspace:onCompletion:) -> Bool`.
 
-Prove no enqueue before review confirmation, stale generation rejection, exclusive admission, cancellation source coverage, progress mapping, queue recovery blocking, reconciliation after success, and `canUndo == false`. Presentation tests cover direction, action counts, representative relative paths, capacity, blockers, destructive Trash wording, stable accessibility identifiers, and no absolute-path announcements.
+- [ ] **Step 1: Write the failing queue-contract tests**
 
-- [ ] **Step 2: Run focused integration tests and verify RED**
+Add tests that construct a prepared plan and prove all of the following before production edits:
 
-```bash
-env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcrun swift test --enable-swift-testing --no-parallel --filter 'FolderSynchronizationIntegrationTests|ComparisonPresentationTests|ComparisonAccessibilityTests|FileOperationControllerTests|OperationStatusViewTests'
+```swift
+#expect(controller.canAdmitFolderSynchronization)
+#expect(controller.synchronizeFolder(plan: plan, workspace: workspace))
+#expect(controller.activeJob?.kind == .synchronizeFolder(.leftToRight))
+#expect(controller.activeJob?.canRetry == false)
+#expect(controller.activeJob?.canUndo == false)
 ```
 
-- [ ] **Step 3: Wire a captured review into the exclusive queue**
+Also assert admission is false during termination preparation, Recovery Needed blocking,
+an active job, or a queued job; rejection must not invoke the transaction service.
+Parameterize all eight `FolderSynchronizationTransactionPhase` values and assert exact
+`FileOperationStage.synchronizing` publication with bounded counts and relative-path-only
+detail. A recovery result must engage the existing global recovery gate.
 
-Add `.synchronizeFolder` job kind and synchronization progress stage. `ComparisonCoordinator` may request a draft only from its current immutable snapshot; the review model prepares it; confirmation passes the exact prepared value to `FileOperationController`. The controller enqueues one exclusive non-retryable, non-Undoable transaction bound to the captured workspace and both roots. On complete success, reconcile comparison roots/subtrees; on any other result, invalidate and refresh the comparison.
-
-- [ ] **Step 4: Build the review UI**
-
-Expose `Review Left → Right` and `Review Right → Left` only when comparison is current. Present a sheet with Copy/Replace/Move to Trash counts, byte estimate, blockers, and Cancel/Start controls. Disable Start during preparation, stale comparison, an exclusive active/queued operation, or recovery blocking. VoiceOver values expose counts and relative names only.
-
-- [ ] **Step 5: Update documentation and verify**
-
-Document one-shot scope, review/confirmation, Trash semantics, whole-plan rollback, Recovery Needed, unsupported kinds, File Provider non-materialization default, and the absence of post-completion Undo. Run focused tests, the full `BloomFileManagerTests` suite, release build, bundle verification, placeholder scan, and `git diff --check`; require zero failures. Record live local smoke results and leave signed-in File Provider checks explicitly NOT RUN when unavailable.
-
-- [ ] **Step 6: Commit integration**
+- [ ] **Step 2: Run the focused tests and observe RED**
 
 ```bash
-git add Sources/BloomFileManager/Models/FileOperationJobModels.swift Sources/BloomFileManager/Stores/FileOperationController.swift Sources/BloomFileManager/Stores/ComparisonCoordinator.swift Sources/BloomFileManager/Views/ComparisonActionBar.swift Sources/BloomFileManager/Views/ComparisonView.swift Sources/BloomFileManager/Views/OperationStatusView.swift Sources/BloomFileManager/App/BloomFileManagerApp.swift Tests/BloomFileManagerTests README.md README.ko.md docs/user-guide.md docs/user-guide.ko.md docs/current-limitations.md docs/current-limitations.ko.md
-git commit -m "feat: integrate reviewed folder synchronization"
+env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcrun swift test --enable-swift-testing --no-parallel --filter 'FileOperationControllerTests|OperationStatusViewTests'
+```
+
+Expected: compile failures for the new job kind, stage, admission property, and controller method.
+
+- [ ] **Step 3: Add the queue and progress surface**
+
+Add these exact public controller seams:
+
+```swift
+var canAdmitFolderSynchronization: Bool {
+    !isTerminationPreparationActive
+        && !isQueueBlockedByRecovery
+        && activeOperation == nil
+        && pendingOperations.isEmpty
+}
+
+@discardableResult
+func synchronizeFolder(
+    plan: PreparedFolderSynchronizationPlan,
+    workspace: WorkspaceState,
+    onCompletion: (@MainActor (FileOperationResult) -> Void)? = nil
+) -> Bool
+```
+
+The method calls `beginOperation` with both roots as touched directories, every action
+source/destination URL as cancellation sources, `allowsRetry: false`, and
+`requiresExclusiveQueue: true`. It invokes the injected shared transaction service and
+publishes `.synchronizing(progress)`. Do not ask `FileOperationUndoService` to create a
+recipe for this job. Extend `OperationStatusView` with stable visual and VoiceOver labels
+for every phase; expose only `currentRelativePath?.string`, never root paths.
+
+- [ ] **Step 4: Run GREEN and commit the queue contract**
+
+```bash
+env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcrun swift test --enable-swift-testing --no-parallel --filter 'FileOperationControllerTests|OperationStatusViewTests'
+git diff --check
+git add Sources/BloomFileManager/Models/FileOperationJobModels.swift Sources/BloomFileManager/Stores/FileOperationController.swift Sources/BloomFileManager/Views/OperationStatusView.swift Sources/BloomFileManager/App/BloomFileManagerApp.swift Tests/BloomFileManagerTests/FileOperationControllerTests.swift Tests/BloomFileManagerTests/OperationStatusViewTests.swift
+git commit -m "feat: queue reviewed folder synchronization"
+```
+
+### Task 5: Full-difference review ownership and admission-before-confirmation
+
+**Files:**
+- Modify: `Sources/BloomFileManager/Stores/ComparisonCoordinator.swift`
+- Modify: `Sources/BloomFileManager/Stores/FolderSynchronizationReviewModel.swift`
+- Create: `Tests/BloomFileManagerTests/FolderSynchronizationIntegrationTests.swift`
+- Test: `Tests/BloomFileManagerTests/ComparisonCoordinatorTests.swift`
+- Test: `Tests/BloomFileManagerTests/FolderSynchronizationReviewModelTests.swift`
+
+**Interfaces:**
+- Consumes: `FolderSynchronizationPlanningService.plan(phase:session:rows:direction:)`, `FolderSynchronizationReviewModel.prepare(_:)`, `FileOperationController.canAdmitFolderSynchronization`, and the Task 4 enqueue method.
+- Produces: one observable review-presentation state representing planner-blocked, already-synchronized, preparing, preparation-blocked, and ready states; `requestFolderSynchronization(_:)`, `cancelFolderSynchronizationReview()`, and `confirmFolderSynchronizationReview(operationController:workspace:) -> Bool` on `ComparisonCoordinator`.
+
+- [ ] **Step 1: Write the failing orchestration tests**
+
+Use the coordinator's complete `rows`, not `visibleRows` or `selection`, and assert:
+
+```swift
+comparison.requestFolderSynchronization(.leftToRight)
+#expect(planner.receivedRows == comparison.rows)
+#expect(planner.receivedDirection == .leftToRight)
+```
+
+Cover `.upToDate + .ready`, `.alreadySynchronized`, planner blockers, and non-current
+comparison. Assert planner-blocked and already-synchronized states never call the
+preparer. Add a late-preparation test: cancelling or starting a newer direction must make
+the earlier completion unable to publish. Most importantly, set controller admission to
+false, invoke confirmation, and assert the review remains ready and `confirm()` was not
+consumed. Then admit and prove exactly one confirmation and one enqueue.
+
+- [ ] **Step 2: Run orchestration tests and observe RED**
+
+```bash
+env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcrun swift test --enable-swift-testing --no-parallel --filter 'FolderSynchronizationIntegrationTests|ComparisonCoordinatorTests|FolderSynchronizationReviewModelTests'
+```
+
+- [ ] **Step 3: Implement review ownership and safe completion reconciliation**
+
+Keep planning pure and synchronous. Only a `.ready(draft)` result calls
+`FolderSynchronizationReviewModel.prepare`. Store the captured workspace identity,
+session roots, direction, and comparison generation in the presentation request.
+Confirmation follows this order exactly:
+
+```swift
+guard operationController.canAdmitFolderSynchronization else { return false }
+guard let plan = synchronizationReview.confirm() else { return false }
+return operationController.synchronizeFolder(
+    plan: plan,
+    workspace: workspace,
+    onCompletion: completionForCapturedComparison
+)
+```
+
+`canAdmitFolderSynchronization` and the synchronous main-actor enqueue path must share
+the exact same predicate, so no actor interleaving can invalidate admission between the
+guard, `confirm()`, and enqueue. Cover that equivalence directly in Task 4 tests. On
+complete success explicitly reconcile both captured roots without requiring the original
+generation to remain current. On failure/cancellation, invalidate and restart only when
+the same `WorkspaceState` still owns a comparison with the captured left/right roots;
+never replace another workspace or a newer root pair.
+
+- [ ] **Step 4: Run GREEN and commit orchestration**
+
+```bash
+env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcrun swift test --enable-swift-testing --no-parallel --filter 'FolderSynchronizationIntegrationTests|ComparisonCoordinatorTests|FolderSynchronizationReviewModelTests|FolderSynchronizationTransactionServiceTests'
+git diff --check
+git add Sources/BloomFileManager/Stores/ComparisonCoordinator.swift Sources/BloomFileManager/Stores/FolderSynchronizationReviewModel.swift Tests/BloomFileManagerTests/FolderSynchronizationIntegrationTests.swift Tests/BloomFileManagerTests/ComparisonCoordinatorTests.swift Tests/BloomFileManagerTests/FolderSynchronizationReviewModelTests.swift
+git commit -m "feat: orchestrate reviewed folder synchronization"
+```
+
+### Task 6: Review sheet, modal ownership, tab teardown, and accessibility
+
+**Files:**
+- Modify: `Sources/BloomFileManager/Views/Comparison/ComparisonActionBar.swift`
+- Modify: `Sources/BloomFileManager/Views/Comparison/ComparisonWorkspaceView.swift`
+- Create: `Sources/BloomFileManager/Views/Comparison/FolderSynchronizationReviewSheet.swift`
+- Modify: `Sources/BloomFileManager/Views/WorkspaceView.swift`
+- Modify: `Sources/BloomFileManager/Views/WorkspaceTabBarView.swift`
+- Modify: `Sources/BloomFileManager/Support/AccessibilityIdentifiers.swift`
+- Test: `Tests/BloomFileManagerTests/ComparisonPresentationTests.swift`
+- Test: `Tests/BloomFileManagerTests/ComparisonAccessibilityTests.swift`
+- Test: `Tests/BloomFileManagerTests/AccessibilityPresentationTests.swift`
+- Test: `Tests/BloomFileManagerTests/WorkspaceTabPresentationTests.swift`
+
+**Interfaces:**
+- Consumes: Task 5's presentation state and request/cancel/confirm actions.
+- Produces: two full-scope Sync buttons, one exclusive review sheet, stable accessibility identifiers, and a non-no-op `dismissSynchronizationReview` teardown action.
+
+- [ ] **Step 1: Write failing presentation and lifecycle tests**
+
+Assert the action bar labels are exactly `Sync Left to Right…` and
+`Sync Right to Left…`, do not inspect selection count, and dispatch their matching
+direction. Render each sheet state and assert ready content includes root basenames,
+copy/replace/Move to Trash/skip counts, formatted estimated bytes, and no more than eight
+relative paths. Search rendered labels/values for the captured absolute root paths and
+require zero matches. Assert destructive Trash wording and stable identifiers for sheet,
+status, confirm, cancel, counts, and representative paths.
+
+Add direct lifecycle tests proving the synchronization review participates in
+`WorkspaceModalPresentationState`, sets `WorkspaceTabModalPolicy` to presented, and is
+dismissed by `WorkspaceTabTeardownActions` without cancelling an already enqueued job.
+
+- [ ] **Step 2: Run presentation tests and observe RED**
+
+```bash
+env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcrun swift test --enable-swift-testing --no-parallel --filter 'ComparisonPresentationTests|ComparisonAccessibilityTests|AccessibilityPresentationTests|WorkspaceTabPresentationTests'
+```
+
+- [ ] **Step 3: Implement the sheet and modal gates**
+
+Mount the sheet from `ComparisonWorkspaceView`, but route its availability through the
+shared workspace modal state. Disable Confirm while preparing, blocked, already
+synchronized, stale, or controller admission is closed. Dismissal calls the Task 5 cancel
+action. Add `synchronizationReviewPresented` to `WorkspaceTabModalPolicy.isPresented`,
+and replace the existing no-op `dismissSynchronizationReview` teardown closure with the
+captured comparison cancellation. Password, conflict, Smart Search, Batch Rename,
+Selection Folder, Trash confirmation, Profiles, and synchronization review must remain
+mutually exclusive.
+
+- [ ] **Step 4: Run GREEN and commit UI integration**
+
+```bash
+env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcrun swift test --enable-swift-testing --no-parallel --filter 'FolderSynchronizationIntegrationTests|ComparisonPresentationTests|ComparisonAccessibilityTests|AccessibilityPresentationTests|WorkspaceTabPresentationTests|WorkspaceModalPresentationStateTests'
+git diff --check
+git add Sources/BloomFileManager/Views/Comparison/ComparisonActionBar.swift Sources/BloomFileManager/Views/Comparison/ComparisonWorkspaceView.swift Sources/BloomFileManager/Views/Comparison/FolderSynchronizationReviewSheet.swift Sources/BloomFileManager/Views/WorkspaceView.swift Sources/BloomFileManager/Views/WorkspaceTabBarView.swift Sources/BloomFileManager/Support/AccessibilityIdentifiers.swift Tests/BloomFileManagerTests
+git commit -m "feat: present folder synchronization review"
+```
+
+### Task 7: Documentation, independent review, and release gates
+
+**Files:**
+- Modify: `README.md`
+- Modify: `README.ko.md`
+- Modify: `docs/user-guide.md`
+- Modify: `docs/user-guide.ko.md`
+- Modify: `docs/current-limitations.md`
+- Modify: `docs/current-limitations.ko.md`
+- Create: `docs/verification/2026-08-13-reviewed-folder-synchronization.md`
+
+**Interfaces:**
+- Consumes: the completed Tasks 4–6 behavior and test evidence.
+- Produces: user-facing English/Korean guidance and an evidence ledger that separates automated, manual local-volume, and signed-in File Provider verification.
+
+- [ ] **Step 1: Update user documentation**
+
+Document full-difference scope, direction, planner/preparation blockers, review counts,
+relative-path preview, Trash semantics, whole-plan in-flight rollback, Recovery Needed,
+non-retryable execution, absence of post-success Undo, and File Provider
+non-materialization. Remove any limitation that says one-way reviewed sync is absent;
+retain explicit limits for bidirectional, scheduled, background, and permanent-delete
+sync.
+
+- [ ] **Step 2: Run focused and full automated gates**
+
+```bash
+env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcrun swift test --enable-swift-testing --no-parallel --filter 'FolderSynchronizationIntegrationTests|FolderSynchronizationTransactionServiceTests|FileOperationControllerTests|ComparisonPresentationTests|ComparisonAccessibilityTests|WorkspaceTabPresentationTests|OperationStatusViewTests'
+env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcrun swift test --enable-swift-testing --no-parallel
+env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcrun swift build -c release
+./script/build_and_run.sh --verify
+git diff --check
+rg -n 'T[B]D|T[O]DO|F[I]XME|implement la[t]er' Sources Tests README.md README.ko.md docs
+```
+
+Expected: every command exits 0; the placeholder scan has no implementation or current
+documentation matches. Existing protected-ZIP fixture declaration warnings may remain,
+but record them rather than presenting them as new failures.
+
+- [ ] **Step 3: Record verification without inventing manual evidence**
+
+Record exact test/suite counts, durations, release and bundle results, and Grok/Codex
+review verdicts. Mark local GUI smoke steps and signed-in OneDrive/Google Drive File
+Provider steps `NOT RUN` unless they were actually performed. Required manual checks are
+both directions, already-synchronized and blocked sheets, cancellation during copy and
+Trash phases, Recovery Needed acknowledgement, VoiceOver relative-path output, and tab
+close gating.
+
+- [ ] **Step 4: Commit documentation and evidence**
+
+```bash
+git add README.md README.ko.md docs/user-guide.md docs/user-guide.ko.md docs/current-limitations.md docs/current-limitations.ko.md docs/verification/2026-08-13-reviewed-folder-synchronization.md
+git commit -m "docs: document reviewed folder synchronization"
 ```
