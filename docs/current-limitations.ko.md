@@ -3,9 +3,7 @@
 **한국어** · [English](current-limitations.md) ·
 [사용자 안내](user-guide.ko.md)
 
-이 목록은 현재 소스 트리를 기준으로 합니다. 공개된 Developer Preview 6 DMG에는
-일괄 이름 변경처럼 이후 릴리스로 아직 패키징하지 않은 소스 기능도 포함되지
-않습니다.
+이 목록은 현재 소스 트리와 Developer Preview 7 DMG를 기준으로 합니다.
 
 ## 플랫폼과 배포
 

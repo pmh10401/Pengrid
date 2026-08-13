@@ -2,14 +2,13 @@
 
 **한국어** · [English](user-guide.md) · [README](../README.ko.md)
 
-이 문서는 Pengrid 1.3.0 Developer Preview 6와 현재 소스 트리의 사용자 관점
-동작, 안전 경계와 의도적으로 제공하지 않는 기능을 설명합니다. 아래의 파일
-컨텍스트 작업과 일괄 이름 변경 기능은 Preview 6에 포함됩니다.
+이 문서는 Pengrid 1.3.0 Developer Preview 7과 현재 소스 트리의 사용자 관점
+동작, 안전 경계와 의도적으로 제공하지 않는 기능을 설명합니다.
 
 ## 요구 사항과 설치
 
 현재 Pengrid는 macOS 15 이상이 설치된 Apple Silicon Mac을 지원합니다.
-[Developer Preview 6 릴리스](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.6)에서
+[Developer Preview 7 릴리스](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.7)에서
 DMG를 다운로드해 열고 `Pengrid.app`을 `Applications` 폴더로 복사하세요.
 
 무료 DMG는 ad-hoc 방식으로 서명되었으며 Developer ID 서명과 Apple 공증을
@@ -593,7 +592,7 @@ Pengrid는 패널, 검색 컨트롤, 미리보기 상태, 압축 단계, 작업 
 
 ## 현재 제한 사항
 
-Developer Preview 6와 현재 소스 트리는 다음 기능을 의도적으로 제공하지 않습니다.
+Developer Preview 7과 현재 소스 트리는 다음 기능을 의도적으로 제공하지 않습니다.
 
 - Intel Mac 또는 macOS 14 이하 지원
 - Developer ID 서명 또는 Apple notarization

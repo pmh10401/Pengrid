@@ -2,15 +2,14 @@
 
 [한국어](user-guide.ko.md) · **English** · [README](../README.md)
 
-This guide describes Pengrid 1.3.0 Developer Preview 6 and the current source
-tree, including safety boundaries and deliberately omitted behavior. The file
-context actions and batch rename described below are included in Preview 6.
+This guide describes Pengrid 1.3.0 Developer Preview 7 and the current source
+tree, including safety boundaries and deliberately omitted behavior.
 
 ## Requirements and installation
 
 Pengrid currently supports Apple Silicon Macs running macOS 15 or later.
 Download the DMG from the
-[Developer Preview 6 release](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.6),
+[Developer Preview 7 release](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.7),
 open it, and copy `Pengrid.app` to `Applications`.
 
 The free DMG is ad-hoc signed, not Developer ID signed, and not notarized.
@@ -625,7 +624,7 @@ documents.
 
 ## Current limitations
 
-Developer Preview 6 and the current source tree deliberately do not provide:
+Developer Preview 7 and the current source tree deliberately do not provide:
 
 - Intel Mac or macOS 14-and-earlier support;
 - Developer ID signing or Apple notarization;

@@ -15,14 +15,14 @@ Pengrid는 두 패널 탐색, 재귀 검색, 미리보기, 대기열 기반 파�
 ## 다운로드
 
 현재 릴리스는
-[Pengrid 1.3.0 Developer Preview 6](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.6)입니다.
+[Pengrid 1.3.0 Developer Preview 7](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.7)입니다.
 
-- [Pengrid.dmg 다운로드](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.6/Pengrid.dmg)
-- 버전: **1.3.0 (빌드 8)**
+- [Pengrid.dmg 다운로드](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.7/Pengrid.dmg)
+- 버전: **1.3.0 (빌드 9)**
 - 요구 사항: **Apple Silicon Mac, macOS 15 이상**
-- 검증: **92개 스위트의 자동 테스트 1,407개 통과**
+- 검증: **110개 스위트의 자동 테스트 1,645개 통과**
 - DMG SHA-256:
-  `ece6212bd5f80d21bc64ef2059839db8a79a416b3706b140b1c4155dbe801b32`
+  `d7060401f05bbaac7f1d64b76d5bce6b93708c75644c8c3737698e8a3144fd73`
 
 DMG를 연 다음 `Pengrid.app`을 `Applications` 폴더로 복사하세요.
 
@@ -84,9 +84,9 @@ contents** 필터는 Spotlight가 이미 색인한 내용만 사용하며 온라
 Open, Open With, Open in Other Pane, Show in Finder, Copy Path, Duplicate,
 New Folder with Selection, 이름 변경, 압축 및 Trash가 포함됩니다.
 
-Preview 6는 실행 전에 화면에 보이는 선택을 캡처하므로 이후 탐색이나 선택
+Pengrid는 실행 전에 화면에 보이는 선택을 캡처하므로 이후 탐색이나 선택
 변경이 작업 목적지를 몰래 바꾸지 못합니다. 정확한 선택 및 기능 판정 규칙은
-[릴리스 노트](docs/release-notes-v1.3.0-developer-preview.6.md)를 참고하세요.
+[릴리스 노트](docs/release-notes-v1.3.0-developer-preview.7.md)를 참고하세요.
 
 **Command-I** 또는 행 컨텍스트 메뉴의 **Get Info**는 캡처한 선택 항목의
 읽기 전용 비모달 검사기를 엽니다. 하나의 항목 메타데이터나 여러 항목 요약을
@@ -170,7 +170,7 @@ open dist/Pengrid.app
 ## 문서
 
 - [상세 기능 가이드](docs/user-guide.ko.md)
-- [Developer Preview 6 릴리스 노트](docs/release-notes-v1.3.0-developer-preview.6.md)
+- [Developer Preview 7 릴리스 노트](docs/release-notes-v1.3.0-developer-preview.7.md)
 - [릴리스 및 패키징 가이드](docs/release.ko.md)
 - [아키텍처 설명](docs/architecture.md)
 - [현재 제한 사항](docs/current-limitations.md)

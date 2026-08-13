@@ -2,9 +2,7 @@
 
 [한국어](current-limitations.ko.md) · **English** · [User guide](user-guide.md)
 
-This list covers the current source tree. The published Developer Preview 6 DMG
-also excludes source features that have not yet been packaged into a later
-release, including batch rename.
+This list covers the current source tree and the Developer Preview 7 DMG.
 
 ## Platform and distribution
 

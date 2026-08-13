@@ -6,33 +6,36 @@ Pengrid is distributed directly for Apple Silicon Macs running macOS 15 or newer
 
 ## Current published Developer Preview
 
-[Pengrid 1.3.0 Developer Preview 6](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.6)
+[Pengrid 1.3.0 Developer Preview 7](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.7)
 is the current free binary release:
 
-- DMG: [Pengrid.dmg](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.6/Pengrid.dmg)
-- Tag: `v1.3.0-developer-preview.6`
-- Packaged source commit: `cd24295bbe60390047985d4577b151aaaa74ad7c`
-- App version: `1.3.0`, build `8`
+- DMG: [Pengrid.dmg](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.7/Pengrid.dmg)
+- Tag: `v1.3.0-developer-preview.7`
+- Packaged source commit: `c0fd61b4af8a42749d6870747eb6de4fc7ec5026`
+- App version: `1.3.0`, build `9`
 - Platform: Apple Silicon, macOS 15 or later
-- Automated result: 1,407 tests in 92 suites
+- Automated result: 1,645 tests in 110 suites
 - Packaging: release contract tests and arm64 production build passed
 - Artifact checks: app signature, DMG checksum, mounted app build, local
   installation, launch, GitHub asset digest, and byte-for-byte public
   redownload verification passed
 - DMG SHA-256:
-  `ece6212bd5f80d21bc64ef2059839db8a79a416b3706b140b1c4155dbe801b32`
+  `d7060401f05bbaac7f1d64b76d5bce6b93708c75644c8c3737698e8a3144fd73`
 
-Preview 6 adds captured-selection context actions, opposite-pane transfers,
-Duplicate, and transactional New Folder with Selection. The exact packaged app
-was installed locally as `/Applications/Pengrid.app`, verified as build 8, and
-launched successfully.
+Preview 7 adds workspace tabs and profiles, read-only Get Info, opt-in indexed
+content search, stronger Undo/Redo stacks, and review-first one-way folder
+synchronization. The exact packaged app was installed locally as
+`/Applications/Pengrid.app`, verified as build 9, and launched successfully.
 
 This artifact is ad-hoc signed, not Developer ID signed, and not notarized.
 `spctl --assess --type execute` therefore rejects it as a Developer ID
 distribution, as expected. This is a correctly labelled unsigned Developer
 Preview, not a signed public release. Physical File Provider, removable-volume,
 case-sensitive-volume, keyboard, and accessibility checks that remain
-`NOT RUN` are recorded in the repository verification documents.
+`NOT RUN` are recorded in the repository verification documents. Local
+folder-sync review, cancellation, rollback, tab gating, and review-sheet
+VoiceOver checks have partial manual evidence; completed sync and signed-in
+provider execution remain `NOT RUN`.
 
 ## Version 1.3 release gates
 

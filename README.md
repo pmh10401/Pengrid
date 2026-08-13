@@ -16,14 +16,14 @@ free, open-source macOS app.
 ## Download
 
 The current release is
-[Pengrid 1.3.0 Developer Preview 6](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.6).
+[Pengrid 1.3.0 Developer Preview 7](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.7).
 
-- [Download Pengrid.dmg](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.6/Pengrid.dmg)
-- Version: **1.3.0 (build 8)**
+- [Download Pengrid.dmg](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.7/Pengrid.dmg)
+- Version: **1.3.0 (build 9)**
 - Requirements: **Apple Silicon Mac, macOS 15 or later**
-- Verification: **1,407 automated tests in 92 suites**
+- Verification: **1,645 automated tests in 110 suites**
 - DMG SHA-256:
-  `ece6212bd5f80d21bc64ef2059839db8a79a416b3706b140b1c4155dbe801b32`
+  `d7060401f05bbaac7f1d64b76d5bce6b93708c75644c8c3737698e8a3144fd73`
 
 Open the DMG, then copy `Pengrid.app` to `Applications`.
 
@@ -84,9 +84,9 @@ Look for files, packages, symbolic links, and multiple selections. The context
 menu includes Open, Open With, Open in Other Pane, Show in Finder, Copy Path,
 Duplicate, New Folder with Selection, rename, archives, and Trash.
 
-Preview 6 captures the visible selection before dispatch, so later navigation
+Pengrid captures the visible selection before dispatch, so later navigation
 or selection changes cannot silently redirect an action. Read the
-[release notes](docs/release-notes-v1.3.0-developer-preview.6.md) for the exact
+[release notes](docs/release-notes-v1.3.0-developer-preview.7.md) for the exact
 selection and capability rules.
 
 Press **Command-I**, or choose **Get Info** from a row's context menu, to open a
@@ -176,7 +176,7 @@ retain the internal name `BloomFileManager` for compatibility.
 ## Documentation
 
 - [Detailed feature guide](docs/user-guide.md)
-- [Developer Preview 6 release notes](docs/release-notes-v1.3.0-developer-preview.6.md)
+- [Developer Preview 7 release notes](docs/release-notes-v1.3.0-developer-preview.7.md)
 - [Release and packaging guide](docs/release.md)
 - [Architecture notes](docs/architecture.md)
 - [Current limitations](docs/current-limitations.md)
