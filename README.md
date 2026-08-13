@@ -98,10 +98,12 @@ file.
 
 ### Run safer file operations
 
-Copy, move, Trash, rename, new-folder, archive, and Undo jobs share an ordered
-operation center. Jobs expose progress and safe cancellation points; exclusive
-transactions such as batch rename and New Folder with Selection use staged
-publication and conservative rollback checks.
+Copy, move, Trash, rename, new-folder, archive, Undo, and reviewed folder
+synchronization jobs share an ordered operation center. Jobs expose progress
+and safe cancellation points; exclusive transactions such as batch rename, New
+Folder with Selection, and one-way folder synchronization use staged
+publication and conservative rollback checks. Synchronization is
+non-retryable and is not exposed as Undo after it finishes.
 
 ### Create and extract archives
 
@@ -115,8 +117,9 @@ password-protected ZIP files and read supported AES and ZipCrypto entries.
 Google Drive and OneDrive appear through macOS File Provider. Metadata-only
 search and folder preview avoid intentional content downloads; byte-reading
 operations may ask macOS to materialize an online-only item. Pengrid also
-includes directory comparison, Storage Inspector, keyboard navigation,
-VoiceOver labels, Reduce Motion support, and privacy-preserving status text.
+includes directory comparison with reviewed one-way folder synchronization,
+Storage Inspector, keyboard navigation, VoiceOver labels, Reduce Motion
+support, and privacy-preserving status text.
 
 ## Essential Shortcuts
 

@@ -40,6 +40,22 @@ release, including batch rename.
 - Mutations are serial. A recovery-needed rollback blocks the queue for review
   instead of guessing ownership or deleting an uncertain item.
 
+## Folder synchronization
+
+- One-way, review-first synchronization of the complete current comparison is
+  available. There is no bidirectional merge, schedule, background watcher, or
+  continuous sync.
+- The plan is all-or-nothing. Individual copy, replace, or Trash rows cannot
+  be selected independently.
+- Completed synchronization is not Undoable and cannot be retried from the
+  captured review. In-flight cancellation rolls back owned changes or reports
+  Recovery Needed.
+- Symbolic links, packages, special entries, type/name conflicts, and unsafe
+  root relationships block the plan. File Provider items are not materialized
+  to make a review or transaction possible.
+- Destination-only items move to Trash after publication. Pengrid does not
+  permanently delete pre-existing user data.
+
 ## Archives and destructive operations
 
 - Native archive tools do not provide reliable cross-format byte progress.

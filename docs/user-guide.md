@@ -560,6 +560,34 @@ events, or changed item identity invalidates stale results and disables unsafe
 actions until the affected data is reconciled. Symbolic links and packages are
 treated as opaque entries during recursive listing rather than traversed.
 
+### Reviewed one-way folder synchronization
+
+When the comparison is current, **Sync Left to Right…** and **Sync Right to
+Left…** plan the complete difference set. They do not use the table selection.
+Pengrid copies source-only supported items, replaces same-kind changed regular
+files, and moves destination-only supported items to Trash. Identical items
+are skipped. A directory copy or Trash action covers its descendants.
+
+The review sheet shows direction, the two folder names, copy/replace/Move to
+Trash/skip counts, estimated copy size, and up to eight relative paths. Confirm
+is disabled while the review is preparing, blocked, already synchronized,
+stale, or another exclusive operation is occupying the queue. VoiceOver
+announces direction and counts without reading the full root paths.
+
+Planning and preparation block type and name conflicts, checking or unstable
+rows, comparison errors, symbolic links, packages, special entries, equal or
+nested roots, and unsafe ancestor relationships. File Provider items that are
+not immediately available are reported as unavailable rather than downloaded
+for the review.
+
+Confirmation runs one exclusive, non-retryable transaction. It stages every
+copy, quarantines replacements and Trash targets, publishes verified outputs,
+and only then moves quarantines to Trash. Cancellation or failure rolls back
+owned changes or reports Recovery Needed and blocks the queue. Pre-existing
+user data is never permanently deleted. Completed synchronization is not
+Undoable. There is no bidirectional merge, schedule, background watcher, or
+permanent-delete mode.
+
 ## Storage Inspector
 
 Choose **Storage > Enter Storage Inspector**, then select a local folder or a
@@ -610,7 +638,9 @@ Developer Preview 6 and the current source tree deliberately do not provide:
 - permanent deletion;
 - automatic removal when ownership or identity cannot be proven;
 - batch-rename regexes, recursive subfolder renaming, manual extension editing,
-  or per-row custom names.
+  or per-row custom names;
+- bidirectional, scheduled, background, or permanent-delete folder
+  synchronization.
 
 See [release and packaging](release.md) and the
 [verification documents](verification/) for candidate-specific evidence and
