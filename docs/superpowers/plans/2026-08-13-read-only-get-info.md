@@ -136,7 +136,7 @@ Expose:
 
 ```swift
 protocol GetInfoInspecting: Sendable {
-    func inspect(_ items: [FileItem]) async -> GetInfoInspectionReport
+    func inspect(_ items: [FileItem]) async throws -> GetInfoInspectionReport
 }
 
 struct LiveGetInfoInspectionService: GetInfoInspecting {
@@ -152,8 +152,8 @@ fields on a detached utility task, read type identifier/description, tags, and d
 from URL resource values, use `readlink` only for a symbolic link, then capture exact
 identity again. Construct `ChecksumRequest` only when `lstat` identifies a regular
 file; use the captured identity, `st_size`, and nanosecond modification timestamp in
-its `ComparisonFingerprint`. Convert cancellation to `CancellationError` at the
-report level and map ordinary per-item failures without discarding other outcomes.
+its `ComparisonFingerprint`. Propagate cancellation as `CancellationError` from the
+report operation and map ordinary per-item failures without discarding other outcomes.
 
 - [ ] **Step 7: Run model/service tests and verify GREEN**
 
