@@ -114,6 +114,30 @@ struct PreparedFolderSynchronizationPlan: Sendable, Equatable {
     let requiredCapacityBytes: Int64
     let destinationFilenameComparisonPolicy: FilenameComparisonPolicy
     let rootAuthority: FolderSynchronizationRootAuthority
+    /// Identity of each existing destination parent that will receive a staging or
+    /// exclusive publication.  Root identity alone cannot authorize a replaced
+    /// intermediate directory.
+    let destinationParentIdentities: [ComparisonRelativePath: FileIdentity]
+
+    init(
+        draft: FolderSynchronizationPlanDraft,
+        sourceFingerprints: [ComparisonRelativePath: SourceFingerprint],
+        destinationFingerprints: [ComparisonRelativePath: SourceFingerprint],
+        expectedAbsentDestinations: Set<ComparisonRelativePath>,
+        requiredCapacityBytes: Int64,
+        destinationFilenameComparisonPolicy: FilenameComparisonPolicy,
+        rootAuthority: FolderSynchronizationRootAuthority,
+        destinationParentIdentities: [ComparisonRelativePath: FileIdentity] = [:]
+    ) {
+        self.draft = draft
+        self.sourceFingerprints = sourceFingerprints
+        self.destinationFingerprints = destinationFingerprints
+        self.expectedAbsentDestinations = expectedAbsentDestinations
+        self.requiredCapacityBytes = requiredCapacityBytes
+        self.destinationFilenameComparisonPolicy = destinationFilenameComparisonPolicy
+        self.rootAuthority = rootAuthority
+        self.destinationParentIdentities = destinationParentIdentities
+    }
 }
 
 protocol FolderSynchronizationPreparing: Sendable {
@@ -155,6 +179,7 @@ actor FolderSynchronizationPreparationService: FolderSynchronizationPreparing {
         var sourceFingerprints: [ComparisonRelativePath: SourceFingerprint] = [:]
         var destinationFingerprints: [ComparisonRelativePath: SourceFingerprint] = [:]
         var expectedAbsentDestinations = Set<ComparisonRelativePath>()
+        var destinationParentIdentities: [ComparisonRelativePath: FileIdentity] = [:]
 
         for action in draft.actions {
             try Task.checkCancellation()
@@ -186,6 +211,17 @@ actor FolderSynchronizationPreparationService: FolderSynchronizationPreparing {
                     relativePath: action.relativePath
                 )
             }
+        }
+
+        // Every mutation, including a Trash-only quarantine and its possible
+        // restoration, is parent-namespace sensitive.
+        for action in draft.actions {
+            let destination = draft.destinationRoot.appending(path: action.relativePath.string)
+            let parent = destination.deletingLastPathComponent().standardizedFileURL
+            guard let identity = try await fileSystem.identity(of: parent) else {
+                throw FolderSynchronizationPreparationError.destinationChanged(action.relativePath)
+            }
+            destinationParentIdentities[action.relativePath] = identity
         }
 
         let initialFilenamePolicy = try await captureDestinationFilenamePolicy(in: draft)
@@ -251,7 +287,8 @@ actor FolderSynchronizationPreparationService: FolderSynchronizationPreparing {
             expectedAbsentDestinations: expectedAbsentDestinations,
             requiredCapacityBytes: requiredCapacityBytes,
             destinationFilenameComparisonPolicy: finalFilenamePolicy,
-            rootAuthority: finalRoots
+            rootAuthority: finalRoots,
+            destinationParentIdentities: destinationParentIdentities
         )
     }
 

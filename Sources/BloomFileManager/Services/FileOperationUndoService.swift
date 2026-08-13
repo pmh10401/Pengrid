@@ -473,10 +473,21 @@ actor FileOperationUndoService {
         do {
             for entry in entries {
                 try Task.checkCancellation()
-                let quarantine = try await fileSystem.quarantineForTrash(
-                    entry.url,
-                    identifiedBy: entry.identity
-                )
+                let parent = entry.url.deletingLastPathComponent()
+                guard let parentIdentity = try await fileSystem.identity(of: parent) else {
+                    throw UndoSafetyError.unavailable
+                }
+                let quarantine: StorageTrashQuarantine
+                do {
+                    quarantine = try await fileSystem.quarantineForTrash(
+                        entry.url,
+                        identifiedBy: entry.identity,
+                        parentIdentifiedBy: parentIdentity
+                    )
+                } catch let recoverable as StorageTrashRecoverableFailure {
+                    quarantines.append(recoverable.quarantine)
+                    throw recoverable
+                }
                 quarantines.append(quarantine)
                 guard try await fileSystem.fingerprint(of: quarantine)
                     .matchesAfterRelocation(entry.fingerprint)
@@ -484,6 +495,9 @@ actor FileOperationUndoService {
             }
         } catch {
             let recovered = await rollback(quarantines)
+            if error is StorageTrashRecoverableFailure, !recovered {
+                return FileOperationResult(outcomes: entries.map { .recoveryNeeded(source: $0.url) })
+            }
             if error as? StorageTrashAccessError == .recoveryRequired {
                 return FileOperationResult(outcomes: entries.map {
                     .recoveryNeeded(source: $0.url)
@@ -523,6 +537,18 @@ actor FileOperationUndoService {
                     mayReportCleanCancellation
                         ? .cancelled(source: $0.url)
                         : .recoveryNeeded(source: $0.url)
+                })
+                break
+            } catch let recoverable as StorageTrashRecoverableFailure {
+                let restored = await rollback([recoverable.quarantine])
+                let pendingQuarantines = Array(quarantines.dropFirst(index + 1))
+                let pendingEntries = Array(entries.dropFirst(index + 1))
+                let pendingRecovered = await rollback(pendingQuarantines)
+                outcomes.append(restored && pendingRecovered
+                    ? .failed(source: entries[index].url, message: "trash transfer failed")
+                    : .recoveryNeeded(source: entries[index].url))
+                outcomes.append(contentsOf: pendingEntries.map {
+                    pendingRecovered ? .cancelled(source: $0.url) : .recoveryNeeded(source: $0.url)
                 })
                 break
             } catch {

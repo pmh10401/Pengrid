@@ -19,6 +19,29 @@ private final class ProgressRecorder: @unchecked Sendable {
     }
 }
 
+private final class OneShotInjectedFailure: @unchecked Sendable {
+    private let lock = NSLock()
+    private var pending = true
+    private var calls = 0
+
+    var callCount: Int { lock.withLock { calls } }
+
+    func throwOnce() throws {
+        let shouldThrow = lock.withLock { () -> Bool in
+            calls += 1
+            guard pending else { return false }
+            pending = false
+            return true
+        }
+        if shouldThrow { throw CocoaError(.fileWriteUnknown) }
+    }
+}
+
+private func descriptorAnchoredTemporaryURL(_ url: URL) -> URL {
+    guard url.path.hasPrefix("/var/") else { return url }
+    return URL(filePath: "/private\(url.path)", directoryHint: .isDirectory)
+}
+
 private enum FolderPreviewFixtureError: Error, Sendable {
     case expected
 }
@@ -606,6 +629,311 @@ struct FileSystemAccessTests {
         }
 
         #expect(try Data(contentsOf: source) == Data("replacement".utf8))
+        #expect(FileManager.default.fileExists(atPath: destination.path) == false)
+    }
+
+    @Test func identifiedExclusivePublicationFinalizesPendingCopyMetadata() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let source = root.url.appending(path: "locked-source.txt")
+        let staging = root.url.appending(path: "staged.txt")
+        let destination = root.url.appending(path: "published.txt")
+        try Data("locked".utf8).write(to: source)
+        guard chflags(source.path, UInt32(UF_IMMUTABLE)) == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        defer {
+            _ = chflags(source.path, 0)
+            _ = chflags(destination.path, 0)
+        }
+        let fileSystem = LiveFileSystemAccess()
+        let sourceIdentity = try #require(await fileSystem.identity(of: source))
+        let parentIdentity = try #require(await fileSystem.identity(of: root.url))
+
+        let stagedIdentity = try await fileSystem.copyAndCaptureIdentity(
+            source, identifiedBy: sourceIdentity, to: staging
+        )
+        try await fileSystem.moveExclusively(
+            staging, identifiedBy: stagedIdentity, to: destination,
+            destinationParentIdentifiedBy: parentIdentity
+        )
+        try await fileSystem.finalizePendingCopyAfterExclusiveRelocation(identity: stagedIdentity)
+        #expect(await fileSystem.ownedCopyAuthorityCountForTesting() == 1)
+
+        var information = stat()
+        #expect(destination.path.withCString { Darwin.lstat($0, &information) } == 0)
+        #expect(UInt32(information.st_flags) & UInt32(UF_IMMUTABLE) != 0)
+        // Pending-copy state was consumed: identity-safe rollback now addresses the
+        // published location rather than an obsolete staging descriptor.
+        _ = chflags(destination.path, 0)
+        try await fileSystem.removeFinalizedOwnedCopy(destination, identifiedBy: stagedIdentity)
+        #expect(await fileSystem.ownedCopyAuthorityCountForTesting() == 0)
+        #expect(FileManager.default.fileExists(atPath: destination.path) == false)
+    }
+
+    @Test func committedFinalizedPublicationReleasesOwnedDescriptorAuthority() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let source = root.url.appending(path: "source.txt")
+        let staging = root.url.appending(path: "staged.txt")
+        let destination = root.url.appending(path: "destination.txt")
+        try Data("source".utf8).write(to: source)
+        let fileSystem = LiveFileSystemAccess()
+        let sourceIdentity = try #require(await fileSystem.identity(of: source))
+        let parentIdentity = try #require(await fileSystem.identity(of: root.url))
+        let stagedIdentity = try await fileSystem.copyAndCaptureIdentity(
+            source, identifiedBy: sourceIdentity, to: staging
+        )
+        try await fileSystem.moveExclusively(
+            staging, identifiedBy: stagedIdentity, to: destination,
+            destinationParentIdentifiedBy: parentIdentity
+        )
+        try await fileSystem.finalizePendingCopyAfterExclusiveRelocation(identity: stagedIdentity)
+        #expect(await fileSystem.ownedCopyAuthorityCountForTesting() == 1)
+        try await fileSystem.commitFinalizedOwnedCopy(identity: stagedIdentity)
+        #expect(await fileSystem.ownedCopyAuthorityCountForTesting() == 0)
+        #expect(try Data(contentsOf: destination) == Data("source".utf8))
+    }
+
+    @Test func finalizedDirectoryCopyWithImmutableDescendantCanBeRemovedForRollback() async throws {
+        let root = try TemporaryDirectory()
+        let source = root.url.appending(path: "locked-source", directoryHint: .isDirectory)
+        let sourceChild = source.appending(path: "immutable-child")
+        let staging = root.url.appending(path: "staged", directoryHint: .isDirectory)
+        let destination = root.url.appending(path: "published", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: source, withIntermediateDirectories: false)
+        try Data("locked".utf8).write(to: sourceChild)
+        guard chflags(sourceChild.path, UInt32(UF_IMMUTABLE)) == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        defer {
+            _ = chflags(sourceChild.path, 0)
+            _ = chflags(destination.appending(path: "immutable-child").path, 0)
+            _ = sourceChild.path.withCString { Darwin.unlink($0) }
+            _ = source.path.withCString { Darwin.rmdir($0) }
+            _ = destination.path.withCString { Darwin.rmdir($0) }
+            _ = root.url.path.withCString { Darwin.rmdir($0) }
+        }
+        let fileSystem = LiveFileSystemAccess()
+        let sourceIdentity = try #require(await fileSystem.identity(of: source))
+        let parentIdentity = try #require(await fileSystem.identity(of: root.url))
+        let stagedIdentity = try await fileSystem.copyAndCaptureIdentity(
+            source, identifiedBy: sourceIdentity, to: staging
+        )
+        try await fileSystem.moveExclusively(
+            staging, identifiedBy: stagedIdentity, to: destination,
+            destinationParentIdentifiedBy: parentIdentity
+        )
+        try await fileSystem.finalizePendingCopyAfterExclusiveRelocation(identity: stagedIdentity)
+
+        var childInfo = stat()
+        #expect(destination.appending(path: "immutable-child").path.withCString {
+            Darwin.lstat($0, &childInfo)
+        } == 0)
+        #expect(UInt32(childInfo.st_flags) & UInt32(UF_IMMUTABLE) != 0)
+        // This is the detached rollback path after a later transaction boundary
+        // fails: immutable descendants must not strand an otherwise-owned tree.
+        try await fileSystem.removeFinalizedOwnedCopy(destination, identifiedBy: stagedIdentity)
+        #expect(FileManager.default.fileExists(atPath: destination.path) == false)
+    }
+
+    @Test func trashFailureRetainsQuarantineUntilPublicationIsRemovedThenRestoresOriginal() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let old = root.url.appending(path: "report.txt")
+        let replacement = root.url.appending(path: "replacement.txt")
+        let trash = descriptorAnchoredTemporaryURL(
+            root.url.appending(path: "trash", directoryHint: .isDirectory)
+        )
+        try Data("old".utf8).write(to: old)
+        try Data("new".utf8).write(to: replacement)
+        try FileManager.default.createDirectory(at: trash, withIntermediateDirectories: false)
+        let fileSystem = LiveFileSystemAccess(
+            storageTrashDirectory: { _ in trash },
+            onBeforeStorageTrashMove: { _ in throw CocoaError(.fileWriteUnknown) }
+        )
+        let oldIdentity = try #require(await fileSystem.identity(of: old))
+        let parentIdentity = try #require(await fileSystem.identity(of: root.url))
+        let quarantine = try await fileSystem.quarantineForTrash(
+            old,
+            identifiedBy: oldIdentity,
+            parentIdentifiedBy: parentIdentity
+        )
+        let reservation = try await fileSystem.reserveStagingDirectory(
+            beside: old, parentIdentifiedBy: parentIdentity
+        )
+        let replacementIdentity = try #require(await fileSystem.identity(of: replacement))
+        let stagedIdentity = try await fileSystem.copyAndCaptureIdentity(
+            replacement, identifiedBy: replacementIdentity, to: reservation.item
+        )
+        try await fileSystem.moveExclusively(
+            reservation.item, identifiedBy: stagedIdentity, to: old,
+            destinationParentIdentifiedBy: parentIdentity
+        )
+        try await fileSystem.finalizePendingCopyAfterExclusiveRelocation(identity: stagedIdentity)
+
+        let failure: StorageTrashRecoverableFailure
+        do {
+            _ = try await fileSystem.moveTrashQuarantineAtomically(quarantine)
+            Issue.record("expected recoverable Trash failure")
+            return
+        } catch let caught as StorageTrashRecoverableFailure {
+            failure = caught
+        }
+        #expect(failure.quarantine.id == quarantine.id)
+        // The new publication occupies the original name, so it is removed first.
+        try await fileSystem.removeFinalizedOwnedCopy(old, identifiedBy: stagedIdentity)
+        try await fileSystem.rollbackTrashQuarantine(failure.quarantine)
+        try await fileSystem.removeStagingDirectory(reservation)
+        #expect(try Data(contentsOf: old) == Data("old".utf8))
+        #expect(FileManager.default.fileExists(atPath: reservation.directory.path) == false)
+    }
+
+    @Test func postTrashQuarantineCleanupFailureKeepsALiveRollbackHandle() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let old = root.url.appending(path: "report.txt")
+        let replacement = root.url.appending(path: "replacement.txt")
+        let trash = descriptorAnchoredTemporaryURL(
+            root.url.appending(path: "trash", directoryHint: .isDirectory)
+        )
+        try Data("old".utf8).write(to: old)
+        try Data("new".utf8).write(to: replacement)
+        try FileManager.default.createDirectory(at: trash, withIntermediateDirectories: false)
+        let cleanupFailure = OneShotInjectedFailure()
+        let trashProgress = ProgressRecorder()
+        let fileSystem = LiveFileSystemAccess(
+            onBeforeEmptyDirectoryUnlink: { url in
+                guard url.lastPathComponent.hasPrefix(".bloom-staging-") else { return }
+                try cleanupFailure.throwOnce()
+            },
+            storageTrashDirectory: { _ in trash },
+            onBeforeStorageTrashMove: { _ in trashProgress.append(1) },
+            onAfterStorageTrashRename: { _ in trashProgress.append(2) }
+        )
+        let oldIdentity = try #require(await fileSystem.identity(of: old))
+        let parentIdentity = try #require(await fileSystem.identity(of: root.url))
+        let quarantine = try await fileSystem.quarantineForTrash(
+            old,
+            identifiedBy: oldIdentity,
+            parentIdentifiedBy: parentIdentity
+        )
+        let reservation = try await fileSystem.reserveStagingDirectory(
+            beside: old,
+            parentIdentifiedBy: parentIdentity
+        )
+        let replacementIdentity = try #require(await fileSystem.identity(of: replacement))
+        let stagedIdentity = try await fileSystem.copyAndCaptureIdentity(
+            replacement,
+            identifiedBy: replacementIdentity,
+            to: reservation.item
+        )
+        try await fileSystem.moveExclusively(
+            reservation.item,
+            identifiedBy: stagedIdentity,
+            to: old,
+            destinationParentIdentifiedBy: parentIdentity
+        )
+        try await fileSystem.finalizePendingCopyAfterExclusiveRelocation(identity: stagedIdentity)
+
+        let failure: StorageTrashRecoverableFailure
+        do {
+            _ = try await fileSystem.moveTrashQuarantineAtomically(quarantine)
+            Issue.record("expected recoverable cleanup failure")
+            return
+        } catch let caught as StorageTrashRecoverableFailure {
+            failure = caught
+        }
+        #expect(trashProgress.latest() == 2)
+        #expect(cleanupFailure.callCount == 1)
+        try await fileSystem.removeFinalizedOwnedCopy(old, identifiedBy: stagedIdentity)
+        try await fileSystem.rollbackTrashQuarantine(failure.quarantine)
+        try await fileSystem.removeStagingDirectory(reservation)
+
+        #expect(try Data(contentsOf: old) == Data("old".utf8))
+        #expect(FileManager.default.fileExists(atPath: quarantine.reservation.directory.path) == false)
+    }
+
+    @Test func recordingFileSystemModelsRecoverableTrashFailureWhenOriginalNameIsOccupied() async throws {
+        let parent = URL(filePath: "/destination", directoryHint: .isDirectory)
+        let original = parent.appending(path: "report.txt")
+        let publication = parent.appending(path: "publication.txt")
+        let fileSystem = RecordingFileSystem(
+            existingURLs: [parent, original, publication],
+            failTrashQuarantineCommitOnAttempt: 1
+        )
+        let originalIdentity = try #require(await fileSystem.identity(of: original))
+        let publicationIdentity = try #require(await fileSystem.identity(of: publication))
+        let quarantine = try await fileSystem.quarantineForTrash(
+            original,
+            identifiedBy: originalIdentity
+        )
+        try await fileSystem.moveExclusively(
+            publication,
+            identifiedBy: publicationIdentity,
+            to: original
+        )
+
+        let failure: StorageTrashRecoverableFailure
+        do {
+            _ = try await fileSystem.moveTrashQuarantineAtomically(quarantine)
+            Issue.record("expected a recoverable Trash failure")
+            return
+        } catch let caught as StorageTrashRecoverableFailure {
+            failure = caught
+        }
+
+        try await fileSystem.remove(original, identifiedBy: publicationIdentity)
+        try await fileSystem.rollbackTrashQuarantine(failure.quarantine)
+        #expect(try await fileSystem.identity(of: original) == originalIdentity)
+    }
+
+    @Test func partialFinalFlagFailureRetainsOwnedDescriptorAuthorityForRollback() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let source = root.url.appending(path: "source", directoryHint: .isDirectory)
+        let first = source.appending(path: "first.txt")
+        let second = source.appending(path: "second.txt")
+        let staging = root.url.appending(path: "staging", directoryHint: .isDirectory)
+        let destination = root.url.appending(path: "destination", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: source, withIntermediateDirectories: false)
+        try Data("first".utf8).write(to: first)
+        try Data("second".utf8).write(to: second)
+        guard chflags(first.path, UInt32(UF_IMMUTABLE)) == 0,
+              chflags(second.path, UInt32(UF_IMMUTABLE)) == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        defer {
+            _ = chflags(first.path, 0)
+            _ = chflags(second.path, 0)
+            _ = chflags(destination.appending(path: "first.txt").path, 0)
+            _ = chflags(destination.appending(path: "second.txt").path, 0)
+        }
+        let finalFlagFailure = OneShotInjectedFailure()
+        let fileSystem = LiveFileSystemAccess(
+            onAfterFinalCopyFlagsApplied: { try finalFlagFailure.throwOnce() }
+        )
+        let sourceIdentity = try #require(await fileSystem.identity(of: source))
+        let parentIdentity = try #require(await fileSystem.identity(of: root.url))
+        let stagedIdentity = try await fileSystem.copyAndCaptureIdentity(
+            source,
+            identifiedBy: sourceIdentity,
+            to: staging
+        )
+        try await fileSystem.moveExclusively(
+            staging,
+            identifiedBy: stagedIdentity,
+            to: destination,
+            destinationParentIdentifiedBy: parentIdentity
+        )
+        await #expect(throws: (any Error).self) {
+            try await fileSystem.finalizePendingCopyAfterExclusiveRelocation(identity: stagedIdentity)
+        }
+        #expect(await fileSystem.ownedCopyAuthorityCountForTesting() == 1)
+
+        try await fileSystem.removeFinalizedOwnedCopy(destination, identifiedBy: stagedIdentity)
+
+        #expect(await fileSystem.ownedCopyAuthorityCountForTesting() == 0)
         #expect(FileManager.default.fileExists(atPath: destination.path) == false)
     }
 

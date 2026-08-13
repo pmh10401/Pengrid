@@ -100,6 +100,13 @@ struct StorageTrashQuarantine: Sendable {
     }
 }
 
+/// The item is still quarantined under the returned authority.  A caller that has
+/// published a replacement must remove that owned publication before restoring this
+/// handle; the low-level Trash primitive must never guess at that ordering.
+struct StorageTrashRecoverableFailure: Error, Sendable {
+    let quarantine: StorageTrashQuarantine
+}
+
 struct PreparedDirectoryHierarchy: Sendable {
     struct OwnedDirectory: Sendable {
         let relativeComponents: [String]
@@ -181,6 +188,15 @@ protocol FileSystemAccess: Sendable {
         to destination: URL,
         destinationParentIdentifiedBy destinationParentIdentity: FileIdentity
     ) async throws
+    /// Finalizes deferred immutable metadata only after an identified staged copy is
+    /// externally published. Callers must record the published identity before this
+    /// can throw so rollback still addresses the destination.
+    func finalizePendingCopyAfterExclusiveRelocation(identity: FileIdentity) async throws
+    /// Releases descriptor-backed authority after the whole transaction has committed.
+    /// It must not mutate user-visible data and is intentionally separate from
+    /// finalization so a failed transaction can still roll the publication back.
+    func commitFinalizedOwnedCopy(identity: FileIdentity) async throws
+    func removeFinalizedOwnedCopy(_ url: URL, identifiedBy identity: FileIdentity) async throws
     func remove(_ url: URL, identifiedBy identity: FileIdentity) async throws
     func replace(
         _ destination: URL,
@@ -205,6 +221,11 @@ protocol FileSystemAccess: Sendable {
     func quarantineForTrash(
         _ url: URL,
         identifiedBy identity: FileIdentity
+    ) async throws -> StorageTrashQuarantine
+    func quarantineForTrash(
+        _ url: URL,
+        identifiedBy identity: FileIdentity,
+        parentIdentifiedBy parentIdentity: FileIdentity
     ) async throws -> StorageTrashQuarantine
     func rollbackTrashQuarantine(_ quarantine: StorageTrashQuarantine) async throws
     func moveTrashQuarantineAtomically(
@@ -234,6 +255,11 @@ protocol FileSystemAccess: Sendable {
 }
 
 extension FileSystemAccess {
+    func finalizePendingCopyAfterExclusiveRelocation(identity: FileIdentity) async throws {}
+    func commitFinalizedOwnedCopy(identity: FileIdentity) async throws {}
+    func removeFinalizedOwnedCopy(_ url: URL, identifiedBy identity: FileIdentity) async throws {
+        try await remove(url, identifiedBy: identity)
+    }
     func removeEmptyDirectory(_ url: URL, identifiedBy identity: FileIdentity) async throws {
         throw FileSystemAccessError.unsupportedOperation(url)
     }
@@ -363,6 +389,18 @@ extension FileSystemAccess {
         }
     }
 
+    func quarantineForTrash(
+        _ url: URL,
+        identifiedBy identity: FileIdentity,
+        parentIdentifiedBy parentIdentity: FileIdentity
+    ) async throws -> StorageTrashQuarantine {
+        let parent = url.deletingLastPathComponent()
+        guard try await self.identity(of: parent) == parentIdentity else {
+            throw FileSystemAccessError.identityMismatch(parent)
+        }
+        return try await quarantineForTrash(url, identifiedBy: identity)
+    }
+
     func rollbackTrashQuarantine(_ quarantine: StorageTrashQuarantine) async throws {
         guard await !exists(quarantine.originalURL) else {
             throw FileSystemAccessError.identityMismatch(quarantine.originalURL)
@@ -383,7 +421,7 @@ extension FileSystemAccess {
                 quarantine.quarantinedURL,
                 identifiedBy: quarantine.identity
             )
-            try? await removeStagingDirectory(quarantine.reservation)
+            try await removeStagingDirectory(quarantine.reservation)
             return quarantine.quarantinedURL
         } catch {
             do {
@@ -449,9 +487,14 @@ actor LiveFileSystemAccess: FileSystemAccess {
         let sourceParentDescriptor: Int32
         let sourceName: String
         let stagingDescriptor: Int32
+        let retainsRecoverableHandle: Bool
     }
 
     private let fileManager: FileManager
+    // Finalized publications retain the original descriptor authority until commit
+    // or rollback.  URLs alone cannot safely clear immutable descendants or prove
+    // that a later namespace entry is still our copied tree.
+    private var finalizedOwnedCopies: [String: PendingOwnedCopy] = [:]
     private let copyChunkSize: Int
     private let onCopyChunk: @Sendable () -> Void
     private let onBeforeCopyEntryCreate: @Sendable (URL) -> Void
@@ -459,6 +502,7 @@ actor LiveFileSystemAccess: FileSystemAccess {
     private let onBeforeCopySourceEntryOpen: @Sendable (URL) -> Void
     private let onCopyEntryCreated: @Sendable (URL) -> Void
     private let onCopyMetadataApplied: @Sendable () throws -> Void
+    private let onAfterFinalCopyFlagsApplied: @Sendable () throws -> Void
     private let onAfterEmptyItemCreated: @Sendable (URL, FileIdentity) throws -> Void
     private let onBeforeEmptyDirectoryUnlink: @Sendable (URL) throws -> Void
     private let storageTrashDirectory: (URL) throws -> URL
@@ -485,6 +529,7 @@ actor LiveFileSystemAccess: FileSystemAccess {
         onBeforeCopySourceEntryOpen: @escaping @Sendable (URL) -> Void = { _ in },
         onCopyEntryCreated: @escaping @Sendable (URL) -> Void = { _ in },
         onCopyMetadataApplied: @escaping @Sendable () throws -> Void = {},
+        onAfterFinalCopyFlagsApplied: @escaping @Sendable () throws -> Void = {},
         onAfterEmptyItemCreated:
             @escaping @Sendable (URL, FileIdentity) throws -> Void = { _, _ in },
         onBeforeEmptyDirectoryUnlink:
@@ -521,6 +566,7 @@ actor LiveFileSystemAccess: FileSystemAccess {
         self.onBeforeCopySourceEntryOpen = onBeforeCopySourceEntryOpen
         self.onCopyEntryCreated = onCopyEntryCreated
         self.onCopyMetadataApplied = onCopyMetadataApplied
+        self.onAfterFinalCopyFlagsApplied = onAfterFinalCopyFlagsApplied
         self.onAfterEmptyItemCreated = onAfterEmptyItemCreated
         self.onBeforeEmptyDirectoryUnlink = onBeforeEmptyDirectoryUnlink
         self.storageTrashDirectory = storageTrashDirectory ?? { source in
@@ -959,7 +1005,7 @@ actor LiveFileSystemAccess: FileSystemAccess {
         if needsTemporaryOwnerWrite {
             try changeMode(of: destination, to: originalMode)
         }
-        try applyAndClosePendingCopy(for: identity)
+        _ = try applyAndClosePendingCopy(for: identity)
     }
 
     func moveExclusively(
@@ -1017,12 +1063,94 @@ actor LiveFileSystemAccess: FileSystemAccess {
             }
         }
         try Task.checkCancellation()
+        // A pending copied tree was opened under its staging parent.  Duplicate the
+        // destination parent before relocation so finalization/rollback retain live
+        // authority for the published namespace rather than an obsolete staging path.
+        let relocatedParentDescriptor = Darwin.dup(destinationParentDescriptor)
+        guard relocatedParentDescriptor >= 0 else { throw currentPOSIXError() }
+        var consumedRelocatedParent = false
+        defer {
+            if !consumedRelocatedParent { Darwin.close(relocatedParentDescriptor) }
+        }
         try renameExclusive(
             from: sourceParentDescriptor,
             name: sourceName,
             to: destinationParentDescriptor,
             name: destinationName
         )
+        if let pending = pendingCopies.removeValue(forKey: expectedIdentity.entryIdentifier) {
+            Darwin.close(pending.rootParentDescriptor)
+            let relocatedEntries = pending.entries.map { entry in
+                OwnedCopyEntry(
+                    url: entry.relativePath.isEmpty
+                        ? destination
+                        : entry.relativePath.reduce(destination) { $0.appending(path: $1) },
+                    relativePath: entry.relativePath,
+                    identity: entry.identity,
+                    kind: entry.kind,
+                    finalFlags: entry.finalFlags
+                )
+            }
+            pendingCopies[expectedIdentity.entryIdentifier] = PendingOwnedCopy(
+                entries: relocatedEntries,
+                rootParentDescriptor: relocatedParentDescriptor,
+                rootDescriptor: pending.rootDescriptor,
+                rootName: destinationName
+            )
+            consumedRelocatedParent = true
+        }
+    }
+
+    func finalizePendingCopyAfterExclusiveRelocation(identity: FileIdentity) async throws {
+        if let pending = try applyPendingCopy(for: identity) {
+            finalizedOwnedCopies[identity.entryIdentifier] = pending
+            finalizedOwnedCopies[identity.resolvedIdentifier] = pending
+        }
+    }
+
+    func commitFinalizedOwnedCopy(identity: FileIdentity) async throws {
+        guard let pending = finalizedOwnedCopies[identity.entryIdentifier]
+            ?? finalizedOwnedCopies[identity.resolvedIdentifier] else { return }
+        finalizedOwnedCopies.removeValue(forKey: identity.entryIdentifier)
+        finalizedOwnedCopies.removeValue(forKey: identity.resolvedIdentifier)
+        finalizedOwnedCopies.removeValue(forKey: pending.entries.first?.identity.entryIdentifier ?? "")
+        finalizedOwnedCopies.removeValue(forKey: pending.entries.first?.identity.resolvedIdentifier ?? "")
+        closePendingCopy(pending)
+    }
+
+    // Internal test seam: the count is descriptor-authority records, not files.
+    // It lets live tests prove commit/rollback release ownership without exposing
+    // descriptors or mutable state to application callers.
+    func ownedCopyAuthorityCountForTesting() -> Int {
+        Set(finalizedOwnedCopies.values.map { $0.rootDescriptor }).count
+            + pendingCopies.count
+    }
+
+    func removeFinalizedOwnedCopy(
+        _ url: URL,
+        identifiedBy expectedIdentity: FileIdentity
+    ) async throws {
+        guard let pending = finalizedOwnedCopies[expectedIdentity.entryIdentifier]
+            ?? finalizedOwnedCopies[expectedIdentity.resolvedIdentifier] else {
+            try remove(url, identifiedBy: expectedIdentity)
+            return
+        }
+        guard try identity(of: url) == expectedIdentity else {
+            throw FileSystemAccessError.identityMismatch(url)
+        }
+        if let cleanupError = cleanupOwnedCopyEntries(
+            pending.entries,
+            rootDescriptor: pending.rootDescriptor,
+            rootParentDescriptor: pending.rootParentDescriptor,
+            rootName: pending.rootName
+        ) {
+            throw cleanupError
+        }
+        finalizedOwnedCopies.removeValue(forKey: expectedIdentity.entryIdentifier)
+        finalizedOwnedCopies.removeValue(forKey: expectedIdentity.resolvedIdentifier)
+        finalizedOwnedCopies.removeValue(forKey: pending.entries.first?.identity.entryIdentifier ?? "")
+        finalizedOwnedCopies.removeValue(forKey: pending.entries.first?.identity.resolvedIdentifier ?? "")
+        closePendingCopy(pending)
     }
 
     func remove(_ url: URL, identifiedBy identity: FileIdentity) throws {
@@ -1051,7 +1179,7 @@ actor LiveFileSystemAccess: FileSystemAccess {
         try requireIdentity(destinationIdentity, at: destination)
         try requireIdentity(stagedIdentity, at: stagedItem)
         _ = try fileManager.replaceItemAt(destination, withItemAt: stagedItem)
-        try applyAndClosePendingCopy(for: stagedIdentity)
+        _ = try applyAndClosePendingCopy(for: stagedIdentity)
     }
 
     func reserveStagingDirectory(beside destination: URL) async throws -> StagingReservation {
@@ -1120,13 +1248,37 @@ actor LiveFileSystemAccess: FileSystemAccess {
         _ url: URL,
         identifiedBy identity: FileIdentity
     ) async throws -> URL? {
-        let quarantine = try await quarantineForTrash(url, identifiedBy: identity)
+        let quarantine: StorageTrashQuarantine
+        do {
+            quarantine = try await quarantineForTrash(url, identifiedBy: identity)
+        } catch let recoverable as StorageTrashRecoverableFailure {
+            // This convenience API has not published a replacement, so it can safely
+            // complete recovery itself rather than leaking an opaque live handle.
+            do {
+                try await rollbackTrashQuarantine(recoverable.quarantine)
+                throw StorageTrashAccessError.failedButRestored
+            } catch let error as StorageTrashAccessError {
+                throw error
+            } catch {
+                throw StorageTrashAccessError.recoveryRequired
+            }
+        }
         return try await moveTrashQuarantineAtomically(quarantine)
     }
 
     func quarantineForTrash(
         _ url: URL,
         identifiedBy expectedIdentity: FileIdentity
+    ) async throws -> StorageTrashQuarantine {
+        try await quarantineForTrash(
+            url, identifiedBy: expectedIdentity, expectedParentIdentity: nil
+        )
+    }
+
+    private func quarantineForTrash(
+        _ url: URL,
+        identifiedBy expectedIdentity: FileIdentity,
+        expectedParentIdentity: FileIdentity?
     ) async throws -> StorageTrashQuarantine {
         let trashDirectory = try storageTrashDirectory(url)
         let reservation = try await reserveStagingDirectory(beside: url)
@@ -1139,10 +1291,19 @@ actor LiveFileSystemAccess: FileSystemAccess {
             )
         } catch {
             Darwin.close(sourceParent)
-            try? await removeStagingDirectory(reservation)
+            let cleanupError: (any Error)?
+            do {
+                try await removeStagingDirectory(reservation)
+                cleanupError = nil
+            } catch {
+                cleanupError = error
+            }
+            if let cleanupError {
+                throw FileTransferAccessFailure(primary: error, cleanup: cleanupError)
+            }
             throw error
         }
-        var movedIntoStaging = false
+        var quarantine: StorageTrashQuarantine?
         do {
             _ = try requireOpenedEntry(
                 staging,
@@ -1150,6 +1311,11 @@ actor LiveFileSystemAccess: FileSystemAccess {
                 expectedType: S_IFDIR,
                 at: reservation.directory
             )
+            if let expectedParentIdentity {
+                guard try identity(ofDescriptor: sourceParent) == expectedParentIdentity else {
+                    throw FileSystemAccessError.identityMismatch(url.deletingLastPathComponent())
+                }
+            }
             guard try identity(
                 named: sourceName,
                 in: sourceParent,
@@ -1163,7 +1329,25 @@ actor LiveFileSystemAccess: FileSystemAccess {
                 to: staging,
                 name: "payload"
             )
-            movedIntoStaging = true
+            // Retain recovery authority before invoking any injectable boundary.
+            // From this point forward a failure may be reported as recoverable and
+            // the transaction can remove a replacement before restoring this handle.
+            let captured = StorageTrashQuarantine(
+                originalURL: url,
+                quarantinedURL: reservation.item,
+                identity: expectedIdentity,
+                reservation: reservation
+            )
+            let context = StorageQuarantineContext(
+                quarantine: captured,
+                trashDirectory: trashDirectory,
+                sourceParentDescriptor: sourceParent,
+                sourceName: sourceName,
+                stagingDescriptor: staging,
+                retainsRecoverableHandle: expectedParentIdentity != nil
+            )
+            storageQuarantines[captured.id] = context
+            quarantine = captured
             try onAfterStorageQuarantineRename()
             guard try identity(
                 named: "payload",
@@ -1175,49 +1359,49 @@ actor LiveFileSystemAccess: FileSystemAccess {
             guard Darwin.fchmod(staging, 0) == 0 else {
                 throw currentPOSIXError()
             }
-            let quarantine = StorageTrashQuarantine(
-                originalURL: url,
-                quarantinedURL: reservation.item,
-                identity: expectedIdentity,
-                reservation: reservation
-            )
-            storageQuarantines[quarantine.id] = StorageQuarantineContext(
-                quarantine: quarantine,
-                trashDirectory: trashDirectory,
-                sourceParentDescriptor: sourceParent,
-                sourceName: sourceName,
-                stagingDescriptor: staging
-            )
-            return quarantine
+            return captured
         } catch let primaryError {
-            if movedIntoStaging {
-                let recovered: Bool
-                do {
-                    try onBeforeStorageRollbackMove(url)
-                    try renameExclusive(
-                        from: staging,
-                        name: "payload",
-                        to: sourceParent,
-                        name: sourceName
-                    )
-                    recovered = true
-                } catch {
-                    recovered = false
+            if let quarantine {
+                // Never restore or abandon internally: the original pathname can be
+                // occupied by a publication by the time recovery runs.  The caller
+                // owns the ordering and receives the still-live handle.
+                _ = Darwin.fchmod(staging, 0)
+                guard expectedParentIdentity != nil else {
+                    do {
+                        try await rollbackTrashQuarantine(quarantine)
+                        throw StorageTrashAccessError.failedButRestored
+                    } catch let error as StorageTrashAccessError {
+                        throw error
+                    } catch {
+                        throw StorageTrashAccessError.recoveryRequired
+                    }
                 }
-                _ = Darwin.fchmod(staging, 0o700)
-                Darwin.close(staging)
-                Darwin.close(sourceParent)
-                if recovered {
-                    try? await removeStagingDirectory(reservation)
-                    throw StorageTrashAccessError.failedButRestored
-                }
-                throw StorageTrashAccessError.recoveryRequired
+                throw StorageTrashRecoverableFailure(quarantine: quarantine)
             }
             Darwin.close(staging)
             Darwin.close(sourceParent)
-            try? await removeStagingDirectory(reservation)
+            let cleanupError: (any Error)?
+            do {
+                try await removeStagingDirectory(reservation)
+                cleanupError = nil
+            } catch {
+                cleanupError = error
+            }
+            if let cleanupError {
+                throw FileTransferAccessFailure(primary: primaryError, cleanup: cleanupError)
+            }
             throw primaryError
         }
+    }
+
+    func quarantineForTrash(
+        _ url: URL,
+        identifiedBy expectedIdentity: FileIdentity,
+        parentIdentifiedBy expectedParentIdentity: FileIdentity
+    ) async throws -> StorageTrashQuarantine {
+        try await quarantineForTrash(
+            url, identifiedBy: expectedIdentity, expectedParentIdentity: expectedParentIdentity
+        )
     }
 
     func rollbackTrashQuarantine(_ quarantine: StorageTrashQuarantine) async throws {
@@ -1246,10 +1430,14 @@ actor LiveFileSystemAccess: FileSystemAccess {
                 name: context.sourceName
             )
         } catch {
-            abandonRecoverableQuarantine(context)
-            throw StorageTrashAccessError.recoveryRequired
+            // Keep the descriptor-backed context alive.  The caller may retry only
+            // after removing an owned publication at the original name.
+            guard context.retainsRecoverableHandle else {
+                throw StorageTrashAccessError.recoveryRequired
+            }
+            throw StorageTrashRecoverableFailure(quarantine: quarantine)
         }
-        await finishEmptyQuarantine(context)
+        try await finishEmptyQuarantine(context)
     }
 
     func fingerprint(of quarantine: StorageTrashQuarantine) async throws -> SourceFingerprint {
@@ -1332,13 +1520,15 @@ actor LiveFileSystemAccess: FileSystemAccess {
                     destination
                 )
             }
-            await finishEmptyQuarantine(context)
+            try await finishEmptyQuarantine(context)
             return destination
         } catch {
             if movedToTrash {
                 guard let trashDescriptor else {
-                    abandonRecoverableQuarantine(context)
-                    throw StorageTrashAccessError.recoveryRequired
+                    guard context.retainsRecoverableHandle else {
+                        throw StorageTrashAccessError.recoveryRequired
+                    }
+                    throw StorageTrashRecoverableFailure(quarantine: quarantine)
                 }
                 do {
                     try renameExclusive(
@@ -1360,16 +1550,39 @@ actor LiveFileSystemAccess: FileSystemAccess {
                             name: ".recovery-\(UUID().uuidString)"
                         )
                     }
-                    abandonRecoverableQuarantine(context)
+                    guard context.retainsRecoverableHandle else {
+                        throw StorageTrashAccessError.recoveryRequired
+                    }
+                    throw StorageTrashRecoverableFailure(quarantine: quarantine)
+                }
+            }
+            // Preserve the established direct primitive contract where the original
+            // namespace is still absent: it is safe to restore immediately.  A
+            // synchronizing transaction has already published a replacement at this
+            // name, so it instead receives the live handle and controls ordering.
+            let originalIsAbsent: Bool
+            do {
+                originalIsAbsent = try identity(of: quarantine.originalURL) == nil
+            } catch {
+                originalIsAbsent = true
+            }
+            if originalIsAbsent {
+                do {
+                    try await rollbackTrashQuarantine(quarantine)
+                    throw StorageTrashAccessError.failedButRestored
+                } catch let error as StorageTrashAccessError {
+                    throw error
+                } catch {
                     throw StorageTrashAccessError.recoveryRequired
                 }
             }
-            do {
-                try await rollbackTrashQuarantine(quarantine)
-            } catch {
+            guard context.retainsRecoverableHandle else {
                 throw StorageTrashAccessError.recoveryRequired
             }
-            throw StorageTrashAccessError.failedButRestored
+            // Keep the context alive. A synchronizing transaction may have already
+            // published a replacement at the original name and must remove it before
+            // requesting an identity-safe restore.
+            throw StorageTrashRecoverableFailure(quarantine: quarantine)
         }
     }
 
@@ -2238,12 +2451,28 @@ actor LiveFileSystemAccess: FileSystemAccess {
         guard status == 0 else { throw currentPOSIXError() }
     }
 
-    private func finishEmptyQuarantine(_ context: StorageQuarantineContext) async {
-        storageQuarantines.removeValue(forKey: context.quarantine.id)
+    private func finishEmptyQuarantine(_ context: StorageQuarantineContext) async throws {
         _ = Darwin.fchmod(context.stagingDescriptor, 0o700)
+        let reservation = context.quarantine.reservation
+        let stagingName = reservation.directory.lastPathComponent
+        try onBeforeEmptyDirectoryUnlink(reservation.directory)
+        guard try identity(ofDescriptor: context.stagingDescriptor) == reservation.directoryIdentity,
+              try identity(
+                  named: stagingName,
+                  in: context.sourceParentDescriptor,
+                  noFollow: true
+              ) == reservation.directoryIdentity else {
+            throw FileSystemAccessError.identityMismatch(reservation.directory)
+        }
+        let status = stagingName.withCString {
+            Darwin.unlinkat(context.sourceParentDescriptor, $0, AT_REMOVEDIR)
+        }
+        guard status == 0 else { throw currentPOSIXError() }
+        // Drop authority only after the descriptor-anchored removal commits. A
+        // failure above leaves a live handle for Trash rollback and retry.
+        storageQuarantines.removeValue(forKey: context.quarantine.id)
         Darwin.close(context.stagingDescriptor)
         Darwin.close(context.sourceParentDescriptor)
-        try? await removeStagingDirectory(context.quarantine.reservation)
     }
 
     private func abandonRecoverableQuarantine(
@@ -2377,9 +2606,8 @@ actor LiveFileSystemAccess: FileSystemAccess {
         Darwin.close(pending.rootDescriptor)
     }
 
-    private func applyAndClosePendingCopy(for identity: FileIdentity) throws {
-        guard let pending = pendingCopies.removeValue(forKey: identity.entryIdentifier) else { return }
-        defer { closePendingCopy(pending) }
+    private func applyPendingCopy(for identity: FileIdentity) throws -> PendingOwnedCopy? {
+        guard let pending = pendingCopies[identity.entryIdentifier] else { return nil }
         var firstError: (any Error)?
         for entry in pending.entries.reversed()
             where entry.finalFlags & Self.mutationBlockingFlags != 0 {
@@ -2391,12 +2619,24 @@ actor LiveFileSystemAccess: FileSystemAccess {
                 try requireIdentity(entry.identity, ofDescriptor: descriptor, at: entry.url)
                 if Darwin.fchflags(descriptor, entry.finalFlags) != 0 {
                     firstError = firstError ?? currentPOSIXError()
+                } else {
+                    try onAfterFinalCopyFlagsApplied()
                 }
             } catch {
                 firstError = firstError ?? error
             }
         }
-        if let firstError { throw firstError }
+        if let firstError {
+            throw firstError
+        }
+        pendingCopies.removeValue(forKey: identity.entryIdentifier)
+        return pending
+    }
+
+    private func applyAndClosePendingCopy(for identity: FileIdentity) throws -> [OwnedCopyEntry]? {
+        guard let pending = try applyPendingCopy(for: identity) else { return nil }
+        defer { closePendingCopy(pending) }
+        return pending.entries
     }
 
     private func openOwnedEntry(

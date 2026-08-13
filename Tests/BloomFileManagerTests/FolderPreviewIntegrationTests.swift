@@ -33,7 +33,9 @@ struct FolderPreviewIntegrationTests {
 
         #expect(implementation.contains("WorkspacePreviewCoordinator("))
         #expect(implementation.contains("previewCoordinator: previewCoordinator"))
-        #expect(implementation.contains("restoreFocus: { workspace.activePane.requestTableFocus() }"))
+        #expect(implementation.contains(
+            "restoreFocus: { workspaceSession.activeWorkspace.activePane.requestTableFocus() }"
+        ))
     }
 
     @Test func textEditingKeepsSpaceAndEscapePriority() {

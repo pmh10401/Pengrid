@@ -123,10 +123,24 @@ actor FileOperationService {
                         continue
                     }
 
-                    let quarantine = try await fileSystem.quarantineForTrash(
-                        entry.url,
-                        identifiedBy: entry.fingerprint.identity
-                    )
+                    let parent = entry.url.deletingLastPathComponent()
+                    guard let parentIdentity = try await fileSystem.identity(of: parent) else {
+                        throw FileSystemAccessError.identityMismatch(parent)
+                    }
+                    let quarantine: StorageTrashQuarantine
+                    do {
+                        quarantine = try await fileSystem.quarantineForTrash(
+                            entry.url,
+                            identifiedBy: entry.fingerprint.identity,
+                            parentIdentifiedBy: parentIdentity
+                        )
+                    } catch let recoverable as StorageTrashRecoverableFailure {
+                        let restored = await Self.restore(recoverable.quarantine, using: fileSystem)
+                        outcomes.append(restored
+                            ? .failed(source: entry.url, message: "cleanup-trash-failed")
+                            : .recoveryNeeded(source: entry.url))
+                        continue
+                    }
                     do {
                         _ = try await fileSystem.moveTrashQuarantineAtomically(
                             quarantine
@@ -140,6 +154,11 @@ actor FileOperationService {
                             for: error,
                             source: entry.url
                         ))
+                    } catch let recoverable as StorageTrashRecoverableFailure {
+                        let restored = await Self.restore(recoverable.quarantine, using: fileSystem)
+                        outcomes.append(restored
+                            ? .failed(source: entry.url, message: "cleanup-trash-failed")
+                            : .recoveryNeeded(source: entry.url))
                     } catch {
                         outcomes.append(.failed(
                             source: entry.url,
@@ -191,6 +210,18 @@ actor FileOperationService {
             skipped: skipped
         )
         return FileOperationResult(outcomes: outcomes)
+    }
+
+    private nonisolated static func restore(
+        _ quarantine: StorageTrashQuarantine,
+        using fileSystem: any FileSystemAccess
+    ) async -> Bool {
+        do {
+            try await fileSystem.rollbackTrashQuarantine(quarantine)
+            return true
+        } catch {
+            return false
+        }
     }
 
     private func exactStorageMatch(_ entry: StorageEntry) async throws -> Bool {

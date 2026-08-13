@@ -429,8 +429,9 @@ struct FileOperationUndoServiceTests {
 
     @Test func copiedOutputUndoQuarantinesAndTrashesOnlyAnUnchangedFingerprint() async throws {
         let source = URL(filePath: "/source/Photo.jpg")
+        let destinationDirectory = URL(filePath: "/destination", directoryHint: .isDirectory)
         let copied = URL(filePath: "/destination/Photo.jpg")
-        let fileSystem = RecordingFileSystem(existingURLs: [copied])
+        let fileSystem = RecordingFileSystem(existingURLs: [destinationDirectory, copied])
         let service = FileOperationUndoService(fileSystem: fileSystem)
         let recipe = try #require(await service.makeRecipe(
             kind: .copy,
@@ -476,10 +477,11 @@ struct FileOperationUndoServiceTests {
     @Test func failedTrashCommitRestoresEveryLaterQuarantinedOutput() async throws {
         let firstSource = URL(filePath: "/source/First.txt")
         let secondSource = URL(filePath: "/source/Second.txt")
+        let destinationDirectory = URL(filePath: "/destination", directoryHint: .isDirectory)
         let firstCopy = URL(filePath: "/destination/First.txt")
         let secondCopy = URL(filePath: "/destination/Second.txt")
         let fileSystem = RecordingFileSystem(
-            existingURLs: [firstCopy, secondCopy],
+            existingURLs: [destinationDirectory, firstCopy, secondCopy],
             forceTrashQuarantineRecovery: true
         )
         let service = FileOperationUndoService(fileSystem: fileSystem)
@@ -505,9 +507,10 @@ struct FileOperationUndoServiceTests {
     @Test func cancellationBeforeNextTrashCommitRestoresThatQuarantinedOutput() async throws {
         let firstSource = URL(filePath: "/source/First.txt")
         let secondSource = URL(filePath: "/source/Second.txt")
+        let destinationDirectory = URL(filePath: "/destination", directoryHint: .isDirectory)
         let firstCopy = URL(filePath: "/destination/First.txt")
         let secondCopy = URL(filePath: "/destination/Second.txt")
-        let fileSystem = RecordingFileSystem(existingURLs: [firstCopy, secondCopy])
+        let fileSystem = RecordingFileSystem(existingURLs: [destinationDirectory, firstCopy, secondCopy])
         let service = FileOperationUndoService(fileSystem: fileSystem)
         let recipe = try #require(await service.makeRecipe(
             kind: .copy,
@@ -547,10 +550,11 @@ struct FileOperationUndoServiceTests {
     @Test func partialUndoFailureRequiresRecoveryEvenWhenCurrentItemWasRestored() async throws {
         let firstSource = URL(filePath: "/source/First.txt")
         let secondSource = URL(filePath: "/source/Second.txt")
+        let destinationDirectory = URL(filePath: "/destination", directoryHint: .isDirectory)
         let firstCopy = URL(filePath: "/destination/First.txt")
         let secondCopy = URL(filePath: "/destination/Second.txt")
         let fileSystem = RecordingFileSystem(
-            existingURLs: [firstCopy, secondCopy],
+            existingURLs: [destinationDirectory, firstCopy, secondCopy],
             failTrashQuarantineCommitOnAttempt: 2
         )
         let service = FileOperationUndoService(fileSystem: fileSystem)
