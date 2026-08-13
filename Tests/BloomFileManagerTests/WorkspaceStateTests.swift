@@ -30,4 +30,24 @@ struct WorkspaceStateTests {
         #expect(workspace.activePaneID == .right)
         #expect(workspace.activePane === workspace.right)
     }
+
+    @Test func descriptorCallbackReceivesCommittedSnapshotAndNewlyActivePane() {
+        let home = URL(filePath: "/private/test-home")
+        var received: [(WorkspaceSnapshot, PaneID)] = []
+        let workspace = WorkspaceState(
+            leftURL: home,
+            rightURL: home.appending(path: "Downloads"),
+            listingService: StubDirectoryListingService(values: [:]),
+            descriptorDidChange: { snapshot, pane in
+                received.append((snapshot, pane))
+            }
+        )
+
+        workspace.activate(.right)
+
+        #expect(received.count == 1)
+        #expect(received[0].0.leftPath == "/private/test-home")
+        #expect(received[0].0.rightPath == "/private/test-home/Downloads")
+        #expect(received[0].1 == .right)
+    }
 }
