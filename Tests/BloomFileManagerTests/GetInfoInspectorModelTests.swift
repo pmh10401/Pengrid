@@ -35,6 +35,18 @@ struct GetInfoInspectorModelTests {
         #expect(model.checksumPhase == .unavailable)
     }
 
+    @Test func activeInspectionServiceCancellationBecomesFailure() async throws {
+        let model = GetInfoInspectorModel(
+            inspector: IndependentlyCancellingInspector(),
+            checksumService: DeferredChecksumService()
+        )
+
+        model.inspect([item(named: "unavailable.txt")])
+
+        #expect(await waitForInspectorCondition { model.phase == .failed })
+        #expect(model.report == nil)
+    }
+
     @Test func inspectionAloneNeverRequestsChecksum() async throws {
         let inspector = DeferredGetInfoInspector()
         let checksum = DeferredChecksumService()
@@ -89,6 +101,23 @@ struct GetInfoInspectorModelTests {
         #expect(await waitForInspectorCondition { model.checksumPhase == .failed })
     }
 
+    @Test func activeChecksumServiceCancellationBecomesRetryableFailure() async throws {
+        let inspector = DeferredGetInfoInspector()
+        let checksum = DeferredChecksumService()
+        let model = GetInfoInspectorModel(inspector: inspector, checksumService: checksum)
+
+        model.inspect([item(named: "document.txt")])
+        #expect(await waitForInspectorCondition { await inspector.requestCount == 1 })
+        await inspector.complete(requestAt: 0, with: report(named: "document.txt"))
+        #expect(await waitForInspectorCondition { model.phase == .loaded })
+
+        model.calculateSHA256()
+        #expect(await waitForInspectorCondition { await checksum.requestCount == 1 })
+        await checksum.fail(requestAt: 0, with: CancellationError())
+
+        #expect(await waitForInspectorCondition { model.checksumPhase == .failed })
+    }
+
     @Test func closingCancelsAnActiveChecksum() async throws {
         let inspector = DeferredGetInfoInspector()
         let checksum = DeferredChecksumService()
@@ -129,6 +158,12 @@ private actor DeferredGetInfoInspector: GetInfoInspecting {
     }
 
     private func recordCancellation() { cancelledCount += 1 }
+}
+
+private actor IndependentlyCancellingInspector: GetInfoInspecting {
+    func inspect(_ items: [FileItem]) async throws -> GetInfoInspectionReport {
+        throw CancellationError()
+    }
 }
 
 private actor DeferredChecksumService: ChecksumService {

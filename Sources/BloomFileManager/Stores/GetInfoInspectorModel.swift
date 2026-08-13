@@ -74,7 +74,8 @@ final class GetInfoInspectorModel {
                 guard !Task.isCancelled else { return }
                 self?.publish(inspectedReport, for: inspectionGeneration)
             } catch is CancellationError {
-                return
+                guard !Task.isCancelled else { return }
+                self?.publishInspectionFailure(for: inspectionGeneration)
             } catch {
                 guard !Task.isCancelled else { return }
                 self?.publishInspectionFailure(for: inspectionGeneration)
@@ -121,6 +122,11 @@ final class GetInfoInspectorModel {
                 )
             } catch is CancellationError {
                 relay.finish()
+                guard !Task.isCancelled else { return }
+                self?.publishChecksumFailure(
+                    generation: activeGeneration,
+                    checksumGeneration: activeChecksumGeneration
+                )
             } catch {
                 relay.finish()
                 guard !Task.isCancelled else { return }

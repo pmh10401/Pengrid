@@ -26,7 +26,7 @@ enum GetInfoInspectorPresentation {
         case calculate
         case calculating(progress: Double)
         case copy(hexDigest: String)
-        case retry
+        case retry(message: String)
     }
 
     static func details(for report: GetInfoInspectionReport) -> Details {
@@ -36,7 +36,8 @@ enum GetInfoInspectorPresentation {
         if isSingleSuccess, let snapshot = report.successfulSnapshots.first {
             title = snapshot.name
         } else {
-            title = "\(summary.selectedCount) items"
+            let noun = summary.selectedCount == 1 ? "item" : "items"
+            title = "\(summary.selectedCount) \(noun)"
         }
 
         let summaryText: String
@@ -46,7 +47,14 @@ enum GetInfoInspectorPresentation {
             summaryText = "\(summary.selectedCount) selected · \(summary.inspectedCount) inspected · \(summary.failedCount) unavailable"
         }
 
-        let rows = isSingleSuccess ? detailRows(for: report.successfulSnapshots[0]) : []
+        let rows: [Row]
+        if isSingleSuccess {
+            rows = detailRows(for: report.successfulSnapshots[0])
+        } else if report.outcomes.count > 1 {
+            rows = summaryRows(for: report)
+        } else {
+            rows = []
+        }
         let outcomes: [Outcome] = report.outcomes.map { outcome in
             switch outcome {
             case let .success(snapshot): Outcome.success(name: snapshot.name)
@@ -77,7 +85,7 @@ enum GetInfoInspectorPresentation {
         case let .complete(hexDigest):
             ChecksumControls.copy(hexDigest: hexDigest)
         case .failed:
-            ChecksumControls.retry
+            ChecksumControls.retry(message: "Unable to calculate SHA-256.")
         }
     }
 
@@ -102,6 +110,27 @@ enum GetInfoInspectorPresentation {
             .init(label: "Availability", value: availabilityDescription(snapshot.availability)),
             .init(label: "Symlink destination", value: snapshot.symbolicLinkDestination ?? "—")
         ]
+    }
+
+    private static func summaryRows(for report: GetInfoInspectionReport) -> [Row] {
+        let summary = report.summary
+        var rows = [
+            Row(label: "Known logical size", value: byteCount(summary.knownLogicalByteTotal)),
+            Row(label: "Known allocated size", value: byteCount(summary.knownAllocatedByteTotal))
+        ]
+        if let commonParentURL = summary.commonParentURL {
+            rows.append(.init(label: "Common parent", value: commonParentURL.path))
+        }
+
+        var seenTypes: Set<String> = []
+        let distinctTypes = report.successfulSnapshots.compactMap { snapshot in
+            seenTypes.insert(snapshot.typeDescription).inserted ? snapshot.typeDescription : nil
+        }
+        rows.append(.init(
+            label: "Types",
+            value: distinctTypes.isEmpty ? "—" : distinctTypes.joined(separator: ", ")
+        ))
+        return rows
     }
 
     private static func entryKindDescription(_ kind: GetInfoEntryKind) -> String {
@@ -151,50 +180,72 @@ struct GetInfoInspectorView: View {
     @Bindable var model: GetInfoInspectorModel
 
     var body: some View {
-        Group {
-            switch model.phase {
-            case .idle:
-                ContentUnavailableView("Get Info", systemImage: "info.circle")
-            case .loading:
-                ProgressView("Inspecting selection…")
-            case .failed:
-                ContentUnavailableView("Information unavailable", systemImage: "exclamationmark.triangle")
-            case .loaded:
-                if let report = model.report {
-                    details(for: report)
+        VStack {
+            Group {
+                switch model.phase {
+                case .idle:
+                    ContentUnavailableView("Get Info", systemImage: "info.circle")
+                case .loading:
+                    ProgressView("Inspecting selection…")
+                        .getInfoAccessibility(GetInfoAccessibilityPresentation.inspectionProgress)
+                case .failed:
+                    ContentUnavailableView("Information unavailable", systemImage: "exclamationmark.triangle")
+                        .getInfoAccessibility(GetInfoAccessibilityPresentation.inspectionFailure)
+                case .loaded:
+                    if let report = model.report {
+                        details(for: report)
+                    }
                 }
             }
         }
         .padding(16)
         .frame(minWidth: 420, minHeight: 460)
-        .accessibilityIdentifier(GetInfoAccessibilityIdentifiers.panel)
+        .accessibilityElement(children: .contain)
+        .getInfoAccessibilitySemantics(GetInfoAccessibilityPresentation.inspector(value: accessibilityStatus))
     }
 
     @ViewBuilder
     private func details(for report: GetInfoInspectionReport) -> some View {
         let details = GetInfoInspectorPresentation.details(for: report)
         let controls = GetInfoInspectorPresentation.checksumControls(for: details, phase: model.checksumPhase)
+        let titleAccessibility = GetInfoAccessibilityPresentation.title(details)
+        let statusAccessibility = GetInfoAccessibilityPresentation.status(details)
+        let metadataAccessibility = GetInfoAccessibilityPresentation.metadata(details)
+        let outcomesAccessibility = GetInfoAccessibilityPresentation.outcomes(details)
         VStack(alignment: .leading, spacing: 12) {
             Text(details.title)
                 .font(.headline)
-                .accessibilityIdentifier(GetInfoAccessibilityIdentifiers.title)
+                .accessibilityElement(children: .ignore)
+                .getInfoAccessibility(titleAccessibility)
             Text(details.summary)
                 .foregroundStyle(.secondary)
-                .accessibilityIdentifier(GetInfoAccessibilityIdentifiers.status)
+                .accessibilityElement(children: .ignore)
+                .getInfoAccessibility(statusAccessibility)
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 8) {
-                    ForEach(details.rows, id: \.label) { row in
-                        LabeledContent(row.label, value: row.value)
-                    }
-                    if details.outcomes.count > 1 || details.rows.isEmpty {
-                        ForEach(details.outcomes, id: \.self) { outcome in
-                            outcomeRow(outcome)
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(details.rows, id: \.label) { row in
+                            LabeledContent(row.label, value: row.value)
+                                .accessibilityElement(children: .combine)
+                                .accessibilityLabel(row.label)
+                                .accessibilityValue(row.value)
                         }
+                    }
+                    .accessibilityElement(children: .contain)
+                    .getInfoAccessibility(metadataAccessibility)
+
+                    if details.outcomes.count > 1 || details.rows.isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            ForEach(details.outcomes, id: \.self) { outcome in
+                                outcomeRow(outcome)
+                            }
+                        }
+                        .accessibilityElement(children: .contain)
+                        .getInfoAccessibility(outcomesAccessibility)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .accessibilityIdentifier(GetInfoAccessibilityIdentifiers.details)
             }
 
             checksumControls(controls)
@@ -206,9 +257,14 @@ struct GetInfoInspectorView: View {
         switch outcome {
         case let .success(name):
             Text(name)
+                .accessibilityLabel("Inspected item")
+                .accessibilityValue(name)
         case let .failure(name, message):
             LabeledContent(name, value: message)
                 .foregroundStyle(.red)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("Unavailable item \(name)")
+                .accessibilityValue(message)
         }
     }
 
@@ -217,25 +273,72 @@ struct GetInfoInspectorView: View {
         switch controls {
         case .hidden:
             EmptyView()
-        case .calculate, .retry:
+        case .calculate:
+            let accessibility = GetInfoAccessibilityPresentation.checksumCalculate
             Button("Calculate SHA-256") {
                 model.calculateSHA256()
             }
-            .accessibilityIdentifier(GetInfoAccessibilityIdentifiers.checksumCalculate)
+            .getInfoAccessibility(accessibility)
+        case let .retry(message):
+            let failureAccessibility = GetInfoAccessibilityPresentation.checksumFailure(message)
+            let retryAccessibility = GetInfoAccessibilityPresentation.checksumRetry
+            VStack(alignment: .leading, spacing: 8) {
+                Text(message)
+                    .foregroundStyle(.red)
+                    .accessibilityElement(children: .ignore)
+                    .getInfoAccessibility(failureAccessibility)
+                Button("Try Again") {
+                    model.calculateSHA256()
+                }
+                .getInfoAccessibility(retryAccessibility)
+            }
         case let .calculating(progress):
+            let accessibility = GetInfoAccessibilityPresentation.checksumProgress(progress)
             ProgressView(value: progress) {
                 Text("Calculating SHA-256")
             }
+            .getInfoAccessibility(accessibility)
         case let .copy(hexDigest):
+            let digestAccessibility = GetInfoAccessibilityPresentation.checksumDigest(hexDigest)
+            let copyAccessibility = GetInfoAccessibilityPresentation.checksumCopy(hexDigest)
             HStack {
                 Text(hexDigest)
                     .textSelection(.enabled)
+                    .accessibilityElement(children: .ignore)
+                    .getInfoAccessibility(digestAccessibility)
                 Button("Copy") {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(hexDigest, forType: .string)
                 }
-                .accessibilityIdentifier(GetInfoAccessibilityIdentifiers.checksumCopy)
+                .getInfoAccessibility(copyAccessibility)
             }
         }
+    }
+
+    private var accessibilityStatus: String {
+        switch model.phase {
+        case .idle: "No selection inspected"
+        case .loading: "Inspecting selection"
+        case .failed: "Information unavailable"
+        case .loaded: model.report.map { GetInfoInspectorPresentation.details(for: $0).summary } ?? "Loaded"
+        }
+    }
+}
+
+private extension View {
+    func getInfoAccessibility(
+        _ semantics: GetInfoAccessibilityPresentation.Element
+    ) -> some View {
+        getInfoAccessibilitySemantics(semantics)
+            .accessibilityIdentifier(semantics.identifier)
+    }
+
+    func getInfoAccessibilitySemantics(
+        _ semantics: GetInfoAccessibilityPresentation.Element
+    ) -> some View {
+        self
+            .accessibilityLabel(semantics.label)
+            .accessibilityValue(semantics.value)
+            .accessibilityHint(semantics.hint ?? "")
     }
 }
