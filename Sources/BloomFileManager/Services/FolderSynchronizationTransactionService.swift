@@ -81,7 +81,14 @@ enum FolderSynchronizationTransactionFailure: LocalizedError, Sendable {
 /// Executes a prepared synchronization as a single recoverable transaction.  The
 /// only permanent-data operation it requests is the existing Trash API, and that is
 /// deliberately deferred until every new publication has been verified.
-actor FolderSynchronizationTransactionService {
+protocol FolderSynchronizationExecuting: Sendable {
+    func execute(
+        _ plan: PreparedFolderSynchronizationPlan,
+        progress: @escaping @Sendable (FolderSynchronizationProgress) async -> Void
+    ) async -> FileOperationResult
+}
+
+actor FolderSynchronizationTransactionService: FolderSynchronizationExecuting {
     typealias ProgressHandler = @Sendable (FolderSynchronizationProgress) async -> Void
 
     private struct StagedItem: Sendable {
@@ -118,6 +125,18 @@ actor FolderSynchronizationTransactionService {
         self.fileSystem = fileSystem
         self.scopedAccess = scopedAccess
         self.availabilityReader = availabilityReader
+    }
+
+    init(
+        fileSystem: any FileSystemAccess,
+        accessCoordinator: CloudLocationScopedAccessCoordinator,
+        availabilityReader: any CloudItemAvailabilityReading = LiveCloudItemAvailabilityService()
+    ) {
+        self.init(
+            fileSystem: fileSystem,
+            scopedAccess: TransactionScopedAccess(coordinator: accessCoordinator),
+            availabilityReader: availabilityReader
+        )
     }
 
     func execute(

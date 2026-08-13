@@ -2960,6 +2960,192 @@ struct FileOperationControllerTests {
         #expect(await fixture.fileSystem.existingURLs.contains(fixture.url("new-B.txt")))
     }
 
+    @Test func folderSynchronizationAdmissionAndEnqueueShareTheSamePredicate() async throws {
+        let fixture = try FolderSynchronizationQueueFixture()
+
+        #expect(fixture.controller.canAdmitFolderSynchronization)
+        #expect(fixture.controller.synchronizeFolder(
+            plan: fixture.plan,
+            workspace: fixture.workspace
+        ))
+        #expect(fixture.controller.canAdmitFolderSynchronization == false)
+        #expect(fixture.controller.activeJob?.kind == .synchronizeFolder(.leftToRight))
+        #expect(fixture.controller.activeJob?.canRetry == false)
+        #expect(fixture.controller.activeJob?.canUndo == false)
+        #expect(fixture.controller.hasExclusiveOperationActive)
+        await fixture.executor.waitUntilStarted()
+        #expect(await fixture.executor.executeCount == 1)
+        await fixture.executor.releaseHeldExecution()
+        await waitUntilQueueIsIdle(fixture.controller)
+
+        let completed = try #require(fixture.controller.operationHistory.first)
+        #expect(completed.kind == .synchronizeFolder(.leftToRight))
+        #expect(completed.state == .succeeded)
+        #expect(completed.canRetry == false)
+        #expect(completed.canUndo == false)
+        #expect(fixture.controller.undoLatest() == false)
+        #expect(fixture.controller.canAdmitFolderSynchronization)
+    }
+
+    @Test func folderSynchronizationRejectionDoesNotInvokeTheTransactionService() async throws {
+        let fixture = try FolderSynchronizationQueueFixture()
+
+        let token = fixture.controller.beginTerminationPreparation()
+        #expect(fixture.controller.canAdmitFolderSynchronization == false)
+        #expect(fixture.controller.synchronizeFolder(
+            plan: fixture.plan,
+            workspace: fixture.workspace
+        ) == false)
+        #expect(await fixture.executor.executeCount == 0)
+        fixture.controller.finishTerminationPreparation(token, restartQueue: true)
+
+        let holding = try FolderSynchronizationQueueFixture(holdUntilReleased: true)
+        #expect(holding.controller.synchronizeFolder(
+            plan: holding.plan,
+            workspace: holding.workspace
+        ))
+        await holding.executor.waitUntilStarted()
+        #expect(holding.controller.canAdmitFolderSynchronization == false)
+        #expect(holding.controller.synchronizeFolder(
+            plan: holding.plan,
+            workspace: holding.workspace
+        ) == false)
+        #expect(await holding.executor.executeCount == 1)
+
+        let queuedDirectory = URL(filePath: "/workspace", directoryHint: .isDirectory)
+        let queuedSource = queuedDirectory.appending(path: "queued.txt")
+        #expect(await holding.controller.createFolder(
+            in: queuedDirectory,
+            named: "Blocked",
+            workspace: holding.workspace
+        ) == false)
+        await holding.executor.releaseHeldExecution()
+        await waitUntilQueueIsIdle(holding.controller)
+        _ = queuedSource
+    }
+
+    @Test func folderSynchronizationAdmissionIsClosedWhileARegularJobIsActiveOrQueued() async throws {
+        let source = URL(filePath: "/source/first")
+        let destinationDirectory = URL(filePath: "/destination")
+        let collision = destinationDirectory.appending(path: "first")
+        let fileSystem = RecordingFileSystem(
+            existingURLs: [source, destinationDirectory, collision]
+        )
+        let executor = RecordingFolderSynchronizationExecutor()
+        let controller = FileOperationController(
+            service: FileOperationService(fileSystem: fileSystem),
+            folderSynchronizationService: executor
+        )
+        let workspace = WorkspaceState(
+            leftURL: destinationDirectory,
+            rightURL: URL(filePath: "/elsewhere"),
+            listingService: StubDirectoryListingService(values: [:])
+        )
+        let plan = try makeFolderSynchronizationQueuePlan()
+
+        #expect(await controller.runTransfer(
+            [source],
+            to: destinationDirectory,
+            mode: .copy,
+            workspace: workspace
+        ))
+        await waitForPendingConflict(controller)
+        #expect(controller.canAdmitFolderSynchronization == false)
+        #expect(controller.synchronizeFolder(plan: plan, workspace: workspace) == false)
+        #expect(await executor.executeCount == 0)
+
+        #expect(await controller.createFolder(
+            in: destinationDirectory,
+            named: "Queued",
+            workspace: workspace
+        ))
+        #expect(controller.queuedJobs.isEmpty == false)
+        #expect(controller.canAdmitFolderSynchronization == false)
+        #expect(controller.synchronizeFolder(plan: plan, workspace: workspace) == false)
+        #expect(await executor.executeCount == 0)
+
+        controller.resolvePendingConflict(.skip, applyToAll: false)
+        await waitUntilQueueIsIdle(controller)
+    }
+
+    @Test func folderSynchronizationRecoveryEngagesTheGlobalRecoveryGate() async throws {
+        let fixture = try FolderSynchronizationQueueFixture(
+            result: FileOperationResult(outcomes: [
+                .recoveryNeeded(source: URL(filePath: "/private/SecretSource/copy.txt"))
+            ])
+        )
+
+        #expect(fixture.controller.canAdmitFolderSynchronization)
+        #expect(fixture.controller.synchronizeFolder(
+            plan: fixture.plan,
+            workspace: fixture.workspace
+        ))
+        await waitUntilQueueIsIdle(fixture.controller)
+
+        #expect(fixture.controller.isQueueBlockedByRecovery)
+        #expect(fixture.controller.canAdmitFolderSynchronization == false)
+        #expect(fixture.controller.synchronizeFolder(
+            plan: fixture.plan,
+            workspace: fixture.workspace
+        ) == false)
+        #expect(await fixture.executor.executeCount == 1)
+        #expect(fixture.controller.operationHistory.first?.canRetry == false)
+        #expect(fixture.controller.operationHistory.first?.canUndo == false)
+    }
+
+    @Test(
+        arguments: [
+            FolderSynchronizationTransactionPhase.preflighting,
+            .staging,
+            .verifyingStaging,
+            .quarantining,
+            .publishing,
+            .verifyingPublished,
+            .movingToTrash,
+            .rollingBack
+        ]
+    )
+    func folderSynchronizationPublishesBoundedRelativePathProgress(
+        phase: FolderSynchronizationTransactionPhase
+    ) async throws {
+        let relativePath = try ComparisonRelativePath(components: ["docs", "report.txt"])
+        let progress = FolderSynchronizationProgress(
+            phase: phase,
+            completedCount: 9,
+            totalCount: 2,
+            currentRelativePath: relativePath
+        )
+        let fixture = try FolderSynchronizationQueueFixture(
+            holdUntilReleased: true,
+            progressToPublish: [progress]
+        )
+
+        #expect(fixture.controller.synchronizeFolder(
+            plan: fixture.plan,
+            workspace: fixture.workspace
+        ))
+        await fixture.executor.waitUntilStarted()
+        #expect(await waitUntilBounded {
+            fixture.controller.stage == .synchronizing(progress)
+        })
+
+        #expect(fixture.controller.stage == .synchronizing(progress))
+        #expect(fixture.controller.activeJob?.progress == FileOperationJobProgress(
+            completedCount: 2,
+            totalCount: 2,
+            detail: FolderSynchronizationOperationStatusPresentation(progress: progress).progressDetail
+        ))
+        let publishedText = fixture.controller.observableTextForTesting
+        #expect(publishedText.contains("docs/report.txt"))
+        #expect(!publishedText.contains("/private/SecretSource"))
+        #expect(!publishedText.contains("/private/SecretDestination"))
+        #expect(!publishedText.contains(fixture.plan.draft.sourceRoot.path))
+        #expect(!publishedText.contains(fixture.plan.draft.destinationRoot.path))
+
+        await fixture.executor.releaseHeldExecution()
+        await waitUntilQueueIsIdle(fixture.controller)
+    }
+
     @Test func identifiedConflictUsesStableContentIdentity() {
         let conflict = FileConflict(
             source: URL(filePath: "/source/a"),
@@ -3375,6 +3561,161 @@ private actor ControllerProtectedArchiveOperator: ArchiveOperating {
 
     func recordedRequests() -> [ArchiveRequest] {
         requests
+    }
+}
+
+@MainActor
+private struct FolderSynchronizationQueueFixture {
+    let plan: PreparedFolderSynchronizationPlan
+    let executor: RecordingFolderSynchronizationExecutor
+    let controller: FileOperationController
+    let workspace: WorkspaceState
+
+    init(
+        holdUntilReleased: Bool = false,
+        result: FileOperationResult? = nil,
+        progressToPublish: [FolderSynchronizationProgress] = []
+    ) throws {
+        plan = try makeFolderSynchronizationQueuePlan()
+        let sourceURL = plan.draft.actions[0].source?.url
+            ?? plan.draft.actions[0].destination!.url
+        executor = RecordingFolderSynchronizationExecutor(
+            result: result ?? FileOperationResult(outcomes: [
+                .succeeded(source: sourceURL, destination: plan.draft.destinationRoot.appending(path: "copy.txt"))
+            ]),
+            holdUntilReleased: holdUntilReleased,
+            progressToPublish: progressToPublish
+        )
+        controller = FileOperationController(
+            service: FileOperationService(
+                fileSystem: RecordingFileSystem(existingURLs: [
+                    plan.draft.sourceRoot,
+                    plan.draft.destinationRoot
+                ])
+            ),
+            folderSynchronizationService: executor
+        )
+        workspace = WorkspaceState(
+            leftURL: plan.draft.sourceRoot,
+            rightURL: plan.draft.destinationRoot,
+            listingService: StubDirectoryListingService(values: [:])
+        )
+    }
+}
+
+private func makeFolderSynchronizationQueuePlan(
+    direction: ComparisonDirection = .leftToRight
+) throws -> PreparedFolderSynchronizationPlan {
+    let source = URL(filePath: "/private/SecretSource", directoryHint: .isDirectory)
+    let destination = URL(filePath: "/private/SecretDestination", directoryHint: .isDirectory)
+    let sourceIdentity = FileIdentity(entryIdentifier: "source-root", resolvedIdentifier: "source-root")
+    let destinationIdentity = FileIdentity(
+        entryIdentifier: "destination-root",
+        resolvedIdentifier: "destination-root"
+    )
+    let path = try ComparisonRelativePath(components: ["copy.txt"])
+    let copy = ComparisonEntry(
+        relativePath: path,
+        url: source.appending(path: path.string),
+        kind: .regularFile,
+        fingerprint: .init(
+            identity: .init(entryIdentifier: "copy", resolvedIdentifier: "copy"),
+            byteSize: 4,
+            modifiedAt: Date(timeIntervalSince1970: 1)
+        ),
+        symbolicLinkTarget: nil,
+        typeDescription: "regularFile"
+    )
+    let draft = try FolderSynchronizationPlanDraft(
+        direction: direction,
+        comparisonGeneration: UUID(uuidString: "00000000-0000-0000-0000-000000000040")!,
+        sourceRoot: source,
+        destinationRoot: destination,
+        sourceRootIdentity: sourceIdentity,
+        destinationRootIdentity: destinationIdentity,
+        actions: [
+            FolderSynchronizationAction(relativePath: path, kind: .copy, source: copy, destination: nil)
+        ],
+        skipCount: 0,
+        estimatedRegularFileCopyBytes: 4
+    )
+    return PreparedFolderSynchronizationPlan(
+        draft: draft,
+        sourceFingerprints: [:],
+        destinationFingerprints: [:],
+        expectedAbsentDestinations: [path],
+        requiredCapacityBytes: 4,
+        destinationFilenameComparisonPolicy: .caseSensitiveCanonical,
+        rootAuthority: .init(
+            source: .init(
+                identity: sourceIdentity,
+                canonicalURL: source,
+                volumeIdentifier: "fixture",
+                mountIdentifier: "fixture:/"
+            ),
+            destination: .init(
+                identity: destinationIdentity,
+                canonicalURL: destination,
+                volumeIdentifier: "fixture",
+                mountIdentifier: "fixture:/"
+            )
+        )
+    )
+}
+
+actor RecordingFolderSynchronizationExecutor: FolderSynchronizationExecuting {
+    private(set) var executeCount = 0
+    private let result: FileOperationResult
+    private let holdUntilReleased: Bool
+    private let progressToPublish: [FolderSynchronizationProgress]
+    private var startWaiters: [CheckedContinuation<Void, Never>] = []
+    private var release: CheckedContinuation<Void, Never>?
+    private var hasStarted = false
+
+    init(
+        result: FileOperationResult,
+        holdUntilReleased: Bool,
+        progressToPublish: [FolderSynchronizationProgress]
+    ) {
+        self.result = result
+        self.holdUntilReleased = holdUntilReleased
+        self.progressToPublish = progressToPublish
+    }
+
+    init() {
+        self.init(
+            result: FileOperationResult(outcomes: []),
+            holdUntilReleased: false,
+            progressToPublish: []
+        )
+    }
+
+    func execute(
+        _ plan: PreparedFolderSynchronizationPlan,
+        progress: @escaping @Sendable (FolderSynchronizationProgress) async -> Void
+    ) async -> FileOperationResult {
+        executeCount += 1
+        hasStarted = true
+        let waiters = startWaiters
+        startWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+        for update in progressToPublish {
+            await progress(update)
+        }
+        if holdUntilReleased {
+            await withCheckedContinuation { release = $0 }
+        }
+        return result
+    }
+
+    func waitUntilStarted() async {
+        if hasStarted { return }
+        await withCheckedContinuation { startWaiters.append($0) }
+    }
+
+    func releaseHeldExecution() {
+        release?.resume()
+        release = nil
     }
 }
 

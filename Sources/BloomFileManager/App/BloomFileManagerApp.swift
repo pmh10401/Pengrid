@@ -110,7 +110,8 @@ struct BloomFileManagerApp: App {
         let operationController = FileOperationController(
             service: operationService,
             materializer: cloudDependencies.materializer,
-            archiveService: archiveService
+            archiveService: archiveService,
+            folderSynchronizationService: operationService.makeFolderSynchronizationTransactionService()
         )
         _operationController = State(initialValue: operationController)
         _contextActionRouter = State(initialValue: FileContextActionRouter(

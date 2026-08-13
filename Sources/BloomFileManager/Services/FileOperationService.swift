@@ -77,6 +77,13 @@ actor FileOperationService {
         )
     }
 
+    nonisolated func makeFolderSynchronizationTransactionService() -> FolderSynchronizationTransactionService {
+        FolderSynchronizationTransactionService(
+            fileSystem: fileSystem,
+            accessCoordinator: accessCoordinator
+        )
+    }
+
     nonisolated func makeUndoService(
         batchRenameService: BatchRenameTransactionService? = nil,
         selectionFolderTransactionService: SelectionFolderTransactionService? = nil

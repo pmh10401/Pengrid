@@ -13,6 +13,7 @@ enum FileOperationJobKind: Sendable, Equatable {
     case extract(ArchiveFormat)
     case undo
     case redo
+    case synchronizeFolder(ComparisonDirection)
 
     var title: String {
         switch self {
@@ -28,7 +29,17 @@ enum FileOperationJobKind: Sendable, Equatable {
         case let .extract(format): "Extract \(format.displayName)"
         case .undo: "Undo"
         case .redo: "Redo"
+        case let .synchronizeFolder(direction):
+            switch direction {
+            case .leftToRight: "Synchronize Left to Right"
+            case .rightToLeft: "Synchronize Right to Left"
+            }
         }
+    }
+
+    var isFolderSynchronization: Bool {
+        if case .synchronizeFolder = self { return true }
+        return false
     }
 }
 
@@ -107,7 +118,11 @@ struct FileOperationJobSnapshot: Identifiable, Sendable, Equatable {
     }
 
     var canRetry: Bool {
-        retryEligible && kind != .undo && kind != .redo && (state == .failed || state == .cancelled)
+        retryEligible
+            && kind != .undo
+            && kind != .redo
+            && !kind.isFolderSynchronization
+            && (state == .failed || state == .cancelled)
     }
 
     var isRetryEligible: Bool { retryEligible }

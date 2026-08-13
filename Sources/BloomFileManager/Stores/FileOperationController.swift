@@ -7,6 +7,7 @@ enum FileOperationStage: Equatable {
     case archiving(ArchiveOperationProgress)
     case batchRenaming(BatchRenameTransactionProgress)
     case enclosingSelection(SelectionFolderTransactionProgress)
+    case synchronizing(FolderSynchronizationProgress)
 }
 
 enum CloudOperationRequestGate {
@@ -82,6 +83,7 @@ final class FileOperationController {
     private let archiveService: any ArchiveOperating
     private let batchRenameService: BatchRenameTransactionService
     private let selectionFolderTransactionService: SelectionFolderTransactionService
+    private let folderSynchronizationService: any FolderSynchronizationExecuting
     private let undoService: FileOperationUndoService
 
     private(set) var stage: FileOperationStage?
@@ -148,6 +150,13 @@ final class FileOperationController {
                 totalCount: progress.totalCount,
                 currentName: progress.currentName
             )
+        case let .synchronizing(progress):
+            let presentation = FolderSynchronizationOperationStatusPresentation(progress: progress)
+            return FileOperationProgress(
+                completedCount: presentation.completedCount,
+                totalCount: presentation.totalCount,
+                currentName: presentation.currentItemName
+            )
         case .preparing, .archiving, nil:
             return nil
         }
@@ -176,6 +185,7 @@ final class FileOperationController {
         archiveService: (any ArchiveOperating)? = nil,
         batchRenameService: BatchRenameTransactionService? = nil,
         selectionFolderTransactionService: SelectionFolderTransactionService? = nil,
+        folderSynchronizationService: (any FolderSynchronizationExecuting)? = nil,
         historyLimit: Int = 100
     ) {
         self.service = service
@@ -188,11 +198,20 @@ final class FileOperationController {
         let resolvedSelectionFolderTransactionService = selectionFolderTransactionService
             ?? service.makeSelectionFolderTransactionService()
         self.selectionFolderTransactionService = resolvedSelectionFolderTransactionService
+        self.folderSynchronizationService = folderSynchronizationService
+            ?? service.makeFolderSynchronizationTransactionService()
         self.undoService = service.makeUndoService(
             batchRenameService: resolvedBatchRenameService,
             selectionFolderTransactionService: resolvedSelectionFolderTransactionService
         )
         self.historyLimit = max(historyLimit, 1)
+    }
+
+    var canAdmitFolderSynchronization: Bool {
+        !isTerminationPreparationActive
+            && !isQueueBlockedByRecovery
+            && activeOperation == nil
+            && pendingOperations.isEmpty
     }
 
     func requestDecision(for conflict: FileConflict) async -> ConflictDecision {
@@ -1334,6 +1353,44 @@ final class FileOperationController {
     }
 
     @discardableResult
+    func synchronizeFolder(
+        plan: PreparedFolderSynchronizationPlan,
+        workspace: WorkspaceState,
+        onCompletion: (@MainActor (FileOperationResult) -> Void)? = nil
+    ) -> Bool {
+        guard canAdmitFolderSynchronization else { return false }
+        let cancellationSources = plan.draft.actions.flatMap { action in
+            [action.source?.url, action.destination?.url].compactMap { $0 }
+        }
+        return beginOperation(
+            kind: .synchronizeFolder(plan.draft.direction),
+            totalCount: plan.draft.actions.count,
+            initialName: plan.draft.destinationRoot.lastPathComponent,
+            initialStage: .synchronizing(FolderSynchronizationProgress(
+                phase: .preflighting,
+                completedCount: 0,
+                totalCount: plan.draft.actions.count
+            )),
+            touchedDirectories: [plan.draft.sourceRoot, plan.draft.destinationRoot],
+            workspace: workspace,
+            cancellationSources: cancellationSources,
+            allowsRetry: false,
+            requiresExclusiveQueue: true,
+            onCompletion: onCompletion
+        ) { [weak self, folderSynchronizationService] in
+            guard let self else {
+                return FileOperationResult(outcomes: cancellationSources.map {
+                    .cancelled(source: $0)
+                })
+            }
+            return await folderSynchronizationService.execute(plan) { [weak self] progress in
+                guard let self else { return }
+                await self.publish(stage: .synchronizing(progress))
+            }
+        }
+    }
+
+    @discardableResult
     func trashStorageCleanup(
         _ groups: [StorageCleanupMutationGroup],
         workspace: WorkspaceState,
@@ -1640,6 +1697,13 @@ final class FileOperationController {
                 totalCount: progress.totalCount,
                 detail: detail
             )
+        case let .synchronizing(progress):
+            let presentation = FolderSynchronizationOperationStatusPresentation(progress: progress)
+            return FileOperationJobProgress(
+                completedCount: presentation.completedCount,
+                totalCount: presentation.totalCount,
+                detail: presentation.progressDetail
+            )
         }
     }
 
@@ -1688,22 +1752,26 @@ final class FileOperationController {
             }
         } else if completedState == .succeeded {
             invalidateReversalRecords(touching: pending.touchedDirectories)
-            recipe = await undoService.makeRecipe(
-                kind: pending.kind,
-                result: result,
-                allowsUndo: !activeOperationDidReplace
-            )
-            if let recipe {
-                undoStack.append(.init(
-                    historyID: pending.id,
-                    originalKind: pending.kind,
-                    recipe: recipe,
-                    displayName: pending.itemDisplayName,
-                    itemCount: recipe.itemCount,
-                    touchedDirectories: pending.touchedDirectories,
-                    directoryKeys: Set(pending.touchedDirectories.flatMap(directoryKeys)),
-                    workspace: pending.workspace
-                ))
+            if case .synchronizeFolder = pending.kind {
+                recipe = nil
+            } else {
+                recipe = await undoService.makeRecipe(
+                    kind: pending.kind,
+                    result: result,
+                    allowsUndo: !activeOperationDidReplace
+                )
+                if let recipe {
+                    undoStack.append(.init(
+                        historyID: pending.id,
+                        originalKind: pending.kind,
+                        recipe: recipe,
+                        displayName: pending.itemDisplayName,
+                        itemCount: recipe.itemCount,
+                        touchedDirectories: pending.touchedDirectories,
+                        directoryKeys: Set(pending.touchedDirectories.flatMap(directoryKeys)),
+                        workspace: pending.workspace
+                    ))
+                }
             }
         } else {
             invalidateReversalRecords(touching: pending.touchedDirectories)

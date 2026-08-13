@@ -201,6 +201,9 @@ actor FileOperationUndoService {
             case .encloseSelection:
                 return nil
 
+            case .synchronizeFolder:
+                return nil
+
             case .undo, .redo:
                 return nil
             }
