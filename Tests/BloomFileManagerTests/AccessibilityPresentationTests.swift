@@ -51,6 +51,23 @@ import Testing
     #expect(SpotlightSearchAccessibilityIdentifiers.coverage == "smartSearch.coverage")
 }
 
+@Test func workspaceSessionAccessibilityIdentifiersAreStableAndDoNotUsePaths() {
+    let tabID = WorkspaceTabID(rawValue: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!)
+    let profileID = WorkspaceProfileID(rawValue: UUID(uuidString: "22222222-2222-2222-2222-222222222222")!)
+
+    #expect(WorkspaceSessionAccessibilityIdentifiers.tabBar == "workspaceTabs.bar")
+    #expect(WorkspaceSessionAccessibilityIdentifiers.newTab == "workspaceTabs.new")
+    #expect(WorkspaceSessionAccessibilityIdentifiers.profiles == "workspaceTabs.profiles")
+    #expect(WorkspaceSessionAccessibilityIdentifiers.profilesSheet == "workspaceProfiles.sheet")
+    #expect(WorkspaceSessionAccessibilityIdentifiers.tab(tabID) == "workspaceTabs.tab.11111111-1111-1111-1111-111111111111")
+    #expect(WorkspaceSessionAccessibilityIdentifiers.closeTab(tabID) == "workspaceTabs.close.11111111-1111-1111-1111-111111111111")
+    #expect(WorkspaceSessionAccessibilityIdentifiers.profile(profileID) == "workspaceProfiles.profile.22222222-2222-2222-2222-222222222222")
+    #expect(WorkspaceSessionAccessibilityIdentifiers.renameProfile(profileID) == "workspaceProfiles.rename.22222222-2222-2222-2222-222222222222")
+    #expect(WorkspaceSessionAccessibilityIdentifiers.openProfile(profileID) == "workspaceProfiles.open.22222222-2222-2222-2222-222222222222")
+    #expect(WorkspaceSessionAccessibilityIdentifiers.deleteProfile(profileID) == "workspaceProfiles.delete.22222222-2222-2222-2222-222222222222")
+    #expect(WorkspaceSessionAccessibilityIdentifiers.done == "workspaceProfiles.done")
+}
+
 @Test func contextActionAppWiringUsesSharedDependenciesAndAccessibleState() throws {
     let app = try source(named: "App/BloomFileManagerApp.swift")
     #expect(app.occurrences(of: "FileContextActionRouter(") == 1)

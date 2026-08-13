@@ -56,6 +56,26 @@ Commands are disabled while the selection or current editing state makes them
 unsafe. Rename, location editing, and filtering retain normal text-editing
 priority for Return, Space, Escape, and Delete.
 
+### Workspace tabs and profiles
+
+The tab bar keeps multiple independent dual-pane workspaces available in one
+window. **Command-T** opens a new tab with the active tab's saved folder pair,
+sort order, split position, and active pane. **Command-W** closes the active tab
+only when it is not the last tab and no active or queued file operation is bound
+to it. A text editor or presented modal keeps Command-W for its normal owner.
+Use **Control-Tab** and **Control-Shift-Tab** to move forward and backward.
+
+Tab titles and VoiceOver labels disclose only both pane folder basenames, not
+their full paths. Profiles are named reusable layouts: save the active layout from the
+tab bar, rename or delete profiles in the management sheet, and choose a profile
+to open it in a new tab. Profile names ignore leading/trailing whitespace and
+cannot duplicate another name under case- and accent-insensitive comparison.
+
+On restart, Pengrid restores workspace folders, sort orders, the divider position,
+active pane, tab order, active tab, and profiles. It does not restore selections,
+filters, navigation history, scroll position, previews, comparison/storage views,
+Smart Search, editing, pending Trash confirmation, or file-operation state.
+
 ### Pane-local filtering
 
 Press **Command-F** to filter the active pane. This searches only filenames that

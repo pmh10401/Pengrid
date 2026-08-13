@@ -55,6 +55,18 @@ Each pane keeps its own history, selection, sorting, and filename filter. Copy,
 move, Open in Other Pane, and reviewed comparison transfers use the pane and
 destination captured when the command starts.
 
+### Keep several workspaces ready
+
+Use workspace tabs to keep independent dual-pane folder pairs open. **Command-T**
+opens a tab from the active tab's persisted layout, **Command-W** closes the active
+tab when it has no active or queued file work, and **Control-Tab** / **Control-Shift-Tab**
+move between tabs. Tab titles show both pane folder names, never their full paths.
+
+Save a named workspace profile from the tab bar, then open it from the Profiles menu
+to create a new tab without changing the existing one. The session restores tab
+folders, sort orders, split position, active pane, and profiles; selections, filters,
+history, previews, searches, and operation state are intentionally not restored.
+
 ### Find files quickly
 
 Smart Search scans filenames and relative paths recursively. It supports
@@ -114,6 +126,10 @@ VoiceOver labels, Reduce Motion support, and privacy-preserving status text.
 | **Command-F** | Filter the active pane |
 | **Command-Shift-F** | Smart Search from the active pane |
 | **Command-I** | Get Info for the captured selection |
+| **Command-T** | New workspace tab |
+| **Command-W** | Close active workspace tab when safe |
+| **Control-Tab** | Next workspace tab |
+| **Control-Shift-Tab** | Previous workspace tab |
 | **Command-D** | Duplicate the captured selection |
 | **Option-Command-C** | Copy full paths in visible order |
 

@@ -70,7 +70,7 @@ struct WorkspaceModalPresentationState: Equatable {
 }
 
 struct WorkspaceView: View {
-    let workspace: WorkspaceState
+    let workspaceSession: WorkspaceSessionState
     let operationController: FileOperationController
     let batchRename: BatchRenameModel
     let smartSearch: SmartSearchStore
@@ -93,12 +93,34 @@ struct WorkspaceView: View {
     let getInfoInspector: GetInfoInspectorController
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
     @State private var modalPresentationState = WorkspaceModalPresentationState()
+    @State private var initialLoadState = WorkspaceTabInitialLoadState()
+    @State private var profilesPresented = false
+
+    private var workspace: WorkspaceState {
+        workspaceSession.activeWorkspace
+    }
 
     var body: some View {
         let hasOverlay = comparison.isActive || storage.isActive
 
         VStack(spacing: 0) {
+            WorkspaceTabBarView(
+                session: workspaceSession,
+                canClose: { id in
+                    guard let tab = workspaceSession.tabs.first(where: { $0.id == id }) else {
+                        return false
+                    }
+                    return !operationController.hasActiveOrQueuedWork(boundTo: tab.workspace)
+                },
+                invalidateReversalHistory: operationController.invalidateReversalHistory(for:),
+                teardown: teardownActiveWorkspace,
+                isModalPresented: workspaceModalIsPresented,
+                isTextEditing: workspace.activeTextEditingSession != nil,
+                profilesPresented: $profilesPresented
+            )
+
             ZStack {
                 ordinaryWorkspace
                     .opacity(hasOverlay ? 0 : 1)
@@ -151,11 +173,29 @@ struct WorkspaceView: View {
             .accessibilityLabel("Active file pane")
             .accessibilityValue(workspace.activePaneID == .left ? "Left" : "Right")
         }
-        .task {
-            await workspace.loadInitialDirectories()
+        .task(id: workspaceSession.activeTabID) {
+            let tabID = workspaceSession.activeTabID
+            let loadState = initialLoadState
+            await withTaskCancellationHandler {
+                await loadState.load(tabID: tabID) {
+                    await workspaceSession.activeWorkspace.loadInitialDirectories()
+                }
+            } onCancel: {
+                loadState.cancel(tabID: tabID)
+            }
         }
         .onDisappear {
-            workspace.flushPendingPersistence()
+            workspaceSession.flushPersistence()
+        }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase != .active else { return }
+            workspaceSession.flushPersistence()
+        }
+        .sheet(isPresented: $profilesPresented) {
+            WorkspaceProfilesView(
+                session: workspaceSession,
+                teardown: teardownActiveWorkspace
+            )
         }
         .sheet(item: pendingConflict) { item in
             ConflictResolutionSheet(conflict: item.conflict) { decision, applyToAll in
@@ -222,6 +262,10 @@ struct WorkspaceView: View {
             Text(trashConfirmationMessage)
         }
         .focusedSceneValue(\.workspaceState, workspace)
+        .focusedSceneValue(\.workspaceSessionState, workspaceSession)
+        .focusedSceneValue(\.workspaceTabModalPresented, workspaceModalIsPresented)
+        .focusedSceneValue(\.workspaceTabTeardown, teardownActiveWorkspace)
+        .focusedSceneValue(\.workspaceProfilesPresentation, { profilesPresented = true })
         .focusedSceneValue(\.comparisonCoordinator, comparison)
         .focusedSceneValue(\.storageAnalysisStore, storage)
     }
@@ -319,6 +363,39 @@ struct WorkspaceView: View {
             return OperationStatusSummary(result: result).accessibilityLabel
         }
         return "No file operation in progress."
+    }
+
+    private var workspaceModalIsPresented: Bool {
+        WorkspaceTabModalPolicy(
+            profilesPresented: profilesPresented,
+            passwordPresented: modalPresentationState.presentedPasswordRequestID != nil,
+            selectionFolderPresented: modalPresentationState.isSelectionFolderPresented,
+            conflictPresented: operationController.pendingConflict != nil,
+            smartSearchPresented: smartSearch.isPresented,
+            batchRenamePresented: batchRename.isPresented,
+            pendingTrashPresented: workspace.pendingTrashRequest != nil
+        ).isPresented
+    }
+
+    private func teardownActiveWorkspace() {
+        WorkspaceTabTeardownActions.perform(
+            stopComparison: comparison.stop,
+            exitStorage: storage.exit,
+            closePreview: previewCoordinator.closeAndRestoreFocus,
+            dismissSmartSearch: smartSearch.dismiss,
+            dismissBatchRename: batchRename.dismiss,
+            dismissSelectionFolder: selectionFolder.dismiss,
+            dismissSynchronizationReview: {},
+            dismissPendingTrash: workspace.dismissTrashConfirmation,
+            endTextEditing: {
+                guard let editing = workspace.activeTextEditingSession else { return }
+                workspace.endTextEditing(editing)
+            },
+            cancelPassword: {
+                guard let request = passwordCoordinator.pendingRequest else { return }
+                passwordCoordinator.cancel(requestID: request.id)
+            }
+        )
     }
 
     private var pendingConflict: Binding<IdentifiedFileConflict?> {

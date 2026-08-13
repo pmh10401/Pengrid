@@ -86,7 +86,7 @@ struct BloomFileManagerApp: App {
     @State private var comparison: ComparisonCoordinator
     @State private var storage: StorageAnalysisStore
     @State private var storageCleanupController: StorageCleanupController
-    @State private var workspace: WorkspaceState
+    @State private var workspaceSession: WorkspaceSessionState
     @State private var contextActionRouter: FileContextActionRouter
     @State private var openWithProvider: OpenWithApplicationProvider
     @State private var selectionFolder: SelectionFolderModel
@@ -193,16 +193,28 @@ struct BloomFileManagerApp: App {
         let home = FileManager.default.homeDirectoryForCurrentUser
         let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
             ?? home
-        let restored = persistence.restore(home: home, downloads: downloads)
-        let workspace = WorkspaceState(
-            restored: restored,
-            listingService: cloudDependencies.makeDirectoryListingService(),
-            monitor: cloudDependencies.makeDirectoryMonitor(),
-            persistence: persistence,
-            leftFallbackURL: home,
-            rightFallbackURL: downloads
+        let sessionPersistence = WorkspaceSessionPersistence()
+        let restoredSession = sessionPersistence.restore(
+            legacy: persistence.load(),
+            home: home,
+            downloads: downloads,
+            isDirectory: { url in
+                var isDirectory: ObjCBool = false
+                return FileManager.default.fileExists(
+                    atPath: url.path,
+                    isDirectory: &isDirectory
+                ) && isDirectory.boolValue
+            }
         )
-        _workspace = State(initialValue: workspace)
+        let workspaceSession = WorkspaceSessionState(
+            restored: restoredSession,
+            persistence: sessionPersistence,
+            runtimeFactory: WorkspaceRuntimeFactory(
+                listingServiceFactory: { cloudDependencies.makeDirectoryListingService() },
+                monitorFactory: { cloudDependencies.makeDirectoryMonitor() }
+            )
+        )
+        _workspaceSession = State(initialValue: workspaceSession)
 
         let previewCloseBinding = WorkspacePreviewCloseBinding()
         let folderPreviewModel = FolderPreviewModel(
@@ -217,7 +229,7 @@ struct BloomFileManagerApp: App {
             quickLookController: quickLookController,
             folderPresenter: folderPreviewController,
             materializer: cloudDependencies.materializer,
-            restoreFocus: { workspace.activePane.requestTableFocus() }
+            restoreFocus: { workspaceSession.activeWorkspace.activePane.requestTableFocus() }
         )
         previewCloseBinding.previewCoordinator = previewCoordinator
         _previewCoordinator = State(initialValue: previewCoordinator)
@@ -233,7 +245,7 @@ struct BloomFileManagerApp: App {
     var body: some Scene {
         WindowGroup(AppIdentity.displayName) {
             WorkspaceView(
-                workspace: workspace,
+                workspaceSession: workspaceSession,
                 operationController: operationController,
                 batchRename: batchRename,
                 smartSearch: smartSearch,
@@ -257,6 +269,9 @@ struct BloomFileManagerApp: App {
             )
             .task {
                 try? await cloudLocations.scanInitially()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
+                workspaceSession.flushPersistence()
             }
         }
         .defaultSize(width: 1_180, height: 760)
