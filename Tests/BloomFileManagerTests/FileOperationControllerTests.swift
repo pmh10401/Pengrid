@@ -2105,6 +2105,508 @@ struct FileOperationControllerTests {
         #expect(controller.operationHistory.first { $0.id == copyJob.id }?.canUndo == false)
     }
 
+    @Test func undoRedoTransfersOnlyTheTopRecipeBetweenLinearStacks() async throws {
+        let source = URL(filePath: "/source/Report.txt")
+        let destinationDirectory = URL(filePath: "/destination", directoryHint: .isDirectory)
+        let copied = destinationDirectory.appending(path: source.lastPathComponent)
+        let fileSystem = RecordingFileSystem(existingURLs: [source, destinationDirectory])
+        let controller = FileOperationController(service: FileOperationService(fileSystem: fileSystem))
+        let workspace = WorkspaceState(
+            leftURL: destinationDirectory,
+            rightURL: URL(filePath: "/elsewhere"),
+            listingService: StubDirectoryListingService(values: [:])
+        )
+
+        #expect(await controller.runTransfer([source], to: destinationDirectory, mode: .move, workspace: workspace))
+        await waitUntilQueueIsIdle(controller)
+        #expect(controller.undoAvailability?.isEnabled == true)
+        #expect(controller.redoAvailability == nil)
+        #expect(controller.undoLatest())
+        await waitUntilQueueIsIdle(controller)
+        #expect(await fileSystem.existingURLs.contains(copied) == false)
+        #expect(controller.redoAvailability?.isEnabled == true)
+        #expect(controller.undoAvailability == nil)
+        #expect(controller.redoLatest())
+        await waitUntilQueueIsIdle(controller)
+        #expect(await fileSystem.existingURLs.contains(copied))
+        #expect(controller.undoAvailability?.isEnabled == true)
+    }
+
+    @Test func redoKeepsTheOriginalForwardRowAuthoritativeAndUsesAnActionTitle() async throws {
+        let source = URL(filePath: "/source/Report.txt")
+        let destinationDirectory = URL(filePath: "/destination", directoryHint: .isDirectory)
+        let fileSystem = RecordingFileSystem(existingURLs: [source, destinationDirectory])
+        let controller = FileOperationController(service: FileOperationService(fileSystem: fileSystem))
+        let workspace = WorkspaceState(
+            leftURL: destinationDirectory,
+            rightURL: URL(filePath: "/elsewhere"),
+            listingService: StubDirectoryListingService(values: [:])
+        )
+
+        #expect(await controller.runTransfer([source], to: destinationDirectory, mode: .move, workspace: workspace))
+        await waitUntilQueueIsIdle(controller)
+        let original = try #require(controller.operationHistory.first)
+
+        #expect(controller.undoLatest())
+        await waitUntilQueueIsIdle(controller)
+        #expect(controller.redoAvailability?.title == "Redo Move")
+
+        #expect(controller.redoLatest())
+        await waitUntilQueueIsIdle(controller)
+
+        #expect(controller.operationHistory.first?.kind == .redo)
+        #expect(controller.operationHistory.first?.canUndo == false)
+        #expect(controller.operationHistory.first { $0.id == original.id }?.canUndo == true)
+    }
+
+    @Test func completedRetryMetadataDoesNotRetainWorkspace() async throws {
+        let directory = URL(filePath: "/workspace", directoryHint: .isDirectory)
+        let existing = directory.appending(path: "Existing", directoryHint: .isDirectory)
+        let controller = FileOperationController(
+            service: FileOperationService(fileSystem: RecordingFileSystem(
+                existingURLs: [directory, existing]
+            ))
+        )
+        let releasedWorkspace = await enqueueFailedFolderCreationForWorkspaceLifetime(
+            controller: controller,
+            directory: directory
+        )
+        #expect(controller.operationHistory.first?.canRetry == true)
+        #expect(await waitUntilBounded { releasedWorkspace.workspace == nil })
+    }
+
+    @Test func admissionImmediatelyClosesAndCancellationReopensTheAuthoritativeUndoRow() async throws {
+        let source = URL(filePath: "/source/Report.txt")
+        let destination = URL(filePath: "/destination", directoryHint: .isDirectory)
+        let unrelated = URL(filePath: "/unrelated", directoryHint: .isDirectory)
+        let fileSystem = RecordingFileSystem(
+            existingURLs: [source, destination, unrelated],
+            suspendExistsOfLastPathComponent: "Suspended"
+        )
+        let controller = FileOperationController(service: FileOperationService(fileSystem: fileSystem))
+        let workspace = WorkspaceState(
+            leftURL: destination,
+            rightURL: unrelated,
+            listingService: StubDirectoryListingService(values: [:])
+        )
+
+        #expect(await controller.runTransfer([source], to: destination, mode: .move, workspace: workspace))
+        await waitUntilQueueIsIdle(controller)
+        let forward = try #require(controller.operationHistory.first)
+        #expect(forward.canUndo)
+
+        #expect(await controller.createFolder(in: unrelated, named: "Suspended", workspace: workspace))
+        await waitUntil { await fileSystem.hasSuspendedExists }
+        #expect(controller.undoAvailability?.isEnabled == false)
+        #expect(controller.operationHistory.first { $0.id == forward.id }?.canUndo == false)
+        #expect(controller.undoLatest() == false)
+
+        controller.cancelActiveJob()
+        await fileSystem.releaseSuspendedExists()
+        await waitUntilQueueIsIdle(controller)
+        #expect(controller.undoAvailability?.isEnabled == true)
+        #expect(controller.operationHistory.first { $0.id == forward.id }?.canUndo == true)
+    }
+
+    @Test func rejectedRedoDuringTerminationDoesNotConsumeTheTopRecipe() async throws {
+        let source = URL(filePath: "/source/Report.txt")
+        let destination = URL(filePath: "/destination", directoryHint: .isDirectory)
+        let fileSystem = RecordingFileSystem(existingURLs: [source, destination])
+        let controller = FileOperationController(service: FileOperationService(fileSystem: fileSystem))
+        let workspace = WorkspaceState(
+            leftURL: destination,
+            rightURL: URL(filePath: "/elsewhere"),
+            listingService: StubDirectoryListingService(values: [:])
+        )
+
+        #expect(await controller.runTransfer([source], to: destination, mode: .move, workspace: workspace))
+        await waitUntilQueueIsIdle(controller)
+        #expect(controller.undoLatest())
+        await waitUntilQueueIsIdle(controller)
+        #expect(controller.redoAvailability?.isEnabled == true)
+
+        let token = controller.beginTerminationPreparation()
+        #expect(controller.redoAvailability?.isEnabled == false)
+        #expect(controller.redoLatest() == false)
+        controller.finishTerminationPreparation(token, restartQueue: false)
+
+        #expect(controller.redoAvailability?.isEnabled == true)
+        #expect(controller.redoLatest())
+        await waitUntilQueueIsIdle(controller)
+    }
+
+    @Test func multiRecordUndoIsLIFOAndNeverAdmitsANonTopHistoryRow() async throws {
+        let firstSource = URL(filePath: "/source-one/First.txt")
+        let secondSource = URL(filePath: "/source-two/Second.txt")
+        let firstDestination = URL(filePath: "/first", directoryHint: .isDirectory)
+        let secondDestination = URL(filePath: "/second", directoryHint: .isDirectory)
+        let firstMoved = firstDestination.appending(path: firstSource.lastPathComponent)
+        let secondMoved = secondDestination.appending(path: secondSource.lastPathComponent)
+        let fileSystem = RecordingFileSystem(existingURLs: [
+            firstSource, secondSource, firstDestination, secondDestination
+        ])
+        let controller = FileOperationController(service: FileOperationService(fileSystem: fileSystem))
+        let workspace = WorkspaceState(
+            leftURL: firstDestination,
+            rightURL: secondDestination,
+            listingService: StubDirectoryListingService(values: [:])
+        )
+
+        #expect(await controller.runTransfer([firstSource], to: firstDestination, mode: .move, workspace: workspace))
+        await waitUntilQueueIsIdle(controller)
+        let first = try #require(controller.operationHistory.first)
+        #expect(await controller.runTransfer([secondSource], to: secondDestination, mode: .move, workspace: workspace))
+        await waitUntilQueueIsIdle(controller)
+        let second = try #require(controller.operationHistory.first)
+        #expect(controller.operationHistory.first { $0.id == first.id }?.canUndo == false)
+        #expect(second.canUndo)
+        #expect(controller.undoJob(first.id) == false)
+
+        #expect(controller.undoJob(second.id))
+        await waitUntilQueueIsIdle(controller)
+        #expect(await fileSystem.existingURLs.contains(secondSource))
+        #expect(await fileSystem.existingURLs.contains(firstMoved))
+        #expect(controller.operationHistory.first { $0.id == first.id }?.canUndo == true)
+        #expect(controller.undoLatest())
+        await waitUntilQueueIsIdle(controller)
+        #expect(await fileSystem.existingURLs.contains(firstSource))
+        #expect(await fileSystem.existingURLs.contains(secondMoved) == false)
+    }
+
+    @Test func historyLimitEvictsTheOppositeReversalEntry() async throws {
+        let source = URL(filePath: "/source/Report.txt")
+        let destination = URL(filePath: "/destination", directoryHint: .isDirectory)
+        let controller = FileOperationController(
+            service: FileOperationService(fileSystem: RecordingFileSystem(existingURLs: [source, destination])),
+            materializer: InMemoryCloudMaterializer(),
+            historyLimit: 1
+        )
+        let workspace = WorkspaceState(
+            leftURL: destination,
+            rightURL: URL(filePath: "/elsewhere"),
+            listingService: StubDirectoryListingService(values: [:])
+        )
+
+        #expect(await controller.runTransfer([source], to: destination, mode: .move, workspace: workspace))
+        await waitUntilQueueIsIdle(controller)
+        #expect(controller.undoLatest())
+        await waitUntilQueueIsIdle(controller)
+        #expect(controller.operationHistory.count == 1)
+        #expect(controller.redoAvailability == nil)
+    }
+
+    @Test func closingWorkspaceClearsWeaklyBoundReversalHistory() async throws {
+        let source = URL(filePath: "/source/Report.txt")
+        let destination = URL(filePath: "/destination", directoryHint: .isDirectory)
+        let fileSystem = RecordingFileSystem(existingURLs: [source, destination])
+        let controller = FileOperationController(service: FileOperationService(fileSystem: fileSystem))
+        let workspace = WorkspaceState(
+            leftURL: destination,
+            rightURL: URL(filePath: "/elsewhere"),
+            listingService: StubDirectoryListingService(values: [:])
+        )
+
+        #expect(await controller.runTransfer([source], to: destination, mode: .move, workspace: workspace))
+        await waitUntilQueueIsIdle(controller)
+        let forward = try #require(controller.operationHistory.first)
+        controller.invalidateReversalHistory(for: workspace)
+        #expect(controller.undoAvailability == nil)
+        #expect(controller.operationHistory.first { $0.id == forward.id }?.canUndo == false)
+    }
+
+    @Test func aliasOverlapInvalidatesBothPopulatedHistoryStacks() async throws {
+        let fixture = try TemporaryDirectory()
+        defer { fixture.remove() }
+        let target = fixture.url.appending(path: "Target", directoryHint: .isDirectory)
+        let alias = fixture.url.appending(path: "Alias", directoryHint: .isDirectory)
+        let other = fixture.url.appending(path: "Other", directoryHint: .isDirectory)
+        let firstSource = URL(filePath: "/source-one/First.txt")
+        let secondSource = URL(filePath: "/source-two/Second.txt")
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: false)
+        try FileManager.default.createDirectory(at: other, withIntermediateDirectories: false)
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: target)
+        let fileSystem = RecordingFileSystem(existingURLs: [
+            target, alias, other, firstSource, secondSource
+        ])
+        let controller = FileOperationController(service: FileOperationService(fileSystem: fileSystem))
+        let workspace = WorkspaceState(
+            leftURL: target,
+            rightURL: other,
+            listingService: StubDirectoryListingService(values: [:])
+        )
+
+        #expect(await controller.runTransfer([firstSource], to: alias, mode: .move, workspace: workspace))
+        await waitUntilQueueIsIdle(controller)
+        let aliasForward = try #require(controller.operationHistory.first)
+        #expect(await controller.runTransfer([secondSource], to: other, mode: .move, workspace: workspace))
+        await waitUntilQueueIsIdle(controller)
+        let secondForward = try #require(controller.operationHistory.first)
+        #expect(controller.undoLatest())
+        await waitUntilQueueIsIdle(controller)
+        #expect(controller.undoAvailability?.isEnabled == true)
+        #expect(controller.redoAvailability?.isEnabled == true)
+
+        #expect(await controller.createFolder(in: target, named: "Direct Mutation", workspace: workspace))
+        await waitUntilQueueIsIdle(controller)
+        #expect(controller.operationHistory.first { $0.id == aliasForward.id }?.canUndo == false)
+        #expect(controller.operationHistory.first { $0.id == secondForward.id }?.canUndo == false)
+        #expect(controller.undoAvailability?.title == "Undo Create Folder")
+        #expect(controller.redoAvailability == nil)
+    }
+
+    @Test func cancelledTopReversalCreatesNoInverseAndDoesNotSkipToAnOlderRecord() async throws {
+        let firstSource = URL(filePath: "/source-one/First.txt")
+        let topSources = [
+            URL(filePath: "/source-two/Second.txt"),
+            URL(filePath: "/source-two/Third.txt")
+        ]
+        let firstDestination = URL(filePath: "/first", directoryHint: .isDirectory)
+        let secondDestination = URL(filePath: "/second", directoryHint: .isDirectory)
+        let firstMoved = firstDestination.appending(path: firstSource.lastPathComponent)
+        let topMoved = topSources.map { secondDestination.appending(path: $0.lastPathComponent) }
+        let fileSystem = RecordingFileSystem(
+            existingURLs: Set([firstSource, firstDestination, secondDestination] + topSources),
+            cancelAfterCheckedExclusiveMoveAttempt: 1
+        )
+        let controller = FileOperationController(service: FileOperationService(fileSystem: fileSystem))
+        let workspace = WorkspaceState(
+            leftURL: firstDestination,
+            rightURL: secondDestination,
+            listingService: StubDirectoryListingService(values: [:])
+        )
+
+        #expect(await controller.runTransfer([firstSource], to: firstDestination, mode: .move, workspace: workspace))
+        await waitUntilQueueIsIdle(controller)
+        let first = try #require(controller.operationHistory.first)
+        #expect(await controller.runTransfer(topSources, to: secondDestination, mode: .move, workspace: workspace))
+        await waitUntilQueueIsIdle(controller)
+        let second = try #require(controller.operationHistory.first)
+
+        #expect(controller.undoJob(second.id))
+        await waitUntilQueueIsIdle(controller)
+
+        #expect(controller.operationHistory.first?.kind == .undo)
+        #expect(controller.operationHistory.first?.state == .cancelled)
+        #expect(controller.redoAvailability == nil)
+        #expect(await fileSystem.existingURLs.contains(firstMoved))
+        #expect(await fileSystem.existingURLs.isSuperset(of: Set(topMoved)))
+        #expect(controller.operationHistory.first { $0.id == second.id }?.canUndo == false)
+        #expect(controller.operationHistory.first { $0.id == first.id }?.canUndo == true)
+    }
+
+    @Test func recoveryGateClosesAndAcknowledgementReopensTheAuthoritativeUndoRow() async throws {
+        let parent = URL(filePath: "/workspace", directoryHint: .isDirectory)
+        let unrelated = URL(filePath: "/unrelated", directoryHint: .isDirectory)
+        let sourceURLs = ["A.txt", "B.txt"].map { parent.appending(path: $0) }
+        let folder = parent.appending(path: "Collected", directoryHint: .isDirectory)
+        let fileSystem = RecordingFileSystem(
+            existingURLs: Set([parent, unrelated] + sourceURLs),
+            failCheckedExclusiveMoveAttempts: [1]
+        )
+        let transaction = SelectionFolderTransactionService(fileSystem: fileSystem)
+        let controller = FileOperationController(
+            service: FileOperationService(fileSystem: fileSystem),
+            materializer: InMemoryCloudMaterializer(),
+            selectionFolderTransactionService: transaction
+        )
+        let workspace = WorkspaceState(
+            leftURL: parent,
+            rightURL: unrelated,
+            listingService: StubDirectoryListingService(values: [:])
+        )
+        #expect(await controller.createFolder(in: unrelated, named: "Independent", workspace: workspace))
+        await waitUntilQueueIsIdle(controller)
+        let independent = try #require(controller.operationHistory.first)
+        let parentIdentity = try #require(await fileSystem.identity(of: parent))
+        var sources: [ContextActionSource] = []
+        for url in sourceURLs {
+            sources.append(ContextActionSource(
+                item: FileItem(
+                    url: url,
+                    name: url.lastPathComponent,
+                    isDirectory: false,
+                    isPackage: false,
+                    modifiedAt: nil,
+                    byteSize: nil,
+                    typeDescription: "Document"
+                ),
+                identity: try #require(await fileSystem.identity(of: url))
+            ))
+        }
+        let plan = SelectionFolderPlan(
+            parentURL: parent,
+            parentIdentity: parentIdentity,
+            folderName: "Collected",
+            folderURL: folder,
+            sources: sources
+        )
+
+        #expect(controller.encloseSelection(plan, in: workspace.left, workspace: workspace))
+        await waitUntilQueueIsIdle(controller)
+        #expect(controller.isQueueBlockedByRecovery)
+        #expect(controller.undoAvailability?.isEnabled == false)
+        #expect(controller.operationHistory.first { $0.id == independent.id }?.canUndo == false)
+
+        #expect(controller.continueAfterRecovery())
+        #expect(controller.undoAvailability?.isEnabled == true)
+        #expect(controller.operationHistory.first { $0.id == independent.id }?.canUndo == true)
+    }
+
+    @Test func weaklyBoundReversalRejectsAfterWorkspaceDeallocation() async throws {
+        let source = URL(filePath: "/source/Report.txt")
+        let destination = URL(filePath: "/destination", directoryHint: .isDirectory)
+        let controller = FileOperationController(
+            service: FileOperationService(fileSystem: RecordingFileSystem(existingURLs: [source, destination]))
+        )
+        let probe = await enqueueMoveForWorkspaceLifetime(
+            controller: controller,
+            source: source,
+            destination: destination
+        )
+
+        #expect(await waitUntilBounded { probe.workspace == nil })
+        #expect(controller.undoAvailability == nil)
+        #expect(controller.operationHistory.first?.canUndo == false)
+        #expect(controller.undoLatest() == false)
+    }
+
+    @Test func activeUndoRejectsOrdinaryForwardAdmissionWithoutCorruptingHistory() async throws {
+        let source = URL(filePath: "/source/Report.txt")
+        let destination = URL(filePath: "/destination", directoryHint: .isDirectory)
+        let unrelated = URL(filePath: "/unrelated", directoryHint: .isDirectory)
+        let fileSystem = RecordingFileSystem(
+            existingURLs: [source, destination, unrelated],
+            suspendCheckedExclusiveMoveAttempt: 1
+        )
+        let controller = FileOperationController(service: FileOperationService(fileSystem: fileSystem))
+        let workspace = WorkspaceState(
+            leftURL: destination,
+            rightURL: unrelated,
+            listingService: StubDirectoryListingService(values: [:])
+        )
+
+        #expect(await controller.runTransfer([source], to: destination, mode: .move, workspace: workspace))
+        await waitUntilQueueIsIdle(controller)
+        let forward = try #require(controller.operationHistory.first)
+        #expect(controller.undoLatest())
+        await fileSystem.waitForSuspendedCheckedExclusiveMove()
+
+        #expect(await controller.createFolder(in: unrelated, named: "Rejected", workspace: workspace) == false)
+        #expect(controller.queuedJobs.isEmpty)
+        #expect(controller.activeJob?.kind == .undo)
+        #expect(controller.operationHistory.first { $0.id == forward.id }?.canUndo == false)
+
+        await fileSystem.releaseSuspendedCheckedExclusiveMove()
+        await waitUntilQueueIsIdle(controller)
+        #expect(controller.redoAvailability?.isEnabled == true)
+    }
+
+    @Test func activeRedoRejectsOrdinaryForwardAdmissionWithoutCorruptingHistory() async throws {
+        let source = URL(filePath: "/source/Report.txt")
+        let destination = URL(filePath: "/destination", directoryHint: .isDirectory)
+        let unrelated = URL(filePath: "/unrelated", directoryHint: .isDirectory)
+        let fileSystem = RecordingFileSystem(
+            existingURLs: [source, destination, unrelated],
+            suspendCheckedExclusiveMoveAttempt: 2
+        )
+        let controller = FileOperationController(service: FileOperationService(fileSystem: fileSystem))
+        let workspace = WorkspaceState(
+            leftURL: destination,
+            rightURL: unrelated,
+            listingService: StubDirectoryListingService(values: [:])
+        )
+
+        #expect(await controller.runTransfer([source], to: destination, mode: .move, workspace: workspace))
+        await waitUntilQueueIsIdle(controller)
+        let forward = try #require(controller.operationHistory.first)
+        #expect(controller.undoLatest())
+        await waitUntilQueueIsIdle(controller)
+        #expect(controller.redoLatest())
+        await fileSystem.waitForSuspendedCheckedExclusiveMove()
+
+        #expect(await controller.createFolder(in: unrelated, named: "Rejected", workspace: workspace) == false)
+        #expect(controller.queuedJobs.isEmpty)
+        #expect(controller.activeJob?.kind == .redo)
+        #expect(controller.operationHistory.first { $0.id == forward.id }?.canUndo == false)
+
+        await fileSystem.releaseSuspendedCheckedExclusiveMove()
+        await waitUntilQueueIsIdle(controller)
+        #expect(controller.undoAvailability?.isEnabled == true)
+    }
+
+    @Test func admittedForwardBranchClearsRedoBeforeItRuns() async throws {
+        let source = URL(filePath: "/source/Report.txt")
+        let destinationDirectory = URL(filePath: "/destination", directoryHint: .isDirectory)
+        let fileSystem = RecordingFileSystem(existingURLs: [source, destinationDirectory])
+        let controller = FileOperationController(service: FileOperationService(fileSystem: fileSystem))
+        let workspace = WorkspaceState(
+            leftURL: destinationDirectory,
+            rightURL: URL(filePath: "/elsewhere"),
+            listingService: StubDirectoryListingService(values: [:])
+        )
+
+        #expect(await controller.runTransfer([source], to: destinationDirectory, mode: .move, workspace: workspace))
+        await waitUntilQueueIsIdle(controller)
+        #expect(controller.undoLatest())
+        await waitUntilQueueIsIdle(controller)
+        #expect(controller.redoAvailability?.isEnabled == true)
+
+        #expect(await controller.createFolder(
+            in: destinationDirectory,
+            named: "New Branch",
+            workspace: workspace
+        ))
+        #expect(controller.redoAvailability == nil)
+        await waitUntilQueueIsIdle(controller)
+    }
+
+    @Test func failedTopReversalDoesNotSilentlyRunAnOlderRecipe() async throws {
+        let firstSource = URL(filePath: "/source/First.txt")
+        let secondSource = URL(filePath: "/source/Second.txt")
+        let firstDestination = URL(filePath: "/first", directoryHint: .isDirectory)
+        let secondDestination = URL(filePath: "/second", directoryHint: .isDirectory)
+        let firstMoved = firstDestination.appending(path: firstSource.lastPathComponent)
+        let secondMoved = secondDestination.appending(path: secondSource.lastPathComponent)
+        let fileSystem = RecordingFileSystem(existingURLs: [
+            firstSource, secondSource, firstDestination, secondDestination
+        ])
+        let controller = FileOperationController(service: FileOperationService(fileSystem: fileSystem))
+        let workspace = WorkspaceState(
+            leftURL: firstDestination,
+            rightURL: secondDestination,
+            listingService: StubDirectoryListingService(values: [:])
+        )
+
+        #expect(await controller.runTransfer([firstSource], to: firstDestination, mode: .move, workspace: workspace))
+        await waitUntilQueueIsIdle(controller)
+        #expect(await controller.runTransfer([secondSource], to: secondDestination, mode: .move, workspace: workspace))
+        await waitUntilQueueIsIdle(controller)
+        await fileSystem.mutateContents(at: secondMoved)
+
+        #expect(controller.undoLatest())
+        await waitUntilQueueIsIdle(controller)
+
+        #expect(await fileSystem.existingURLs.contains(firstMoved))
+        #expect(await fileSystem.existingURLs.contains(firstSource) == false)
+        #expect(await fileSystem.existingURLs.contains(secondMoved))
+        #expect(controller.operationHistory.first?.kind == .undo)
+        #expect(controller.operationHistory.first?.state == .failed)
+    }
+
+    @Test func activeOrQueuedWorkIsBoundToTheExactWorkspace() async throws {
+        let directory = URL(filePath: "/workspace", directoryHint: .isDirectory)
+        let fileSystem = RecordingFileSystem(existingURLs: [directory])
+        let controller = FileOperationController(service: FileOperationService(fileSystem: fileSystem))
+        let workspace = WorkspaceState(leftURL: directory, rightURL: URL(filePath: "/elsewhere"), listingService: StubDirectoryListingService(values: [:]))
+        let other = WorkspaceState(leftURL: directory, rightURL: URL(filePath: "/elsewhere"), listingService: StubDirectoryListingService(values: [:]))
+
+        #expect(await controller.createFolder(in: directory, named: "Created", workspace: workspace))
+        #expect(controller.hasActiveOrQueuedWork(boundTo: workspace))
+        #expect(controller.hasActiveOrQueuedWork(boundTo: other) == false)
+        await waitUntilQueueIsIdle(controller)
+        #expect(controller.hasActiveOrQueuedWork(boundTo: workspace) == false)
+    }
+
     @Test func replacementConflictNeverExposesUndo() async throws {
         let source = URL(filePath: "/source/Report.txt")
         let destinationDirectory = URL(filePath: "/destination", directoryHint: .isDirectory)
@@ -2479,6 +2981,48 @@ struct FileOperationControllerTests {
         while controller.isRunning {
             await Task.yield()
         }
+    }
+
+    private func enqueueFailedFolderCreationForWorkspaceLifetime(
+        controller: FileOperationController,
+        directory: URL
+    ) async -> WorkspaceLifetimeProbe {
+        let probe = WorkspaceLifetimeProbe()
+        let workspace = WorkspaceState(
+            leftURL: directory,
+            rightURL: URL(filePath: "/elsewhere"),
+            listingService: StubDirectoryListingService(values: [:])
+        )
+        probe.workspace = workspace
+        #expect(await controller.createFolder(
+            in: directory,
+            named: "Existing",
+            workspace: workspace
+        ))
+        await waitUntilQueueIsIdle(controller)
+        return probe
+    }
+
+    private func enqueueMoveForWorkspaceLifetime(
+        controller: FileOperationController,
+        source: URL,
+        destination: URL
+    ) async -> WorkspaceLifetimeProbe {
+        let probe = WorkspaceLifetimeProbe()
+        let workspace = WorkspaceState(
+            leftURL: destination,
+            rightURL: URL(filePath: "/elsewhere"),
+            listingService: StubDirectoryListingService(values: [:])
+        )
+        probe.workspace = workspace
+        #expect(await controller.runTransfer(
+            [source],
+            to: destination,
+            mode: .move,
+            workspace: workspace
+        ))
+        await waitUntilQueueIsIdle(controller)
+        return probe
     }
 
     private func waitUntilQueueIsIdle(_ controller: FileOperationController) async {
@@ -3055,6 +3599,11 @@ private actor SequencedListingService: DirectoryListingService {
         requestCount += 1
         return requestCount == 1 ? (firstItems, false) : (refreshedItems, true)
     }
+}
+
+@MainActor
+private final class WorkspaceLifetimeProbe {
+    weak var workspace: WorkspaceState?
 }
 
 private actor SuspendingOperationCenterFingerprintReader:

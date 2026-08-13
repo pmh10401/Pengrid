@@ -201,7 +201,7 @@ actor FileOperationUndoService {
             case .encloseSelection:
                 return nil
 
-            case .undo:
+            case .undo, .redo:
                 return nil
             }
         } catch {

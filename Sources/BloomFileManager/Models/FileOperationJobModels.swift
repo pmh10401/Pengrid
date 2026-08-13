@@ -12,6 +12,7 @@ enum FileOperationJobKind: Sendable, Equatable {
     case compressProtectedZIP
     case extract(ArchiveFormat)
     case undo
+    case redo
 
     var title: String {
         switch self {
@@ -26,6 +27,7 @@ enum FileOperationJobKind: Sendable, Equatable {
         case .compressProtectedZIP: "Compress Encrypted ZIP"
         case let .extract(format): "Extract \(format.displayName)"
         case .undo: "Undo"
+        case .redo: "Redo"
         }
     }
 }
@@ -105,7 +107,7 @@ struct FileOperationJobSnapshot: Identifiable, Sendable, Equatable {
     }
 
     var canRetry: Bool {
-        retryEligible && kind != .undo && (state == .failed || state == .cancelled)
+        retryEligible && kind != .undo && kind != .redo && (state == .failed || state == .cancelled)
     }
 
     var isRetryEligible: Bool { retryEligible }
@@ -132,4 +134,29 @@ struct FileOperationJobSnapshot: Identifiable, Sendable, Equatable {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return basename.isEmpty ? "Item" : basename
     }
+}
+
+enum FileOperationReversalDirection: Sendable, Equatable {
+    case undo
+    case redo
+
+    var jobKind: FileOperationJobKind {
+        switch self {
+        case .undo: .undo
+        case .redo: .redo
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .undo: "Undo"
+        case .redo: "Redo"
+        }
+    }
+}
+
+struct FileOperationReversalAvailability: Sendable, Equatable {
+    let title: String
+    let itemCount: Int
+    let isEnabled: Bool
 }
