@@ -1,8 +1,39 @@
+import Darwin
 import Foundation
 import Testing
 @testable import BloomFileManager
 
 @Suite struct GetInfoInspectionServiceTests {
+    @Test func directoryMetadataUsesLiteralLstatEntrySizes() async throws {
+        let directory = try TemporaryDirectory()
+        defer { directory.remove() }
+        let expected = try literalEntrySizes(at: directory.url)
+
+        let report = try await LiveGetInfoInspectionService().inspect([.fixture(directory.url)])
+        let snapshot = try #require(report.successfulSnapshots.first)
+
+        #expect(snapshot.kind == .directory)
+        #expect(snapshot.logicalByteSize == expected.logical)
+        #expect(snapshot.allocatedByteSize == expected.allocated)
+        #expect(report.summary.knownLogicalByteTotal == expected.logical)
+        #expect(report.summary.knownAllocatedByteTotal == expected.allocated)
+    }
+
+    @Test func packageMetadataUsesLiteralLstatEntrySizes() async throws {
+        let directory = try TemporaryDirectory()
+        defer { directory.remove() }
+        let package = directory.url.appending(path: "Sample.app", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: package, withIntermediateDirectories: false)
+        let expected = try literalEntrySizes(at: package)
+
+        let report = try await LiveGetInfoInspectionService().inspect([.fixture(package)])
+        let snapshot = try #require(report.successfulSnapshots.first)
+
+        #expect(snapshot.kind == .package)
+        #expect(snapshot.logicalByteSize == expected.logical)
+        #expect(snapshot.allocatedByteSize == expected.allocated)
+    }
+
     @Test func regularFileMetadataProducesIdentityBoundChecksumRequest() async throws {
         let directory = try TemporaryDirectory()
         defer { directory.remove() }
@@ -152,6 +183,18 @@ import Testing
             #expect(error is CancellationError)
         }
     }
+}
+
+private func literalEntrySizes(at url: URL) throws -> (logical: Int64, allocated: Int64) {
+    var information = stat()
+    let status: Int32 = url.withUnsafeFileSystemRepresentation { path in
+        guard let path else { return -1 }
+        return Darwin.lstat(path, &information)
+    }
+    guard status == 0 else {
+        throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+    }
+    return (Int64(information.st_size), Int64(information.st_blocks) * 512)
 }
 
 private extension FileItem {

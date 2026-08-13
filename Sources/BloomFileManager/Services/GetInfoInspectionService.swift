@@ -158,8 +158,16 @@ private struct GetInfoNoFollowMetadata: Sendable {
         } else {
             typeDescription = values?.localizedTypeDescription ?? kind.rawValue
         }
-        let logicalByteSize = kind == .regularFile ? Int64(information.st_size) : nil
-        let allocatedByteSize = kind == .regularFile ? Int64(information.st_blocks) * 512 : nil
+        let logicalByteSize: Int64?
+        let allocatedByteSize: Int64?
+        switch kind {
+        case .regularFile, .directory, .package:
+            logicalByteSize = Int64(information.st_size)
+            allocatedByteSize = Int64(information.st_blocks) * 512
+        case .symbolicLink, .special:
+            logicalByteSize = nil
+            allocatedByteSize = nil
+        }
 
         return .init(
             kind: kind,
