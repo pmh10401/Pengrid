@@ -14,7 +14,7 @@
 - MVP is one-shot and one-way. There is no background watcher, recurring schedule, two-way merge, or mirror-without-review mode.
 - Planning requires `ComparisonPhase.upToDate`, a current `ComparisonSession`, and one captured generation.
 - Copy source-only entries; replace supported same-kind changed entries; move destination-only entries to Trash; skip identical entries.
-- Block type/name conflicts, checking, unstable, error, symbolic links, packages, special entries, equal/nested roots, changed roots, and unsupported ancestor relationships.
+- Block type/name conflicts, checking, unstable, error, symbolic links, packages, special entries, equal identities, lexically equal/nested roots, changed roots, and unsupported ancestor relationships. Because the pure planner performs no I/O, preparation must additionally reject canonical, alias-, mount-, or symbolic-link-mediated equal/nested roots before review or mutation.
 - Coalesce descendants when a selected top-level directory copy or Trash action already covers them.
 - Capture exact root identities, source fingerprints, existing destination fingerprints, and expected destination absences before confirmation; recheck immediately before mutation.
 - Stage and verify every copy before quarantining any pre-existing destination.
@@ -95,7 +95,7 @@ Cover both directions and every comparison status:
 @Test func actionsSortParentsBeforeChildrenAndUseStableRelativePathOrder() throws
 @Test func nonCurrentPhaseAndMissingSessionAreBlocked() throws
 @Test func conflictsCheckingUnstableErrorsAndUnsupportedKindsAreBlocked() throws
-@Test func equalOrNestedRootsAreBlocked() throws
+@Test func equalIdentityOrLexicallyNestedRootsAreBlocked() throws
 ```
 
 - [ ] **Step 5: Run planner tests and verify RED**
@@ -170,7 +170,7 @@ actor FolderSynchronizationPreparationService {
 }
 ```
 
-Acquire access for both roots, recheck root identities before and after per-item capture, use no-follow identity/fingerprint APIs, require every draft comparison fingerprint to agree with live values, and calculate capacity conservatively. Do not materialize File Provider items implicitly; return a typed unavailable blocker.
+Acquire access for both roots, resolve and reject canonical, alias-, mount-, and symbolic-link-mediated equal/nested root relationships, recheck root identities before and after per-item capture, use no-follow identity/fingerprint APIs, require every draft comparison fingerprint to agree with live values, and calculate capacity conservatively. This preparation check is the filesystem authority for root ancestry; a pure-planner lexical pass is never sufficient by itself. Do not materialize File Provider items implicitly; return a typed unavailable blocker.
 
 - [ ] **Step 4: Implement review state**
 

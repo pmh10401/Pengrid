@@ -16,15 +16,20 @@ The user chooses Left to Right or Right to Left. Planning requires a captured
 scope into ordered actions:
 
 - source-only supported entry: copy to the destination;
-- changed regular file, symbolic link, or package of the same kind: replace destination;
+- changed regular file of the same kind: replace destination;
 - destination-only supported entry: move destination to Trash;
 - identical entry: no action;
 - same-kind directory containers: no direct replacement; descendants carry changes.
 
 Top-level directory copy and directory Trash actions suppress descendant actions already
-covered by the tree operation. Special entries, type/name conflicts, errors, unstable or
+covered by the tree operation. Symbolic links, packages, special entries, type/name conflicts, errors, unstable or
 checking rows, missing sides for a changed status, and unsafe ancestor layouts block the
 entire plan. An empty plan is visible as Already Synchronized and cannot execute.
+
+The pure planner can reject equal root identities and lexically equal or nested normalized
+paths, but it performs no filesystem resolution. Canonical, alias-, mount-, and
+symbolic-link-mediated ancestry is therefore a mandatory preparation check before a plan
+may be shown as confirmable or reach mutation code.
 
 ## Prepared authority
 
@@ -43,7 +48,9 @@ second identity/fingerprint check at each publication boundary.
 
 `FolderSynchronizationTransactionService` is the sole mutation and rollback authority:
 
-1. Acquire scoped access and revalidate roots and the whole plan.
+1. Acquire scoped access, resolve no-follow canonical root ancestry, and reject equal or
+   nested roots (including alias-, mount-, and symbolic-link-mediated relationships) before
+   revalidating the whole plan.
 2. Reserve transaction-owned staging names and stage every source copy.
 3. Verify every staged payload against the captured source fingerprint.
 4. Quarantine every existing replacement/deletion by exact identity.
