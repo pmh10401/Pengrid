@@ -643,6 +643,19 @@ import Testing
         })
     }
 
+    @Test func folderSynchronizationRequestUsesCompleteRowsNotSelection() async throws {
+        let fixture = try await FolderSynchronizationOrchestrationFixture.make(
+            leftOnly: ["only.txt"],
+            identical: ["same.txt"]
+        )
+        fixture.comparison.selection = []
+        fixture.comparison.filter = .leftOnly
+        fixture.comparison.requestFolderSynchronization(.rightToLeft)
+        #expect(fixture.planner.receivedRows == fixture.comparison.rows)
+        #expect(fixture.planner.receivedDirection == .rightToLeft)
+        fixture.stop()
+    }
+
     @Test func equalResolvedRootsAreRejectedBeforeListing() async throws {
         let fixture = try CoordinatorFixture.equalRoots()
         fixture.coordinator.start(workspace: fixture.workspace)

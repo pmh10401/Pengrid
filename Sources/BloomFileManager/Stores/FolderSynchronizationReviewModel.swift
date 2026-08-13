@@ -34,6 +34,25 @@ enum FolderSynchronizationReviewState: Sendable, Equatable {
         guard case .preparing = self else { return false }
         return true
     }
+
+    var isReady: Bool {
+        guard case .ready = self else { return false }
+        return true
+    }
+}
+
+enum FolderSynchronizationReviewPresentation: Sendable, Equatable {
+    case idle
+    case plannerBlocked([FolderSynchronizationBlocker])
+    case alreadySynchronized(FolderSynchronizationPlanSummary)
+    case preparing(direction: ComparisonDirection, comparisonGeneration: UUID)
+    case preparationBlocked(FolderSynchronizationReviewBlocker)
+    case ready(FolderSynchronizationReview)
+
+    var isPreparing: Bool {
+        guard case .preparing = self else { return false }
+        return true
+    }
 }
 
 @MainActor @Observable

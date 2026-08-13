@@ -80,6 +80,20 @@ import Testing
         #expect(blocker.error == .unsafeRootRelationship)
         #expect(!blocker.presentation.contains("/fixtures"))
     }
+
+    @Test func readyStateRemainsUnconsumedUntilConfirmIsInvoked() async throws {
+        let fixture = try ReviewFixture()
+        let model = FolderSynchronizationReviewModel(preparer: fixture.preparer)
+
+        model.prepare(fixture.draft)
+        await fixture.preparer.waitForRequestCount(1)
+        await fixture.preparer.releaseSuccess()
+        await settle(model)
+
+        #expect(model.state.isReady)
+        #expect(model.confirm() != nil)
+        #expect(model.state.isReady == false)
+    }
 }
 
 @MainActor private func settle(_ model: FolderSynchronizationReviewModel) async {

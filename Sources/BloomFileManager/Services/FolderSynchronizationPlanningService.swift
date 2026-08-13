@@ -1,6 +1,15 @@
 import Foundation
 
-struct FolderSynchronizationPlanningService: Sendable {
+protocol FolderSynchronizationPlanning: Sendable {
+    func plan(
+        phase: ComparisonPhase,
+        session: ComparisonSession?,
+        rows: [ComparisonRow],
+        direction: ComparisonDirection
+    ) -> FolderSynchronizationPlanningResult
+}
+
+struct FolderSynchronizationPlanningService: FolderSynchronizationPlanning, Sendable {
     func plan(
         phase: ComparisonPhase,
         session: ComparisonSession?,
