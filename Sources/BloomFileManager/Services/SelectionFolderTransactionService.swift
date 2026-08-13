@@ -43,6 +43,14 @@ actor SelectionFolderTransactionService {
     }
 
     func execute(_ plan: SelectionFolderPlan, progress: @escaping ProgressHandler) async -> FileOperationResult {
+        await execute(plan, expectedSourceFingerprints: [:], progress: progress)
+    }
+
+    func execute(
+        _ plan: SelectionFolderPlan,
+        expectedSourceFingerprints: [URL: SourceFingerprint],
+        progress: @escaping ProgressHandler
+    ) async -> FileOperationResult {
         let folderName = plan.folderName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard plan.sources.count >= 2,
               (try? FilenameValidator.validate(folderName)) != nil,
@@ -73,7 +81,7 @@ actor SelectionFolderTransactionService {
         var moved: [MovedEntry] = []
         do {
             try Task.checkCancellation()
-            try await preflightForward(plan)
+            try await preflightForward(plan, expectedSourceFingerprints: expectedSourceFingerprints)
             try Task.checkCancellation()
             await progress(.init(
                 phase: .creatingFolder,
@@ -99,7 +107,16 @@ actor SelectionFolderTransactionService {
                     path: source.item.url.lastPathComponent,
                     directoryHint: source.item.isDirectory ? .isDirectory : .notDirectory
                 )
+                guard try await fileSystem.identity(of: source.item.url) == source.identity else {
+                    throw SelectionFolderTransactionFailure.sourceChanged(source.item.url.lastPathComponent)
+                }
                 let sourceFingerprint = try await fileSystem.fingerprint(of: source.item.url)
+                if let expected = expectedSourceFingerprints[source.item.url], sourceFingerprint != expected {
+                    throw SelectionFolderTransactionFailure.sourceChanged(source.item.url.lastPathComponent)
+                }
+                guard try await fileSystem.identity(of: source.item.url) == source.identity else {
+                    throw SelectionFolderTransactionFailure.sourceChanged(source.item.url.lastPathComponent)
+                }
                 try await fileSystem.moveExclusively(
                     source.item.url,
                     identifiedBy: source.identity,
@@ -181,7 +198,8 @@ actor SelectionFolderTransactionService {
             for entry in plan.entries.reversed() {
                 try Task.checkCancellation()
                 guard try await fileSystem.identity(of: entry.folderURL) == entry.folderIdentity,
-                      try await fileSystem.fingerprint(of: entry.folderURL) == entry.fingerprint
+                      try await fileSystem.fingerprint(of: entry.folderURL) == entry.fingerprint,
+                      try await fileSystem.identity(of: entry.folderURL) == entry.folderIdentity
                 else { throw SelectionFolderTransactionFailure.undoPreflightFailed }
                 try await fileSystem.moveExclusively(
                     entry.folderURL,
@@ -189,7 +207,16 @@ actor SelectionFolderTransactionService {
                     to: entry.originalSource.item.url,
                     destinationParentIdentifiedBy: plan.parentIdentity
                 )
+                // The move is now externally visible. Record it before any
+                // postflight await so cancellation or authority loss rolls it back.
                 moved.append(entry)
+                guard try await fileSystem.identity(of: entry.originalSource.item.url)
+                    == entry.folderIdentity,
+                      try await fileSystem.fingerprint(of: entry.originalSource.item.url)
+                    .matchesAfterRelocation(entry.fingerprint),
+                      try await fileSystem.identity(of: entry.originalSource.item.url)
+                    == entry.folderIdentity
+                else { throw SelectionFolderTransactionFailure.undoPreflightFailed }
                 await progress(.init(
                     phase: .movingItems,
                     completedCount: moved.count,
@@ -224,7 +251,10 @@ actor SelectionFolderTransactionService {
         }
     }
 
-    private func preflightForward(_ plan: SelectionFolderPlan) async throws {
+    private func preflightForward(
+        _ plan: SelectionFolderPlan,
+        expectedSourceFingerprints: [URL: SourceFingerprint]
+    ) async throws {
         guard try await fileSystem.identity(of: plan.parentURL) == plan.parentIdentity else {
             throw SelectionFolderTransactionFailure.parentChanged
         }
@@ -234,6 +264,13 @@ actor SelectionFolderTransactionService {
         for source in plan.sources {
             guard try await fileSystem.identity(of: source.item.url) == source.identity else {
                 throw SelectionFolderTransactionFailure.sourceChanged(source.item.name)
+            }
+            if let expected = expectedSourceFingerprints[source.item.url] {
+                let fingerprint = try await fileSystem.fingerprint(of: source.item.url)
+                guard fingerprint == expected,
+                      try await fileSystem.identity(of: source.item.url) == source.identity else {
+                    throw SelectionFolderTransactionFailure.sourceChanged(source.item.name)
+                }
             }
         }
     }
@@ -264,7 +301,8 @@ actor SelectionFolderTransactionService {
         for entry in plan.entries {
             guard await !fileSystem.exists(entry.originalSource.item.url),
                   try await fileSystem.identity(of: entry.folderURL) == entry.folderIdentity,
-                  try await fileSystem.fingerprint(of: entry.folderURL) == entry.fingerprint
+                  try await fileSystem.fingerprint(of: entry.folderURL) == entry.fingerprint,
+                  try await fileSystem.identity(of: entry.folderURL) == entry.folderIdentity
             else { throw SelectionFolderTransactionFailure.undoPreflightFailed }
         }
     }
@@ -281,7 +319,8 @@ actor SelectionFolderTransactionService {
                 guard await !fileSystem.exists(entry.source.item.url) else { throw SelectionFolderTransactionFailure.destinationOccupied(entry.source.item.url.lastPathComponent) }
                 guard try await fileSystem.identity(of: entry.folderURL) == entry.identity,
                       try await fileSystem.fingerprint(of: entry.folderURL)
-                        .matchesAfterRelocation(entry.fingerprint)
+                        .matchesAfterRelocation(entry.fingerprint),
+                      try await fileSystem.identity(of: entry.folderURL) == entry.identity
                 else { throw SelectionFolderTransactionFailure.sourceChanged(entry.source.item.url.lastPathComponent) }
                 try await fileSystem.moveExclusively(entry.folderURL, identifiedBy: entry.identity,
                     to: entry.source.item.url, destinationParentIdentifiedBy: plan.parentIdentity)
@@ -313,7 +352,9 @@ actor SelectionFolderTransactionService {
                 guard try await fileSystem.identity(of: entry.originalSource.item.url)
                     == entry.folderIdentity,
                       try await fileSystem.fingerprint(of: entry.originalSource.item.url)
-                    .matchesAfterRelocation(entry.fingerprint)
+                    .matchesAfterRelocation(entry.fingerprint),
+                      try await fileSystem.identity(of: entry.originalSource.item.url)
+                    == entry.folderIdentity
                 else { throw SelectionFolderTransactionFailure.sourceChanged(entry.originalSource.item.name) }
                 try await fileSystem.moveExclusively(entry.originalSource.item.url,
                     identifiedBy: entry.folderIdentity, to: entry.folderURL,

@@ -376,7 +376,7 @@ final class FileOperationController {
             guard let self else {
                 return FileOperationResult(outcomes: [])
             }
-            if case let .selectionFolder(plan) = recipe {
+            if case let .selectionFolderReverse(plan) = recipe {
                 return await self.undoService.performSelectionFolderUndo(plan) { [weak self] progress in
                     guard let self else { return }
                     await self.publish(stage: .enclosingSelection(progress))

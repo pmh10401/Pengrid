@@ -3,7 +3,18 @@ import Foundation
 struct FileOperationUndoMoveEntry: Sendable, Equatable {
     let currentURL: URL
     let currentIdentity: FileIdentity
+    let currentFingerprint: SourceFingerprint
     let originalURL: URL
+}
+
+struct SelectionFolderForwardRecipe: Sendable, Equatable {
+    let plan: SelectionFolderPlan
+    let expectedSourceFingerprints: [URL: SourceFingerprint]
+}
+
+struct FileOperationReversalExecution: Sendable, Equatable {
+    let result: FileOperationResult
+    let inverseRecipe: FileOperationUndoRecipe?
 }
 
 struct FileOperationUndoCreatedEntry: Sendable, Equatable {
@@ -16,14 +27,16 @@ enum FileOperationUndoRecipe: Sendable, Equatable {
     case moveBack([FileOperationUndoMoveEntry])
     case removeCreated([FileOperationUndoCreatedEntry])
     case batchRename(BatchRenameUndoPlan)
-    case selectionFolder(SelectionFolderUndoPlan)
+    case selectionFolderReverse(SelectionFolderUndoPlan)
+    case selectionFolderForward(SelectionFolderForwardRecipe)
 
     var itemCount: Int {
         switch self {
         case let .moveBack(entries): entries.count
         case let .removeCreated(entries): entries.count
         case let .batchRename(plan): plan.entries.count
-        case let .selectionFolder(plan): plan.entries.count
+        case let .selectionFolderReverse(plan): plan.entries.count
+        case let .selectionFolderForward(recipe): recipe.plan.sources.count
         }
     }
 
@@ -32,7 +45,8 @@ enum FileOperationUndoRecipe: Sendable, Equatable {
         case let .moveBack(entries): entries.first?.currentURL.lastPathComponent ?? "Item"
         case let .removeCreated(entries): entries.first?.url.lastPathComponent ?? "Item"
         case let .batchRename(plan): plan.entries.first?.finalURL.lastPathComponent ?? "Item"
-        case let .selectionFolder(plan): plan.folderURL.lastPathComponent
+        case let .selectionFolderReverse(plan): plan.folderURL.lastPathComponent
+        case let .selectionFolderForward(recipe): recipe.plan.folderName
         }
     }
 
@@ -46,8 +60,10 @@ enum FileOperationUndoRecipe: Sendable, Equatable {
             Set(entries.map { $0.url.deletingLastPathComponent() })
         case let .batchRename(plan):
             [plan.parentURL]
-        case let .selectionFolder(plan):
+        case let .selectionFolderReverse(plan):
             [plan.parentURL, plan.folderURL]
+        case let .selectionFolderForward(recipe):
+            [recipe.plan.parentURL, recipe.plan.folderURL]
         }
     }
 }
@@ -108,9 +124,21 @@ actor FileOperationUndoService {
 
         do {
             if kind == .rename, let plan = result.batchRenameUndoMetadata() {
-                guard plan.entries.count == completed.count else { return nil }
-                for entry in plan.entries {
+                guard plan.entries.count == result.outcomes.count,
+                      plan.entries.count == completed.count
+                else { return nil }
+                for (entry, outcome) in zip(plan.entries, result.outcomes) {
                     try Task.checkCancellation()
+                    guard case let .succeeded(source, destination?) = outcome,
+                          source.standardizedFileURL
+                            == entry.originalSource.url.standardizedFileURL,
+                          destination.standardizedFileURL
+                            == entry.finalURL.standardizedFileURL,
+                          result.undoDestinationIdentity(for: destination)
+                            == entry.finalIdentity,
+                          result.undoDestinationFingerprint(for: destination)
+                            == entry.finalFingerprint
+                    else { return nil }
                     guard try await fileSystem.identity(of: entry.finalURL)
                         == entry.finalIdentity,
                         try await fileSystem.fingerprint(of: entry.finalURL)
@@ -135,6 +163,10 @@ actor FileOperationUndoService {
                     entries.append(FileOperationUndoMoveEntry(
                         currentURL: item.destination,
                         currentIdentity: identity,
+                        currentFingerprint: try await fingerprintAfterMatchingIdentity(
+                            at: item.destination,
+                            identity: identity
+                        ),
                         originalURL: item.source
                     ))
                 }
@@ -181,6 +213,25 @@ actor FileOperationUndoService {
         _ recipe: FileOperationUndoRecipe,
         progress: @escaping OperationProgressHandler = { _ in }
     ) async -> FileOperationResult {
+        await performReversal(recipe, progress: progress).result
+    }
+
+    func performReversal(
+        _ recipe: FileOperationUndoRecipe,
+        progress: @escaping OperationProgressHandler = { _ in }
+    ) async -> FileOperationReversalExecution {
+        let result = await execute(recipe, progress: progress)
+        guard result.outcomes.count == recipe.itemCount,
+              result.outcomes.allSatisfy({ if case .succeeded = $0 { return true }; return false }) else {
+            return .init(result: result, inverseRecipe: nil)
+        }
+        return .init(result: result, inverseRecipe: await freshInverse(for: recipe, result: result))
+    }
+
+    private func execute(
+        _ recipe: FileOperationUndoRecipe,
+        progress: @escaping OperationProgressHandler
+    ) async -> FileOperationResult {
         let urls: [URL]
         switch recipe {
         case let .moveBack(entries):
@@ -191,10 +242,12 @@ actor FileOperationUndoService {
             urls = [plan.parentURL] + plan.entries.flatMap {
                 [$0.finalURL, $0.originalSource.url]
             }
-        case let .selectionFolder(plan):
+        case let .selectionFolderReverse(plan):
             urls = [plan.parentURL, plan.folderURL] + plan.entries.flatMap {
                 [$0.originalSource.item.url, $0.folderURL]
             }
+        case let .selectionFolderForward(recipe):
+            urls = [recipe.plan.parentURL, recipe.plan.folderURL] + recipe.plan.sources.map(\.item.url)
         }
 
         let leases: [CloudLocationScopedAccessLease]
@@ -212,13 +265,21 @@ actor FileOperationUndoService {
             return await removeCreated(entries, progress: progress)
         case let .batchRename(plan):
             return await reverseBatchRename(plan, progress: progress)
-        case let .selectionFolder(plan):
+        case let .selectionFolderReverse(plan):
             return await performSelectionFolderUndo(plan) { update in
                 await progress(FileOperationProgress(
                     completedCount: update.completedCount,
                     totalCount: update.totalCount,
                     currentName: update.currentName
                 ))
+            }
+        case let .selectionFolderForward(recipe):
+            guard await selectionFolderForwardIsCurrent(recipe) else { return failureResult(for: .selectionFolderForward(recipe)) }
+            return await selectionFolderTransactionService.execute(
+                recipe.plan,
+                expectedSourceFingerprints: recipe.expectedSourceFingerprints
+            ) { update in
+                await progress(.init(completedCount: update.completedCount, totalCount: update.totalCount, currentName: update.currentName))
             }
         }
     }
@@ -267,7 +328,7 @@ actor FileOperationUndoService {
                       try await fileSystem.fingerprint(of: entry.folderURL) == entry.fingerprint
                 else { return nil }
             }
-            return .selectionFolder(plan)
+            return .selectionFolderReverse(plan)
         } catch {
             return nil
         }
@@ -320,7 +381,8 @@ actor FileOperationUndoService {
                 try Task.checkCancellation()
                 guard await !fileSystem.exists(entry.originalURL),
                       let current = try await fileSystem.identity(of: entry.currentURL),
-                      current == entry.currentIdentity
+                      current == entry.currentIdentity,
+                      try await fingerprintAfterMatchingIdentity(at: entry.currentURL, identity: entry.currentIdentity) == entry.currentFingerprint
                 else { throw UndoSafetyError.unavailable }
             }
         } catch is CancellationError {
@@ -336,23 +398,36 @@ actor FileOperationUndoService {
         for entry in entries.reversed() {
             do {
                 try Task.checkCancellation()
+                guard try await fingerprintAfterMatchingIdentity(at: entry.currentURL, identity: entry.currentIdentity) == entry.currentFingerprint else { throw UndoSafetyError.unavailable }
                 try await fileSystem.moveExclusively(
                     entry.currentURL,
                     identifiedBy: entry.currentIdentity,
                     to: entry.originalURL
                 )
+                // This relocation is externally visible before postflight I/O.
+                // Include it in recovery before awaiting further authority checks.
+                completedEntries.append(entry)
+                guard try await fingerprintAfterMatchingIdentity(
+                    at: entry.originalURL,
+                    identity: entry.currentIdentity
+                ).matchesAfterRelocation(entry.currentFingerprint) else {
+                    throw UndoSafetyError.unavailable
+                }
                 outcomes.append(.succeeded(
                     source: entry.currentURL,
                     destination: entry.originalURL
                 ))
-                completedEntries.append(entry)
                 await progress(FileOperationProgress(
                     completedCount: outcomes.count,
                     totalCount: entries.count,
                     currentName: entry.currentURL.lastPathComponent
                 ))
             } catch is CancellationError {
-                guard await rollbackMoves(completedEntries) else {
+                let fileSystem = self.fileSystem
+                let recovered = await Task.detached {
+                    await Self.rollbackMoves(completedEntries, fileSystem: fileSystem)
+                }.value
+                guard recovered else {
                     return FileOperationResult(outcomes: entries.map {
                         .recoveryNeeded(source: $0.currentURL)
                     })
@@ -361,7 +436,11 @@ actor FileOperationUndoService {
                     .cancelled(source: $0.currentURL)
                 })
             } catch {
-                guard await rollbackMoves(completedEntries) else {
+                let fileSystem = self.fileSystem
+                let recovered = await Task.detached {
+                    await Self.rollbackMoves(completedEntries, fileSystem: fileSystem)
+                }.value
+                guard recovered else {
                     return FileOperationResult(outcomes: entries.map {
                         .recoveryNeeded(source: $0.currentURL)
                     })
@@ -482,13 +561,22 @@ actor FileOperationUndoService {
         return recovered
     }
 
-    private func rollbackMoves(_ entries: [FileOperationUndoMoveEntry]) async -> Bool {
+    private nonisolated static func rollbackMoves(
+        _ entries: [FileOperationUndoMoveEntry],
+        fileSystem: any FileSystemAccess
+    ) async -> Bool {
         var recovered = true
         for entry in entries.reversed() {
             do {
                 guard await !fileSystem.exists(entry.currentURL),
                       let identity = try await fileSystem.identity(of: entry.originalURL),
-                      identity == entry.currentIdentity
+                      identity == entry.currentIdentity,
+                      try await fingerprintAfterMatchingIdentity(
+                        at: entry.originalURL,
+                        identity: entry.currentIdentity,
+                        fileSystem: fileSystem
+                      )
+                        .matchesAfterRelocation(entry.currentFingerprint)
                 else {
                     recovered = false
                     continue
@@ -520,10 +608,118 @@ actor FileOperationUndoService {
             return FileOperationResult(outcomes: plan.entries.map {
                 .failed(source: $0.finalURL, message: message)
             })
-        case let .selectionFolder(plan):
+        case let .selectionFolderReverse(plan):
             return FileOperationResult(outcomes: plan.entries.map {
                 .failed(source: $0.folderURL, message: message)
             })
+        case let .selectionFolderForward(recipe):
+            return FileOperationResult(outcomes: recipe.plan.sources.map {
+                .failed(source: $0.item.url, message: message)
+            })
         }
+    }
+
+    private func fingerprintAfterMatchingIdentity(at url: URL, identity: FileIdentity) async throws -> SourceFingerprint {
+        try await Self.fingerprintAfterMatchingIdentity(at: url, identity: identity, fileSystem: fileSystem)
+    }
+
+    private nonisolated static func fingerprintAfterMatchingIdentity(
+        at url: URL,
+        identity: FileIdentity,
+        fileSystem: any FileSystemAccess
+    ) async throws -> SourceFingerprint {
+        guard try await fileSystem.identity(of: url) == identity else { throw UndoSafetyError.unavailable }
+        let fingerprint = try await fileSystem.fingerprint(of: url)
+        guard try await fileSystem.identity(of: url) == identity else { throw UndoSafetyError.unavailable }
+        return fingerprint
+    }
+
+    private func freshInverse(for recipe: FileOperationUndoRecipe, result: FileOperationResult) async -> FileOperationUndoRecipe? {
+        switch recipe {
+        case let .moveBack(expectedEntries):
+            let completed = result.outcomes.compactMap { outcome -> (URL, URL)? in
+                guard case let .succeeded(source, destination?) = outcome else { return nil }
+                return (source, destination)
+            }
+            guard completed.count == result.outcomes.count,
+                  completed.count == expectedEntries.count else { return nil }
+            do {
+                var entries: [FileOperationUndoMoveEntry] = []
+                for (original, current) in completed {
+                    guard let expected = expectedEntries.first(where: {
+                        $0.currentURL == original && $0.originalURL == current
+                    }),
+                    try await fileSystem.identity(of: current) == expected.currentIdentity else { return nil }
+                    let fingerprint = try await fingerprintAfterMatchingIdentity(
+                        at: current,
+                        identity: expected.currentIdentity
+                    )
+                    guard fingerprint.matchesAfterRelocation(expected.currentFingerprint) else { return nil }
+                    entries.append(.init(currentURL: current, currentIdentity: expected.currentIdentity, currentFingerprint: fingerprint, originalURL: original))
+                }
+                return .moveBack(entries)
+            } catch { return nil }
+        case let .removeCreated(entries):
+            let destinations = result.outcomes.compactMap { outcome -> URL? in
+                guard case let .succeeded(_, destination?) = outcome else { return nil }
+                return destination
+            }
+            guard destinations.count == entries.count else { return nil }
+            do {
+                var inverseEntries: [FileOperationUndoMoveEntry] = []
+                for (entry, destination) in zip(entries, destinations) {
+                    guard try await fileSystem.identity(of: destination) == entry.identity else { return nil }
+                    let fingerprint = try await fingerprintAfterMatchingIdentity(
+                        at: destination,
+                        identity: entry.identity
+                    )
+                    guard fingerprint.matchesAfterRelocation(entry.fingerprint) else { return nil }
+                    inverseEntries.append(.init(
+                        currentURL: destination,
+                        currentIdentity: entry.identity,
+                        currentFingerprint: fingerprint,
+                        originalURL: entry.url
+                    ))
+                }
+                return .moveBack(inverseEntries)
+            } catch {
+                return nil
+            }
+        case .batchRename:
+            return await makeRecipe(kind: .rename, result: result, allowsUndo: true)
+        case let .selectionFolderReverse(plan):
+            guard await !fileSystem.exists(plan.folderURL) else { return nil }
+            do {
+                var expected: [URL: SourceFingerprint] = [:]
+                for entry in plan.entries {
+                    guard try await fileSystem.identity(of: entry.originalSource.item.url)
+                        == entry.folderIdentity else { return nil }
+                    let fingerprint = try await fingerprintAfterMatchingIdentity(
+                        at: entry.originalSource.item.url,
+                        identity: entry.folderIdentity
+                    )
+                    guard fingerprint.matchesAfterRelocation(entry.fingerprint) else { return nil }
+                    expected[entry.originalSource.item.url] = fingerprint
+                }
+                return .selectionFolderForward(.init(
+                    plan: .init(parentURL: plan.parentURL, parentIdentity: plan.parentIdentity, folderName: plan.folderURL.lastPathComponent, folderURL: plan.folderURL, sources: plan.entries.map(\.originalSource)),
+                    expectedSourceFingerprints: expected
+                ))
+            } catch { return nil }
+        case .selectionFolderForward:
+            return await makeSelectionFolderRecipe(result: result)
+        }
+    }
+
+    private func selectionFolderForwardIsCurrent(_ recipe: SelectionFolderForwardRecipe) async -> Bool {
+        guard await !fileSystem.exists(recipe.plan.folderURL) else { return false }
+        do {
+            for source in recipe.plan.sources {
+                guard let expected = recipe.expectedSourceFingerprints[source.item.url],
+                      try await fileSystem.identity(of: source.item.url) == source.identity,
+                      try await fingerprintAfterMatchingIdentity(at: source.item.url, identity: source.identity) == expected else { return false }
+            }
+            return true
+        } catch { return false }
     }
 }
