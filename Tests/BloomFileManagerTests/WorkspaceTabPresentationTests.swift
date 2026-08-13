@@ -265,6 +265,45 @@ struct WorkspaceTabPresentationTests {
         #expect(invalidated?.left.currentDirectory.path == "/One/Left")
     }
 
+    @Test func synchronizationReviewParticipatesInTabModalPolicyAndRealTeardown() async throws {
+        let policy = WorkspaceTabModalPolicy(synchronizationReviewPresented: true)
+        #expect(policy.isPresented)
+
+        let fixture = try await FolderSynchronizationOrchestrationFixture.make(leftOnly: ["copy.txt"])
+        fixture.comparison.requestFolderSynchronization(.leftToRight)
+        await fixture.preparer.waitForRequestCount(1)
+        await fixture.preparer.releaseSuccess()
+        for _ in 0..<200 where fixture.comparison.folderSynchronizationReview.isPreparing {
+            await Task.yield()
+        }
+        #expect(fixture.comparison.confirmFolderSynchronizationReview(
+            operationController: fixture.controller,
+            workspace: fixture.workspace
+        ))
+        await fixture.executor.waitUntilStarted()
+        #expect(fixture.controller.activeJob?.kind == .synchronizeFolder(.leftToRight))
+
+        WorkspaceTabTeardownActions.perform(
+            stopComparison: {},
+            exitStorage: {},
+            closePreview: {},
+            dismissSmartSearch: {},
+            dismissBatchRename: {},
+            dismissSelectionFolder: {},
+            dismissSynchronizationReview: fixture.comparison.cancelFolderSynchronizationReview,
+            dismissPendingTrash: {},
+            endTextEditing: {},
+            cancelPassword: {}
+        )
+        #expect(fixture.comparison.folderSynchronizationReview == .idle)
+        #expect(fixture.controller.activeJob?.kind == .synchronizeFolder(.leftToRight))
+        await fixture.executor.releaseHeldExecution()
+        while fixture.controller.isRunning || !fixture.controller.queuedJobs.isEmpty {
+            await Task.yield()
+        }
+        fixture.stop()
+    }
+
     @Test func teardownClearsTabScopedPresentationWithoutClosingGetInfo() {
         var events: [String] = []
         WorkspaceTabTeardownActions.perform(

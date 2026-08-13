@@ -12,8 +12,12 @@ struct WorkspaceModalPresentationState: Equatable {
     private(set) var presentedPasswordRequestID: UUID?
     private(set) var isSelectionFolderPresented = false
 
+    private(set) var isSynchronizationReviewPresented = false
+
     var allowsOtherModalPresentation: Bool {
-        presentedPasswordRequestID == nil && !isSelectionFolderPresented
+        presentedPasswordRequestID == nil
+            && !isSelectionFolderPresented
+            && !isSynchronizationReviewPresented
     }
 
     mutating func selectionFolderSheetDidAppear() {
@@ -29,13 +33,42 @@ struct WorkspaceModalPresentationState: Equatable {
         conflictPresented: Bool,
         searchPresented: Bool,
         batchRenamePresented: Bool,
-        passwordPresented: Bool
+        passwordPresented: Bool,
+        synchronizationReviewPresented: Bool = false
     ) -> Bool {
         !isSelectionFolderPresented
             && !conflictPresented
             && !searchPresented
             && !batchRenamePresented
             && !passwordPresented
+            && !synchronizationReviewPresented
+            && !isSynchronizationReviewPresented
+    }
+
+    mutating func synchronizationReviewSheetDidAppear() {
+        guard presentedPasswordRequestID == nil else { return }
+        isSynchronizationReviewPresented = true
+    }
+
+    mutating func synchronizationReviewSheetDidDisappear() {
+        isSynchronizationReviewPresented = false
+    }
+
+    func allowsSynchronizationReviewPresentation(
+        conflictPresented: Bool,
+        searchPresented: Bool,
+        batchRenamePresented: Bool,
+        passwordPresented: Bool,
+        selectionFolderPresented: Bool
+    ) -> Bool {
+        !isSynchronizationReviewPresented
+            && presentedPasswordRequestID == nil
+            && !conflictPresented
+            && !searchPresented
+            && !batchRenamePresented
+            && !passwordPresented
+            && !selectionFolderPresented
+            && !isSelectionFolderPresented
     }
 
     mutating func passwordSheetDidAppear(requestID: UUID) {
@@ -54,7 +87,8 @@ struct WorkspaceModalPresentationState: Equatable {
         conflictPresented: Bool,
         searchPresented: Bool,
         batchRenamePresented: Bool = false,
-        selectionFolderPresented: Bool = false
+        selectionFolderPresented: Bool = false,
+        synchronizationReviewPresented: Bool = false
     ) -> ArchivePasswordRequest? {
         guard let pending else { return nil }
         if let presentedPasswordRequestID {
@@ -63,7 +97,8 @@ struct WorkspaceModalPresentationState: Equatable {
         guard !conflictPresented,
               !searchPresented,
               !batchRenamePresented,
-              !selectionFolderPresented
+              !selectionFolderPresented,
+              !synchronizationReviewPresented
         else { return nil }
         return pending
     }
@@ -131,7 +166,12 @@ struct WorkspaceView: View {
                     ComparisonWorkspaceView(
                         workspace: workspace,
                         comparison: comparison,
-                        operationController: operationController
+                        operationController: operationController,
+                        searchPresented: smartSearch.isPresented,
+                        batchRenamePresented: batchRename.isPresented,
+                        trashPresented: workspace.pendingTrashRequest != nil,
+                        profilesPresented: profilesPresented,
+                        modalPresentationState: $modalPresentationState
                     )
                 } else if storage.isActive {
                     StorageInspectorView(
@@ -373,7 +413,8 @@ struct WorkspaceView: View {
             conflictPresented: operationController.pendingConflict != nil,
             smartSearchPresented: smartSearch.isPresented,
             batchRenamePresented: batchRename.isPresented,
-            pendingTrashPresented: workspace.pendingTrashRequest != nil
+            pendingTrashPresented: workspace.pendingTrashRequest != nil,
+            synchronizationReviewPresented: comparison.folderSynchronizationReview != .idle
         ).isPresented
     }
 
@@ -385,7 +426,7 @@ struct WorkspaceView: View {
             dismissSmartSearch: smartSearch.dismiss,
             dismissBatchRename: batchRename.dismiss,
             dismissSelectionFolder: selectionFolder.dismiss,
-            dismissSynchronizationReview: {},
+            dismissSynchronizationReview: comparison.cancelFolderSynchronizationReview,
             dismissPendingTrash: workspace.dismissTrashConfirmation,
             endTextEditing: {
                 guard let editing = workspace.activeTextEditingSession else { return }
@@ -403,7 +444,8 @@ struct WorkspaceView: View {
             guard modalPresentationState.allowsOtherModalPresentation,
                   !smartSearch.isPresented,
                   !batchRename.isPresented,
-                  !selectionFolder.isPresented
+                  !selectionFolder.isPresented,
+                  comparison.folderSynchronizationReview == .idle
             else { return nil }
             return operationController.pendingConflict.map(IdentifiedFileConflict.init)
         } set: { item in
@@ -461,7 +503,8 @@ struct WorkspaceView: View {
                 conflictPresented: operationController.pendingConflict != nil,
                 searchPresented: smartSearch.isPresented,
                 batchRenamePresented: batchRename.isPresented,
-                selectionFolderPresented: selectionFolder.isPresented
+                selectionFolderPresented: selectionFolder.isPresented,
+                synchronizationReviewPresented: comparison.folderSynchronizationReview != .idle
             )
         } set: { request in
             // The sheet's content captures the request ID and handles its own
@@ -479,7 +522,8 @@ struct WorkspaceView: View {
                     conflictPresented: operationController.pendingConflict != nil,
                     searchPresented: smartSearch.isPresented,
                     batchRenamePresented: batchRename.isPresented,
-                    passwordPresented: passwordCoordinator.pendingRequest != nil
+                    passwordPresented: passwordCoordinator.pendingRequest != nil,
+                    synchronizationReviewPresented: comparison.folderSynchronizationReview != .idle
                 )
         } set: { isPresented in
             if !isPresented {

@@ -427,6 +427,8 @@ func stalePasswordDismissalCannotCancelNewCoordinatorRequest() async throws {
     #expect(workspace.contains("passwordSheetDidAppear"))
     #expect(workspace.contains("passwordSheetDidDisappear"))
     #expect(workspace.contains("allowsOtherModalPresentation"))
+    #expect(workspace.contains("dismissSynchronizationReview: comparison.cancelFolderSynchronizationReview"))
+    #expect(workspace.contains("synchronizationReviewPresented: comparison.folderSynchronizationReview != .idle"))
 
     let app = try source(named: "App/BloomFileManagerApp.swift")
     #expect(app.contains(

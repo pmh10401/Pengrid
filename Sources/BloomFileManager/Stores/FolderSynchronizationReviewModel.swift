@@ -53,6 +53,10 @@ enum FolderSynchronizationReviewPresentation: Sendable, Equatable {
         guard case .preparing = self else { return false }
         return true
     }
+
+    var isPresented: Bool {
+        self != .idle
+    }
 }
 
 @MainActor @Observable
