@@ -208,13 +208,15 @@ Expected: compilation fails for missing runtime/session APIs.
 Extend `WorkspaceState.init` with:
 
 ```swift
-descriptorDidChange: (@MainActor @Sendable (WorkspaceSnapshot) -> Void)? = nil
+descriptorDidChange: (@MainActor @Sendable (WorkspaceSnapshot, PaneID) -> Void)? = nil
 ```
 
 `saveWorkspaceSnapshot()` builds one snapshot, saves through legacy persistence when
-present, and invokes the callback. Existing initializers and behavior remain source
-compatible. Add `currentSnapshot()` and make `flushPendingPersistence()` invoke the
-callback after draining its divider debounce.
+present, and invokes the callback with the current active pane. Existing initializers
+and behavior remain source compatible. `activate(_:)` invokes the callback after the
+active pane actually changes, even though legacy v1 persistence cannot store that
+field. Add `currentSnapshot()` and make `flushPendingPersistence()` invoke the callback
+after draining its divider debounce.
 
 - [ ] **Step 4: Implement the factory and session owner**
 
@@ -223,7 +225,7 @@ callback after draining its divider debounce.
     func makeRuntime(
         id: WorkspaceTabID,
         descriptor: WorkspaceDescriptor,
-        descriptorDidChange: @escaping @MainActor @Sendable (WorkspaceSnapshot) -> Void
+        descriptorDidChange: @escaping @MainActor @Sendable (WorkspaceSnapshot, PaneID) -> Void
     ) -> WorkspaceState
 }
 
@@ -246,9 +248,10 @@ callback after draining its divider debounce.
 }
 ```
 
-Route descriptor callbacks by stable tab ID. Save v2 after every structural/profile
-mutation and debounce descriptor-only changes by 300 ms. Do not copy runtime objects
-when creating/opening tabs.
+Route descriptor callbacks by stable tab ID and map `PaneID` to
+`WorkspacePersistedPane`, so active-pane identity cannot be lost. Save v2 after every
+structural/profile mutation and debounce descriptor-only changes by 300 ms. Do not
+copy runtime objects when creating/opening tabs.
 
 - [ ] **Step 5: Run Task 2 tests and verify GREEN**
 

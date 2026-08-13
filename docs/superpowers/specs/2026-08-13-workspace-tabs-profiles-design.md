@@ -42,9 +42,11 @@ restore policy. Malformed tabs are repaired per pane, unknown active IDs fall ba
 the first valid tab, and an empty tab list is repaired to one default tab.
 
 The v1 record is not deleted. A v2 write is encoded completely before replacing the
-UserDefaults value. Child workspaces report committed descriptor changes to the session
-owner; a debounced save coalesces navigation, sort, and divider changes. Application
-termination flushes every child divider debounce and the session envelope.
+UserDefaults value. Child workspaces report a committed workspace snapshot plus the
+current pane ID to the session owner. The callback also fires when the active pane
+changes, so the persisted active-pane field cannot silently become stale. A debounced
+save coalesces navigation, sort, and divider changes. Application termination flushes
+every child divider debounce and the session envelope.
 
 ## Lifecycle and safety
 
