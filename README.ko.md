@@ -59,7 +59,10 @@ DMG를 연 다음 `Pengrid.app`을 `Applications` 폴더로 복사하세요.
 
 Smart Search는 파일명과 상대 경로를 재귀적으로 검색합니다. 일반 텍스트,
 한글 초성, 혼합 쿼리, 파일 종류, 확장자, 크기 및 수정일 필터를 지원하며,
-검색 조건을 저장해 다시 열 수 있습니다.
+검색 조건을 저장해 다시 열 수 있습니다. 기본값이 꺼진 **Search indexed file
+contents** 필터는 Spotlight가 이미 색인한 내용만 사용하며 온라인 전용 파일을
+내려받지 않습니다. 내용 범위를 사용할 수 없거나 초성 검색이라 건너뛴 경우도
+표시합니다.
 
 ### 작업 흐름을 유지하며 미리보고 실행하기
 
@@ -71,6 +74,12 @@ New Folder with Selection, 이름 변경, 압축 및 Trash가 포함됩니다.
 Preview 6는 실행 전에 화면에 보이는 선택을 캡처하므로 이후 탐색이나 선택
 변경이 작업 목적지를 몰래 바꾸지 못합니다. 정확한 선택 및 기능 판정 규칙은
 [릴리스 노트](docs/release-notes-v1.3.0-developer-preview.6.md)를 참고하세요.
+
+**Command-I** 또는 행 컨텍스트 메뉴의 **Get Info**는 캡처한 선택 항목의
+읽기 전용 비모달 검사기를 엽니다. 하나의 항목 메타데이터나 여러 항목 요약을
+표시하며, 디렉터리 크기는 재귀 합계가 아닌 항목 자체의 크기입니다. SHA-256은
+적격 일반 파일 하나에서 명시적으로 버튼을 눌렀을 때만 계산하며, 온라인 전용
+파일은 그때 macOS 다운로드가 필요할 수 있습니다.
 
 ### 더 안전하게 파일 작업 실행하기
 
@@ -101,6 +110,7 @@ Google Drive와 OneDrive는 macOS File Provider를 통해 표시됩니다. 메�
 | **Space** | 폴더 미리보기 또는 시스템 Quick Look |
 | **Command-F** | 활성 패널 필터 |
 | **Command-Shift-F** | 활성 패널에서 Smart Search 시작 |
+| **Command-I** | 캡처한 선택 항목의 Get Info |
 | **Command-D** | 캡처한 선택 항목 복제 |
 | **Option-Command-C** | 화면 순서대로 전체 경로 복사 |
 

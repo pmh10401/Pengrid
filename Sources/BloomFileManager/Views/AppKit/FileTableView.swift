@@ -58,6 +58,7 @@ struct FileTableView: NSViewRepresentable {
     let onActivatePane: () -> Void
     let onOpen: (FileItem) -> Void
     let onOpenSelection: ([FileItem]) -> Void
+    let onGetInfo: ([FileItem]) -> Void
     let contextMenuPresentation: ([FileItem]) -> FileContextMenuPresentation
     let onContextAction: (ContextActionKind, [FileItem]) -> Void
     let onSortChange: (FileSort) -> Void
@@ -103,6 +104,7 @@ struct FileTableView: NSViewRepresentable {
         onActivatePane: @escaping () -> Void,
         onOpen: @escaping (FileItem) -> Void,
         onOpenSelection: @escaping ([FileItem]) -> Void = { _ in },
+        onGetInfo: @escaping ([FileItem]) -> Void = { _ in },
         onSortChange: @escaping (FileSort) -> Void,
         contextMenuPresentation: @escaping ([FileItem]) -> FileContextMenuPresentation = { _ in .hidden },
         onContextAction: @escaping (ContextActionKind, [FileItem]) -> Void = { _, _ in },
@@ -143,6 +145,7 @@ struct FileTableView: NSViewRepresentable {
         self.onActivatePane = onActivatePane
         self.onOpen = onOpen
         self.onOpenSelection = onOpenSelection
+        self.onGetInfo = onGetInfo
         self.contextMenuPresentation = contextMenuPresentation
         self.onContextAction = onContextAction
         self.onSortChange = onSortChange
@@ -686,6 +689,11 @@ extension FileTableView {
                 selectedItems: contextMenuItems,
                 isTextEditing: parent.isTextEditing
             )
+            let getInfoPolicy = GetInfoSelectionPolicy(
+                selectionCount: parent.selection.count,
+                capturedItemCount: contextMenuItems.count,
+                isTextEditing: parent.isTextEditing
+            )
             menu.removeAllItems()
             addMenuItem("Open", action: #selector(openFromMenu), enabled: policy.canOpen, to: menu)
             addContextMenuItem(
@@ -785,6 +793,15 @@ extension FileTableView {
             )
             menu.addItem(.separator())
             addMenuItem("Move to Trash…", action: #selector(trashFromMenu), enabled: policy.canTrash, to: menu)
+            if getInfoPolicy.isVisible {
+                addMenuItem(
+                    "Get Info",
+                    action: #selector(getInfoFromMenu),
+                    enabled: getInfoPolicy.isEnabled,
+                    to: menu,
+                    identifier: GetInfoAccessibilityIdentifiers.contextMenu
+                )
+            }
         }
 
         @objc private func openFromMenu() {
@@ -823,6 +840,7 @@ extension FileTableView {
         }
         @objc private func extractFromMenu() { parent.onExtract() }
         @objc private func trashFromMenu() { parent.onRequestTrashConfirmation() }
+        @objc private func getInfoFromMenu() { parent.onGetInfo(contextMenuItems) }
 
         private func dispatchContextAction(_ action: ContextActionKind) {
             parent.onContextAction(action, contextMenuItems)

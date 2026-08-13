@@ -45,6 +45,10 @@ import Testing
     #expect(AccessibilityIdentifiers.workspaceCopyFullPath == "workspace.copyFullPath")
     #expect(AccessibilityIdentifiers.workspaceDuplicate == "workspace.duplicate")
     #expect(AccessibilityIdentifiers.workspaceContextActionStatus == "workspace.contextActionStatus")
+    #expect(GetInfoAccessibilityIdentifiers.command == "workspace.getInfo")
+    #expect(GetInfoAccessibilityIdentifiers.contextMenu == "fileTable.getInfo")
+    #expect(SpotlightSearchAccessibilityIdentifiers.indexedContents == "smartSearch.indexedContents")
+    #expect(SpotlightSearchAccessibilityIdentifiers.coverage == "smartSearch.coverage")
 }
 
 @Test func contextActionAppWiringUsesSharedDependenciesAndAccessibleState() throws {
@@ -180,6 +184,21 @@ func stalePasswordDismissalCannotCancelNewCoordinatorRequest() async throws {
     #expect(app.contains("_passwordCoordinator = State(initialValue: passwordCoordinator)"))
     #expect(app.contains("passwordProvider: passwordCoordinator"))
     #expect(app.contains("passwordCoordinator: passwordCoordinator"))
+}
+
+@Test func appComposesOneInspectorAndContentAwareSearchService() throws {
+    let app = try source(named: "App/BloomFileManagerApp.swift")
+    #expect(app.occurrences(of: "LiveGetInfoInspectionService(") == 1)
+    #expect(app.occurrences(of: "GetInfoInspectorModel(") == 1)
+    #expect(app.occurrences(of: "GetInfoInspectorController(") == 1)
+    #expect(app.occurrences(of: "ContentAwareSmartSearchService(") == 1)
+    #expect(app.contains("LiveSpotlightSmartSearchService("))
+
+    let workspace = try source(named: "Views/WorkspaceView.swift")
+    #expect(workspace.contains("let getInfoInspector: GetInfoInspectorController"))
+    let commands = try source(named: "Support/WorkspaceCommands.swift")
+    #expect(commands.contains("Button(\"Get Info\")"))
+    #expect(commands.contains(".keyboardShortcut(\"i\", modifiers: .command)"))
 }
 
 @Test func folderPreviewAccessibilityIdentifiersAndAnnouncementsRemainStable() throws {

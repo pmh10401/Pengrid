@@ -69,6 +69,18 @@ struct WorkspaceCommandPolicy: Equatable {
     }
 }
 
+struct GetInfoSelectionPolicy: Equatable {
+    let isVisible: Bool
+    let isEnabled: Bool
+
+    init(selectionCount: Int, capturedItemCount: Int, isTextEditing: Bool) {
+        isVisible = selectionCount > 0
+        isEnabled = selectionCount > 0
+            && capturedItemCount == selectionCount
+            && !isTextEditing
+    }
+}
+
 enum PasteboardCommandRoute: Equatable {
     case textResponder
     case fileSelection
@@ -229,6 +241,27 @@ enum WorkspaceFilterCommandActions {
 enum WorkspaceSearchCommandActions {
     static func showSmartSearch(in workspace: WorkspaceState, store: SmartSearchStore) {
         store.present(initialRoot: workspace.activePane.currentDirectory)
+    }
+}
+
+@MainActor
+enum WorkspaceGetInfoCommandActions {
+    @discardableResult
+    static func present(
+        in workspace: WorkspaceState,
+        isTextEditing: Bool,
+        present: ([FileItem]) -> Void
+    ) -> Bool {
+        let selectedURLs = Set(workspace.selectedURLsForCommands)
+        let items = workspace.activePane.visibleItems.filter { selectedURLs.contains($0.url) }
+        let policy = GetInfoSelectionPolicy(
+            selectionCount: workspace.selectedURLsForCommands.count,
+            capturedItemCount: items.count,
+            isTextEditing: isTextEditing
+        )
+        guard policy.isEnabled else { return false }
+        present(items)
+        return true
     }
 }
 
@@ -584,6 +617,7 @@ struct WorkspaceCommands: Commands {
     var openWithProvider: (any OpenWithApplicationProviding)? = nil
     var selectionFolder: SelectionFolderModel? = nil
     var smartSearch: SmartSearchStore?
+    var getInfoInspector: GetInfoInspectorController? = nil
     let storage: StorageAnalysisStore
     let storageCleanupController: StorageCleanupController
     var materializer: any CloudMaterializing = LiveCloudMaterializationService()
@@ -614,6 +648,18 @@ struct WorkspaceCommands: Commands {
             }
             .keyboardShortcut(.space, modifiers: [])
             .disabled(!contextPolicy.quickLook.isEnabled || previewCoordinator == nil)
+
+            Button("Get Info") {
+                guard let workspace, let getInfoInspector else { return }
+                _ = WorkspaceGetInfoCommandActions.present(
+                    in: workspace,
+                    isTextEditing: workspace.activeTextEditingSession != nil,
+                    present: { getInfoInspector.present(items: $0) }
+                )
+            }
+            .keyboardShortcut("i", modifiers: .command)
+            .disabled(!getInfoPolicy.isEnabled)
+            .accessibilityIdentifier(GetInfoAccessibilityIdentifiers.command)
 
             Button("Close Preview") {
                 guard let previewCoordinator else { return }
@@ -1088,6 +1134,14 @@ struct WorkspaceCommands: Commands {
             isOperationRunning: operationController.isRunning,
             pasteboardHasFileURLs: FileURLPasteboard.containsFileURLs(in: .general),
             selectedItems: selectedItemsForCommands,
+            isTextEditing: workspace?.activeTextEditingSession != nil
+        )
+    }
+
+    private var getInfoPolicy: GetInfoSelectionPolicy {
+        GetInfoSelectionPolicy(
+            selectionCount: workspace?.selectedURLsForCommands.count ?? 0,
+            capturedItemCount: selectedItemsForCommands.count,
             isTextEditing: workspace?.activeTextEditingSession != nil
         )
     }

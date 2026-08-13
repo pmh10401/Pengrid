@@ -373,6 +373,77 @@ struct SmartSearchStoreTests {
         let relaunched = SmartSearchStore(service: ReplacingSearchService(), persistence: persistence)
         #expect(relaunched.savedSearches == [second])
     }
+
+    @Test func indexedContentPreferenceAndCoverageArePublishedForCurrentGeneration() async {
+        let service = CoverageSearchService()
+        let store = SmartSearchStore(
+            service: service,
+            persistence: RecordingSmartSearchPersistence(data: nil)
+        )
+        store.present(initialRoot: URL(filePath: "/coverage", directoryHint: .isDirectory))
+        store.queryText = "invoice"
+        store.searchIndexedContents = true
+        store.submit()
+        await service.waitForRequest()
+        await service.finish(
+            coverage: .indexedContentsUnavailable,
+            results: [searchResult(name: "invoice.txt")]
+        )
+        await waitForStore { store.phase == .results }
+
+        #expect(await service.requestedIndexedContents())
+        #expect(store.coverage == .indexedContentsUnavailable)
+        #expect(store.coverageMessage == "Spotlight unavailable; searched names and paths only")
+    }
+
+    @Test func staleCoveragePublicationCannotReplaceTheCurrentGeneration() async {
+        let service = DelayedCoverageSearchService()
+        let store = SmartSearchStore(
+            service: service,
+            persistence: RecordingSmartSearchPersistence(data: nil)
+        )
+        store.present(initialRoot: URL(filePath: "/coverage", directoryHint: .isDirectory))
+        store.queryText = "first"
+        store.submit()
+        await service.waitForRequestCount(1)
+
+        store.queryText = "second"
+        store.submit()
+        await service.waitForRequestCount(2)
+        await service.publishCoverage(.indexedContentsUnavailable, forRequest: 0)
+        await Task.yield()
+        await Task.yield()
+
+        #expect(store.coverage == .namesAndPathsOnly)
+
+        await service.finish(
+            request: 1,
+            coverage: .indexedContentsIncluded,
+            results: [searchResult(name: "second.txt")]
+        )
+        await waitForStore { store.phase == .results }
+        #expect(store.coverage == .indexedContentsIncluded)
+        await service.finish(request: 0, coverage: .indexedContentsUnavailable, results: [])
+    }
+
+    @Test func openingSavedSearchRestoresIndexedContentPreference() throws {
+        let root = URL(filePath: "/saved", directoryHint: .isDirectory)
+        let query = try SmartSearchQuery(
+            text: "invoice",
+            roots: [root],
+            searchIndexedContents: true
+        )
+        let record = SmartSearchRecord(displayName: "Indexed invoices", query: query)
+        let store = SmartSearchStore(
+            service: StaticSearchService(values: []),
+            persistence: RecordingSmartSearchPersistence(data: nil)
+        )
+        store.searchIndexedContents = false
+
+        store.openSavedSearch(record)
+
+        #expect(store.searchIndexedContents)
+    }
 }
 
 private actor ReplacingSearchService: SmartSearching {
@@ -449,6 +520,83 @@ private actor LifetimeSearchService: SmartSearching {
 
     private func recordCancellation() {
         cancellationObserved = true
+    }
+}
+
+private actor CoverageSearchService: SmartSearching {
+    private var continuation: CheckedContinuation<(
+        SmartSearchCoverage,
+        [SmartSearchResult]
+    ), Never>?
+    private var requestedIndexedContentsValue = false
+
+    func search(
+        _ query: SmartSearchQuery,
+        progress: @escaping @Sendable (Int) -> Void
+    ) async throws -> [SmartSearchResult] {
+        requestedIndexedContentsValue = query.searchIndexedContents
+        let value = await withCheckedContinuation { continuation = $0 }
+        return value.1
+    }
+
+    func search(
+        _ query: SmartSearchQuery,
+        progress: @escaping @Sendable (Int) -> Void,
+        coverage: @escaping @Sendable (SmartSearchCoverage) -> Void
+    ) async throws -> [SmartSearchResult] {
+        requestedIndexedContentsValue = query.searchIndexedContents
+        let value = await withCheckedContinuation { continuation = $0 }
+        coverage(value.0)
+        return value.1
+    }
+
+    func waitForRequest() async {
+        while continuation == nil { await Task.yield() }
+    }
+
+    func finish(coverage: SmartSearchCoverage, results: [SmartSearchResult]) {
+        continuation?.resume(returning: (coverage, results))
+        continuation = nil
+    }
+
+    func requestedIndexedContents() -> Bool { requestedIndexedContentsValue }
+}
+
+private actor DelayedCoverageSearchService: SmartSearching {
+    private var continuations: [CheckedContinuation<[SmartSearchResult], Never>] = []
+    private var coverageCallbacks: [@Sendable (SmartSearchCoverage) -> Void] = []
+
+    func search(
+        _ query: SmartSearchQuery,
+        progress: @escaping @Sendable (Int) -> Void
+    ) async throws -> [SmartSearchResult] {
+        await withCheckedContinuation { continuations.append($0) }
+    }
+
+    func search(
+        _ query: SmartSearchQuery,
+        progress: @escaping @Sendable (Int) -> Void,
+        coverage: @escaping @Sendable (SmartSearchCoverage) -> Void
+    ) async throws -> [SmartSearchResult] {
+        coverageCallbacks.append(coverage)
+        return await withCheckedContinuation { continuations.append($0) }
+    }
+
+    func waitForRequestCount(_ count: Int) async {
+        while continuations.count < count { await Task.yield() }
+    }
+
+    func publishCoverage(_ coverage: SmartSearchCoverage, forRequest index: Int) {
+        coverageCallbacks[index](coverage)
+    }
+
+    func finish(
+        request index: Int,
+        coverage: SmartSearchCoverage,
+        results: [SmartSearchResult]
+    ) {
+        coverageCallbacks[index](coverage)
+        continuations[index].resume(returning: results)
     }
 }
 

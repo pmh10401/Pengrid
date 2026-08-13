@@ -250,6 +250,36 @@ import Testing
     #expect(!policy.canClosePreview)
 }
 
+@Test func getInfoPolicyRequiresACompleteNonTextSelection() {
+    let complete = GetInfoSelectionPolicy(
+        selectionCount: 2,
+        capturedItemCount: 2,
+        isTextEditing: false
+    )
+    #expect(complete.isVisible && complete.isEnabled)
+
+    let incomplete = GetInfoSelectionPolicy(
+        selectionCount: 2,
+        capturedItemCount: 1,
+        isTextEditing: false
+    )
+    #expect(incomplete.isVisible && !incomplete.isEnabled)
+
+    let editing = GetInfoSelectionPolicy(
+        selectionCount: 1,
+        capturedItemCount: 1,
+        isTextEditing: true
+    )
+    #expect(editing.isVisible && !editing.isEnabled)
+
+    let empty = GetInfoSelectionPolicy(
+        selectionCount: 0,
+        capturedItemCount: 0,
+        isTextEditing: false
+    )
+    #expect(!empty.isVisible && !empty.isEnabled)
+}
+
 private func commandPolicyItem(
     named name: String,
     isDirectory: Bool = false

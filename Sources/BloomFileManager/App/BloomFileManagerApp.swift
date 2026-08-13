@@ -80,6 +80,7 @@ struct BloomFileManagerApp: App {
     @State private var passwordCoordinator: ArchivePasswordPromptCoordinator
     @State private var smartSearch: SmartSearchStore
     @State private var smartSearchRouter: SmartSearchActionRouter
+    @State private var getInfoInspector: GetInfoInspectorController
     @State private var favorites = FavoritesStore()
     @State private var cloudLocations: CloudLocationsStore
     @State private var comparison: ComparisonCoordinator
@@ -126,13 +127,32 @@ struct BloomFileManagerApp: App {
             fileSystem: cloudDependencies.fileSystem,
             accessCoordinator: cloudDependencies.accessCoordinator
         ))
+        let localSearch = LocalSmartSearchService(
+            fileSystem: cloudDependencies.fileSystem,
+            scopedAccessCoordinator: cloudDependencies.accessCoordinator
+        )
+        let spotlightSearch = LiveSpotlightSmartSearchService(
+            runner: LiveSpotlightMetadataQueryRunner(),
+            fileSystem: cloudDependencies.fileSystem,
+            availabilityReader: LiveCloudItemAvailabilityService(),
+            scopedAccessCoordinator: cloudDependencies.accessCoordinator
+        )
+        let searchService = ContentAwareSmartSearchService(
+            local: localSearch,
+            spotlight: spotlightSearch
+        )
         _smartSearch = State(initialValue: SmartSearchStore(
-            service: LocalSmartSearchService(
-                fileSystem: cloudDependencies.fileSystem,
-                scopedAccessCoordinator: cloudDependencies.accessCoordinator
-            ),
+            service: searchService,
             persistence: persistence
         ))
+        let getInfoModel = GetInfoInspectorModel(
+            inspector: LiveGetInfoInspectionService(
+                fileSystem: cloudDependencies.fileSystem,
+                accessCoordinator: cloudDependencies.accessCoordinator
+            ),
+            checksumService: cloudDependencies.makeChecksumService()
+        )
+        _getInfoInspector = State(initialValue: GetInfoInspectorController(model: getInfoModel))
         _smartSearchRouter = State(initialValue: SmartSearchActionRouter(
             fileSystem: cloudDependencies.fileSystem,
             accessCoordinator: cloudDependencies.accessCoordinator
@@ -232,7 +252,8 @@ struct BloomFileManagerApp: App {
                 passwordCoordinator: passwordCoordinator,
                 contextActionRouter: contextActionRouter,
                 openWithProvider: openWithProvider,
-                selectionFolder: selectionFolder
+                selectionFolder: selectionFolder,
+                getInfoInspector: getInfoInspector
             )
             .task {
                 try? await cloudLocations.scanInitially()
@@ -248,6 +269,7 @@ struct BloomFileManagerApp: App {
                 openWithProvider: openWithProvider,
                 selectionFolder: selectionFolder,
                 smartSearch: smartSearch,
+                getInfoInspector: getInfoInspector,
                 storage: storage,
                 storageCleanupController: storageCleanupController,
                 materializer: cloudDependencies.materializer,

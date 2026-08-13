@@ -90,8 +90,14 @@ Results can be limited by:
 - inclusive earliest and latest modification date.
 
 Search reads names, relative paths, and ordinary filesystem or File Provider
-metadata. It is not a file-content search and does not maintain a background
-index.
+metadata by default. **Search indexed file contents** is an opt-in saved-query
+setting. For literal text only, it merges results from Spotlight's existing
+content index with the normal results; it never reads file bytes, forces File
+Provider materialization, or provides snippets. The index can be incomplete for
+provider-backed, excluded, or otherwise unindexed locations, so it never means
+all content was searched. Korean-initial or mixed-initial queries visibly skip
+indexed content. Spotlight failure or its five-second timeout preserves local
+name/path results and reports that indexed content was unavailable.
 
 ### Saved searches
 
@@ -141,6 +147,26 @@ Press Space again or Escape to close the current preview. When a system Quick
 Look panel is open, selection changes update it through the same identity and
 cloud-materialization gates used for the original selection.
 
+## Get Info
+
+Choose **Get Info** from a file-row context menu or press **Command-I**. The
+command uses the complete captured active-pane selection in visible table order;
+it is disabled while text editing is active or if that selection cannot be fully
+resolved. The reusable nonmodal panel is read-only.
+
+For one item, Get Info shows the name and path, kind/type, logical and allocated
+entry bytes, dates, owner/group, permissions, tags, cloud availability, and a
+symbolic-link destination where applicable. For multiple items, it preserves the
+captured order, reports failures separately, and shows known totals. Directory
+bytes always describe the directory entry, never a recursive total.
+
+Get Info opens with metadata only. **Calculate SHA-256** appears only for one
+captured regular non-symbolic-link file and runs only after its explicit button
+is chosen. That action revalidates identity and can require macOS to materialize
+an online-only file; opening or closing the inspector does not. This version
+does not edit tags, permissions, ownership, dates, extended attributes, or
+names.
+
 ## File-row context-menu productivity
 
 The row context menu uses the same command policy as **File Operations** in the
@@ -151,8 +177,8 @@ menu bar. Its stable groups are:
    **Copy Path >**
 3. **New Folder**, **New Folder with Selection…**, **Add to Favorites**,
    **Duplicate**, **Rename**, and **Batch Rename…**
-4. Existing **Copy** and **Paste**, existing archive actions, then **Move to
-   Trash…**
+4. Existing **Copy** and **Paste**, existing archive actions, **Move to
+   Trash…**, then **Get Info**
 
 Items without a meaningful selection are omitted. A temporarily unavailable
 action remains visible but disabled with a reason. Right-clicking inside the
@@ -556,7 +582,8 @@ Developer Preview 6 and the current source tree deliberately do not provide:
 - Intel Mac or macOS 14-and-earlier support;
 - Developer ID signing or Apple notarization;
 - direct Google Drive or OneDrive OAuth/API clients;
-- background indexing or file-content search;
+- a complete or Pengrid-managed background index, indexed-content snippets, or
+  guaranteed content coverage;
 - guaranteed metadata for every online-only provider item;
 - reliable per-byte progress from native archive tools;
 - 7z, RAR, or password-protected TAR support;

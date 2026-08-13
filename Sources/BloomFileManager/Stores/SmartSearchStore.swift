@@ -109,12 +109,14 @@ final class SmartSearchStore {
     private(set) var examinedEntryCount = 0
     private(set) var progressMessage: String?
     private(set) var errorMessage: String?
+    private(set) var coverage: SmartSearchCoverage = .namesAndPathsOnly
     private(set) var savedSearches: [SmartSearchRecord]
 
     var queryText = ""
     var roots: [URL] = []
     var includeHidden = false
     var includePackages = false
+    var searchIndexedContents = false
     var includeDirectories = true {
         didSet {
             guard metadata.kind != (includeDirectories ? .all : .files) else { return }
@@ -141,6 +143,19 @@ final class SmartSearchStore {
 
     var canSaveCurrentSearch: Bool {
         currentQuery() != nil
+    }
+
+    var coverageMessage: String {
+        switch coverage {
+        case .namesAndPathsOnly:
+            "Names and paths only"
+        case .indexedContentsIncluded:
+            "Indexed contents included"
+        case .indexedContentsUnavailable:
+            "Spotlight unavailable; searched names and paths only"
+        case .indexedContentsSkippedForInitialQuery:
+            "Indexed contents skipped for Korean-initial search"
+        }
     }
 
     private let service: any SmartSearching
@@ -227,9 +242,18 @@ final class SmartSearchStore {
         let service = service
         let task = Task { [weak self] in
             do {
-                let found = try await service.search(query, progress: relay.yield)
+                let found = try await service.search(
+                    query,
+                    progress: relay.yield,
+                    coverage: { [weak self] coverage in
+                        Task { @MainActor [weak self] in
+                            self?.publishCoverage(coverage, for: searchGeneration)
+                        }
+                    }
+                )
                 relay.finish()
                 await progressConsumer.value
+                await Task.yield()
                 guard !Task.isCancelled,
                       let self,
                       searchGeneration == self.generation
@@ -301,6 +325,7 @@ final class SmartSearchStore {
         roots = record.query.roots
         includeHidden = record.query.includeHidden
         includePackages = record.query.includePackages
+        searchIndexedContents = record.query.searchIndexedContents
         maximumResults = record.query.maximumResults
         includeDirectories = record.query.includeDirectories
         metadata = record.query.metadata
@@ -345,7 +370,8 @@ final class SmartSearchStore {
             includePackages: includePackages,
             includeDirectories: includeDirectories,
             maximumResults: maximumResults,
-            metadata: metadata
+            metadata: metadata,
+            searchIndexedContents: searchIndexedContents
         )
     }
 
@@ -358,6 +384,7 @@ final class SmartSearchStore {
         examinedEntryCount = 0
         progressMessage = nil
         errorMessage = nil
+        coverage = .namesAndPathsOnly
     }
 
     private func publishProgress(_ count: Int, for searchGeneration: Int) {
@@ -367,6 +394,11 @@ final class SmartSearchStore {
         else { return }
         examinedEntryCount = count
         progressMessage = count == 1 ? "Examined 1 entry…" : "Examined \(count) entries…"
+    }
+
+    private func publishCoverage(_ coverage: SmartSearchCoverage, for searchGeneration: Int) {
+        guard searchGeneration == generation, phase == .searching else { return }
+        self.coverage = coverage
     }
 
     private func cancelActiveSearch() {

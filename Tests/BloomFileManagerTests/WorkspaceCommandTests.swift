@@ -78,6 +78,41 @@ struct WorkspaceCommandTests {
         #expect(store.roots == [workspace.activePane.currentDirectory])
     }
 
+    @Test func getInfoCommandRouteCapturesVisibleActivePaneSelectionAndFailsClosed() async throws {
+        let left = URL(filePath: "/get-info-left", directoryHint: .isDirectory)
+        let first = commandItem("first.txt", in: left)
+        let second = commandItem("second.txt", in: left)
+        let replacement = commandItem("replacement.txt", in: left)
+        let workspace = WorkspaceState(
+            leftURL: left,
+            rightURL: URL(filePath: "/get-info-right", directoryHint: .isDirectory),
+            listingService: StubDirectoryListingService(values: [left: [first, second, replacement]])
+        )
+        await workspace.loadInitialDirectories()
+        workspace.left.selection = [second.url, first.url]
+
+        var captured: [[FileItem]] = []
+        #expect(WorkspaceGetInfoCommandActions.present(
+            in: workspace,
+            isTextEditing: false,
+            present: { captured.append($0) }
+        ))
+        #expect(captured == [[first, second]])
+
+        workspace.left.selection = [replacement.url, URL(filePath: "/missing.txt")]
+        #expect(!WorkspaceGetInfoCommandActions.present(
+            in: workspace,
+            isTextEditing: false,
+            present: { captured.append($0) }
+        ))
+        #expect(!WorkspaceGetInfoCommandActions.present(
+            in: workspace,
+            isTextEditing: true,
+            present: { captured.append($0) }
+        ))
+        #expect(captured == [[first, second]])
+    }
+
     @Test func protectedWorkspaceCommandActionInvokesAES256ZIPControllerRoute() async throws {
         let directory = URL(filePath: "/workspace", directoryHint: .isDirectory)
         let source = directory.appending(path: "Report.txt")

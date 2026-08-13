@@ -2,7 +2,7 @@
 
 [한국어](current-limitations.ko.md) · **English** · [User guide](user-guide.md)
 
-This list covers the current source tree. The published Developer Preview 5 DMG
+This list covers the current source tree. The published Developer Preview 6 DMG
 also excludes source features that have not yet been packaged into a later
 release, including batch rename.
 
@@ -14,8 +14,12 @@ release, including batch rename.
 
 ## Search, preview, and cloud
 
-- Search uses names, relative paths, and available metadata; there is no file-
-  content search or persistent background index.
+- Search uses names, relative paths, and available metadata by default. Its
+  opt-in Spotlight content mode searches only already-indexed literal content;
+  coverage can be incomplete for provider-backed, excluded, or unindexed
+  locations and it supplies no snippets or persistent Pengrid index.
+- Get Info is read-only. It does not change names, tags, permissions, ownership,
+  dates, or extended attributes; SHA-256 remains an explicit single-file action.
 - Folder preview is one level and read-only. File Provider metadata that is not
   locally exposed is reported unavailable rather than downloaded implicitly.
 - Google Drive and OneDrive use their macOS File Provider roots. Pengrid has no

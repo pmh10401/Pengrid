@@ -90,6 +90,7 @@ struct WorkspaceView: View {
     let contextActionRouter: FileContextActionRouter
     let openWithProvider: any OpenWithApplicationProviding
     let selectionFolder: SelectionFolderModel
+    let getInfoInspector: GetInfoInspectorController
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var modalPresentationState = WorkspaceModalPresentationState()
@@ -253,6 +254,7 @@ struct WorkspaceView: View {
                     contextActionRouter: contextActionRouter,
                     openWithProvider: openWithProvider,
                     selectionFolder: selectionFolder,
+                    getInfoInspector: getInfoInspector,
                     isActive: workspace.activePaneID == .left,
                     onActivate: { workspace.activate(.left) },
                     onRequestTrashConfirmation: workspace.requestTrashConfirmation
@@ -273,6 +275,7 @@ struct WorkspaceView: View {
                     contextActionRouter: contextActionRouter,
                     openWithProvider: openWithProvider,
                     selectionFolder: selectionFolder,
+                    getInfoInspector: getInfoInspector,
                     isActive: workspace.activePaneID == .right,
                     onActivate: { workspace.activate(.right) },
                     onRequestTrashConfirmation: workspace.requestTrashConfirmation

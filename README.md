@@ -60,6 +60,10 @@ destination captured when the command starts.
 Smart Search scans filenames and relative paths recursively. It supports
 ordinary text, Korean initial-consonant matching, mixed queries, type,
 extension, size, and modified-date filters. Searches can be saved and reopened.
+The optional **Search indexed file contents** filter is off by default: it uses
+only already-indexed Spotlight content, never downloads cloud-only files, and
+reports when content coverage is unavailable or skipped for an initial-consonant
+query.
 
 ### Preview and act without losing context
 
@@ -72,6 +76,13 @@ Preview 6 captures the visible selection before dispatch, so later navigation
 or selection changes cannot silently redirect an action. Read the
 [release notes](docs/release-notes-v1.3.0-developer-preview.6.md) for the exact
 selection and capability rules.
+
+Press **Command-I**, or choose **Get Info** from a row's context menu, to open a
+nonmodal read-only inspector for the captured selection. It reports metadata for
+one item or a multiple-selection summary; directory sizes are entry sizes, not
+recursive totals. SHA-256 is calculated only after choosing the explicit button
+for one eligible regular file, which may require macOS to download a cloud-only
+file.
 
 ### Run safer file operations
 
@@ -102,6 +113,7 @@ VoiceOver labels, Reduce Motion support, and privacy-preserving status text.
 | **Space** | Folder preview or system Quick Look |
 | **Command-F** | Filter the active pane |
 | **Command-Shift-F** | Smart Search from the active pane |
+| **Command-I** | Get Info for the captured selection |
 | **Command-D** | Duplicate the captured selection |
 | **Option-Command-C** | Copy full paths in visible order |
 
