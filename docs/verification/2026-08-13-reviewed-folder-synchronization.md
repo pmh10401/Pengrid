@@ -1,12 +1,16 @@
 # Reviewed folder synchronization verification — 2026-08-13
 
-Status: **IMPLEMENTATION COMPLETE / AUTOMATED GATES RECORDED**
+Status: **IMPLEMENTATION COMPLETE / AUTOMATED GATES RECORDED / MANUAL LOCAL GUI PARTIAL / COMPLETED LOCAL SYNC NOT RUN / SIGNED-IN FILE PROVIDER NOT RUN**
 
 This record applies to the official integration worktree
 `/Users/mac/Documents/Pengrid/.worktrees/safe-operation-center` on branch
 `codex/safe-operation-center`. It records the integrated implementation and
 final verification for Tasks 4–7 of the review-first folder synchronization
 plan, including Codex follow-up `bbf6e23`.
+
+The manual local GUI evidence below was collected on 2026-08-14 at official
+HEAD `66964e7`. That commit records File Provider discovery only; it does not
+change product behavior.
 
 Implementation commits:
 
@@ -133,20 +137,26 @@ recorded above.
 
 ## Manual local GUI matrix
 
-The session did not drive the live Pengrid GUI. The following required checks
-remain **NOT RUN** and must not be inferred from automated tests:
+The 2026-08-14 run used disposable pairs under `$TMPDIR`. It dry-reviewed LTR
+and RTL plans without confirming them, verified identical and planner-blocked
+review states, cancelled one 201-file / 264 MB copy job and one 40-item Trash
+job, checked the bound-tab close gate, and checked VoiceOver on the review
+sheet. Post-terminal shell inspection found all 201 copy sources with an empty
+destination, and both `keep.txt` entries plus all 40 obsolete destination files
+after Trash cancellation. No screenshot, AX dump, or operation phase log was
+captured, so the narrower status wording below is intentional.
 
 | Check | Status |
 | --- | --- |
-| Sync Left to Right on a real local-volume pair | NOT RUN |
-| Sync Right to Left on a real local-volume pair | NOT RUN |
-| Already Synchronized review sheet | NOT RUN |
-| Planner/preparation-blocked review sheet | NOT RUN |
-| Cancel during copy/staging | NOT RUN |
-| Cancel during Trash transfer | NOT RUN |
+| Sync Left to Right on a real local-volume pair | **NOT RUN (completed execution)** — dry ready review passed with Copy 1 / Replace 0 / Trash 1 / Skip 1 and relative names, then Cancel |
+| Sync Right to Left on a real local-volume pair | **NOT RUN (completed execution)** — dry ready review passed with the reversed direction/counts and relative names, then Cancel |
+| Already Synchronized review sheet | **PASS — 2026-08-14** — identical temp pair showed Already Synchronized; confirm disabled |
+| Planner/preparation-blocked review sheet | **PASS — 2026-08-14 (planner-blocked symlink only)** — relative symlink path was blocked and confirm disabled; preparation-blocked was not separately run |
+| Cancel during copy/staging | **PASS — 2026-08-14** — cancellation accepted during an active temp copy job; after terminal, source files 201 and destination entries 0; exact phase was not captured |
+| Cancel during Trash transfer | **PASS — 2026-08-14** — cancellation accepted during the Trash phase; both keep files and all 40 obsolete files remained |
 | Recovery Needed acknowledgement | NOT RUN |
-| VoiceOver relative-path output | NOT RUN |
-| Tab close gating while a sync job is active | NOT RUN |
+| VoiceOver relative-path output | **PASS — 2026-08-14 (review sheet only)** — direction, counts, and relative names were spoken; no absolute path; operation progress was not spoken-checked |
+| Tab close gating while a sync job is active | **PASS — 2026-08-14** — bound tab close was disabled during the job and re-enabled after cancellation became terminal |
 
 ## Signed-in File Provider matrix
 
