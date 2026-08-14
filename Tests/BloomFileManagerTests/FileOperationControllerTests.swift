@@ -2,6 +2,7 @@ import Foundation
 import Testing
 @testable import BloomFileManager
 
+@Suite(.timeLimit(.minutes(1)))
 @MainActor
 struct FileOperationControllerTests {
     @Test func duplicateQueuesASeparateKeepBothJobAndSelectsOnlyCapturedParentOutputs() async throws {
@@ -3212,9 +3213,12 @@ struct FileOperationControllerTests {
     }
 
     private func waitUntilQueueIsIdle(_ controller: FileOperationController) async {
-        while controller.isRunning || !controller.queuedJobs.isEmpty {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while ContinuousClock.now < deadline {
+            if !controller.isRunning && controller.queuedJobs.isEmpty { return }
             await Task.yield()
         }
+        Issue.record("Timed out waiting for the file-operation queue to become idle (running: \(controller.isRunning), queued: \(controller.queuedJobs.count), recoveryBlocked: \(controller.isQueueBlockedByRecovery))")
     }
 
     private func waitUntil(
@@ -3236,9 +3240,12 @@ struct FileOperationControllerTests {
     }
 
     private func waitForPendingConflict(_ controller: FileOperationController) async {
-        while controller.pendingConflict == nil {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while ContinuousClock.now < deadline {
+            if controller.pendingConflict != nil { return }
             await Task.yield()
         }
+        Issue.record("Timed out waiting for a pending conflict (running: \(controller.isRunning), queued: \(controller.queuedJobs.count), recoveryBlocked: \(controller.isQueueBlockedByRecovery))")
     }
 
     private func waitForConflictOrCompletion(_ controller: FileOperationController) async -> Bool {
@@ -3670,6 +3677,7 @@ actor RecordingFolderSynchronizationExecutor: FolderSynchronizationExecuting {
     private let progressToPublish: [FolderSynchronizationProgress]
     private var startWaiters: [CheckedContinuation<Void, Never>] = []
     private var release: CheckedContinuation<Void, Never>?
+    private var releaseRequested = false
     private var hasStarted = false
 
     init(
@@ -3703,7 +3711,11 @@ actor RecordingFolderSynchronizationExecutor: FolderSynchronizationExecuting {
             await progress(update)
         }
         if holdUntilReleased {
-            await withCheckedContinuation { release = $0 }
+            if releaseRequested {
+                releaseRequested = false
+            } else {
+                await withCheckedContinuation { release = $0 }
+            }
         }
         return result
     }
@@ -3714,8 +3726,12 @@ actor RecordingFolderSynchronizationExecutor: FolderSynchronizationExecuting {
     }
 
     func releaseHeldExecution() {
-        release?.resume()
-        release = nil
+        if let release {
+            release.resume()
+            self.release = nil
+        } else {
+            releaseRequested = true
+        }
     }
 }
 
