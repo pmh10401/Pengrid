@@ -18,6 +18,8 @@ is the current free binary release:
 - Packaging: release contract tests and arm64 production build passed
 - Local artifact checks: app signature, DMG checksum, mounted app build,
   installation, and launch passed
+- GitHub publication checks: the uploaded asset digest matched, and an
+  unauthenticated public redownload was byte-for-byte identical to the local DMG
 - DMG SHA-256:
   `d7060401f05bbaac7f1d64b76d5bce6b93708c75644c8c3737698e8a3144fd73`
 
