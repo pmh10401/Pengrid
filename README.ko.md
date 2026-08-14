@@ -15,14 +15,14 @@ Pengrid는 두 패널 탐색, 재귀 검색, 미리보기, 대기열 기반 파�
 ## 다운로드
 
 현재 릴리스는
-[Pengrid 1.3.0 Developer Preview 6](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.6)입니다.
+[Pengrid 1.3.0 Developer Preview 7](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.7)입니다.
 
-- [Pengrid.dmg 다운로드](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.6/Pengrid.dmg)
-- 버전: **1.3.0 (빌드 8)**
+- [Pengrid.dmg 다운로드](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.7/Pengrid.dmg)
+- 버전: **1.3.0 (빌드 9)**
 - 요구 사항: **Apple Silicon Mac, macOS 15 이상**
-- 검증: **92개 스위트의 자동 테스트 1,407개 통과**
+- 검증: **110개 스위트의 자동 테스트 1,645개 통과**
 - DMG SHA-256:
-  `ece6212bd5f80d21bc64ef2059839db8a79a416b3706b140b1c4155dbe801b32`
+  `d7060401f05bbaac7f1d64b76d5bce6b93708c75644c8c3737698e8a3144fd73`
 
 DMG를 연 다음 `Pengrid.app`을 `Applications` 폴더로 복사하세요.
 
@@ -55,11 +55,27 @@ DMG를 연 다음 `Pengrid.app`을 `Applications` 폴더로 복사하세요.
 복사, 이동, Open in Other Pane 및 검토된 디렉터리 비교 전송은 명령 시작 시
 캡처한 패널과 목적지를 사용합니다.
 
+### 여러 작업 공간을 준비해 두기
+
+작업 공간 탭으로 서로 독립된 두 패널 폴더 쌍을 여러 개 열어 둘 수 있습니다.
+**Command-T**는 활성 탭의 저장된 배치를 복사해 새 탭을 열고, **Command-W**는
+실행 중이거나 대기 중인 파일 작업이 없을 때 활성 탭을 닫습니다.
+**Control-Tab** / **Control-Shift-Tab**으로 탭을 이동합니다. 탭 제목에는 전체
+경로가 아닌 두 패널의 현재 폴더 이름만 표시됩니다.
+
+탭 막대에서 이름 있는 작업 공간 프로필을 저장한 뒤 Profiles 메뉴에서 열면
+현재 탭을 바꾸지 않고 새 탭을 만듭니다. 세션은 폴더, 정렬, 분할 위치, 활성
+패널 및 프로필만 복원하며, 선택, 필터, 기록, 미리보기, 검색과 작업 상태는
+의도적으로 복원하지 않습니다.
+
 ### 파일을 빠르게 찾기
 
 Smart Search는 파일명과 상대 경로를 재귀적으로 검색합니다. 일반 텍스트,
 한글 초성, 혼합 쿼리, 파일 종류, 확장자, 크기 및 수정일 필터를 지원하며,
-검색 조건을 저장해 다시 열 수 있습니다.
+검색 조건을 저장해 다시 열 수 있습니다. 기본값이 꺼진 **Search indexed file
+contents** 필터는 Spotlight가 이미 색인한 내용만 사용하며 온라인 전용 파일을
+내려받지 않습니다. 내용 범위를 사용할 수 없거나 초성 검색이라 건너뛴 경우도
+표시합니다.
 
 ### 작업 흐름을 유지하며 미리보고 실행하기
 
@@ -68,16 +84,23 @@ Smart Search는 파일명과 상대 경로를 재귀적으로 검색합니다. �
 Open, Open With, Open in Other Pane, Show in Finder, Copy Path, Duplicate,
 New Folder with Selection, 이름 변경, 압축 및 Trash가 포함됩니다.
 
-Preview 6는 실행 전에 화면에 보이는 선택을 캡처하므로 이후 탐색이나 선택
+Pengrid는 실행 전에 화면에 보이는 선택을 캡처하므로 이후 탐색이나 선택
 변경이 작업 목적지를 몰래 바꾸지 못합니다. 정확한 선택 및 기능 판정 규칙은
-[릴리스 노트](docs/release-notes-v1.3.0-developer-preview.6.md)를 참고하세요.
+[릴리스 노트](docs/release-notes-v1.3.0-developer-preview.7.md)를 참고하세요.
+
+**Command-I** 또는 행 컨텍스트 메뉴의 **Get Info**는 캡처한 선택 항목의
+읽기 전용 비모달 검사기를 엽니다. 하나의 항목 메타데이터나 여러 항목 요약을
+표시하며, 디렉터리 크기는 재귀 합계가 아닌 항목 자체의 크기입니다. SHA-256은
+적격 일반 파일 하나에서 명시적으로 버튼을 눌렀을 때만 계산하며, 온라인 전용
+파일은 그때 macOS 다운로드가 필요할 수 있습니다.
 
 ### 더 안전하게 파일 작업 실행하기
 
-복사, 이동, Trash, 이름 변경, 새 폴더, 압축 및 Undo 작업은 하나의 순서 있는
-작업 센터를 공유합니다. 작업은 진행률과 안전한 취소 지점을 제공하며, 일괄
-이름 변경과 New Folder with Selection 같은 독점 트랜잭션은 단계적 게시와
-보수적인 롤백 검사를 사용합니다.
+복사, 이동, Trash, 이름 변경, 새 폴더, 압축, Undo 및 검토된 폴더 동기화
+작업은 하나의 순서 있는 작업 센터를 공유합니다. 작업은 진행률과 안전한 취소
+지점을 제공하며, 일괄 이름 변경, New Folder with Selection, 한 방향 폴더
+동기화 같은 독점 트랜잭션은 단계적 게시와 보수적인 롤백 검사를 사용합니다.
+동기화는 다시 시도할 수 없고, 완료 후 Undo로 되돌리지 않습니다.
 
 ### 압축 파일 만들고 풀기
 
@@ -91,8 +114,9 @@ Preview 6는 실행 전에 화면에 보이는 선택을 캡처하므로 이후 
 Google Drive와 OneDrive는 macOS File Provider를 통해 표시됩니다. 메타데이터
 검색과 폴더 미리보기는 의도적인 콘텐츠 다운로드를 피하며, 바이트를 읽는
 작업은 macOS에 온라인 전용 항목 다운로드를 요청할 수 있습니다. 디렉터리
-비교, Storage Inspector, 키보드 탐색, VoiceOver 레이블, Reduce Motion 및
-개인정보를 노출하지 않는 상태 텍스트도 제공합니다.
+비교와 검토된 한 방향 폴더 동기화, Storage Inspector, 키보드 탐색,
+VoiceOver 레이블, Reduce Motion 및 개인정보를 노출하지 않는 상태 텍스트도
+제공합니다.
 
 ## 주요 단축키
 
@@ -101,6 +125,11 @@ Google Drive와 OneDrive는 macOS File Provider를 통해 표시됩니다. 메�
 | **Space** | 폴더 미리보기 또는 시스템 Quick Look |
 | **Command-F** | 활성 패널 필터 |
 | **Command-Shift-F** | 활성 패널에서 Smart Search 시작 |
+| **Command-I** | 캡처한 선택 항목의 Get Info |
+| **Command-T** | 새 작업 공간 탭 |
+| **Command-W** | 안전할 때 활성 작업 공간 탭 닫기 |
+| **Control-Tab** | 다음 작업 공간 탭 |
+| **Control-Shift-Tab** | 이전 작업 공간 탭 |
 | **Command-D** | 캡처한 선택 항목 복제 |
 | **Option-Command-C** | 화면 순서대로 전체 경로 복사 |
 
@@ -141,7 +170,7 @@ open dist/Pengrid.app
 ## 문서
 
 - [상세 기능 가이드](docs/user-guide.ko.md)
-- [Developer Preview 6 릴리스 노트](docs/release-notes-v1.3.0-developer-preview.6.md)
+- [Developer Preview 7 릴리스 노트](docs/release-notes-v1.3.0-developer-preview.7.md)
 - [릴리스 및 패키징 가이드](docs/release.ko.md)
 - [아키텍처 설명](docs/architecture.md)
 - [현재 제한 사항](docs/current-limitations.md)

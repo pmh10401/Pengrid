@@ -411,6 +411,99 @@ import Testing
         fixture.comparison.stop()
     }
 
+    @Test func syncActionBarLabelsAreSelectionIndependentAndDispatchDirection() throws {
+        let actionBar = try bloomSource(named: "Views/Comparison/ComparisonActionBar.swift")
+        #expect(actionBar.contains("Button(\"Sync Left to Right…\")"))
+        #expect(actionBar.contains("Button(\"Sync Right to Left…\")"))
+        #expect(actionBar.contains("requestFolderSynchronization(.leftToRight)"))
+        #expect(actionBar.contains("requestFolderSynchronization(.rightToLeft)"))
+        if let left = actionBar.range(of: "Button(\"Sync Left to Right…\")"),
+           let right = actionBar.range(of: "Button(\"Sync Right to Left…\")") {
+            let syncButtons = String(actionBar[left.lowerBound..<right.upperBound])
+                + String(actionBar[right.upperBound...].prefix(280))
+            #expect(!syncButtons.contains("selection.count"))
+            #expect(!syncButtons.contains("visibleRows"))
+            #expect(!syncButtons.contains("canCopy"))
+            #expect(!syncButtons.contains("canMove"))
+        }
+
+        let workspace = try bloomSource(named: "Views/Comparison/ComparisonWorkspaceView.swift")
+        #expect(workspace.contains("FolderSynchronizationReviewSheet"))
+        #expect(workspace.contains("synchronizationReviewBinding"))
+    }
+
+    @Test func readySynchronizationReviewShowsBasenamesCountsAndAtMostEightRelativePaths() throws {
+        let review = try makeReadySynchronizationReview(pathCount: 10, trashCount: 1)
+        let presentation = FolderSynchronizationReviewSheetPresentation(
+            state: .ready(review),
+            canAdmit: true,
+            currentGeneration: review.comparisonGeneration
+        )
+
+        #expect(presentation.title == "Synchronize Left to Right")
+        #expect(presentation.sourceBasename == "SecretSource")
+        #expect(presentation.destinationBasename == "SecretDestination")
+        #expect(presentation.copyCountLabel == "Copy 8")
+        #expect(presentation.replaceCountLabel == "Replace 1")
+        #expect(presentation.trashCountLabel.contains("Move to Trash"))
+        #expect(presentation.skipCountLabel == "Skip 2")
+        #expect(presentation.estimatedSizeLabel != nil)
+        #expect(presentation.representativePaths.count == 8)
+        #expect(presentation.isConfirmEnabled)
+        #expect(presentation.destructiveWarning.contains("Trash"))
+        let visible = presentation.visibleStrings.joined(separator: "\n")
+        #expect(!visible.contains("/private/SecretSource"))
+        #expect(!visible.contains("/private/SecretDestination"))
+        #expect(visible.contains("copy-1.txt"))
+        #expect(presentation.accessibilityLabel.contains("left to right"))
+        #expect(!presentation.accessibilityLabel.contains("/private"))
+    }
+
+    @Test func synchronizationReviewConfirmIsDisabledWhenNotReadyOrAdmissionIsClosed() throws {
+        let review = try makeReadySynchronizationReview(pathCount: 1, trashCount: 0)
+        let blocked = FolderSynchronizationReviewSheetPresentation(
+            state: .plannerBlocked([.init(reason: .unsupportedEntryKind)]),
+            canAdmit: true,
+            currentGeneration: review.comparisonGeneration
+        )
+        let already = FolderSynchronizationReviewSheetPresentation(
+            state: .alreadySynchronized(try FolderSynchronizationPlanSummary(
+                direction: .leftToRight,
+                comparisonGeneration: review.comparisonGeneration,
+                sourceRoot: review.preparedPlan.draft.sourceRoot,
+                destinationRoot: review.preparedPlan.draft.destinationRoot,
+                sourceRootIdentity: review.preparedPlan.draft.sourceRootIdentity,
+                destinationRootIdentity: review.preparedPlan.draft.destinationRootIdentity,
+                skipCount: 3
+            )),
+            canAdmit: true,
+            currentGeneration: review.comparisonGeneration
+        )
+        let preparing = FolderSynchronizationReviewSheetPresentation(
+            state: .preparing(direction: .leftToRight, comparisonGeneration: review.comparisonGeneration),
+            canAdmit: true,
+            currentGeneration: review.comparisonGeneration
+        )
+        let stale = FolderSynchronizationReviewSheetPresentation(
+            state: .ready(review),
+            canAdmit: true,
+            currentGeneration: UUID()
+        )
+        let closed = FolderSynchronizationReviewSheetPresentation(
+            state: .ready(review),
+            canAdmit: false,
+            currentGeneration: review.comparisonGeneration
+        )
+
+        #expect(!blocked.isConfirmEnabled)
+        #expect(!already.isConfirmEnabled)
+        #expect(!preparing.isConfirmEnabled)
+        #expect(!stale.isConfirmEnabled)
+        #expect(!closed.isConfirmEnabled)
+        #expect(already.statusText.contains("Already Synchronized"))
+        #expect(!blocked.statusText.contains("/private"))
+    }
+
     @Test func comparisonCommandPolicyNamesAndEnablesOnlyValidActions() {
         let inactive = ComparisonCommandPolicy(isActive: false, canVerifySelected: false)
         #expect(inactive.toggleTitle == "Compare Folders")
@@ -525,6 +618,147 @@ private actor PresentationNoopChecksumService: ChecksumService {
         await progress(1)
         return ChecksumResult(digest: Data(request.url.path.utf8))
     }
+}
+
+private func makeReadySynchronizationReview(
+    pathCount: Int,
+    trashCount: Int
+) throws -> FolderSynchronizationReview {
+    let source = URL(filePath: "/private/SecretSource", directoryHint: .isDirectory)
+    let destination = URL(filePath: "/private/SecretDestination", directoryHint: .isDirectory)
+    let sourceIdentity = FileIdentity(entryIdentifier: "source-root", resolvedIdentifier: "source-root")
+    let destinationIdentity = FileIdentity(
+        entryIdentifier: "destination-root",
+        resolvedIdentifier: "destination-root"
+    )
+    var actions: [FolderSynchronizationAction] = []
+    let copyCount = max(pathCount - trashCount - 1, 0)
+    for index in 0..<copyCount {
+        let path = try ComparisonRelativePath(components: ["copy-\(index + 1).txt"])
+        let entry = ComparisonEntry(
+            relativePath: path,
+            url: source.appending(path: path.string),
+            kind: .regularFile,
+            fingerprint: .init(
+                identity: .init(entryIdentifier: "copy-\(index)", resolvedIdentifier: "copy-\(index)"),
+                byteSize: 4,
+                modifiedAt: Date(timeIntervalSince1970: 1)
+            ),
+            symbolicLinkTarget: nil,
+            typeDescription: "regularFile"
+        )
+        actions.append(try FolderSynchronizationAction(
+            relativePath: path,
+            kind: .copy,
+            source: entry,
+            destination: nil
+        ))
+    }
+    if pathCount > trashCount {
+        let path = try ComparisonRelativePath(components: ["replace.txt"])
+        let left = ComparisonEntry(
+            relativePath: path,
+            url: source.appending(path: path.string),
+            kind: .regularFile,
+            fingerprint: .init(
+                identity: .init(entryIdentifier: "replace-s", resolvedIdentifier: "replace-s"),
+                byteSize: 4,
+                modifiedAt: Date(timeIntervalSince1970: 1)
+            ),
+            symbolicLinkTarget: nil,
+            typeDescription: "regularFile"
+        )
+        let right = ComparisonEntry(
+            relativePath: path,
+            url: destination.appending(path: path.string),
+            kind: .regularFile,
+            fingerprint: .init(
+                identity: .init(entryIdentifier: "replace-d", resolvedIdentifier: "replace-d"),
+                byteSize: 3,
+                modifiedAt: Date(timeIntervalSince1970: 2)
+            ),
+            symbolicLinkTarget: nil,
+            typeDescription: "regularFile"
+        )
+        actions.append(try FolderSynchronizationAction(
+            relativePath: path,
+            kind: .replace,
+            source: left,
+            destination: right
+        ))
+    }
+    if trashCount > 0 {
+        let path = try ComparisonRelativePath(components: ["trash.txt"])
+        let trash = ComparisonEntry(
+            relativePath: path,
+            url: destination.appending(path: path.string),
+            kind: .regularFile,
+            fingerprint: .init(
+                identity: .init(entryIdentifier: "trash", resolvedIdentifier: "trash"),
+                byteSize: 1,
+                modifiedAt: Date(timeIntervalSince1970: 1)
+            ),
+            symbolicLinkTarget: nil,
+            typeDescription: "regularFile"
+        )
+        actions.append(try FolderSynchronizationAction(
+            relativePath: path,
+            kind: .moveDestinationToTrash,
+            source: nil,
+            destination: trash
+        ))
+    }
+    let ordered = actions.sorted(by: FolderSynchronizationAction.deterministicOrder)
+    let bytes = ordered.reduce(into: Int64(0)) { total, action in
+        total += action.source?.fingerprint.byteSize ?? 0
+    }
+    let draft = try FolderSynchronizationPlanDraft(
+        direction: .leftToRight,
+        comparisonGeneration: UUID(uuidString: "00000000-0000-0000-0000-000000000060")!,
+        sourceRoot: source,
+        destinationRoot: destination,
+        sourceRootIdentity: sourceIdentity,
+        destinationRootIdentity: destinationIdentity,
+        actions: ordered,
+        skipCount: 2,
+        estimatedRegularFileCopyBytes: bytes
+    )
+    let prepared = PreparedFolderSynchronizationPlan(
+        draft: draft,
+        sourceFingerprints: [:],
+        destinationFingerprints: [:],
+        expectedAbsentDestinations: Set(ordered.filter { $0.kind == .copy }.map(\.relativePath)),
+        requiredCapacityBytes: bytes,
+        destinationFilenameComparisonPolicy: .caseSensitiveCanonical,
+        rootAuthority: .init(
+            source: .init(
+                identity: sourceIdentity,
+                canonicalURL: source,
+                volumeIdentifier: "fixture",
+                mountIdentifier: "fixture:/"
+            ),
+            destination: .init(
+                identity: destinationIdentity,
+                canonicalURL: destination,
+                volumeIdentifier: "fixture",
+                mountIdentifier: "fixture:/"
+            )
+        )
+    )
+    return FolderSynchronizationReview(
+        preparedPlan: prepared,
+        direction: .leftToRight,
+        comparisonGeneration: draft.comparisonGeneration,
+        summary: .init(
+            copyCount: ordered.count(where: { $0.kind == .copy }),
+            replaceCount: ordered.count(where: { $0.kind == .replace }),
+            moveToTrashCount: ordered.count(where: { $0.kind == .moveDestinationToTrash }),
+            skipCount: 2,
+            estimatedCopyBytes: bytes,
+            requiredCapacityBytes: bytes
+        ),
+        representativeRelativePaths: Array(ordered.prefix(8).map(\.relativePath))
+    )
 }
 
 @MainActor

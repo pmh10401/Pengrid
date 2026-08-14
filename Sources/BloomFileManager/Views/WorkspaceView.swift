@@ -12,8 +12,12 @@ struct WorkspaceModalPresentationState: Equatable {
     private(set) var presentedPasswordRequestID: UUID?
     private(set) var isSelectionFolderPresented = false
 
+    private(set) var isSynchronizationReviewPresented = false
+
     var allowsOtherModalPresentation: Bool {
-        presentedPasswordRequestID == nil && !isSelectionFolderPresented
+        presentedPasswordRequestID == nil
+            && !isSelectionFolderPresented
+            && !isSynchronizationReviewPresented
     }
 
     mutating func selectionFolderSheetDidAppear() {
@@ -29,13 +33,42 @@ struct WorkspaceModalPresentationState: Equatable {
         conflictPresented: Bool,
         searchPresented: Bool,
         batchRenamePresented: Bool,
-        passwordPresented: Bool
+        passwordPresented: Bool,
+        synchronizationReviewPresented: Bool = false
     ) -> Bool {
         !isSelectionFolderPresented
             && !conflictPresented
             && !searchPresented
             && !batchRenamePresented
             && !passwordPresented
+            && !synchronizationReviewPresented
+            && !isSynchronizationReviewPresented
+    }
+
+    mutating func synchronizationReviewSheetDidAppear() {
+        guard presentedPasswordRequestID == nil else { return }
+        isSynchronizationReviewPresented = true
+    }
+
+    mutating func synchronizationReviewSheetDidDisappear() {
+        isSynchronizationReviewPresented = false
+    }
+
+    func allowsSynchronizationReviewPresentation(
+        conflictPresented: Bool,
+        searchPresented: Bool,
+        batchRenamePresented: Bool,
+        passwordPresented: Bool,
+        selectionFolderPresented: Bool
+    ) -> Bool {
+        !isSynchronizationReviewPresented
+            && presentedPasswordRequestID == nil
+            && !conflictPresented
+            && !searchPresented
+            && !batchRenamePresented
+            && !passwordPresented
+            && !selectionFolderPresented
+            && !isSelectionFolderPresented
     }
 
     mutating func passwordSheetDidAppear(requestID: UUID) {
@@ -54,7 +87,8 @@ struct WorkspaceModalPresentationState: Equatable {
         conflictPresented: Bool,
         searchPresented: Bool,
         batchRenamePresented: Bool = false,
-        selectionFolderPresented: Bool = false
+        selectionFolderPresented: Bool = false,
+        synchronizationReviewPresented: Bool = false
     ) -> ArchivePasswordRequest? {
         guard let pending else { return nil }
         if let presentedPasswordRequestID {
@@ -63,14 +97,15 @@ struct WorkspaceModalPresentationState: Equatable {
         guard !conflictPresented,
               !searchPresented,
               !batchRenamePresented,
-              !selectionFolderPresented
+              !selectionFolderPresented,
+              !synchronizationReviewPresented
         else { return nil }
         return pending
     }
 }
 
 struct WorkspaceView: View {
-    let workspace: WorkspaceState
+    let workspaceSession: WorkspaceSessionState
     let operationController: FileOperationController
     let batchRename: BatchRenameModel
     let smartSearch: SmartSearchStore
@@ -90,14 +125,37 @@ struct WorkspaceView: View {
     let contextActionRouter: FileContextActionRouter
     let openWithProvider: any OpenWithApplicationProviding
     let selectionFolder: SelectionFolderModel
+    let getInfoInspector: GetInfoInspectorController
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
     @State private var modalPresentationState = WorkspaceModalPresentationState()
+    @State private var initialLoadState = WorkspaceTabInitialLoadState()
+    @State private var profilesPresented = false
+
+    private var workspace: WorkspaceState {
+        workspaceSession.activeWorkspace
+    }
 
     var body: some View {
         let hasOverlay = comparison.isActive || storage.isActive
 
         VStack(spacing: 0) {
+            WorkspaceTabBarView(
+                session: workspaceSession,
+                canClose: { id in
+                    guard let tab = workspaceSession.tabs.first(where: { $0.id == id }) else {
+                        return false
+                    }
+                    return !operationController.hasActiveOrQueuedWork(boundTo: tab.workspace)
+                },
+                invalidateReversalHistory: operationController.invalidateReversalHistory(for:),
+                teardown: teardownActiveWorkspace,
+                isModalPresented: workspaceModalIsPresented,
+                isTextEditing: workspace.activeTextEditingSession != nil,
+                profilesPresented: $profilesPresented
+            )
+
             ZStack {
                 ordinaryWorkspace
                     .opacity(hasOverlay ? 0 : 1)
@@ -108,7 +166,12 @@ struct WorkspaceView: View {
                     ComparisonWorkspaceView(
                         workspace: workspace,
                         comparison: comparison,
-                        operationController: operationController
+                        operationController: operationController,
+                        searchPresented: smartSearch.isPresented,
+                        batchRenamePresented: batchRename.isPresented,
+                        trashPresented: workspace.pendingTrashRequest != nil,
+                        profilesPresented: profilesPresented,
+                        modalPresentationState: $modalPresentationState
                     )
                 } else if storage.isActive {
                     StorageInspectorView(
@@ -150,11 +213,29 @@ struct WorkspaceView: View {
             .accessibilityLabel("Active file pane")
             .accessibilityValue(workspace.activePaneID == .left ? "Left" : "Right")
         }
-        .task {
-            await workspace.loadInitialDirectories()
+        .task(id: workspaceSession.activeTabID) {
+            let tabID = workspaceSession.activeTabID
+            let loadState = initialLoadState
+            await withTaskCancellationHandler {
+                await loadState.load(tabID: tabID) {
+                    await workspaceSession.activeWorkspace.loadInitialDirectories()
+                }
+            } onCancel: {
+                loadState.cancel(tabID: tabID)
+            }
         }
         .onDisappear {
-            workspace.flushPendingPersistence()
+            workspaceSession.flushPersistence()
+        }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase != .active else { return }
+            workspaceSession.flushPersistence()
+        }
+        .sheet(isPresented: $profilesPresented) {
+            WorkspaceProfilesView(
+                session: workspaceSession,
+                teardown: teardownActiveWorkspace
+            )
         }
         .sheet(item: pendingConflict) { item in
             ConflictResolutionSheet(conflict: item.conflict) { decision, applyToAll in
@@ -221,6 +302,10 @@ struct WorkspaceView: View {
             Text(trashConfirmationMessage)
         }
         .focusedSceneValue(\.workspaceState, workspace)
+        .focusedSceneValue(\.workspaceSessionState, workspaceSession)
+        .focusedSceneValue(\.workspaceTabModalPresented, workspaceModalIsPresented)
+        .focusedSceneValue(\.workspaceTabTeardown, teardownActiveWorkspace)
+        .focusedSceneValue(\.workspaceProfilesPresentation, { profilesPresented = true })
         .focusedSceneValue(\.comparisonCoordinator, comparison)
         .focusedSceneValue(\.storageAnalysisStore, storage)
     }
@@ -253,6 +338,7 @@ struct WorkspaceView: View {
                     contextActionRouter: contextActionRouter,
                     openWithProvider: openWithProvider,
                     selectionFolder: selectionFolder,
+                    getInfoInspector: getInfoInspector,
                     isActive: workspace.activePaneID == .left,
                     onActivate: { workspace.activate(.left) },
                     onRequestTrashConfirmation: workspace.requestTrashConfirmation
@@ -273,6 +359,7 @@ struct WorkspaceView: View {
                     contextActionRouter: contextActionRouter,
                     openWithProvider: openWithProvider,
                     selectionFolder: selectionFolder,
+                    getInfoInspector: getInfoInspector,
                     isActive: workspace.activePaneID == .right,
                     onActivate: { workspace.activate(.right) },
                     onRequestTrashConfirmation: workspace.requestTrashConfirmation
@@ -318,12 +405,47 @@ struct WorkspaceView: View {
         return "No file operation in progress."
     }
 
+    private var workspaceModalIsPresented: Bool {
+        WorkspaceTabModalPolicy(
+            profilesPresented: profilesPresented,
+            passwordPresented: modalPresentationState.presentedPasswordRequestID != nil,
+            selectionFolderPresented: modalPresentationState.isSelectionFolderPresented,
+            conflictPresented: operationController.pendingConflict != nil,
+            smartSearchPresented: smartSearch.isPresented,
+            batchRenamePresented: batchRename.isPresented,
+            pendingTrashPresented: workspace.pendingTrashRequest != nil,
+            synchronizationReviewPresented: comparison.folderSynchronizationReview != .idle
+        ).isPresented
+    }
+
+    private func teardownActiveWorkspace() {
+        WorkspaceTabTeardownActions.perform(
+            stopComparison: comparison.stop,
+            exitStorage: storage.exit,
+            closePreview: previewCoordinator.closeAndRestoreFocus,
+            dismissSmartSearch: smartSearch.dismiss,
+            dismissBatchRename: batchRename.dismiss,
+            dismissSelectionFolder: selectionFolder.dismiss,
+            dismissSynchronizationReview: comparison.cancelFolderSynchronizationReview,
+            dismissPendingTrash: workspace.dismissTrashConfirmation,
+            endTextEditing: {
+                guard let editing = workspace.activeTextEditingSession else { return }
+                workspace.endTextEditing(editing)
+            },
+            cancelPassword: {
+                guard let request = passwordCoordinator.pendingRequest else { return }
+                passwordCoordinator.cancel(requestID: request.id)
+            }
+        )
+    }
+
     private var pendingConflict: Binding<IdentifiedFileConflict?> {
         Binding {
             guard modalPresentationState.allowsOtherModalPresentation,
                   !smartSearch.isPresented,
                   !batchRename.isPresented,
-                  !selectionFolder.isPresented
+                  !selectionFolder.isPresented,
+                  comparison.folderSynchronizationReview == .idle
             else { return nil }
             return operationController.pendingConflict.map(IdentifiedFileConflict.init)
         } set: { item in
@@ -381,7 +503,8 @@ struct WorkspaceView: View {
                 conflictPresented: operationController.pendingConflict != nil,
                 searchPresented: smartSearch.isPresented,
                 batchRenamePresented: batchRename.isPresented,
-                selectionFolderPresented: selectionFolder.isPresented
+                selectionFolderPresented: selectionFolder.isPresented,
+                synchronizationReviewPresented: comparison.folderSynchronizationReview != .idle
             )
         } set: { request in
             // The sheet's content captures the request ID and handles its own
@@ -399,7 +522,8 @@ struct WorkspaceView: View {
                     conflictPresented: operationController.pendingConflict != nil,
                     searchPresented: smartSearch.isPresented,
                     batchRenamePresented: batchRename.isPresented,
-                    passwordPresented: passwordCoordinator.pendingRequest != nil
+                    passwordPresented: passwordCoordinator.pendingRequest != nil,
+                    synchronizationReviewPresented: comparison.folderSynchronizationReview != .idle
                 )
         } set: { isPresented in
             if !isPresented {

@@ -2,9 +2,7 @@
 
 [한국어](current-limitations.ko.md) · **English** · [User guide](user-guide.md)
 
-This list covers the current source tree. The published Developer Preview 5 DMG
-also excludes source features that have not yet been packaged into a later
-release, including batch rename.
+This list covers the current source tree and the Developer Preview 7 DMG.
 
 ## Platform and distribution
 
@@ -14,8 +12,12 @@ release, including batch rename.
 
 ## Search, preview, and cloud
 
-- Search uses names, relative paths, and available metadata; there is no file-
-  content search or persistent background index.
+- Search uses names, relative paths, and available metadata by default. Its
+  opt-in Spotlight content mode searches only already-indexed literal content;
+  coverage can be incomplete for provider-backed, excluded, or unindexed
+  locations and it supplies no snippets or persistent Pengrid index.
+- Get Info is read-only. It does not change names, tags, permissions, ownership,
+  dates, or extended attributes; SHA-256 remains an explicit single-file action.
 - Folder preview is one level and read-only. File Provider metadata that is not
   locally exposed is reported unavailable rather than downloaded implicitly.
 - Google Drive and OneDrive use their macOS File Provider roots. Pengrid has no
@@ -35,6 +37,22 @@ release, including batch rename.
   change.
 - Mutations are serial. A recovery-needed rollback blocks the queue for review
   instead of guessing ownership or deleting an uncertain item.
+
+## Folder synchronization
+
+- One-way, review-first synchronization of the complete current comparison is
+  available. There is no bidirectional merge, schedule, background watcher, or
+  continuous sync.
+- The plan is all-or-nothing. Individual copy, replace, or Trash rows cannot
+  be selected independently.
+- Completed synchronization is not Undoable and cannot be retried from the
+  captured review. In-flight cancellation rolls back owned changes or reports
+  Recovery Needed.
+- Symbolic links, packages, special entries, type/name conflicts, and unsafe
+  root relationships block the plan. File Provider items are not materialized
+  to make a review or transaction possible.
+- Destination-only items move to Trash after publication. Pengrid does not
+  permanently delete pre-existing user data.
 
 ## Archives and destructive operations
 

@@ -27,6 +27,12 @@ import Testing
     #expect(implementation.contains("sizeDescription(result.item.byteSize)"))
     #expect(implementation.contains("dateDescription(result.item.modifiedAt)"))
     #expect(!implementation.contains("url.path)"))
+    #expect(implementation.contains("Search indexed file contents"))
+    #expect(implementation.contains("Indexed contents included"))
+    #expect(implementation.contains("Spotlight unavailable; searched names and paths only"))
+    #expect(implementation.contains("Indexed contents skipped for Korean-initial search"))
+    #expect(implementation.contains("SpotlightSearchAccessibilityIdentifiers.indexedContents"))
+    #expect(implementation.contains("without downloading cloud-only files"))
 }
 
 @MainActor

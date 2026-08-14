@@ -30,6 +30,43 @@ import Testing
         ))
     }
 
+    @Test func synchronizationReviewIsExclusiveWithEveryOtherWorkspaceSheet() {
+        var state = WorkspaceModalPresentationState()
+        state.synchronizationReviewSheetDidAppear()
+
+        #expect(!state.allowsOtherModalPresentation)
+        #expect(!state.allowsSynchronizationReviewPresentation(
+            conflictPresented: false,
+            searchPresented: false,
+            batchRenamePresented: false,
+            passwordPresented: true,
+            selectionFolderPresented: false
+        ))
+        #expect(!state.allowsSynchronizationReviewPresentation(
+            conflictPresented: true,
+            searchPresented: false,
+            batchRenamePresented: false,
+            passwordPresented: false,
+            selectionFolderPresented: false
+        ))
+        #expect(!state.allowsSelectionFolderPresentation(
+            conflictPresented: false,
+            searchPresented: false,
+            batchRenamePresented: false,
+            passwordPresented: false,
+            synchronizationReviewPresented: true
+        ))
+
+        state.synchronizationReviewSheetDidDisappear()
+        #expect(state.allowsSynchronizationReviewPresentation(
+            conflictPresented: false,
+            searchPresented: false,
+            batchRenamePresented: false,
+            passwordPresented: false,
+            selectionFolderPresented: false
+        ))
+    }
+
     @Test func passwordWaitsWhileSelectionFolderIsPresented() {
         let request = ArchivePasswordRequest(
             id: UUID(),

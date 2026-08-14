@@ -9,23 +9,23 @@ App Sandbox entitlement를 사용하지 않습니다. 실행 파일명과 호환
 ## 현재 게시된 Developer Preview
 
 현재 무료 바이너리 릴리스는
-[Pengrid 1.3.0 Developer Preview 6](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.6)입니다.
+[Pengrid 1.3.0 Developer Preview 7](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.7)입니다.
 
-- DMG: [Pengrid.dmg](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.6/Pengrid.dmg)
-- 태그: `v1.3.0-developer-preview.6`
-- 패키징한 소스 커밋: `cd24295bbe60390047985d4577b151aaaa74ad7c`
-- 앱 버전: `1.3.0`, 빌드 `8`
+- DMG: [Pengrid.dmg](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.7/Pengrid.dmg)
+- 태그: `v1.3.0-developer-preview.7`
+- 패키징한 소스 커밋: `c0fd61b4af8a42749d6870747eb6de4fc7ec5026`
+- 앱 버전: `1.3.0`, 빌드 `9`
 - 플랫폼: Apple Silicon, macOS 15 이상
-- 자동 검증: 92개 스위트의 테스트 1,407개 통과
+- 자동 검증: 110개 스위트의 테스트 1,645개 통과
 - 패키징: 릴리스 계약 테스트와 arm64 프로덕션 빌드 통과
-- 파일 검사: 앱 서명, DMG 체크섬, 마운트된 앱의 빌드 번호, 로컬 설치, 실행,
-  GitHub 자산 digest 및 공개 재다운로드 바이트 비교 검증 통과
+- 로컬 파일 검사: 앱 서명, DMG 체크섬, 마운트된 앱의 빌드 번호, 설치 및 실행
+  검증 통과
 - DMG SHA-256:
-  `ece6212bd5f80d21bc64ef2059839db8a79a416b3706b140b1c4155dbe801b32`
+  `d7060401f05bbaac7f1d64b76d5bce6b93708c75644c8c3737698e8a3144fd73`
 
-Preview 6는 캡처된 선택을 사용하는 컨텍스트 작업, 반대쪽 패널 전송,
-Duplicate 및 선택 항목을 새 폴더로 묶는 트랜잭션 기능을 추가한 릴리스입니다.
-같은 패키징 앱을 `/Applications/Pengrid.app`에 설치하고 빌드 8을 확인한 뒤
+Preview 7은 작업 공간 탭과 프로필, 읽기 전용 Get Info, 선택 가능한 색인 내용
+검색, 강화된 Undo/Redo 스택 및 검토 우선 단방향 폴더 동기화를 추가합니다.
+같은 패키징 앱을 `/Applications/Pengrid.app`에 설치하고 빌드 9를 확인한 뒤
 정상적으로 실행했습니다.
 
 이 파일은 ad-hoc 방식으로 서명되었으며 Developer ID 서명과 Apple 공증을
@@ -33,7 +33,9 @@ Duplicate 및 선택 항목을 새 폴더로 묶는 트랜잭션 기능을 추�
 배포 심사에서 예상대로 거부됩니다. 서명된 공개 릴리스가 아니라 unsigned
 Developer Preview임을 명확히 표시해 배포합니다. 아직 `NOT RUN`인 실제 File
 Provider, 이동식 볼륨, 대소문자 구분 볼륨, 키보드 및 접근성 검사는 저장소의
-검증 문서에 그대로 기록되어 있습니다.
+검증 문서에 그대로 기록되어 있습니다. 로컬 폴더 동기화 검토, 취소, 롤백,
+탭 차단 및 검토 시트 VoiceOver에는 부분 수동 증거가 있지만 완료 동기화와
+로그인된 provider 실행은 아직 `NOT RUN`입니다.
 
 ## 버전 1.3 릴리스 게이트
 

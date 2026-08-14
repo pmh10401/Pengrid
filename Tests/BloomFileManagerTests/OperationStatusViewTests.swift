@@ -195,6 +195,51 @@ import Testing
     }
 }
 
+@Test func folderSynchronizationPhasesHaveBoundedRelativePathOnlyAccessibilityLabels() throws {
+    let expectations: [(FolderSynchronizationTransactionPhase, String)] = [
+        (.preflighting, "Checking Folders"),
+        (.staging, "Staging Copies"),
+        (.verifyingStaging, "Verifying Staged Copies"),
+        (.quarantining, "Quarantining Destinations"),
+        (.publishing, "Publishing Copies"),
+        (.verifyingPublished, "Verifying Published Copies"),
+        (.movingToTrash, "Moving to Trash"),
+        (.rollingBack, "Restoring Folders")
+    ]
+    let relativePath = try ComparisonRelativePath(components: ["docs", "Secret\nName.txt"])
+
+    for (phase, title) in expectations {
+        let presentation = FolderSynchronizationOperationStatusPresentation(
+            progress: FolderSynchronizationProgress(
+                phase: phase,
+                completedCount: 9,
+                totalCount: 2,
+                currentRelativePath: relativePath
+            )
+        )
+        #expect(presentation.title == title)
+        #expect(presentation.completedCount == 2)
+        #expect(presentation.totalCount == 2)
+        #expect(presentation.currentItemName == "docs/Secret Name.txt")
+        #expect(presentation.accessibilityLabel ==
+            "\(title), 2 of 2, current item docs/Secret Name.txt")
+        #expect(!presentation.accessibilityLabel.contains("/private"))
+        #expect(!presentation.accessibilityLabel.contains("/SecretSource"))
+        #expect(!presentation.progressDetail.contains("/private"))
+        #expect(FileOperationStage.synchronizing(FolderSynchronizationProgress(
+            phase: phase,
+            completedCount: 1,
+            totalCount: 2,
+            currentRelativePath: relativePath
+        )) == .synchronizing(FolderSynchronizationProgress(
+            phase: phase,
+            completedCount: 1,
+            totalCount: 2,
+            currentRelativePath: relativePath
+        )))
+    }
+}
+
 @Test func selectionEnclosurePhasesHaveBoundedBasenameOnlyAccessibilityLabels() {
     let expectations: [(SelectionFolderTransactionPhase, String)] = [
         (.creatingFolder, "Creating Folder"),

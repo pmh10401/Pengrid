@@ -4,6 +4,210 @@ import Testing
 
 @Suite("Identity checked file operation undo")
 struct FileOperationUndoServiceTests {
+    @Test func moveRecipeCapturesIdentityAndFingerprint() async throws {
+        let original = URL(filePath: "/workspace/Before.txt")
+        let moved = URL(filePath: "/workspace/After.txt")
+        let fileSystem = RecordingFileSystem(existingURLs: [moved])
+        let service = FileOperationUndoService(fileSystem: fileSystem)
+        let recipe = try #require(await service.makeRecipe(
+            kind: .move,
+            result: await authoritativeUndoResult(
+                outcomes: [.succeeded(source: original, destination: moved)],
+                fileSystem: fileSystem
+            ),
+            allowsUndo: true
+        ))
+
+        guard case let .moveBack(entries) = recipe else {
+            Issue.record("Expected a move-back recipe")
+            return
+        }
+        let fingerprint = try await fileSystem.fingerprint(of: moved)
+        #expect(entries[0].currentFingerprint == fingerprint)
+    }
+
+    @Test func successfulMoveBackReturnsSwappedMoveBackInverse() async throws {
+        let original = URL(filePath: "/workspace/Before.txt")
+        let moved = URL(filePath: "/workspace/After.txt")
+        let fileSystem = RecordingFileSystem(existingURLs: [moved])
+        let service = FileOperationUndoService(fileSystem: fileSystem)
+        let recipe = try #require(await service.makeRecipe(
+            kind: .move,
+            result: await authoritativeUndoResult(
+                outcomes: [.succeeded(source: original, destination: moved)],
+                fileSystem: fileSystem
+            ),
+            allowsUndo: true
+        ))
+
+        let execution = await service.performReversal(recipe)
+
+        #expect(execution.result.outcomes == [.succeeded(source: moved, destination: original)])
+        guard case let .moveBack(entries)? = execution.inverseRecipe else {
+            Issue.record("Expected a freshly captured inverse")
+            return
+        }
+        #expect(entries[0].currentURL == original)
+        #expect(entries[0].originalURL == moved)
+    }
+
+    @Test func moveBackDoesNotEmitInverseAfterPostRelocationContentDrift() async throws {
+        let original = URL(filePath: "/workspace/Before.txt")
+        let moved = URL(filePath: "/workspace/After.txt")
+        let fileSystem = RecordingFileSystem(
+            existingURLs: [moved],
+            mutateMovedDestinationAfterCheckedExclusiveMoveAttempts: [1]
+        )
+        let service = FileOperationUndoService(fileSystem: fileSystem)
+        let recipe = try #require(await service.makeRecipe(
+            kind: .move,
+            result: await authoritativeUndoResult(
+                outcomes: [.succeeded(source: original, destination: moved)],
+                fileSystem: fileSystem
+            ),
+            allowsUndo: true
+        ))
+
+        let execution = await service.performReversal(recipe)
+
+        #expect(execution.result.hasFailures)
+        #expect(execution.inverseRecipe == nil)
+    }
+
+    @Test func moveBackDoesNotEmitInverseAfterPostRelocationIdentityReplacement() async throws {
+        let original = URL(filePath: "/workspace/Before.txt")
+        let moved = URL(filePath: "/workspace/After.txt")
+        let fileSystem = RecordingFileSystem(
+            existingURLs: [moved],
+            replaceMovedDestinationIdentityAfterCheckedExclusiveMoveAttempts: [1]
+        )
+        let service = FileOperationUndoService(fileSystem: fileSystem)
+        let recipe = try #require(await service.makeRecipe(
+            kind: .move,
+            result: await authoritativeUndoResult(
+                outcomes: [.succeeded(source: original, destination: moved)],
+                fileSystem: fileSystem
+            ),
+            allowsUndo: true
+        ))
+
+        let execution = await service.performReversal(recipe)
+
+        #expect(execution.result.hasFailures)
+        #expect(execution.inverseRecipe == nil)
+    }
+
+    @Test func cancelledMoveBackDetachesAndCompletesRollback() async throws {
+        let firstOriginal = URL(filePath: "/workspace/First-before.txt")
+        let firstMoved = URL(filePath: "/workspace/First-after.txt")
+        let secondOriginal = URL(filePath: "/workspace/Second-before.txt")
+        let secondMoved = URL(filePath: "/workspace/Second-after.txt")
+        let fileSystem = RecordingFileSystem(
+            existingURLs: [firstMoved, secondMoved],
+            cancelAfterCheckedExclusiveMoveAttempt: 1
+        )
+        let service = FileOperationUndoService(fileSystem: fileSystem)
+        let recipe = try #require(await service.makeRecipe(
+            kind: .move,
+            result: await authoritativeUndoResult(
+                outcomes: [
+                    .succeeded(source: firstOriginal, destination: firstMoved),
+                    .succeeded(source: secondOriginal, destination: secondMoved)
+                ],
+                fileSystem: fileSystem
+            ),
+            allowsUndo: true
+        ))
+
+        let operation = Task { await service.performReversal(recipe) }
+        let execution = await operation.value
+
+        #expect(execution.inverseRecipe == nil)
+        #expect(execution.result.outcomes.allSatisfy { if case .cancelled = $0 { return true }; return false })
+        #expect(await fileSystem.existingURLs == [firstMoved, secondMoved])
+    }
+
+    @Test func successfulRemoveCreatedReturnsTrashLocationMoveBackInverse() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let source = root.url.appending(path: "Source.txt")
+        let created = root.url.appending(path: "Report.txt")
+        try Data("report".utf8).write(to: created)
+        let fileSystem = LiveFileSystemAccess()
+        let service = FileOperationUndoService(fileSystem: fileSystem)
+        let recipe = try #require(await service.makeRecipe(
+            kind: .copy,
+            result: await authoritativeUndoResult(outcomes: [.succeeded(source: source, destination: created)], fileSystem: fileSystem),
+            allowsUndo: true
+        ))
+
+        let execution = await service.performReversal(recipe)
+
+        guard case let .moveBack(entries)? = execution.inverseRecipe else {
+            Issue.record("Expected an inverse from the resulting Trash location")
+            return
+        }
+        #expect(entries.count == 1)
+        #expect(entries[0].currentURL != created)
+        #expect(entries[0].originalURL == created)
+    }
+
+    @Test func successfulBatchRenameReturnsResultMetadataAsInverse() async throws {
+        let fixture = try await BatchRenameUndoFixture(mapping: ["A.txt": "C.txt", "B.txt": "D.txt"])
+        let forward = await fixture.transaction.execute(fixture.plan) { _ in }
+        let service = FileOperationUndoService(fileSystem: fixture.fileSystem, batchRenameService: fixture.transaction)
+        let recipe = try #require(await service.makeRecipe(kind: .rename, result: forward, allowsUndo: true))
+
+        let execution = await service.performReversal(recipe)
+
+        guard case .batchRename? = execution.inverseRecipe else {
+            Issue.record("Expected fresh batch-rename metadata")
+            return
+        }
+        #expect(!execution.result.hasFailures)
+    }
+
+    @Test func batchRenameRecipeRejectsSameCountSwappedOutcomeOrder() async throws {
+        let fixture = try await BatchRenameUndoFixture(mapping: ["A.txt": "C.txt", "B.txt": "D.txt"])
+        let forward = await fixture.transaction.execute(fixture.plan) { _ in }
+        let plan = try #require(forward.batchRenameUndoMetadata())
+        let mismatched = FileOperationResult(
+            outcomes: forward.outcomes.reversed(),
+            undoDestinationIdentities: Dictionary(uniqueKeysWithValues: plan.entries.map { ($0.finalURL, $0.finalIdentity) }),
+            undoDestinationFingerprints: Dictionary(uniqueKeysWithValues: plan.entries.map { ($0.finalURL, $0.finalFingerprint) }),
+            batchRenameUndoPlan: plan
+        )
+
+        #expect(await FileOperationUndoService(fileSystem: fixture.fileSystem).makeRecipe(
+            kind: .rename,
+            result: mismatched,
+            allowsUndo: true
+        ) == nil)
+    }
+
+    @Test func batchRenameRecipeRejectsSameCountSwappedMetadataEntries() async throws {
+        let fixture = try await BatchRenameUndoFixture(mapping: ["A.txt": "C.txt", "B.txt": "D.txt"])
+        let forward = await fixture.transaction.execute(fixture.plan) { _ in }
+        let plan = try #require(forward.batchRenameUndoMetadata())
+        let mismatchedPlan = BatchRenameUndoPlan(
+            parentURL: plan.parentURL,
+            parentIdentity: plan.parentIdentity,
+            entries: plan.entries.reversed(),
+            comparisonPolicy: plan.comparisonPolicy
+        )
+        let mismatched = FileOperationResult(
+            outcomes: forward.outcomes,
+            undoDestinationIdentities: Dictionary(uniqueKeysWithValues: plan.entries.map { ($0.finalURL, $0.finalIdentity) }),
+            undoDestinationFingerprints: Dictionary(uniqueKeysWithValues: plan.entries.map { ($0.finalURL, $0.finalFingerprint) }),
+            batchRenameUndoPlan: mismatchedPlan
+        )
+
+        #expect(await FileOperationUndoService(fileSystem: fixture.fileSystem).makeRecipe(
+            kind: .rename,
+            result: mismatched,
+            allowsUndo: true
+        ) == nil)
+    }
     @Test func duplicateUndoRequiresTheCapturedCreatedIdentityAndFingerprint() async throws {
         let source = URL(filePath: "/workspace/Report.txt")
         let duplicate = URL(filePath: "/workspace/Report copy.txt")
@@ -149,6 +353,59 @@ struct FileOperationUndoServiceTests {
         #expect(await fileSystem.events.contains(where: { $0.hasPrefix("moveChecked:") }) == false)
     }
 
+    @Test func moveUndoRejectsSameIdentityContentMutation() async throws {
+        let original = URL(filePath: "/workspace/Before.txt")
+        let moved = URL(filePath: "/workspace/After.txt")
+        let fileSystem = RecordingFileSystem(existingURLs: [moved])
+        let service = FileOperationUndoService(fileSystem: fileSystem)
+        let recipe = try #require(await service.makeRecipe(
+            kind: .move,
+            result: await authoritativeUndoResult(
+                outcomes: [.succeeded(source: original, destination: moved)],
+                fileSystem: fileSystem
+            ),
+            allowsUndo: true
+        ))
+        await fileSystem.mutateContents(at: moved)
+
+        let result = await service.perform(recipe)
+
+        #expect(result.hasFailures)
+        #expect(await fileSystem.existingURLs.contains(moved))
+        #expect(await fileSystem.existingURLs.contains(original) == false)
+    }
+
+    @Test func moveUndoRejectsMutationImmediatelyBeforeExclusiveMove() async throws {
+        let original = URL(filePath: "/workspace/Before.txt")
+        let moved = URL(filePath: "/workspace/After.txt")
+        let fileSystem = RecordingFileSystem(
+            existingURLs: [moved],
+            suspendCheckedExclusiveMoveAttempt: 1
+        )
+        let service = FileOperationUndoService(fileSystem: fileSystem)
+        let recipe = try #require(await service.makeRecipe(
+            kind: .move,
+            result: await authoritativeUndoResult(
+                outcomes: [.succeeded(source: original, destination: moved)],
+                fileSystem: fileSystem
+            ),
+            allowsUndo: true
+        ))
+        let operation = Task { await service.perform(recipe) }
+        await fileSystem.waitForSuspendedCheckedExclusiveMove()
+        await fileSystem.replaceIdentity(
+            at: moved,
+            with: FileIdentity(entryIdentifier: "replacement", resolvedIdentifier: "replacement")
+        )
+        await fileSystem.releaseSuspendedCheckedExclusiveMove()
+
+        let result = await operation.value
+
+        #expect(result.hasFailures)
+        #expect(await fileSystem.existingURLs.contains(moved))
+        #expect(await fileSystem.existingURLs.contains(original) == false)
+    }
+
     @Test func trashUndoRestoresTheCapturedTrashIdentityToItsOriginalPath() async throws {
         let original = URL(filePath: "/workspace/Deleted.txt")
         let trashed = URL(filePath: "/.Trash/Pengrid-Deleted.txt")
@@ -172,8 +429,9 @@ struct FileOperationUndoServiceTests {
 
     @Test func copiedOutputUndoQuarantinesAndTrashesOnlyAnUnchangedFingerprint() async throws {
         let source = URL(filePath: "/source/Photo.jpg")
+        let destinationDirectory = URL(filePath: "/destination", directoryHint: .isDirectory)
         let copied = URL(filePath: "/destination/Photo.jpg")
-        let fileSystem = RecordingFileSystem(existingURLs: [copied])
+        let fileSystem = RecordingFileSystem(existingURLs: [destinationDirectory, copied])
         let service = FileOperationUndoService(fileSystem: fileSystem)
         let recipe = try #require(await service.makeRecipe(
             kind: .copy,
@@ -219,10 +477,11 @@ struct FileOperationUndoServiceTests {
     @Test func failedTrashCommitRestoresEveryLaterQuarantinedOutput() async throws {
         let firstSource = URL(filePath: "/source/First.txt")
         let secondSource = URL(filePath: "/source/Second.txt")
+        let destinationDirectory = URL(filePath: "/destination", directoryHint: .isDirectory)
         let firstCopy = URL(filePath: "/destination/First.txt")
         let secondCopy = URL(filePath: "/destination/Second.txt")
         let fileSystem = RecordingFileSystem(
-            existingURLs: [firstCopy, secondCopy],
+            existingURLs: [destinationDirectory, firstCopy, secondCopy],
             forceTrashQuarantineRecovery: true
         )
         let service = FileOperationUndoService(fileSystem: fileSystem)
@@ -248,9 +507,10 @@ struct FileOperationUndoServiceTests {
     @Test func cancellationBeforeNextTrashCommitRestoresThatQuarantinedOutput() async throws {
         let firstSource = URL(filePath: "/source/First.txt")
         let secondSource = URL(filePath: "/source/Second.txt")
+        let destinationDirectory = URL(filePath: "/destination", directoryHint: .isDirectory)
         let firstCopy = URL(filePath: "/destination/First.txt")
         let secondCopy = URL(filePath: "/destination/Second.txt")
-        let fileSystem = RecordingFileSystem(existingURLs: [firstCopy, secondCopy])
+        let fileSystem = RecordingFileSystem(existingURLs: [destinationDirectory, firstCopy, secondCopy])
         let service = FileOperationUndoService(fileSystem: fileSystem)
         let recipe = try #require(await service.makeRecipe(
             kind: .copy,
@@ -263,7 +523,7 @@ struct FileOperationUndoServiceTests {
         let gate = UndoProgressCancellationGate()
 
         let operation = Task {
-            await service.perform(recipe) { progress in
+            await service.performReversal(recipe) { progress in
                 guard progress.completedCount == 1 else { return }
                 await gate.suspend()
             }
@@ -271,8 +531,10 @@ struct FileOperationUndoServiceTests {
         await gate.waitUntilSuspended()
         operation.cancel()
         await gate.release()
-        let result = await operation.value
+        let execution = await operation.value
+        let result = execution.result
 
+        #expect(execution.inverseRecipe == nil)
         #expect(result.outcomes.count == 2)
         guard case let .succeeded(source, destination) = result.outcomes.first else {
             Issue.record("Expected the first output to reach Trash")
@@ -288,10 +550,11 @@ struct FileOperationUndoServiceTests {
     @Test func partialUndoFailureRequiresRecoveryEvenWhenCurrentItemWasRestored() async throws {
         let firstSource = URL(filePath: "/source/First.txt")
         let secondSource = URL(filePath: "/source/Second.txt")
+        let destinationDirectory = URL(filePath: "/destination", directoryHint: .isDirectory)
         let firstCopy = URL(filePath: "/destination/First.txt")
         let secondCopy = URL(filePath: "/destination/Second.txt")
         let fileSystem = RecordingFileSystem(
-            existingURLs: [firstCopy, secondCopy],
+            existingURLs: [destinationDirectory, firstCopy, secondCopy],
             failTrashQuarantineCommitOnAttempt: 2
         )
         let service = FileOperationUndoService(fileSystem: fileSystem)
@@ -304,8 +567,10 @@ struct FileOperationUndoServiceTests {
             allowsUndo: true
         ))
 
-        let result = await service.perform(recipe)
+        let execution = await service.performReversal(recipe)
+        let result = execution.result
 
+        #expect(execution.inverseRecipe == nil)
         #expect(result.outcomes.count == 2)
         guard case .succeeded = result.outcomes.first else {
             Issue.record("Expected the first output to reach Trash")
@@ -566,7 +831,7 @@ struct FileOperationUndoServiceTests {
             result: fixture.result,
             allowsUndo: true
         ))
-        #expect(recipe == .selectionFolder(fixture.undoPlan))
+        #expect(recipe == .selectionFolderReverse(fixture.undoPlan))
 
         await fixture.fileSystem.mutateContents(at: fixture.folder.appending(path: "A.txt"))
         await fixture.fileSystem.clearEvents()
@@ -698,6 +963,118 @@ struct FileOperationUndoServiceTests {
         #expect(FileManager.default.fileExists(atPath: folder.path) == false)
         #expect(try String(contentsOf: first, encoding: .utf8) == "A")
         #expect(try String(contentsOf: second, encoding: .utf8) == "B")
+    }
+
+    @Test func successfulSelectionFolderReverseReturnsFingerprintBoundForwardInverse() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let parent = root.url
+        let folder = parent.appending(path: "Collected", directoryHint: .isDirectory)
+        let first = parent.appending(path: "A.txt")
+        let second = parent.appending(path: "B.txt")
+        try Data("A".utf8).write(to: first)
+        try Data("B".utf8).write(to: second)
+        let fileSystem = LiveFileSystemAccess()
+        let transaction = SelectionFolderTransactionService(fileSystem: fileSystem)
+        let parentIdentity = try #require(await fileSystem.identity(of: parent))
+        var sources: [ContextActionSource] = []
+        for url in [first, second] {
+            sources.append(ContextActionSource(
+                item: FileItem(
+                    url: url,
+                    name: url.lastPathComponent,
+                    isDirectory: false,
+                    isPackage: false,
+                    modifiedAt: nil,
+                    byteSize: nil,
+                    typeDescription: "Document"
+                ),
+                identity: try #require(await fileSystem.identity(of: url))
+            ))
+        }
+        let forward = await transaction.execute(SelectionFolderPlan(
+            parentURL: parent,
+            parentIdentity: parentIdentity,
+            folderName: "Collected",
+            folderURL: folder,
+            sources: sources
+        ), progress: { _ in })
+        let undoService = FileOperationUndoService(
+            fileSystem: fileSystem,
+            selectionFolderTransactionService: transaction
+        )
+        let recipe = try #require(await undoService.makeRecipe(
+            kind: .encloseSelection,
+            result: forward,
+            allowsUndo: true
+        ))
+
+        let execution = await undoService.performReversal(recipe)
+
+        guard !execution.result.hasFailures else {
+            Issue.record("Reverse failed: \(execution.result.outcomes)")
+            return
+        }
+        #expect(execution.result.outcomes.count == 2)
+        guard case let .selectionFolderForward(forward)? = execution.inverseRecipe else {
+            Issue.record("Expected a fingerprint-bound forward inverse")
+            return
+        }
+        #expect(forward.plan.folderURL == folder)
+        #expect(forward.expectedSourceFingerprints.count == 2)
+        #expect(await fileSystem.exists(folder) == false)
+    }
+
+    @Test func successfulSelectionFolderForwardReturnsFreshReverseInverse() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let parent = root.url
+        let folder = parent.appending(path: "Collected", directoryHint: .isDirectory)
+        let first = parent.appending(path: "A.txt")
+        let second = parent.appending(path: "B.txt")
+        try Data("A".utf8).write(to: first)
+        try Data("B".utf8).write(to: second)
+        let fileSystem = LiveFileSystemAccess()
+        let parentIdentity = try #require(await fileSystem.identity(of: parent))
+        var sources: [ContextActionSource] = []
+        var fingerprints: [URL: SourceFingerprint] = [:]
+        for url in [first, second] {
+            let identity = try #require(await fileSystem.identity(of: url))
+            fingerprints[url] = try await fileSystem.fingerprint(of: url)
+            sources.append(ContextActionSource(
+                item: FileItem(
+                    url: url,
+                    name: url.lastPathComponent,
+                    isDirectory: false,
+                    isPackage: false,
+                    modifiedAt: nil,
+                    byteSize: nil,
+                    typeDescription: "Document"
+                ),
+                identity: identity
+            ))
+        }
+        let recipe = FileOperationUndoRecipe.selectionFolderForward(.init(
+            plan: .init(
+                parentURL: parent,
+                parentIdentity: parentIdentity,
+                folderName: "Collected",
+                folderURL: folder,
+                sources: sources
+            ),
+            expectedSourceFingerprints: fingerprints
+        ))
+        let service = FileOperationUndoService(fileSystem: fileSystem)
+
+        let execution = await service.performReversal(recipe)
+
+        #expect(!execution.result.hasFailures)
+        guard case let .selectionFolderReverse(plan)? = execution.inverseRecipe else {
+            Issue.record("Expected a fresh selection-folder reverse inverse")
+            return
+        }
+        #expect(plan.folderURL == folder)
+        #expect(await fileSystem.exists(folder))
     }
 }
 

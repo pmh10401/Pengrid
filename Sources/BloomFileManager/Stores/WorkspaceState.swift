@@ -44,6 +44,7 @@ final class WorkspaceState {
     private(set) var pendingTrashRequest: TrashRequest?
     private(set) var activeTextEditingSession: WorkspaceTextEditingSession?
     private let persistence: WorkspacePersistence?
+    private let descriptorDidChange: (@MainActor @Sendable (WorkspaceSnapshot, PaneID) -> Void)?
     let leftFallbackURL: URL
     let rightFallbackURL: URL
     private var persistedSplitRatio: Double
@@ -67,7 +68,8 @@ final class WorkspaceState {
         splitRatio: Double = 0.5,
         listingService: any DirectoryListingService,
         monitor: any DirectoryMonitor = LiveDirectoryMonitor(),
-        persistence: WorkspacePersistence? = nil
+        persistence: WorkspacePersistence? = nil,
+        descriptorDidChange: (@MainActor @Sendable (WorkspaceSnapshot, PaneID) -> Void)? = nil
     ) {
         let normalizedRatio = WorkspaceSplitRatio.clamped(splitRatio)
         left = FilePaneState(
@@ -85,6 +87,7 @@ final class WorkspaceState {
         self.splitRatio = normalizedRatio
         persistedSplitRatio = normalizedRatio
         self.persistence = persistence
+        self.descriptorDidChange = descriptorDidChange
         self.leftFallbackURL = leftFallbackURL ?? leftURL
         self.rightFallbackURL = rightFallbackURL ?? rightURL
 
@@ -114,12 +117,15 @@ final class WorkspaceState {
             splitRatio: restored.splitRatio,
             listingService: listingService,
             monitor: monitor,
-            persistence: persistence
+            persistence: persistence,
+            descriptorDidChange: nil
         )
     }
 
     func activate(_ pane: PaneID) {
+        guard activePaneID != pane else { return }
         activePaneID = pane
+        notifyDescriptorDidChange()
     }
 
     func requestTrashConfirmation(for items: [IdentifiedFileRequest]) {
@@ -175,15 +181,26 @@ final class WorkspaceState {
     }
 
     func flushPendingPersistence() {
-        guard splitRatioPersistenceTask != nil else { return }
-        splitRatioPersistenceTask?.cancel()
-        splitRatioPersistenceTask = nil
-        persistedSplitRatio = WorkspaceSplitRatio.clamped(splitRatio)
+        if splitRatioPersistenceTask != nil {
+            splitRatioPersistenceTask?.cancel()
+            splitRatioPersistenceTask = nil
+            persistedSplitRatio = WorkspaceSplitRatio.clamped(splitRatio)
+        }
         saveWorkspaceSnapshot()
     }
 
+    func currentSnapshot() -> WorkspaceSnapshot {
+        WorkspaceSnapshot(
+            leftPath: left.committedDirectoryForPersistence.path,
+            rightPath: right.committedDirectoryForPersistence.path,
+            leftSort: left.sort,
+            rightSort: right.sort,
+            splitRatio: persistedSplitRatio
+        )
+    }
+
     private func scheduleSplitRatioPersistence() {
-        guard persistence != nil else { return }
+        guard persistence != nil || descriptorDidChange != nil else { return }
         splitRatioPersistenceTask?.cancel()
         splitRatioPersistenceTask = Task { @MainActor [weak self] in
             do {
@@ -199,12 +216,12 @@ final class WorkspaceState {
     }
 
     private func saveWorkspaceSnapshot() {
-        persistence?.save(WorkspaceSnapshot(
-            leftPath: left.committedDirectoryForPersistence.path,
-            rightPath: right.committedDirectoryForPersistence.path,
-            leftSort: left.sort,
-            rightSort: right.sort,
-            splitRatio: persistedSplitRatio
-        ))
+        let snapshot = currentSnapshot()
+        persistence?.save(snapshot)
+        descriptorDidChange?(snapshot, activePaneID)
+    }
+
+    private func notifyDescriptorDidChange() {
+        descriptorDidChange?(currentSnapshot(), activePaneID)
     }
 }

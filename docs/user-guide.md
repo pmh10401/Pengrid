@@ -2,15 +2,14 @@
 
 [한국어](user-guide.ko.md) · **English** · [README](../README.md)
 
-This guide describes Pengrid 1.3.0 Developer Preview 6 and the current source
-tree, including safety boundaries and deliberately omitted behavior. The file
-context actions and batch rename described below are included in Preview 6.
+This guide describes Pengrid 1.3.0 Developer Preview 7 and the current source
+tree, including safety boundaries and deliberately omitted behavior.
 
 ## Requirements and installation
 
 Pengrid currently supports Apple Silicon Macs running macOS 15 or later.
 Download the DMG from the
-[Developer Preview 6 release](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.6),
+[Developer Preview 7 release](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.7),
 open it, and copy `Pengrid.app` to `Applications`.
 
 The free DMG is ad-hoc signed, not Developer ID signed, and not notarized.
@@ -56,6 +55,26 @@ Commands are disabled while the selection or current editing state makes them
 unsafe. Rename, location editing, and filtering retain normal text-editing
 priority for Return, Space, Escape, and Delete.
 
+### Workspace tabs and profiles
+
+The tab bar keeps multiple independent dual-pane workspaces available in one
+window. **Command-T** opens a new tab with the active tab's saved folder pair,
+sort order, split position, and active pane. **Command-W** closes the active tab
+only when it is not the last tab and no active or queued file operation is bound
+to it. A text editor or presented modal keeps Command-W for its normal owner.
+Use **Control-Tab** and **Control-Shift-Tab** to move forward and backward.
+
+Tab titles and VoiceOver labels disclose only both pane folder basenames, not
+their full paths. Profiles are named reusable layouts: save the active layout from the
+tab bar, rename or delete profiles in the management sheet, and choose a profile
+to open it in a new tab. Profile names ignore leading/trailing whitespace and
+cannot duplicate another name under case- and accent-insensitive comparison.
+
+On restart, Pengrid restores workspace folders, sort orders, the divider position,
+active pane, tab order, active tab, and profiles. It does not restore selections,
+filters, navigation history, scroll position, previews, comparison/storage views,
+Smart Search, editing, pending Trash confirmation, or file-operation state.
+
 ### Pane-local filtering
 
 Press **Command-F** to filter the active pane. This searches only filenames that
@@ -90,8 +109,14 @@ Results can be limited by:
 - inclusive earliest and latest modification date.
 
 Search reads names, relative paths, and ordinary filesystem or File Provider
-metadata. It is not a file-content search and does not maintain a background
-index.
+metadata by default. **Search indexed file contents** is an opt-in saved-query
+setting. For literal text only, it merges results from Spotlight's existing
+content index with the normal results; it never reads file bytes, forces File
+Provider materialization, or provides snippets. The index can be incomplete for
+provider-backed, excluded, or otherwise unindexed locations, so it never means
+all content was searched. Korean-initial or mixed-initial queries visibly skip
+indexed content. Spotlight failure or its five-second timeout preserves local
+name/path results and reports that indexed content was unavailable.
 
 ### Saved searches
 
@@ -141,6 +166,26 @@ Press Space again or Escape to close the current preview. When a system Quick
 Look panel is open, selection changes update it through the same identity and
 cloud-materialization gates used for the original selection.
 
+## Get Info
+
+Choose **Get Info** from a file-row context menu or press **Command-I**. The
+command uses the complete captured active-pane selection in visible table order;
+it is disabled while text editing is active or if that selection cannot be fully
+resolved. The reusable nonmodal panel is read-only.
+
+For one item, Get Info shows the name and path, kind/type, logical and allocated
+entry bytes, dates, owner/group, permissions, tags, cloud availability, and a
+symbolic-link destination where applicable. For multiple items, it preserves the
+captured order, reports failures separately, and shows known totals. Directory
+bytes always describe the directory entry, never a recursive total.
+
+Get Info opens with metadata only. **Calculate SHA-256** appears only for one
+captured regular non-symbolic-link file and runs only after its explicit button
+is chosen. That action revalidates identity and can require macOS to materialize
+an online-only file; opening or closing the inspector does not. This version
+does not edit tags, permissions, ownership, dates, extended attributes, or
+names.
+
 ## File-row context-menu productivity
 
 The row context menu uses the same command policy as **File Operations** in the
@@ -151,8 +196,8 @@ menu bar. Its stable groups are:
    **Copy Path >**
 3. **New Folder**, **New Folder with Selection…**, **Add to Favorites**,
    **Duplicate**, **Rename**, and **Batch Rename…**
-4. Existing **Copy** and **Paste**, existing archive actions, then **Move to
-   Trash…**
+4. Existing **Copy** and **Paste**, existing archive actions, **Move to
+   Trash…**, then **Get Info**
 
 Items without a meaningful selection are omitted. A temporarily unavailable
 action remains visible but disabled with a reason. Right-clicking inside the
@@ -514,6 +559,34 @@ events, or changed item identity invalidates stale results and disables unsafe
 actions until the affected data is reconciled. Symbolic links and packages are
 treated as opaque entries during recursive listing rather than traversed.
 
+### Reviewed one-way folder synchronization
+
+When the comparison is current, **Sync Left to Right…** and **Sync Right to
+Left…** plan the complete difference set. They do not use the table selection.
+Pengrid copies source-only supported items, replaces same-kind changed regular
+files, and moves destination-only supported items to Trash. Identical items
+are skipped. A directory copy or Trash action covers its descendants.
+
+The review sheet shows direction, the two folder names, copy/replace/Move to
+Trash/skip counts, estimated copy size, and up to eight relative paths. Confirm
+is disabled while the review is preparing, blocked, already synchronized,
+stale, or another exclusive operation is occupying the queue. VoiceOver
+announces direction and counts without reading the full root paths.
+
+Planning and preparation block type and name conflicts, checking or unstable
+rows, comparison errors, symbolic links, packages, special entries, equal or
+nested roots, and unsafe ancestor relationships. File Provider items that are
+not immediately available are reported as unavailable rather than downloaded
+for the review.
+
+Confirmation runs one exclusive, non-retryable transaction. It stages every
+copy, quarantines replacements and Trash targets, publishes verified outputs,
+and only then moves quarantines to Trash. Cancellation or failure rolls back
+owned changes or reports Recovery Needed and blocks the queue. Pre-existing
+user data is never permanently deleted. Completed synchronization is not
+Undoable. There is no bidirectional merge, schedule, background watcher, or
+permanent-delete mode.
+
 ## Storage Inspector
 
 Choose **Storage > Enter Storage Inspector**, then select a local folder or a
@@ -551,19 +624,22 @@ documents.
 
 ## Current limitations
 
-Developer Preview 6 and the current source tree deliberately do not provide:
+Developer Preview 7 and the current source tree deliberately do not provide:
 
 - Intel Mac or macOS 14-and-earlier support;
 - Developer ID signing or Apple notarization;
 - direct Google Drive or OneDrive OAuth/API clients;
-- background indexing or file-content search;
+- a complete or Pengrid-managed background index, indexed-content snippets, or
+  guaranteed content coverage;
 - guaranteed metadata for every online-only provider item;
 - reliable per-byte progress from native archive tools;
 - 7z, RAR, or password-protected TAR support;
 - permanent deletion;
 - automatic removal when ownership or identity cannot be proven;
 - batch-rename regexes, recursive subfolder renaming, manual extension editing,
-  or per-row custom names.
+  or per-row custom names;
+- bidirectional, scheduled, background, or permanent-delete folder
+  synchronization.
 
 See [release and packaging](release.md) and the
 [verification documents](verification/) for candidate-specific evidence and

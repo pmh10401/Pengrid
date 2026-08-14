@@ -15,6 +15,136 @@ private actor EmptySmartSearchService: SmartSearching {
 
 @MainActor
 struct WorkspaceCommandTests {
+    @Test func workspaceProfileSheetUsesTheGuardedCurrentOwnerRoute() throws {
+        let profilesView = try workspaceSource(named: "Views/WorkspaceProfilesView.swift")
+        let commands = try workspaceCommandsSource()
+        let tabBar = try workspaceSource(named: "Views/WorkspaceTabBarView.swift")
+
+        #expect(profilesView.contains("WorkspaceTabCommandActions.openProfile("))
+        #expect(profilesView.contains("isModalPresented: true"))
+        #expect(profilesView.contains("allowsCurrentModalOwner: true"))
+        for directMutation in [
+            "session.openProfile(profile.id)",
+            "session.saveActiveProfile(named:",
+            "session.renameProfile(",
+            "session.deleteProfile("
+        ] {
+            #expect(!profilesView.contains(directMutation))
+        }
+        for facadeAction in [
+            "WorkspaceTabCommandActions.openProfile(",
+            "WorkspaceTabCommandActions.saveActiveProfile(",
+            "WorkspaceTabCommandActions.renameProfile(",
+            "WorkspaceTabCommandActions.deleteProfile("
+        ] {
+            #expect(profilesView.contains(facadeAction))
+        }
+        #expect(!commands.contains("workspaceSession.newTab()"))
+        #expect(!commands.contains("workspaceSession.openProfile(profile.id)"))
+
+        let tabActions = try #require(commandGroupBody(
+            in: tabBar,
+            anchoredAt: "enum WorkspaceTabCommandActions"
+        ))
+        let tabBarOutsideFacade = tabBar.replacingOccurrences(of: tabActions, with: "")
+        for mutation in ["session.newTab()", "session.selectTab(", "session.openProfile(", "session.closeTab("] {
+            #expect(!tabBarOutsideFacade.contains(mutation))
+        }
+    }
+
+    @Test func workspaceCommandFocusPolicyFailsClosedForMissingFocusedValues() {
+        let missingModal = WorkspaceTabCommandFocusPolicy(
+            hasWorkspace: true,
+            hasSession: true,
+            hasTeardown: true,
+            hasProfilesPresentation: true,
+            isModalPresented: true,
+            isTextEditing: false
+        )
+        let missingTextOwner = WorkspaceTabCommandFocusPolicy(
+            hasWorkspace: true,
+            hasSession: true,
+            hasTeardown: true,
+            hasProfilesPresentation: true,
+            isModalPresented: false,
+            isTextEditing: true
+        )
+        let missingTeardown = WorkspaceTabCommandFocusPolicy(
+            hasWorkspace: true,
+            hasSession: true,
+            hasTeardown: false,
+            hasProfilesPresentation: true,
+            isModalPresented: false,
+            isTextEditing: false
+        )
+        let missingProfilePresentation = WorkspaceTabCommandFocusPolicy(
+            hasWorkspace: true,
+            hasSession: true,
+            hasTeardown: true,
+            hasProfilesPresentation: false,
+            isModalPresented: false,
+            isTextEditing: false
+        )
+
+        #expect(!missingModal.permitsTabMutation)
+        #expect(!missingTextOwner.permitsTabMutation)
+        #expect(!missingTeardown.permitsTabMutation)
+        #expect(!missingProfilePresentation.permitsProfilesPresentation)
+    }
+
+    @Test func workspaceTabMutationAPIsRequireExplicitOwnershipState() throws {
+        let tabActions = try workspaceSource(named: "Views/WorkspaceTabBarView.swift")
+        for api in [
+            "newTab", "select", "selectNext", "selectPrevious", "openProfile", "close",
+            "saveActiveProfile", "renameProfile", "deleteProfile"
+        ] {
+            let signature = try #require(tabActionSignature(named: api, in: tabActions))
+            #expect(signature.contains("isModalPresented: Bool"))
+            #expect(signature.contains("isTextEditing: Bool"))
+            #expect(!signature.contains("isModalPresented: Bool = false"))
+            #expect(!signature.contains("isTextEditing: Bool = false"))
+        }
+    }
+
+    @Test func workspaceTabCommandsStayInTheWindowGroupAndFileCommandsStayInTheFileGroup() throws {
+        let commands = try workspaceCommandsSource()
+        let windowGroup = try #require(commandGroupBody(
+            in: commands,
+            anchoredAt: "CommandGroup(after: .windowList)"
+        ))
+        let fileGroup = try #require(commandGroupBody(
+            in: commands,
+            anchoredAt: "CommandGroup(after: .newItem)"
+        ))
+        let profilesMenu = try #require(commandGroupBody(
+            in: commands,
+            anchoredAt: "CommandMenu(\"Workspace Profiles\")"
+        ))
+
+        for title in ["New Workspace Tab", "Close Workspace Tab", "Next Workspace Tab", "Previous Workspace Tab"] {
+            #expect(windowGroup.contains("Button(\"\(title)\")"))
+            #expect(!fileGroup.contains("Button(\"\(title)\")"))
+        }
+        for title in ["Open", "Quick Look", "Get Info", "Close Preview", "Rename", "Rename with F2"] {
+            #expect(fileGroup.contains("Button(\"\(title)\")"))
+            #expect(!windowGroup.contains("Button(\"\(title)\")"))
+        }
+
+        #expect(windowGroup.contains(".keyboardShortcut(\"t\", modifiers: .command)"))
+        #expect(windowGroup.contains(".keyboardShortcut(\"w\", modifiers: .command)"))
+        #expect(windowGroup.contains(".keyboardShortcut(.tab, modifiers: .control)"))
+        #expect(windowGroup.contains(".keyboardShortcut(.tab, modifiers: [.control, .shift])"))
+        #expect(windowGroup.contains("!tabCommandFocusPolicy.permitsTabMutation"))
+        #expect(windowGroup.contains("beforeClose: operationController.invalidateReversalHistory(for:)"))
+        #expect(profilesMenu.contains("Button(\"Save Workspace as Profile…\")"))
+        #expect(profilesMenu.contains("Button(\"Manage Workspace Profiles…\")"))
+        #expect(profilesMenu.contains("!tabCommandFocusPolicy.permitsProfilesPresentation"))
+        #expect(profilesMenu.contains("!tabCommandFocusPolicy.permitsTabMutation"))
+        #expect(profilesMenu.contains("WorkspaceTabCommandActions.openProfile("))
+        #expect(!commands.contains("workspaceTabModalPresented ?? false"))
+        #expect(commands.contains("workspaceTabModalPresented ?? true"))
+    }
+
     @Test func batchRenameCommandCapturesOnlyActivePaneSelectionInVisibleOrder() async throws {
         let left = URL(filePath: "/left", directoryHint: .isDirectory)
         let right = URL(filePath: "/right", directoryHint: .isDirectory)
@@ -76,6 +206,41 @@ struct WorkspaceCommandTests {
 
         #expect(store.isPresented)
         #expect(store.roots == [workspace.activePane.currentDirectory])
+    }
+
+    @Test func getInfoCommandRouteCapturesVisibleActivePaneSelectionAndFailsClosed() async throws {
+        let left = URL(filePath: "/get-info-left", directoryHint: .isDirectory)
+        let first = commandItem("first.txt", in: left)
+        let second = commandItem("second.txt", in: left)
+        let replacement = commandItem("replacement.txt", in: left)
+        let workspace = WorkspaceState(
+            leftURL: left,
+            rightURL: URL(filePath: "/get-info-right", directoryHint: .isDirectory),
+            listingService: StubDirectoryListingService(values: [left: [first, second, replacement]])
+        )
+        await workspace.loadInitialDirectories()
+        workspace.left.selection = [second.url, first.url]
+
+        var captured: [[FileItem]] = []
+        #expect(WorkspaceGetInfoCommandActions.present(
+            in: workspace,
+            isTextEditing: false,
+            present: { captured.append($0) }
+        ))
+        #expect(captured == [[first, second]])
+
+        workspace.left.selection = [replacement.url, URL(filePath: "/missing.txt")]
+        #expect(!WorkspaceGetInfoCommandActions.present(
+            in: workspace,
+            isTextEditing: false,
+            present: { captured.append($0) }
+        ))
+        #expect(!WorkspaceGetInfoCommandActions.present(
+            in: workspace,
+            isTextEditing: true,
+            present: { captured.append($0) }
+        ))
+        #expect(captured == [[first, second]])
     }
 
     @Test func protectedWorkspaceCommandActionInvokesAES256ZIPControllerRoute() async throws {
@@ -606,6 +771,41 @@ private func workspaceSource(named relativePath: String) throws -> String {
         contentsOf: packageRoot.appending(path: "Sources/BloomFileManager/\(relativePath)"),
         encoding: .utf8
     )
+}
+
+private func workspaceCommandsSource() throws -> String {
+    try workspaceSource(named: "Support/WorkspaceCommands.swift")
+}
+
+/// Extracts one balanced SwiftUI command-group body, so the menu-placement
+/// assertion is tied to the actual group boundary rather than a file-wide
+/// substring that could match a different menu.
+private func commandGroupBody(in source: String, anchoredAt anchor: String) -> String? {
+    guard let anchorRange = source.range(of: anchor),
+          let openingBrace = source[anchorRange.upperBound...].firstIndex(of: "{")
+    else { return nil }
+
+    var depth = 0
+    for index in source.indices[openingBrace...] {
+        switch source[index] {
+        case "{": depth += 1
+        case "}":
+            depth -= 1
+            if depth == 0 {
+                return String(source[source.index(after: openingBrace)..<index])
+            }
+        default: break
+        }
+    }
+    return nil
+}
+
+private func tabActionSignature(named name: String, in source: String) -> String? {
+    let anchor = "static func \(name)("
+    guard let anchorRange = source.range(of: anchor),
+          let closingParenthesis = source[anchorRange.upperBound...].firstIndex(of: ")")
+    else { return nil }
+    return String(source[anchorRange.lowerBound...closingParenthesis])
 }
 
 private extension String {

@@ -3,6 +3,23 @@ import Testing
 @testable import BloomFileManager
 
 @Suite struct SmartSearchModelTests {
+    @Test func indexedContentPreferenceRoundTripsAndLegacyDefaultsOff() throws {
+        let optedIn = try SmartSearchQuery(
+            text: "invoice",
+            roots: [URL(filePath: "/tmp")],
+            searchIndexedContents: true
+        )
+        let decoded = try JSONDecoder().decode(
+            SmartSearchQuery.self,
+            from: JSONEncoder().encode(optedIn)
+        )
+
+        #expect(decoded.searchIndexedContents)
+
+        let legacy = #"{"text":"invoice","roots":["file:\/\/\/tmp"],"includeHidden":false,"includePackages":false,"includeDirectories":true,"maximumResults":500}"#.data(using: .utf8)!
+        #expect(try JSONDecoder().decode(SmartSearchQuery.self, from: legacy).searchIndexedContents == false)
+    }
+
     @Test func metadataFilterNormalizesExtensionsAndRejectsMissingBoundedMetadata() throws {
         let filter = try SmartSearchMetadataFilter(
             kind: .files,

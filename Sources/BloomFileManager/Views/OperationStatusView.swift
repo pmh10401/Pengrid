@@ -279,6 +279,38 @@ struct SelectionFolderOperationStatusPresentation: Equatable, Sendable {
     }
 }
 
+struct FolderSynchronizationOperationStatusPresentation: Equatable, Sendable {
+    let title: String
+    let currentItemName: String
+    let completedCount: Int
+    let totalCount: Int
+    let progressDetail: String
+    let accessibilityLabel: String
+
+    init(progress: FolderSynchronizationProgress) {
+        title = switch progress.phase {
+        case .preflighting: "Checking Folders"
+        case .staging: "Staging Copies"
+        case .verifyingStaging: "Verifying Staged Copies"
+        case .quarantining: "Quarantining Destinations"
+        case .publishing: "Publishing Copies"
+        case .verifyingPublished: "Verifying Published Copies"
+        case .movingToTrash: "Moving to Trash"
+        case .rollingBack: "Restoring Folders"
+        }
+        completedCount = min(max(progress.completedCount, 0), max(progress.totalCount, 0))
+        totalCount = max(progress.totalCount, 0)
+        let sanitized = progress.currentRelativePath?.string
+            .components(separatedBy: .newlines)
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        currentItemName = (sanitized?.isEmpty == false) ? sanitized! : "Item"
+        progressDetail = currentItemName
+        accessibilityLabel = "\(title), \(completedCount) of \(totalCount), "
+            + "current item \(currentItemName)"
+    }
+}
+
 struct OperationStatusView: View {
     let controller: FileOperationController
 
@@ -305,6 +337,8 @@ struct OperationStatusView: View {
                 batchRenameStatus(progress)
             case let .enclosingSelection(progress):
                 selectionFolderStatus(progress)
+            case let .synchronizing(progress):
+                folderSynchronizationStatus(progress)
             }
         }
         .accessibilityIdentifier(AccessibilityIdentifiers.operationStatus)
@@ -312,6 +346,41 @@ struct OperationStatusView: View {
 
     private func batchRenameStatus(_ progress: BatchRenameTransactionProgress) -> some View {
         let presentation = BatchRenameOperationStatusPresentation(progress: progress)
+        return HStack(spacing: 10) {
+            Text(presentation.title)
+                .font(.caption.weight(.semibold))
+
+            ProgressView(
+                value: Double(presentation.completedCount),
+                total: Double(max(presentation.totalCount, 1))
+            )
+            .frame(maxWidth: 180)
+
+            Text(presentation.currentItemName)
+                .font(.caption)
+                .lineLimit(1)
+                .truncationMode(.middle)
+
+            Spacer(minLength: 8)
+
+            Text("\(presentation.completedCount) of \(presentation.totalCount)")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+
+            Button("Cancel") {
+                controller.cancel()
+            }
+            .controlSize(.small)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(presentation.accessibilityLabel)
+        .modifier(StatusBarStyle())
+    }
+
+    private func folderSynchronizationStatus(
+        _ progress: FolderSynchronizationProgress
+    ) -> some View {
+        let presentation = FolderSynchronizationOperationStatusPresentation(progress: progress)
         return HStack(spacing: 10) {
             Text(presentation.title)
                 .font(.caption.weight(.semibold))

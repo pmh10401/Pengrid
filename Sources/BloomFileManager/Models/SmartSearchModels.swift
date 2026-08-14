@@ -185,6 +185,7 @@ struct SmartSearchQuery: Codable, Equatable, Sendable {
     let roots: [URL]
     var includeHidden: Bool
     var includePackages: Bool
+    var searchIndexedContents: Bool
     var includeDirectories: Bool {
         didSet {
             let legacyKind: SmartSearchItemKind = includeDirectories ? .all : .files
@@ -199,11 +200,11 @@ struct SmartSearchQuery: Codable, Equatable, Sendable {
     var isWithinComplexityLimits: Bool { preparedPlan != nil }
     var candidateBudget: Int { min(Self.maximumCandidateBudget, max(Self.minimumCandidateBudget, maximumResults * Self.candidateBudgetMultiplier)) }
 
-    init(text: String, roots: [URL], includeHidden: Bool = false, includePackages: Bool = false, includeDirectories: Bool = true, maximumResults: Int = Self.defaultMaximumResults, metadata: SmartSearchMetadataFilter? = nil) throws {
-        try self.init(text: text, roots: roots, includeHidden: includeHidden, includePackages: includePackages, includeDirectories: includeDirectories, maximumResults: maximumResults, metadata: metadata, enforceComplexityLimits: true)
+    init(text: String, roots: [URL], includeHidden: Bool = false, includePackages: Bool = false, includeDirectories: Bool = true, maximumResults: Int = Self.defaultMaximumResults, metadata: SmartSearchMetadataFilter? = nil, searchIndexedContents: Bool = false) throws {
+        try self.init(text: text, roots: roots, includeHidden: includeHidden, includePackages: includePackages, includeDirectories: includeDirectories, maximumResults: maximumResults, metadata: metadata, searchIndexedContents: searchIndexedContents, enforceComplexityLimits: true)
     }
 
-    private init(text: String, roots: [URL], includeHidden: Bool, includePackages: Bool, includeDirectories: Bool, maximumResults: Int, metadata: SmartSearchMetadataFilter?, enforceComplexityLimits: Bool) throws {
+    private init(text: String, roots: [URL], includeHidden: Bool, includePackages: Bool, includeDirectories: Bool, maximumResults: Int, metadata: SmartSearchMetadataFilter?, searchIndexedContents: Bool, enforceComplexityLimits: Bool) throws {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw SmartSearchValidationError.emptyText }
         guard !roots.isEmpty else { throw SmartSearchValidationError.missingRoots }
@@ -223,7 +224,7 @@ struct SmartSearchQuery: Codable, Equatable, Sendable {
         if enforceComplexityLimits, plan == nil { throw SmartSearchValidationError.queryTooComplex }
         if enforceComplexityLimits, plan?.clauses.isEmpty == true { throw SmartSearchValidationError.noSearchableTerms }
         let resolvedMetadata = metadata ?? .legacy(includeDirectories: includeDirectories)
-        self.text = trimmed; self.roots = standardized; self.includeHidden = includeHidden; self.includePackages = includePackages; self.includeDirectories = resolvedMetadata.kind != .files; self.metadata = resolvedMetadata
+        self.text = trimmed; self.roots = standardized; self.includeHidden = includeHidden; self.includePackages = includePackages; self.searchIndexedContents = searchIndexedContents; self.includeDirectories = resolvedMetadata.kind != .files; self.metadata = resolvedMetadata
         self.maximumResults = maximumResults.clamped(to: Self.maximumResultRange); preparedPlan = plan
     }
 
@@ -234,14 +235,14 @@ struct SmartSearchQuery: Codable, Equatable, Sendable {
     }
     mutating func setMaximumResults(_ value: Int) { maximumResults = value.clamped(to: Self.maximumResultRange) }
 
-    private enum CodingKeys: String, CodingKey { case text, roots, includeHidden, includePackages, includeDirectories, maximumResults, metadata }
+    private enum CodingKeys: String, CodingKey { case text, roots, includeHidden, includePackages, includeDirectories, maximumResults, metadata, searchIndexedContents }
     init(from decoder: any Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
-        try self.init(text: values.decode(String.self, forKey: .text), roots: values.decode([URL].self, forKey: .roots), includeHidden: values.decode(Bool.self, forKey: .includeHidden), includePackages: values.decode(Bool.self, forKey: .includePackages), includeDirectories: values.decodeIfPresent(Bool.self, forKey: .includeDirectories) ?? true, maximumResults: values.decode(Int.self, forKey: .maximumResults), metadata: values.decodeIfPresent(SmartSearchMetadataFilter.self, forKey: .metadata), enforceComplexityLimits: false)
+        try self.init(text: values.decode(String.self, forKey: .text), roots: values.decode([URL].self, forKey: .roots), includeHidden: values.decode(Bool.self, forKey: .includeHidden), includePackages: values.decode(Bool.self, forKey: .includePackages), includeDirectories: values.decodeIfPresent(Bool.self, forKey: .includeDirectories) ?? true, maximumResults: values.decode(Int.self, forKey: .maximumResults), metadata: values.decodeIfPresent(SmartSearchMetadataFilter.self, forKey: .metadata), searchIndexedContents: values.decodeIfPresent(Bool.self, forKey: .searchIndexedContents) ?? false, enforceComplexityLimits: false)
     }
     func encode(to encoder: any Encoder) throws {
         var values = encoder.container(keyedBy: CodingKeys.self)
-        try values.encode(text, forKey: .text); try values.encode(roots, forKey: .roots); try values.encode(includeHidden, forKey: .includeHidden); try values.encode(includePackages, forKey: .includePackages); try values.encode(metadata.kind != .files, forKey: .includeDirectories); try values.encode(maximumResults, forKey: .maximumResults); try values.encode(metadata, forKey: .metadata)
+        try values.encode(text, forKey: .text); try values.encode(roots, forKey: .roots); try values.encode(includeHidden, forKey: .includeHidden); try values.encode(includePackages, forKey: .includePackages); try values.encode(metadata.kind != .files, forKey: .includeDirectories); try values.encode(maximumResults, forKey: .maximumResults); try values.encode(metadata, forKey: .metadata); try values.encode(searchIndexedContents, forKey: .searchIndexedContents)
     }
 }
 

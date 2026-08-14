@@ -61,6 +61,11 @@ struct ComparisonWorkspaceView: View {
     let workspace: WorkspaceState
     let comparison: ComparisonCoordinator
     let operationController: FileOperationController
+    let searchPresented: Bool
+    let batchRenamePresented: Bool
+    let trashPresented: Bool
+    let profilesPresented: Bool
+    @Binding var modalPresentationState: WorkspaceModalPresentationState
     @State private var navigation = ComparisonNavigationState()
     @State private var tableFocusRequestID: UUID?
 
@@ -147,6 +152,43 @@ struct ComparisonWorkspaceView: View {
                 }
             )
         }
+        .sheet(isPresented: synchronizationReviewBinding) {
+            FolderSynchronizationReviewSheet(
+                comparison: comparison,
+                operationController: operationController,
+                workspace: workspace,
+                onCancel: { comparison.cancelFolderSynchronizationReview() },
+                onConfirm: {
+                    comparison.confirmFolderSynchronizationReview(
+                        operationController: operationController,
+                        workspace: workspace
+                    )
+                }
+            )
+            .onAppear { modalPresentationState.synchronizationReviewSheetDidAppear() }
+            .onDisappear { modalPresentationState.synchronizationReviewSheetDidDisappear() }
+        }
+    }
+
+    private var synchronizationReviewBinding: Binding<Bool> {
+        Binding(
+            get: {
+                guard comparison.folderSynchronizationReview != .idle else { return false }
+                return modalPresentationState.allowsSynchronizationReviewPresentation(
+                    conflictPresented: operationController.pendingConflict != nil,
+                    searchPresented: searchPresented,
+                    batchRenamePresented: batchRenamePresented,
+                    passwordPresented: modalPresentationState.presentedPasswordRequestID != nil,
+                    selectionFolderPresented: modalPresentationState.isSelectionFolderPresented
+                ) && !trashPresented && !profilesPresented
+                    || modalPresentationState.isSynchronizationReviewPresented
+            },
+            set: { isPresented in
+                if !isPresented, comparison.folderSynchronizationReview != .idle {
+                    comparison.cancelFolderSynchronizationReview()
+                }
+            }
+        )
     }
 
     private var moveConfirmationBinding: Binding<ComparisonMoveConfirmation?> {

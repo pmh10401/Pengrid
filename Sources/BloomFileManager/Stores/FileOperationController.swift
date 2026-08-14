@@ -7,6 +7,7 @@ enum FileOperationStage: Equatable {
     case archiving(ArchiveOperationProgress)
     case batchRenaming(BatchRenameTransactionProgress)
     case enclosingSelection(SelectionFolderTransactionProgress)
+    case synchronizing(FolderSynchronizationProgress)
 }
 
 enum CloudOperationRequestGate {
@@ -82,6 +83,7 @@ final class FileOperationController {
     private let archiveService: any ArchiveOperating
     private let batchRenameService: BatchRenameTransactionService
     private let selectionFolderTransactionService: SelectionFolderTransactionService
+    private let folderSynchronizationService: any FolderSynchronizationExecuting
     private let undoService: FileOperationUndoService
 
     private(set) var stage: FileOperationStage?
@@ -95,6 +97,16 @@ final class FileOperationController {
     private(set) var isPaused = false
     private(set) var isQueueBlockedByRecovery = false
     private(set) var isTerminationPreparationActive = false
+
+    var undoAvailability: FileOperationReversalAvailability? {
+        reconcileUnavailableReversalRecords()
+        return reversalAvailability(for: undoStack, direction: .undo)
+    }
+
+    var redoAvailability: FileOperationReversalAvailability? {
+        reconcileUnavailableReversalRecords()
+        return reversalAvailability(for: redoStack, direction: .redo)
+    }
 
     /// True only after the active operation has completed its result handling
     /// and no operation task can still publish a cleanup/recovery outcome.
@@ -138,6 +150,13 @@ final class FileOperationController {
                 totalCount: progress.totalCount,
                 currentName: progress.currentName
             )
+        case let .synchronizing(progress):
+            let presentation = FolderSynchronizationOperationStatusPresentation(progress: progress)
+            return FileOperationProgress(
+                completedCount: presentation.completedCount,
+                totalCount: presentation.totalCount,
+                currentName: presentation.currentItemName
+            )
         case .preparing, .archiving, nil:
             return nil
         }
@@ -150,11 +169,12 @@ final class FileOperationController {
     @ObservationIgnored private var pendingOperations: [PendingFileOperation] = []
     @ObservationIgnored private var activeOperation: PendingFileOperation?
     @ObservationIgnored private var activeControl: FileOperationControl?
-    @ObservationIgnored private var retryOperations: [UUID: PendingFileOperation] = [:]
+    @ObservationIgnored private var retryOperations: [UUID: RetryFileOperation] = [:]
     @ObservationIgnored private var terminationPreparationGeneration: UInt64 = 0
     @ObservationIgnored private var terminationPreparationToken: TerminationPreparationToken?
-    @ObservationIgnored private var undoRecipes: [UUID: FileOperationUndoRecipe] = [:]
-    @ObservationIgnored private var undoDirectoryKeys: [UUID: Set<String>] = [:]
+    @ObservationIgnored private var undoStack: [FileOperationReversalRecord] = []
+    @ObservationIgnored private var redoStack: [FileOperationReversalRecord] = []
+    @ObservationIgnored private var reversalExecutions: [UUID: FileOperationReversalExecution] = [:]
     @ObservationIgnored private var activeOperationDidReplace = false
     @ObservationIgnored private var archiveProgressGate = ArchiveProgressPublicationGate()
     @ObservationIgnored private let historyLimit: Int
@@ -165,6 +185,7 @@ final class FileOperationController {
         archiveService: (any ArchiveOperating)? = nil,
         batchRenameService: BatchRenameTransactionService? = nil,
         selectionFolderTransactionService: SelectionFolderTransactionService? = nil,
+        folderSynchronizationService: (any FolderSynchronizationExecuting)? = nil,
         historyLimit: Int = 100
     ) {
         self.service = service
@@ -177,11 +198,20 @@ final class FileOperationController {
         let resolvedSelectionFolderTransactionService = selectionFolderTransactionService
             ?? service.makeSelectionFolderTransactionService()
         self.selectionFolderTransactionService = resolvedSelectionFolderTransactionService
+        self.folderSynchronizationService = folderSynchronizationService
+            ?? service.makeFolderSynchronizationTransactionService()
         self.undoService = service.makeUndoService(
             batchRenameService: resolvedBatchRenameService,
             selectionFolderTransactionService: resolvedSelectionFolderTransactionService
         )
         self.historyLimit = max(historyLimit, 1)
+    }
+
+    var canAdmitFolderSynchronization: Bool {
+        !isTerminationPreparationActive
+            && !isQueueBlockedByRecovery
+            && activeOperation == nil
+            && pendingOperations.isEmpty
     }
 
     func requestDecision(for conflict: FileConflict) async -> ConflictDecision {
@@ -253,6 +283,7 @@ final class FileOperationController {
         self.terminationPreparationToken = terminationPreparationToken
         isTerminationPreparationActive = true
         cancelActiveJob()
+        refreshUndoEligibility()
         return terminationPreparationToken
     }
 
@@ -268,6 +299,8 @@ final class FileOperationController {
         isTerminationPreparationActive = false
         if restartQueue {
             startNextOperationIfNeeded()
+        } else {
+            refreshUndoEligibility()
         }
     }
 
@@ -313,13 +346,16 @@ final class FileOperationController {
         }
         let pending = pendingOperations.remove(at: index)
         queuedJobs.removeAll { $0.id == id }
-        retryOperations[id] = pending
+        if pending.allowsRetry {
+            retryOperations[id] = .init(pending)
+        }
         let cancellationResult = pending.cancellationResult
         recordHistory(pending.snapshot(
             state: .cancelled,
             canRetry: pending.allowsRetry
         ))
         pending.onCompletion?(cancellationResult)
+        refreshUndoEligibility()
         return true
     }
 
@@ -347,46 +383,33 @@ final class FileOperationController {
     @discardableResult
     func retryJob(_ id: UUID) -> Bool {
         guard operationHistory.first(where: { $0.id == id })?.canRetry == true,
-              let original = retryOperations[id]
+              let original = retryOperations[id],
+              let retry = original.makePendingOperation()
         else { return false }
-        return enqueue(original.retryAttempt())
+        return enqueue(retry)
     }
 
     @discardableResult
     func undoJob(_ id: UUID) -> Bool {
-        guard activeOperation == nil,
-              pendingOperations.isEmpty,
-              operationHistory.first(where: { $0.id == id })?.canUndo == true,
-              let recipe = undoRecipes.removeValue(forKey: id),
-              let original = retryOperations[id]
-        else { return false }
+        guard undoStack.last?.historyID == id else { return false }
+        return undoLatest()
+    }
 
-        undoDirectoryKeys.removeValue(forKey: id)
-        setUndoEligibility(for: id, canUndo: false)
-        return beginOperation(
-            kind: .undo,
-            totalCount: recipe.itemCount,
-            initialName: recipe.displayName,
-            touchedDirectories: recipe.touchedDirectories,
-            workspace: original.workspace,
-            cancellationSources: Array(recipe.touchedDirectories),
-            allowsRetry: false,
-            requiresExclusiveQueue: true
-        ) { [weak self] in
-            guard let self else {
-                return FileOperationResult(outcomes: [])
-            }
-            if case let .selectionFolder(plan) = recipe {
-                return await self.undoService.performSelectionFolderUndo(plan) { [weak self] progress in
-                    guard let self else { return }
-                    await self.publish(stage: .enclosingSelection(progress))
-                }
-            }
-            return await self.undoService.perform(recipe) { [weak self] progress in
-                guard let self else { return }
-                await self.publish(stage: .operating(progress))
-            }
-        }
+    @discardableResult
+    func undoLatest() -> Bool { beginReversal(direction: .undo) }
+
+    @discardableResult
+    func redoLatest() -> Bool { beginReversal(direction: .redo) }
+
+    func invalidateReversalHistory(for workspace: WorkspaceState) {
+        undoStack.removeAll { $0.workspace.value === workspace }
+        redoStack.removeAll { $0.workspace.value === workspace }
+        refreshUndoEligibility()
+    }
+
+    func hasActiveOrQueuedWork(boundTo workspace: WorkspaceState) -> Bool {
+        activeOperation?.workspace === workspace
+            || pendingOperations.contains { $0.workspace === workspace }
     }
 
     private func cancelPendingDecision(requestID: UUID) {
@@ -1330,6 +1353,44 @@ final class FileOperationController {
     }
 
     @discardableResult
+    func synchronizeFolder(
+        plan: PreparedFolderSynchronizationPlan,
+        workspace: WorkspaceState,
+        onCompletion: (@MainActor (FileOperationResult) -> Void)? = nil
+    ) -> Bool {
+        guard canAdmitFolderSynchronization else { return false }
+        let cancellationSources = plan.draft.actions.flatMap { action in
+            [action.source?.url, action.destination?.url].compactMap { $0 }
+        }
+        return beginOperation(
+            kind: .synchronizeFolder(plan.draft.direction),
+            totalCount: plan.draft.actions.count,
+            initialName: plan.draft.destinationRoot.lastPathComponent,
+            initialStage: .synchronizing(FolderSynchronizationProgress(
+                phase: .preflighting,
+                completedCount: 0,
+                totalCount: plan.draft.actions.count
+            )),
+            touchedDirectories: [plan.draft.sourceRoot, plan.draft.destinationRoot],
+            workspace: workspace,
+            cancellationSources: cancellationSources,
+            allowsRetry: false,
+            requiresExclusiveQueue: true,
+            onCompletion: onCompletion
+        ) { [weak self, folderSynchronizationService] in
+            guard let self else {
+                return FileOperationResult(outcomes: cancellationSources.map {
+                    .cancelled(source: $0)
+                })
+            }
+            return await folderSynchronizationService.execute(plan) { [weak self] progress in
+                guard let self else { return }
+                await self.publish(stage: .synchronizing(progress))
+            }
+        }
+    }
+
+    @discardableResult
     func trashStorageCleanup(
         _ groups: [StorageCleanupMutationGroup],
         workspace: WorkspaceState,
@@ -1390,6 +1451,51 @@ final class FileOperationController {
     }
 
     @discardableResult
+    private func beginReversal(direction: FileOperationReversalDirection) -> Bool {
+        guard isReversalQueueAdmissionAvailable else { return false }
+        var sourceStack = direction == .undo ? undoStack : redoStack
+        guard let record = sourceStack.last,
+              let workspace = record.workspace.value
+        else {
+            if direction == .undo { undoStack.removeAll { $0.workspace.value == nil } }
+            else { redoStack.removeAll { $0.workspace.value == nil } }
+            refreshUndoEligibility()
+            return false
+        }
+
+        let operationID = UUID()
+        let pending = PendingFileOperation(
+            id: operationID,
+            kind: direction.jobKind,
+            itemDisplayName: record.displayName,
+            itemCount: record.itemCount,
+            initialStage: nil,
+            touchedDirectories: record.touchedDirectories,
+            workspace: workspace,
+            cancellationSources: Array(record.recipe.touchedDirectories),
+            allowsRetry: false,
+            requiresExclusiveQueue: true,
+            archiveProtection: nil,
+            reversalDirection: direction,
+            reversalRecord: record,
+            onCompletion: nil
+        ) { [weak self] in
+            guard let self else { return FileOperationResult(outcomes: []) }
+            let execution = await self.undoService.performReversal(record.recipe) { [weak self] progress in
+                guard let self else { return }
+                await self.publish(stage: .operating(progress))
+            }
+            self.reversalExecutions[operationID] = execution
+            return execution.result
+        }
+        guard enqueue(pending) else { return false }
+        sourceStack.removeLast()
+        if direction == .undo { undoStack = sourceStack } else { redoStack = sourceStack }
+        refreshUndoEligibility()
+        return true
+    }
+
+    @discardableResult
     private func enqueue(_ pending: PendingFileOperation) -> Bool {
         guard !isTerminationPreparationActive else { return false }
         if pending.requiresExclusiveQueue {
@@ -1398,6 +1504,9 @@ final class FileOperationController {
             || pendingOperations.contains(where: \.requiresExclusiveQueue) {
             return false
         }
+        if pending.reversalDirection == nil {
+            redoStack.removeAll()
+        }
         pendingOperations.append(pending)
         queuedJobs.append(pending.snapshot(state: .queued))
         startNextOperationIfNeeded()
@@ -1405,6 +1514,7 @@ final class FileOperationController {
     }
 
     private func startNextOperationIfNeeded() {
+        defer { refreshUndoEligibility() }
         guard activeOperation == nil,
               !isTerminationPreparationActive,
               !isQueueBlockedByRecovery,
@@ -1412,8 +1522,6 @@ final class FileOperationController {
         else { return }
         let pending = pendingOperations.removeFirst()
         queuedJobs.removeAll { $0.id == pending.id }
-        invalidateUndoRecipes(touching: pending.touchedDirectories)
-
         let control = FileOperationControl()
         activeOperation = pending
         activeControl = control
@@ -1589,6 +1697,13 @@ final class FileOperationController {
                 totalCount: progress.totalCount,
                 detail: detail
             )
+        case let .synchronizing(progress):
+            let presentation = FolderSynchronizationOperationStatusPresentation(progress: progress)
+            return FileOperationJobProgress(
+                completedCount: presentation.completedCount,
+                totalCount: presentation.totalCount,
+                detail: presentation.progressDetail
+            )
         }
     }
 
@@ -1621,25 +1736,53 @@ final class FileOperationController {
             }
         }))
         let recipe: FileOperationUndoRecipe?
-        if completedState == .succeeded {
-            recipe = await undoService.makeRecipe(
-                kind: pending.kind,
-                result: result,
-                allowsUndo: !activeOperationDidReplace
-            )
+        if let direction = pending.reversalDirection {
+            let execution = reversalExecutions.removeValue(forKey: pending.id)
+            recipe = nil
+            if completedState == .succeeded,
+               let inverse = execution?.inverseRecipe,
+               let source = pending.reversalRecord {
+                let inverseRecord = source.replacing(
+                    recipe: inverse,
+                    touchedDirectories: inverse.touchedDirectories,
+                    directoryKeys: Set(inverse.touchedDirectories.flatMap(directoryKeys))
+                )
+                if direction == .undo { redoStack.append(inverseRecord) }
+                else { undoStack.append(inverseRecord) }
+            }
+        } else if completedState == .succeeded {
+            invalidateReversalRecords(touching: pending.touchedDirectories)
+            if case .synchronizeFolder = pending.kind {
+                recipe = nil
+            } else {
+                recipe = await undoService.makeRecipe(
+                    kind: pending.kind,
+                    result: result,
+                    allowsUndo: !activeOperationDidReplace
+                )
+                if let recipe {
+                    undoStack.append(.init(
+                        historyID: pending.id,
+                        originalKind: pending.kind,
+                        recipe: recipe,
+                        displayName: pending.itemDisplayName,
+                        itemCount: recipe.itemCount,
+                        touchedDirectories: pending.touchedDirectories,
+                        directoryKeys: Set(pending.touchedDirectories.flatMap(directoryKeys)),
+                        workspace: pending.workspace
+                    ))
+                }
+            }
         } else {
+            invalidateReversalRecords(touching: pending.touchedDirectories)
             recipe = nil
         }
-        if let recipe {
-            undoRecipes[pending.id] = recipe
-            undoDirectoryKeys[pending.id] = Set(
-                recipe.touchedDirectories.flatMap(directoryKeys)
-            )
+        if pending.allowsRetry {
+            retryOperations[pending.id] = .init(pending)
         }
-        retryOperations[pending.id] = pending
         recordHistory(pending.snapshot(
             state: completedState,
-            canUndo: recipe != nil,
+            canUndo: false,
             canRetry: canRetry
         ))
         if result.outcomes.contains(where: {
@@ -1657,6 +1800,7 @@ final class FileOperationController {
         applyToAllDecision = nil
         activeOperationDidReplace = false
         archiveProgressGate.reset()
+        refreshUndoEligibility()
     }
 
     private func terminalState(for result: FileOperationResult) -> FileOperationJobState {
@@ -1684,8 +1828,8 @@ final class FileOperationController {
         operationHistory.removeSubrange(historyLimit...)
         for item in removed {
             retryOperations.removeValue(forKey: item.id)
-            undoRecipes.removeValue(forKey: item.id)
-            undoDirectoryKeys.removeValue(forKey: item.id)
+            undoStack.removeAll { $0.historyID == item.id }
+            redoStack.removeAll { $0.historyID == item.id }
         }
     }
 
@@ -1700,21 +1844,76 @@ final class FileOperationController {
         )
     }
 
-    private func invalidateUndoRecipes(touching directories: Set<URL>) {
+    private func reversalAvailability(
+        for stack: [FileOperationReversalRecord],
+        direction: FileOperationReversalDirection
+    ) -> FileOperationReversalAvailability? {
+        guard let record = stack.last else { return nil }
+        return .init(
+            title: "\(direction.title) \(record.originalKind.title)",
+            itemCount: record.itemCount,
+            isEnabled: isReversalQueueAdmissionAvailable && record.workspace.value != nil
+        )
+    }
+
+    private var isReversalQueueAdmissionAvailable: Bool {
+        activeOperation == nil
+            && pendingOperations.isEmpty
+            && !isQueueBlockedByRecovery
+            && !isTerminationPreparationActive
+    }
+
+    private func refreshUndoEligibility() {
+        _ = pruneUnavailableReversalRecords()
+        projectUndoEligibility()
+    }
+
+    private func reconcileUnavailableReversalRecords() {
+        guard pruneUnavailableReversalRecords() else { return }
+        projectUndoEligibility()
+    }
+
+    @discardableResult
+    private func pruneUnavailableReversalRecords() -> Bool {
+        let undoCount = undoStack.count
+        let redoCount = redoStack.count
+        undoStack.removeAll { $0.workspace.value == nil }
+        redoStack.removeAll { $0.workspace.value == nil }
+        return undoStack.count != undoCount || redoStack.count != redoCount
+    }
+
+    private func projectUndoEligibility() {
+        let eligibleID = reversalAvailability(
+            for: undoStack,
+            direction: .undo
+        )?.isEnabled == true ? undoStack.last?.historyID : nil
+        for index in operationHistory.indices {
+            let current = operationHistory[index]
+            let canUndo = current.id == eligibleID
+            guard current.canUndo != canUndo else { continue }
+            operationHistory[index] = snapshot(
+                for: current,
+                state: current.state,
+                progress: current.progress,
+                canUndo: canUndo
+            )
+        }
+    }
+
+    private func invalidateReversalRecords(touching directories: Set<URL>) {
         let currentKeys = Set(directories.flatMap(directoryKeys))
         guard !currentKeys.isEmpty else { return }
-        let invalidated = undoRecipes.compactMap { id, recipe -> UUID? in
-            let recipeKeys = undoDirectoryKeys[id]
-                ?? Set(recipe.touchedDirectories.flatMap(directoryKeys))
-            return recipeKeys.contains(where: { recipeKey in
+        undoStack.removeAll { record in
+            record.directoryKeys.contains(where: { recipeKey in
                 currentKeys.contains(where: { pathsOverlap(recipeKey, $0) })
-            }) ? id : nil
+            })
         }
-        for id in invalidated {
-            undoRecipes.removeValue(forKey: id)
-            undoDirectoryKeys.removeValue(forKey: id)
-            setUndoEligibility(for: id, canUndo: false)
+        redoStack.removeAll { record in
+            record.directoryKeys.contains(where: { recipeKey in
+                currentKeys.contains(where: { pathsOverlap(recipeKey, $0) })
+            })
         }
+        refreshUndoEligibility()
     }
 
     private func snapshot(
@@ -1768,6 +1967,137 @@ final class FileOperationController {
 }
 
 @MainActor
+private final class WeakWorkspaceReference {
+    weak var value: WorkspaceState?
+
+    init(_ value: WorkspaceState) {
+        self.value = value
+    }
+}
+
+@MainActor
+private struct FileOperationReversalRecord {
+    let historyID: UUID
+    let originalKind: FileOperationJobKind
+    let recipe: FileOperationUndoRecipe
+    let displayName: String
+    let itemCount: Int
+    let touchedDirectories: Set<URL>
+    let directoryKeys: Set<String>
+    let workspace: WeakWorkspaceReference
+
+    init(
+        historyID: UUID,
+        originalKind: FileOperationJobKind,
+        recipe: FileOperationUndoRecipe,
+        displayName: String,
+        itemCount: Int,
+        touchedDirectories: Set<URL>,
+        directoryKeys: Set<String>,
+        workspace: WorkspaceState
+    ) {
+        self.historyID = historyID
+        self.originalKind = originalKind
+        self.recipe = recipe
+        self.displayName = FileOperationJobSnapshot(
+            id: historyID,
+            kind: .undo,
+            itemDisplayName: displayName,
+            itemCount: itemCount,
+            state: .succeeded,
+            progress: nil,
+            canUndo: false
+        ).itemDisplayName
+        self.itemCount = max(itemCount, 0)
+        self.touchedDirectories = touchedDirectories
+        self.directoryKeys = directoryKeys
+        self.workspace = .init(workspace)
+    }
+
+    private init(
+        historyID: UUID,
+        originalKind: FileOperationJobKind,
+        recipe: FileOperationUndoRecipe,
+        displayName: String,
+        itemCount: Int,
+        touchedDirectories: Set<URL>,
+        directoryKeys: Set<String>,
+        workspace: WeakWorkspaceReference
+    ) {
+        self.historyID = historyID
+        self.originalKind = originalKind
+        self.recipe = recipe
+        self.displayName = displayName
+        self.itemCount = max(itemCount, 0)
+        self.touchedDirectories = touchedDirectories
+        self.directoryKeys = directoryKeys
+        self.workspace = workspace
+    }
+
+    func replacing(
+        recipe: FileOperationUndoRecipe,
+        touchedDirectories: Set<URL>,
+        directoryKeys: Set<String>
+    ) -> Self {
+        .init(
+            historyID: historyID,
+            originalKind: originalKind,
+            recipe: recipe,
+            displayName: displayName,
+            itemCount: recipe.itemCount,
+            touchedDirectories: touchedDirectories,
+            directoryKeys: directoryKeys,
+            workspace: workspace
+        )
+    }
+}
+
+@MainActor
+private final class RetryFileOperation {
+    weak var workspace: WorkspaceState?
+    private let kind: FileOperationJobKind
+    private let itemDisplayName: String
+    private let itemCount: Int
+    private let initialStage: FileOperationStage?
+    private let touchedDirectories: Set<URL>
+    private let cancellationSources: [URL]
+    private let requiresExclusiveQueue: Bool
+    private let archiveProtection: ArchiveProtection?
+    private let operation: @MainActor () async -> FileOperationResult
+
+    init(_ pending: PendingFileOperation) {
+        self.workspace = pending.workspace
+        self.kind = pending.kind
+        self.itemDisplayName = pending.itemDisplayName
+        self.itemCount = pending.itemCount
+        self.initialStage = pending.initialStage
+        self.touchedDirectories = pending.touchedDirectories
+        self.cancellationSources = pending.cancellationSources
+        self.requiresExclusiveQueue = pending.requiresExclusiveQueue
+        self.archiveProtection = pending.archiveProtection
+        self.operation = pending.operation
+    }
+
+    func makePendingOperation() -> PendingFileOperation? {
+        guard let workspace else { return nil }
+        return PendingFileOperation(
+            kind: kind,
+            itemDisplayName: itemDisplayName,
+            itemCount: itemCount,
+            initialStage: initialStage,
+            touchedDirectories: touchedDirectories,
+            workspace: workspace,
+            cancellationSources: cancellationSources,
+            allowsRetry: true,
+            requiresExclusiveQueue: requiresExclusiveQueue,
+            archiveProtection: archiveProtection,
+            onCompletion: nil,
+            operation: operation
+        )
+    }
+}
+
+@MainActor
 private struct PendingFileOperation {
     let id: UUID
     let kind: FileOperationJobKind
@@ -1780,6 +2110,8 @@ private struct PendingFileOperation {
     let allowsRetry: Bool
     let requiresExclusiveQueue: Bool
     let archiveProtection: ArchiveProtection?
+    let reversalDirection: FileOperationReversalDirection?
+    let reversalRecord: FileOperationReversalRecord?
     let onCompletion: (@MainActor (FileOperationResult) -> Void)?
     let operation: @MainActor () async -> FileOperationResult
 
@@ -1795,6 +2127,8 @@ private struct PendingFileOperation {
         allowsRetry: Bool,
         requiresExclusiveQueue: Bool,
         archiveProtection: ArchiveProtection?,
+        reversalDirection: FileOperationReversalDirection? = nil,
+        reversalRecord: FileOperationReversalRecord? = nil,
         onCompletion: (@MainActor (FileOperationResult) -> Void)?,
         operation: @escaping @MainActor () async -> FileOperationResult
     ) {
@@ -1808,6 +2142,8 @@ private struct PendingFileOperation {
         self.allowsRetry = allowsRetry
         self.requiresExclusiveQueue = requiresExclusiveQueue
         self.archiveProtection = archiveProtection
+        self.reversalDirection = reversalDirection
+        self.reversalRecord = reversalRecord
         self.onCompletion = onCompletion
         self.operation = operation
         self.itemDisplayName = FileOperationJobSnapshot(
@@ -1844,22 +2180,6 @@ private struct PendingFileOperation {
         })
     }
 
-    func retryAttempt() -> PendingFileOperation {
-        PendingFileOperation(
-            kind: kind,
-            itemDisplayName: itemDisplayName,
-            itemCount: itemCount,
-            initialStage: initialStage,
-            touchedDirectories: touchedDirectories,
-            workspace: workspace,
-            cancellationSources: cancellationSources,
-            allowsRetry: allowsRetry,
-            requiresExclusiveQueue: requiresExclusiveQueue,
-            archiveProtection: archiveProtection,
-            onCompletion: onCompletion,
-            operation: operation
-        )
-    }
 }
 
 private struct ArchiveSelectionCapture {

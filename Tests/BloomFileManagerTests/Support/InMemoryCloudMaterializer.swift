@@ -39,12 +39,14 @@ actor InMemoryCloudMaterializer: CloudMaterializing {
 extension FileOperationController {
     convenience init(
         service: FileOperationService,
-        batchRenameService: BatchRenameTransactionService? = nil
+        batchRenameService: BatchRenameTransactionService? = nil,
+        folderSynchronizationService: (any FolderSynchronizationExecuting)? = nil
     ) {
         self.init(
             service: service,
             materializer: InMemoryCloudMaterializer(),
-            batchRenameService: batchRenameService
+            batchRenameService: batchRenameService,
+            folderSynchronizationService: folderSynchronizationService
         )
     }
 }

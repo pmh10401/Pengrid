@@ -457,6 +457,8 @@ final class ComparisonCoordinator {
     private let monitor: any ComparisonTreeMonitor
     private let announcementPoster: any ComparisonAnnouncementPosting
     private let announcementDelay: Duration
+    private let folderSynchronizationPlanner: any FolderSynchronizationPlanning
+    let synchronizationReview: FolderSynchronizationReviewModel
 
     @ObservationIgnored private var sessionTask: Task<Void, Never>?
     @ObservationIgnored private var monitorTask: Task<Void, Never>?
@@ -495,6 +497,10 @@ final class ComparisonCoordinator {
     @ObservationIgnored private var announcementTask: Task<Void, Never>?
     @ObservationIgnored private var pendingAnnouncement: ComparisonAnnouncementSnapshot?
     @ObservationIgnored private var lastAnnounced: ComparisonAnnouncementSnapshot?
+    @ObservationIgnored private var capturedSynchronizationWorkspace: WorkspaceState?
+    @ObservationIgnored private var capturedSynchronizationLeftRoot: URL?
+    @ObservationIgnored private var capturedSynchronizationRightRoot: URL?
+    @ObservationIgnored private var reviewObservationGeneration: UInt64 = 0
 
     private(set) var session: ComparisonSession?
     private(set) var phase: ComparisonPhase = .idle {
@@ -509,6 +515,7 @@ final class ComparisonCoordinator {
     }
     private(set) var pendingMoveConfirmation: ComparisonMoveConfirmation?
     private(set) var isMoveDispatchPending = false
+    private(set) var folderSynchronizationReview: FolderSynchronizationReviewPresentation = .idle
     var selection: Set<ComparisonRelativePath> = []
     var filter: ComparisonFilter = .differences
     var options = ComparisonOptions()
@@ -533,7 +540,9 @@ final class ComparisonCoordinator {
         projections: any ComparisonProjectionBuilding = LiveComparisonProjectionBuilder(),
         monitor: any ComparisonTreeMonitor = LiveComparisonTreeMonitor(),
         announcementPoster: any ComparisonAnnouncementPosting = LiveComparisonAnnouncementPoster(),
-        announcementDelay: Duration = .milliseconds(500)
+        announcementDelay: Duration = .milliseconds(500),
+        folderSynchronizationPlanner: any FolderSynchronizationPlanning = FolderSynchronizationPlanningService(),
+        folderSynchronizationReview: FolderSynchronizationReviewModel? = nil
     ) {
         self.listings = listings
         self.checksums = checksums
@@ -543,12 +552,15 @@ final class ComparisonCoordinator {
         self.monitor = monitor
         self.announcementPoster = announcementPoster
         self.announcementDelay = announcementDelay
+        self.folderSynchronizationPlanner = folderSynchronizationPlanner
+        self.synchronizationReview = folderSynchronizationReview ?? FolderSynchronizationReviewModel()
     }
 
     func start(workspace: WorkspaceState) {
         finishMetricsIfNeeded(cancelled: true)
         stopTasksOnly()
         resetProjection()
+        cancelFolderSynchronizationReview()
 
         let generation = UUID()
         currentWorkspace = workspace
@@ -645,6 +657,7 @@ final class ComparisonCoordinator {
         currentWorkspace = nil
         phase = .idle
         resetProjection()
+        cancelFolderSynchronizationReview()
         Task { await cache.removeAll() }
     }
 
@@ -701,6 +714,71 @@ final class ComparisonCoordinator {
             return "A destination ancestor prevents this move."
         }
         return nil
+    }
+
+    func requestFolderSynchronization(_ direction: ComparisonDirection) {
+        reviewObservationGeneration &+= 1
+        let observationGeneration = reviewObservationGeneration
+        let result = folderSynchronizationPlanner.plan(
+            phase: phase,
+            session: session,
+            rows: rows,
+            direction: direction
+        )
+        switch result {
+        case let .blocked(blockers):
+            synchronizationReview.reset()
+            clearCapturedSynchronization()
+            folderSynchronizationReview = .plannerBlocked(blockers)
+        case let .alreadySynchronized(summary):
+            synchronizationReview.reset()
+            clearCapturedSynchronization()
+            folderSynchronizationReview = .alreadySynchronized(summary)
+        case let .ready(draft):
+            capturedSynchronizationWorkspace = currentWorkspace
+            capturedSynchronizationLeftRoot = session?.leftRoot
+            capturedSynchronizationRightRoot = session?.rightRoot
+            folderSynchronizationReview = .preparing(
+                direction: draft.direction,
+                comparisonGeneration: draft.comparisonGeneration
+            )
+            synchronizationReview.prepare(draft) { [weak self] state in
+                self?.applyReviewTransition(state, generation: observationGeneration)
+            }
+        }
+    }
+
+    func cancelFolderSynchronizationReview() {
+        reviewObservationGeneration &+= 1
+        synchronizationReview.cancel()
+        clearCapturedSynchronization()
+        folderSynchronizationReview = .idle
+    }
+
+    @discardableResult
+    func confirmFolderSynchronizationReview(
+        operationController: FileOperationController,
+        workspace: WorkspaceState
+    ) -> Bool {
+        guard operationController.canAdmitFolderSynchronization else { return false }
+        guard let plan = synchronizationReview.confirm() else { return false }
+        folderSynchronizationReview = .idle
+        let capturedWorkspace = capturedSynchronizationWorkspace
+        let capturedLeft = capturedSynchronizationLeftRoot
+        let capturedRight = capturedSynchronizationRightRoot
+        clearCapturedSynchronization()
+        return operationController.synchronizeFolder(
+            plan: plan,
+            workspace: workspace,
+            onCompletion: { [weak self] result in
+                self?.completeCapturedSynchronization(
+                    result,
+                    workspace: capturedWorkspace,
+                    leftRoot: capturedLeft,
+                    rightRoot: capturedRight
+                )
+            }
+        )
     }
 
     func requestMove(direction: ComparisonDirection) {
@@ -837,6 +915,44 @@ final class ComparisonCoordinator {
                 self?.reconcile(requests)
             }
         )
+    }
+
+    private func applyReviewTransition(
+        _ state: FolderSynchronizationReviewState,
+        generation: UInt64
+    ) {
+        guard generation == reviewObservationGeneration else { return }
+        switch state {
+        case let .ready(review):
+            folderSynchronizationReview = .ready(review)
+        case let .blocked(blocker):
+            folderSynchronizationReview = .preparationBlocked(blocker)
+        case .idle:
+            folderSynchronizationReview = .idle
+        case .preparing:
+            break
+        }
+    }
+
+    private func clearCapturedSynchronization() {
+        capturedSynchronizationWorkspace = nil
+        capturedSynchronizationLeftRoot = nil
+        capturedSynchronizationRightRoot = nil
+    }
+
+    private func completeCapturedSynchronization(
+        _ result: FileOperationResult,
+        workspace: WorkspaceState?,
+        leftRoot: URL?,
+        rightRoot: URL?
+    ) {
+        guard let workspace, let leftRoot, let rightRoot else { return }
+        guard currentWorkspace === workspace,
+              let session,
+              session.leftRoot == leftRoot,
+              session.rightRoot == rightRoot
+        else { return }
+        restartCurrentRoots()
     }
 
     private func identifiedRequests(

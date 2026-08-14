@@ -45,6 +45,27 @@ import Testing
     #expect(AccessibilityIdentifiers.workspaceCopyFullPath == "workspace.copyFullPath")
     #expect(AccessibilityIdentifiers.workspaceDuplicate == "workspace.duplicate")
     #expect(AccessibilityIdentifiers.workspaceContextActionStatus == "workspace.contextActionStatus")
+    #expect(GetInfoAccessibilityIdentifiers.command == "workspace.getInfo")
+    #expect(GetInfoAccessibilityIdentifiers.contextMenu == "fileTable.getInfo")
+    #expect(SpotlightSearchAccessibilityIdentifiers.indexedContents == "smartSearch.indexedContents")
+    #expect(SpotlightSearchAccessibilityIdentifiers.coverage == "smartSearch.coverage")
+}
+
+@Test func workspaceSessionAccessibilityIdentifiersAreStableAndDoNotUsePaths() {
+    let tabID = WorkspaceTabID(rawValue: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!)
+    let profileID = WorkspaceProfileID(rawValue: UUID(uuidString: "22222222-2222-2222-2222-222222222222")!)
+
+    #expect(WorkspaceSessionAccessibilityIdentifiers.tabBar == "workspaceTabs.bar")
+    #expect(WorkspaceSessionAccessibilityIdentifiers.newTab == "workspaceTabs.new")
+    #expect(WorkspaceSessionAccessibilityIdentifiers.profiles == "workspaceTabs.profiles")
+    #expect(WorkspaceSessionAccessibilityIdentifiers.profilesSheet == "workspaceProfiles.sheet")
+    #expect(WorkspaceSessionAccessibilityIdentifiers.tab(tabID) == "workspaceTabs.tab.11111111-1111-1111-1111-111111111111")
+    #expect(WorkspaceSessionAccessibilityIdentifiers.closeTab(tabID) == "workspaceTabs.close.11111111-1111-1111-1111-111111111111")
+    #expect(WorkspaceSessionAccessibilityIdentifiers.profile(profileID) == "workspaceProfiles.profile.22222222-2222-2222-2222-222222222222")
+    #expect(WorkspaceSessionAccessibilityIdentifiers.renameProfile(profileID) == "workspaceProfiles.rename.22222222-2222-2222-2222-222222222222")
+    #expect(WorkspaceSessionAccessibilityIdentifiers.openProfile(profileID) == "workspaceProfiles.open.22222222-2222-2222-2222-222222222222")
+    #expect(WorkspaceSessionAccessibilityIdentifiers.deleteProfile(profileID) == "workspaceProfiles.delete.22222222-2222-2222-2222-222222222222")
+    #expect(WorkspaceSessionAccessibilityIdentifiers.done == "workspaceProfiles.done")
 }
 
 @Test func contextActionAppWiringUsesSharedDependenciesAndAccessibleState() throws {
@@ -180,6 +201,32 @@ func stalePasswordDismissalCannotCancelNewCoordinatorRequest() async throws {
     #expect(app.contains("_passwordCoordinator = State(initialValue: passwordCoordinator)"))
     #expect(app.contains("passwordProvider: passwordCoordinator"))
     #expect(app.contains("passwordCoordinator: passwordCoordinator"))
+}
+
+@Test func appComposesOneInspectorAndContentAwareSearchService() throws {
+    let app = try source(named: "App/BloomFileManagerApp.swift")
+    #expect(app.occurrences(of: "LiveGetInfoInspectionService(") == 1)
+    #expect(app.occurrences(of: "GetInfoInspectorModel(") == 1)
+    #expect(app.occurrences(of: "GetInfoInspectorController(") == 1)
+    #expect(app.occurrences(of: "ContentAwareSmartSearchService(") == 1)
+    #expect(app.contains("LiveSpotlightSmartSearchService("))
+
+    let workspace = try source(named: "Views/WorkspaceView.swift")
+    #expect(workspace.contains("let getInfoInspector: GetInfoInspectorController"))
+    let commands = try source(named: "Support/WorkspaceCommands.swift")
+    #expect(commands.contains("Button(\"Get Info\")"))
+    #expect(commands.contains(".keyboardShortcut(\"i\", modifiers: .command)"))
+}
+
+@Test func folderSynchronizationReviewUsesTheSharedCloudRuntimeDependencies() throws {
+    let app = try source(named: "App/BloomFileManagerApp.swift")
+
+    #expect(app.contains("func makeFolderSynchronizationPreparationService()"))
+    #expect(app.contains("fileSystem: fileSystem"))
+    #expect(app.contains("accessCoordinator: accessCoordinator"))
+    #expect(app.contains(
+        "preparer: cloudDependencies.makeFolderSynchronizationPreparationService()"
+    ))
 }
 
 @Test func folderPreviewAccessibilityIdentifiersAndAnnouncementsRemainStable() throws {
@@ -391,6 +438,8 @@ func stalePasswordDismissalCannotCancelNewCoordinatorRequest() async throws {
     #expect(workspace.contains("passwordSheetDidAppear"))
     #expect(workspace.contains("passwordSheetDidDisappear"))
     #expect(workspace.contains("allowsOtherModalPresentation"))
+    #expect(workspace.contains("dismissSynchronizationReview: comparison.cancelFolderSynchronizationReview"))
+    #expect(workspace.contains("synchronizationReviewPresented: comparison.folderSynchronizationReview != .idle"))
 
     let app = try source(named: "App/BloomFileManagerApp.swift")
     #expect(app.contains(

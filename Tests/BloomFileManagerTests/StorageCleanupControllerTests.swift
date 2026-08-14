@@ -345,11 +345,16 @@ private final class StorageCleanupFixture {
             readableCounts: readableCounts
         )
         controller = StorageCleanupController(fingerprints: fingerprints)
-        fileSystem = CleanupRecordingFileSystem(identities: Dictionary(
+        var identities = Dictionary(
             uniqueKeysWithValues: group.members.map {
                 ($0.url, $0.fingerprint.identity)
             }
-        ),
+        )
+        identities[root] = FileIdentity(
+            entryIdentifier: "cleanup-root",
+            resolvedIdentifier: "cleanup-root"
+        )
+        fileSystem = CleanupRecordingFileSystem(identities: identities,
         failingTrashURLs: failingURLs,
         recoveryOnRollbackURLs: recoveryOnRollbackURLs,
         replaceAtQuarantineURLs: replaceAtQuarantineURLs)

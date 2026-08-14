@@ -118,6 +118,7 @@ struct FilePaneView: View {
     let contextActionRouter: FileContextActionRouter
     let openWithProvider: any OpenWithApplicationProviding
     let selectionFolder: SelectionFolderModel
+    let getInfoInspector: GetInfoInspectorController
     let isActive: Bool
     let onActivate: () -> Void
     let onRequestTrashConfirmation: ([URL]) -> Void
@@ -363,6 +364,7 @@ struct FilePaneView: View {
             onActivatePane: onActivate,
             onOpen: open,
             onOpenSelection: open,
+            onGetInfo: { items in getInfoInspector.present(items: items) },
             onSortChange: { state.sort = $0 },
             contextMenuPresentation: { contextMenuPresentation(for: $0) },
             onContextAction: { routeContextAction($0, items: $1) },

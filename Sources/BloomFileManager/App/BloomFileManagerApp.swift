@@ -53,6 +53,13 @@ struct CloudRuntimeDependencies {
     func makeComparisonTreeMonitor() -> LiveComparisonTreeMonitor {
         LiveComparisonTreeMonitor(accessCoordinator: accessCoordinator)
     }
+
+    func makeFolderSynchronizationPreparationService() -> FolderSynchronizationPreparationService {
+        FolderSynchronizationPreparationService(
+            fileSystem: fileSystem,
+            accessCoordinator: accessCoordinator
+        )
+    }
 }
 
 struct StorageInspectorRuntimeDependencies {
@@ -80,12 +87,13 @@ struct BloomFileManagerApp: App {
     @State private var passwordCoordinator: ArchivePasswordPromptCoordinator
     @State private var smartSearch: SmartSearchStore
     @State private var smartSearchRouter: SmartSearchActionRouter
+    @State private var getInfoInspector: GetInfoInspectorController
     @State private var favorites = FavoritesStore()
     @State private var cloudLocations: CloudLocationsStore
     @State private var comparison: ComparisonCoordinator
     @State private var storage: StorageAnalysisStore
     @State private var storageCleanupController: StorageCleanupController
-    @State private var workspace: WorkspaceState
+    @State private var workspaceSession: WorkspaceSessionState
     @State private var contextActionRouter: FileContextActionRouter
     @State private var openWithProvider: OpenWithApplicationProvider
     @State private var selectionFolder: SelectionFolderModel
@@ -109,7 +117,8 @@ struct BloomFileManagerApp: App {
         let operationController = FileOperationController(
             service: operationService,
             materializer: cloudDependencies.materializer,
-            archiveService: archiveService
+            archiveService: archiveService,
+            folderSynchronizationService: operationService.makeFolderSynchronizationTransactionService()
         )
         _operationController = State(initialValue: operationController)
         _contextActionRouter = State(initialValue: FileContextActionRouter(
@@ -126,13 +135,32 @@ struct BloomFileManagerApp: App {
             fileSystem: cloudDependencies.fileSystem,
             accessCoordinator: cloudDependencies.accessCoordinator
         ))
+        let localSearch = LocalSmartSearchService(
+            fileSystem: cloudDependencies.fileSystem,
+            scopedAccessCoordinator: cloudDependencies.accessCoordinator
+        )
+        let spotlightSearch = LiveSpotlightSmartSearchService(
+            runner: LiveSpotlightMetadataQueryRunner(),
+            fileSystem: cloudDependencies.fileSystem,
+            availabilityReader: LiveCloudItemAvailabilityService(),
+            scopedAccessCoordinator: cloudDependencies.accessCoordinator
+        )
+        let searchService = ContentAwareSmartSearchService(
+            local: localSearch,
+            spotlight: spotlightSearch
+        )
         _smartSearch = State(initialValue: SmartSearchStore(
-            service: LocalSmartSearchService(
-                fileSystem: cloudDependencies.fileSystem,
-                scopedAccessCoordinator: cloudDependencies.accessCoordinator
-            ),
+            service: searchService,
             persistence: persistence
         ))
+        let getInfoModel = GetInfoInspectorModel(
+            inspector: LiveGetInfoInspectionService(
+                fileSystem: cloudDependencies.fileSystem,
+                accessCoordinator: cloudDependencies.accessCoordinator
+            ),
+            checksumService: cloudDependencies.makeChecksumService()
+        )
+        _getInfoInspector = State(initialValue: GetInfoInspectorController(model: getInfoModel))
         _smartSearchRouter = State(initialValue: SmartSearchActionRouter(
             fileSystem: cloudDependencies.fileSystem,
             accessCoordinator: cloudDependencies.accessCoordinator
@@ -144,7 +172,10 @@ struct BloomFileManagerApp: App {
         _comparison = State(initialValue: ComparisonCoordinator(
             listings: cloudDependencies.makeComparisonListingService(),
             checksums: cloudDependencies.makeChecksumService(),
-            monitor: cloudDependencies.makeComparisonTreeMonitor()
+            monitor: cloudDependencies.makeComparisonTreeMonitor(),
+            folderSynchronizationReview: FolderSynchronizationReviewModel(
+                preparer: cloudDependencies.makeFolderSynchronizationPreparationService()
+            )
         ))
         let fingerprints: any StorageEntryFingerprintReading =
             LiveStorageEntryFingerprintReader()
@@ -173,16 +204,28 @@ struct BloomFileManagerApp: App {
         let home = FileManager.default.homeDirectoryForCurrentUser
         let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
             ?? home
-        let restored = persistence.restore(home: home, downloads: downloads)
-        let workspace = WorkspaceState(
-            restored: restored,
-            listingService: cloudDependencies.makeDirectoryListingService(),
-            monitor: cloudDependencies.makeDirectoryMonitor(),
-            persistence: persistence,
-            leftFallbackURL: home,
-            rightFallbackURL: downloads
+        let sessionPersistence = WorkspaceSessionPersistence()
+        let restoredSession = sessionPersistence.restore(
+            legacy: persistence.load(),
+            home: home,
+            downloads: downloads,
+            isDirectory: { url in
+                var isDirectory: ObjCBool = false
+                return FileManager.default.fileExists(
+                    atPath: url.path,
+                    isDirectory: &isDirectory
+                ) && isDirectory.boolValue
+            }
         )
-        _workspace = State(initialValue: workspace)
+        let workspaceSession = WorkspaceSessionState(
+            restored: restoredSession,
+            persistence: sessionPersistence,
+            runtimeFactory: WorkspaceRuntimeFactory(
+                listingServiceFactory: { cloudDependencies.makeDirectoryListingService() },
+                monitorFactory: { cloudDependencies.makeDirectoryMonitor() }
+            )
+        )
+        _workspaceSession = State(initialValue: workspaceSession)
 
         let previewCloseBinding = WorkspacePreviewCloseBinding()
         let folderPreviewModel = FolderPreviewModel(
@@ -197,7 +240,7 @@ struct BloomFileManagerApp: App {
             quickLookController: quickLookController,
             folderPresenter: folderPreviewController,
             materializer: cloudDependencies.materializer,
-            restoreFocus: { workspace.activePane.requestTableFocus() }
+            restoreFocus: { workspaceSession.activeWorkspace.activePane.requestTableFocus() }
         )
         previewCloseBinding.previewCoordinator = previewCoordinator
         _previewCoordinator = State(initialValue: previewCoordinator)
@@ -213,7 +256,7 @@ struct BloomFileManagerApp: App {
     var body: some Scene {
         WindowGroup(AppIdentity.displayName) {
             WorkspaceView(
-                workspace: workspace,
+                workspaceSession: workspaceSession,
                 operationController: operationController,
                 batchRename: batchRename,
                 smartSearch: smartSearch,
@@ -232,10 +275,14 @@ struct BloomFileManagerApp: App {
                 passwordCoordinator: passwordCoordinator,
                 contextActionRouter: contextActionRouter,
                 openWithProvider: openWithProvider,
-                selectionFolder: selectionFolder
+                selectionFolder: selectionFolder,
+                getInfoInspector: getInfoInspector
             )
             .task {
                 try? await cloudLocations.scanInitially()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
+                workspaceSession.flushPersistence()
             }
         }
         .defaultSize(width: 1_180, height: 760)
@@ -248,6 +295,7 @@ struct BloomFileManagerApp: App {
                 openWithProvider: openWithProvider,
                 selectionFolder: selectionFolder,
                 smartSearch: smartSearch,
+                getInfoInspector: getInfoInspector,
                 storage: storage,
                 storageCleanupController: storageCleanupController,
                 materializer: cloudDependencies.materializer,

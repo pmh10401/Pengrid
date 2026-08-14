@@ -1,15 +1,37 @@
 import Foundation
 
+enum SmartSearchCoverage: Equatable, Sendable {
+    case namesAndPathsOnly
+    case indexedContentsIncluded
+    case indexedContentsUnavailable
+    case indexedContentsSkippedForInitialQuery
+}
+
 protocol SmartSearching: Sendable {
     func search(
         _ query: SmartSearchQuery,
         progress: @escaping @Sendable (Int) -> Void
+    ) async throws -> [SmartSearchResult]
+
+    func search(
+        _ query: SmartSearchQuery,
+        progress: @escaping @Sendable (Int) -> Void,
+        coverage: @escaping @Sendable (SmartSearchCoverage) -> Void
     ) async throws -> [SmartSearchResult]
 }
 
 extension SmartSearching {
     func search(_ query: SmartSearchQuery) async throws -> [SmartSearchResult] {
         try await search(query, progress: { _ in })
+    }
+
+    func search(
+        _ query: SmartSearchQuery,
+        progress: @escaping @Sendable (Int) -> Void,
+        coverage: @escaping @Sendable (SmartSearchCoverage) -> Void
+    ) async throws -> [SmartSearchResult] {
+        coverage(.namesAndPathsOnly)
+        return try await search(query, progress: progress)
     }
 }
 

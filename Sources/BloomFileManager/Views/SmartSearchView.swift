@@ -310,6 +310,12 @@ struct SmartSearchView: View {
                     .accessibilityLabel("Smart Search progress")
                     .accessibilityValue(progress)
             }
+            Text(coverageMessage)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .accessibilityIdentifier(SpotlightSearchAccessibilityIdentifiers.coverage)
+                .accessibilityLabel("Smart Search coverage")
+                .accessibilityValue(coverageMessage)
         }
     }
 
@@ -330,6 +336,12 @@ struct SmartSearchView: View {
                 get: { store.includePackages }, set: { store.includePackages = $0 }
             ))
             .accessibilityIdentifier(AccessibilityIdentifiers.smartSearchPackages)
+            Toggle("Search indexed file contents", isOn: Binding(
+                get: { store.searchIndexedContents },
+                set: { store.searchIndexedContents = $0 }
+            ))
+            .accessibilityIdentifier(SpotlightSearchAccessibilityIdentifiers.indexedContents)
+            .accessibilityHint("Searches contents already indexed by Spotlight without downloading cloud-only files")
             TextField("Extensions, separated by commas", text: $extensionText)
                 .accessibilityIdentifier(AccessibilityIdentifiers.smartSearchExtensions)
             HStack {
@@ -360,6 +372,19 @@ struct SmartSearchView: View {
         }
         .padding()
         .frame(width: 340)
+    }
+
+    private var coverageMessage: String {
+        switch store.coverage {
+        case .namesAndPathsOnly:
+            "Names and paths only"
+        case .indexedContentsIncluded:
+            "Indexed contents included"
+        case .indexedContentsUnavailable:
+            "Spotlight unavailable; searched names and paths only"
+        case .indexedContentsSkippedForInitialQuery:
+            "Indexed contents skipped for Korean-initial search"
+        }
     }
 
     private var activeFilterSummary: some View {

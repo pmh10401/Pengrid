@@ -261,6 +261,17 @@ import Testing
         let filters = ComparisonFilter.allCases.map(AccessibilityIdentifiers.comparisonFilter)
         #expect(Set(filters).count == ComparisonFilter.allCases.count)
         #expect(filters.allSatisfy { $0.hasPrefix("comparisonFilter.") })
+        #expect(AccessibilityIdentifiers.comparisonSyncLeftToRight == "comparison.sync.leftToRight")
+        #expect(AccessibilityIdentifiers.comparisonSyncRightToLeft == "comparison.sync.rightToLeft")
+        #expect(AccessibilityIdentifiers.folderSynchronizationReviewSheet == "folderSynchronization.sheet")
+        #expect(AccessibilityIdentifiers.folderSynchronizationReviewStatus == "folderSynchronization.status")
+        #expect(AccessibilityIdentifiers.folderSynchronizationReviewConfirm == "folderSynchronization.confirm")
+        #expect(AccessibilityIdentifiers.folderSynchronizationReviewCancel == "folderSynchronization.cancel")
+        #expect(AccessibilityIdentifiers.folderSynchronizationReviewCopyCount == "folderSynchronization.count.copy")
+        #expect(AccessibilityIdentifiers.folderSynchronizationReviewReplaceCount == "folderSynchronization.count.replace")
+        #expect(AccessibilityIdentifiers.folderSynchronizationReviewTrashCount == "folderSynchronization.count.trash")
+        #expect(AccessibilityIdentifiers.folderSynchronizationReviewSkipCount == "folderSynchronization.count.skip")
+        #expect(AccessibilityIdentifiers.folderSynchronizationReviewPaths == "folderSynchronization.paths")
     }
 }
 

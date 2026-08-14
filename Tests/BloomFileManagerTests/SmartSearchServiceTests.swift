@@ -4,6 +4,21 @@ import Testing
 @testable import BloomFileManager
 
 @Suite struct SmartSearchServiceTests {
+    @Test func legacySearchConformerReportsNamesAndPathsOnlyCoverage() async throws {
+        let coverage = LockedCoverageValues()
+        let service = LegacyCoverageSearchService()
+        let query = try SmartSearchQuery(text: "invoice", roots: [URL(filePath: "/tmp")])
+
+        let results = try await service.search(
+            query,
+            progress: { _ in },
+            coverage: { coverage.append($0) }
+        )
+
+        #expect(results.isEmpty)
+        #expect(coverage.values == [.namesAndPathsOnly])
+    }
+
     @Test func serviceCapturesExactIdentityAndAppliesMetadataBeforeRetention() async throws {
         let root = try ServiceTemporaryDirectory()
         defer { root.remove() }
@@ -284,6 +299,28 @@ import Testing
         )
 
         #expect(results.isEmpty)
+    }
+}
+
+private struct LegacyCoverageSearchService: SmartSearching {
+    func search(
+        _: SmartSearchQuery,
+        progress _: @escaping @Sendable (Int) -> Void
+    ) async throws -> [SmartSearchResult] {
+        []
+    }
+}
+
+private final class LockedCoverageValues: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedValues: [SmartSearchCoverage] = []
+
+    var values: [SmartSearchCoverage] {
+        lock.withLock { storedValues }
+    }
+
+    func append(_ value: SmartSearchCoverage) {
+        lock.withLock { storedValues.append(value) }
     }
 }
 

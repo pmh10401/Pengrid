@@ -12,6 +12,8 @@ enum FileOperationJobKind: Sendable, Equatable {
     case compressProtectedZIP
     case extract(ArchiveFormat)
     case undo
+    case redo
+    case synchronizeFolder(ComparisonDirection)
 
     var title: String {
         switch self {
@@ -26,7 +28,18 @@ enum FileOperationJobKind: Sendable, Equatable {
         case .compressProtectedZIP: "Compress Encrypted ZIP"
         case let .extract(format): "Extract \(format.displayName)"
         case .undo: "Undo"
+        case .redo: "Redo"
+        case let .synchronizeFolder(direction):
+            switch direction {
+            case .leftToRight: "Synchronize Left to Right"
+            case .rightToLeft: "Synchronize Right to Left"
+            }
         }
+    }
+
+    var isFolderSynchronization: Bool {
+        if case .synchronizeFolder = self { return true }
+        return false
     }
 }
 
@@ -105,7 +118,11 @@ struct FileOperationJobSnapshot: Identifiable, Sendable, Equatable {
     }
 
     var canRetry: Bool {
-        retryEligible && kind != .undo && (state == .failed || state == .cancelled)
+        retryEligible
+            && kind != .undo
+            && kind != .redo
+            && !kind.isFolderSynchronization
+            && (state == .failed || state == .cancelled)
     }
 
     var isRetryEligible: Bool { retryEligible }
@@ -132,4 +149,29 @@ struct FileOperationJobSnapshot: Identifiable, Sendable, Equatable {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return basename.isEmpty ? "Item" : basename
     }
+}
+
+enum FileOperationReversalDirection: Sendable, Equatable {
+    case undo
+    case redo
+
+    var jobKind: FileOperationJobKind {
+        switch self {
+        case .undo: .undo
+        case .redo: .redo
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .undo: "Undo"
+        case .redo: "Redo"
+        }
+    }
+}
+
+struct FileOperationReversalAvailability: Sendable, Equatable {
+    let title: String
+    let itemCount: Int
+    let isEnabled: Bool
 }

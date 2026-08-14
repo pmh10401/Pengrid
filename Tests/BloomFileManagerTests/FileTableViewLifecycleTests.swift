@@ -1287,7 +1287,7 @@ struct FileTableViewLifecycleTests {
         #expect(menu.items.map(\.title) == [
             "Open", "", "New Folder", "Add to Favorites", "Rename", "Batch Rename…", "",
             "Copy", "Paste", "", "Compress to ZIP", "Compress as Password-Protected ZIP…",
-            "Compress as…", "Extract Archive", "", "Move to Trash…"
+            "Compress as…", "Extract Archive", "", "Move to Trash…", "Get Info"
         ])
     }
 
@@ -1505,7 +1505,7 @@ struct FileTableViewLifecycleTests {
             "New Folder", "New Folder with Selection (2 Items)…", "Add to Favorites", "Duplicate",
             "Rename", "Batch Rename…", "", "Copy", "Paste", "",
             "Compress to ZIP", "Compress as Password-Protected ZIP…", "Compress as…", "Extract Archive", "",
-            "Move to Trash…"
+            "Move to Trash…", "Get Info"
         ])
         let copyPath = try #require(menu.items.first { $0.title == "Copy Path" })
         #expect(copyPath.identifier == NSUserInterfaceItemIdentifier(AccessibilityIdentifiers.fileTableCopyPath))
@@ -1691,6 +1691,38 @@ struct FileTableViewLifecycleTests {
         #expect(NSApp.sendAction(enclose.action!, to: enclose.target, from: enclose))
         #expect(actions.last?.0 == .encloseSelection)
         #expect(actions.last?.1 == [first, second])
+    }
+
+    @Test func contextMenuGetInfoUsesCapturedVisibleOrder() throws {
+        let directory = URL(filePath: "/tmp/get-info-context", directoryHint: .isDirectory)
+        let first = makeTableItem(named: "first.txt", in: directory)
+        let second = makeTableItem(named: "second.txt", in: directory)
+        let replacement = makeTableItem(named: "replacement.txt", in: directory)
+        let selection = SelectionRecorder(value: [second.url, first.url])
+        var captured: [[FileItem]] = []
+        let view = FileTableView(
+            items: [first, second, replacement],
+            selection: selection.binding,
+            onActivatePane: {},
+            onOpen: { _ in },
+            onGetInfo: { captured.append($0) },
+            onSortChange: { _ in }
+        )
+        let coordinator = view.makeCoordinator()
+        let scrollView = view.makeScrollView(coordinator: coordinator)
+        let table = try #require(scrollView.documentView as? NSTableView)
+        coordinator.apply(items: view.items, selection: selection.value, to: table)
+        let menu = try #require(table.menu)
+        coordinator.menuNeedsUpdate(menu)
+
+        let getInfo = try #require(menu.items.first {
+            $0.identifier == NSUserInterfaceItemIdentifier(GetInfoAccessibilityIdentifiers.contextMenu)
+        })
+        #expect(getInfo.isEnabled)
+        selection.value = [replacement.url]
+        coordinator.apply(items: view.items, selection: selection.value, to: table)
+        #expect(NSApp.sendAction(getInfo.action!, to: getInfo.target, from: getInfo))
+        #expect(captured == [[first, second]])
     }
 
     @Test func contextMenuRightClickPreservesInsideSelectionAndReplacesOutsideSelection() {

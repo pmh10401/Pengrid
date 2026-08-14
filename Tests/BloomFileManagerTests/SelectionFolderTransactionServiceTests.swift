@@ -102,6 +102,26 @@ struct SelectionFolderTransactionServiceTests {
         #expect(try FileManager.default.contentsOfDirectory(atPath: fixture.folder.path).isEmpty)
     }
 
+    @Test func expectedFingerprintsRejectSourceMutationBeforeCreatingFolder() async throws {
+        let fixture = try await makeFixture()
+        defer { fixture.root.remove() }
+        let expected = [
+            fixture.first: try await fixture.fileSystem.fingerprint(of: fixture.first),
+            fixture.second: try await fixture.fileSystem.fingerprint(of: fixture.second)
+        ]
+        try Data("changed".utf8).write(to: fixture.first)
+
+        let result = await SelectionFolderTransactionService(fileSystem: fixture.fileSystem).execute(
+            fixture.plan,
+            expectedSourceFingerprints: expected,
+            progress: { _ in }
+        )
+
+        #expect(result.hasFailures)
+        #expect(FileManager.default.fileExists(atPath: fixture.folder.path) == false)
+        #expect(try Data(contentsOf: fixture.first) == Data("changed".utf8))
+    }
+
     @Test(arguments: [TransactionFault.cancelBeforeCreate, .cancelAfterCreate, .cancelAfterMove(1), .cancelAfterMove(2)])
     func executeCancellationAtEveryMutatedBoundaryRestoresSourcesAndOwnedFolder(
         fault: TransactionFault
@@ -220,6 +240,21 @@ struct SelectionFolderTransactionServiceTests {
         #expect(await fixture.fileSystem.exists(fixture.second) == false)
     }
 
+    @Test func reverseCancellationDuringPostMoveVerificationRestoresTheProvisionalMove() async throws {
+        let fixture = TransactionFixture(fault: .cancelDuringReverseVerificationAfterMove(1))
+        let forward = await fixture.service.execute(fixture.plan, progress: { _ in })
+        let undo = try #require(forward.selectionFolderUndoMetadata())
+
+        let task = Task { await fixture.service.reverse(undo, progress: { _ in }) }
+        let result = await task.value
+
+        #expect(result.outcomes.allSatisfy { if case .cancelled = $0 { return true }; return false })
+        #expect(await fixture.fileSystem.exists(fixture.folder.appending(path: "A.txt")))
+        #expect(await fixture.fileSystem.exists(fixture.folder.appending(path: "B.txt")))
+        #expect(await fixture.fileSystem.exists(fixture.first) == false)
+        #expect(await fixture.fileSystem.exists(fixture.second) == false)
+    }
+
     @Test func incompleteReverseRollbackIsRecoveryNeeded() async throws {
         let fixture = TransactionFixture(fault: .failReverseMoveAndRollback(2))
         let forward = await fixture.service.execute(fixture.plan, progress: { _ in })
@@ -324,6 +359,7 @@ enum TransactionFault: Sendable, Equatable {
     case cancelAfterCreate
     case cancelAfterMove(Int)
     case cancelDuringForwardVerificationAfterMove(Int)
+    case cancelDuringReverseVerificationAfterMove(Int)
     case failMove(Int)
     case failMoveAndRollback(Int)
     case failReverseMove(Int)
@@ -381,6 +417,7 @@ private actor TransactionFileSystem: FileSystemAccess {
     private var fingerprints: [URL: Int] = [:]
     private var fingerprintCallCount = 0
     private var didCancelForwardVerification = false
+    private var didCancelReverseVerification = false
     private(set) var events: [String] = []
 
     init(parent: URL, parentIdentity: FileIdentity, entries: [URL: FileIdentity], fault: TransactionFault) {
@@ -416,6 +453,13 @@ private actor TransactionFileSystem: FileSystemAccess {
            moveAttempt == index,
            !didCancelForwardVerification {
             didCancelForwardVerification = true
+            withUnsafeCurrentTask { $0?.cancel() }
+            throw CancellationError()
+        }
+        if case let .cancelDuringReverseVerificationAfterMove(index) = fault,
+           reverseMoveAttempt == index,
+           !didCancelReverseVerification {
+            didCancelReverseVerification = true
             withUnsafeCurrentTask { $0?.cancel() }
             throw CancellationError()
         }

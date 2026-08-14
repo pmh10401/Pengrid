@@ -16,14 +16,14 @@ free, open-source macOS app.
 ## Download
 
 The current release is
-[Pengrid 1.3.0 Developer Preview 6](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.6).
+[Pengrid 1.3.0 Developer Preview 7](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.7).
 
-- [Download Pengrid.dmg](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.6/Pengrid.dmg)
-- Version: **1.3.0 (build 8)**
+- [Download Pengrid.dmg](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.7/Pengrid.dmg)
+- Version: **1.3.0 (build 9)**
 - Requirements: **Apple Silicon Mac, macOS 15 or later**
-- Verification: **1,407 automated tests in 92 suites**
+- Verification: **1,645 automated tests in 110 suites**
 - DMG SHA-256:
-  `ece6212bd5f80d21bc64ef2059839db8a79a416b3706b140b1c4155dbe801b32`
+  `d7060401f05bbaac7f1d64b76d5bce6b93708c75644c8c3737698e8a3144fd73`
 
 Open the DMG, then copy `Pengrid.app` to `Applications`.
 
@@ -55,11 +55,27 @@ Each pane keeps its own history, selection, sorting, and filename filter. Copy,
 move, Open in Other Pane, and reviewed comparison transfers use the pane and
 destination captured when the command starts.
 
+### Keep several workspaces ready
+
+Use workspace tabs to keep independent dual-pane folder pairs open. **Command-T**
+opens a tab from the active tab's persisted layout, **Command-W** closes the active
+tab when it has no active or queued file work, and **Control-Tab** / **Control-Shift-Tab**
+move between tabs. Tab titles show both pane folder names, never their full paths.
+
+Save a named workspace profile from the tab bar, then open it from the Profiles menu
+to create a new tab without changing the existing one. The session restores tab
+folders, sort orders, split position, active pane, and profiles; selections, filters,
+history, previews, searches, and operation state are intentionally not restored.
+
 ### Find files quickly
 
 Smart Search scans filenames and relative paths recursively. It supports
 ordinary text, Korean initial-consonant matching, mixed queries, type,
 extension, size, and modified-date filters. Searches can be saved and reopened.
+The optional **Search indexed file contents** filter is off by default: it uses
+only already-indexed Spotlight content, never downloads cloud-only files, and
+reports when content coverage is unavailable or skipped for an initial-consonant
+query.
 
 ### Preview and act without losing context
 
@@ -68,17 +84,26 @@ Look for files, packages, symbolic links, and multiple selections. The context
 menu includes Open, Open With, Open in Other Pane, Show in Finder, Copy Path,
 Duplicate, New Folder with Selection, rename, archives, and Trash.
 
-Preview 6 captures the visible selection before dispatch, so later navigation
+Pengrid captures the visible selection before dispatch, so later navigation
 or selection changes cannot silently redirect an action. Read the
-[release notes](docs/release-notes-v1.3.0-developer-preview.6.md) for the exact
+[release notes](docs/release-notes-v1.3.0-developer-preview.7.md) for the exact
 selection and capability rules.
+
+Press **Command-I**, or choose **Get Info** from a row's context menu, to open a
+nonmodal read-only inspector for the captured selection. It reports metadata for
+one item or a multiple-selection summary; directory sizes are entry sizes, not
+recursive totals. SHA-256 is calculated only after choosing the explicit button
+for one eligible regular file, which may require macOS to download a cloud-only
+file.
 
 ### Run safer file operations
 
-Copy, move, Trash, rename, new-folder, archive, and Undo jobs share an ordered
-operation center. Jobs expose progress and safe cancellation points; exclusive
-transactions such as batch rename and New Folder with Selection use staged
-publication and conservative rollback checks.
+Copy, move, Trash, rename, new-folder, archive, Undo, and reviewed folder
+synchronization jobs share an ordered operation center. Jobs expose progress
+and safe cancellation points; exclusive transactions such as batch rename, New
+Folder with Selection, and one-way folder synchronization use staged
+publication and conservative rollback checks. Synchronization is
+non-retryable and is not exposed as Undo after it finishes.
 
 ### Create and extract archives
 
@@ -92,8 +117,9 @@ password-protected ZIP files and read supported AES and ZipCrypto entries.
 Google Drive and OneDrive appear through macOS File Provider. Metadata-only
 search and folder preview avoid intentional content downloads; byte-reading
 operations may ask macOS to materialize an online-only item. Pengrid also
-includes directory comparison, Storage Inspector, keyboard navigation,
-VoiceOver labels, Reduce Motion support, and privacy-preserving status text.
+includes directory comparison with reviewed one-way folder synchronization,
+Storage Inspector, keyboard navigation, VoiceOver labels, Reduce Motion
+support, and privacy-preserving status text.
 
 ## Essential Shortcuts
 
@@ -102,6 +128,11 @@ VoiceOver labels, Reduce Motion support, and privacy-preserving status text.
 | **Space** | Folder preview or system Quick Look |
 | **Command-F** | Filter the active pane |
 | **Command-Shift-F** | Smart Search from the active pane |
+| **Command-I** | Get Info for the captured selection |
+| **Command-T** | New workspace tab |
+| **Command-W** | Close active workspace tab when safe |
+| **Control-Tab** | Next workspace tab |
+| **Control-Shift-Tab** | Previous workspace tab |
 | **Command-D** | Duplicate the captured selection |
 | **Option-Command-C** | Copy full paths in visible order |
 
@@ -145,7 +176,7 @@ retain the internal name `BloomFileManager` for compatibility.
 ## Documentation
 
 - [Detailed feature guide](docs/user-guide.md)
-- [Developer Preview 6 release notes](docs/release-notes-v1.3.0-developer-preview.6.md)
+- [Developer Preview 7 release notes](docs/release-notes-v1.3.0-developer-preview.7.md)
 - [Release and packaging guide](docs/release.md)
 - [Architecture notes](docs/architecture.md)
 - [Current limitations](docs/current-limitations.md)

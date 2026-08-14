@@ -4,6 +4,27 @@ import Testing
 
 @Suite("FileOperationJobModelsTests")
 struct FileOperationJobModelsTests {
+    @Test func redoIsNotRetryableAndReversalAvailabilityIsPrivacySafe() {
+        let snapshot = FileOperationJobSnapshot(
+            id: UUID(),
+            kind: .redo,
+            itemDisplayName: "/private/path/Report.txt",
+            itemCount: 2,
+            state: .failed,
+            progress: nil,
+            canUndo: false
+        )
+        let availability = FileOperationReversalAvailability(
+            title: "Redo Report.txt",
+            itemCount: 2,
+            isEnabled: true
+        )
+
+        #expect(snapshot.title == "Redo")
+        #expect(snapshot.canRetry == false)
+        #expect(snapshot.itemDisplayName == "Report.txt")
+        #expect(availability.title.contains("/private") == false)
+    }
     @Test func snapshotSanitizesAbsolutePathsAndExposesStableLabels() {
         let snapshot = FileOperationJobSnapshot(
             id: UUID(),

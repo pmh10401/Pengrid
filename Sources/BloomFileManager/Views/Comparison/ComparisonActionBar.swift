@@ -58,6 +58,21 @@ struct ComparisonActionBar: View {
                 comparison.verifyAll()
             }
             .disabled(!comparison.isActive)
+
+            Divider()
+                .frame(height: 20)
+
+            Button("Sync Left to Right…") {
+                comparison.requestFolderSynchronization(.leftToRight)
+            }
+            .help("Review a one-way synchronization of the complete comparison from left to right")
+            .accessibilityIdentifier(AccessibilityIdentifiers.comparisonSyncLeftToRight)
+
+            Button("Sync Right to Left…") {
+                comparison.requestFolderSynchronization(.rightToLeft)
+            }
+            .help("Review a one-way synchronization of the complete comparison from right to left")
+            .accessibilityIdentifier(AccessibilityIdentifiers.comparisonSyncRightToLeft)
         }
         .controlSize(.small)
         .padding(.horizontal, 10)

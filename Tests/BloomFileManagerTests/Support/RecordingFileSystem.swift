@@ -805,6 +805,9 @@ actor RecordingFileSystem: FileSystemAccess {
     ) async throws -> URL {
         trashQuarantineCommitAttempt += 1
         if trashQuarantineCommitAttempt == failTrashQuarantineCommitOnAttempt {
+            if existingURLs.contains(quarantine.originalURL) {
+                throw StorageTrashRecoverableFailure(quarantine: quarantine)
+            }
             try await rollbackTrashQuarantine(quarantine)
             throw StorageTrashAccessError.failedButRestored
         }

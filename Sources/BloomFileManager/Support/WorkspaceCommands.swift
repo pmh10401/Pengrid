@@ -69,6 +69,46 @@ struct WorkspaceCommandPolicy: Equatable {
     }
 }
 
+/// Focused values are scene-local UI context. Their absence must not authorize
+/// a session mutation; `WorkspaceSessionState` remains owner-neutral so its
+/// domain tests can call it directly without synthesizing a UI scene.
+struct WorkspaceTabCommandFocusPolicy: Equatable {
+    let hasWorkspace: Bool
+    let hasSession: Bool
+    let hasTeardown: Bool
+    let hasProfilesPresentation: Bool
+    let isModalPresented: Bool
+    let isTextEditing: Bool
+
+    var permitsTabMutation: Bool {
+        hasWorkspace
+            && hasSession
+            && hasTeardown
+            && !isModalPresented
+            && !isTextEditing
+    }
+
+    var permitsProfilesPresentation: Bool {
+        hasWorkspace
+            && hasSession
+            && hasProfilesPresentation
+            && !isModalPresented
+            && !isTextEditing
+    }
+}
+
+struct GetInfoSelectionPolicy: Equatable {
+    let isVisible: Bool
+    let isEnabled: Bool
+
+    init(selectionCount: Int, capturedItemCount: Int, isTextEditing: Bool) {
+        isVisible = selectionCount > 0
+        isEnabled = selectionCount > 0
+            && capturedItemCount == selectionCount
+            && !isTextEditing
+    }
+}
+
 enum PasteboardCommandRoute: Equatable {
     case textResponder
     case fileSelection
@@ -229,6 +269,27 @@ enum WorkspaceFilterCommandActions {
 enum WorkspaceSearchCommandActions {
     static func showSmartSearch(in workspace: WorkspaceState, store: SmartSearchStore) {
         store.present(initialRoot: workspace.activePane.currentDirectory)
+    }
+}
+
+@MainActor
+enum WorkspaceGetInfoCommandActions {
+    @discardableResult
+    static func present(
+        in workspace: WorkspaceState,
+        isTextEditing: Bool,
+        present: ([FileItem]) -> Void
+    ) -> Bool {
+        let selectedURLs = Set(workspace.selectedURLsForCommands)
+        let items = workspace.activePane.visibleItems.filter { selectedURLs.contains($0.url) }
+        let policy = GetInfoSelectionPolicy(
+            selectionCount: workspace.selectedURLsForCommands.count,
+            capturedItemCount: items.count,
+            isTextEditing: isTextEditing
+        )
+        guard policy.isEnabled else { return false }
+        present(items)
+        return true
     }
 }
 
@@ -420,6 +481,22 @@ private struct WorkspaceFocusedValueKey: FocusedValueKey {
     typealias Value = WorkspaceState
 }
 
+private struct WorkspaceSessionFocusedValueKey: FocusedValueKey {
+    typealias Value = WorkspaceSessionState
+}
+
+private struct WorkspaceTabModalPresentedFocusedValueKey: FocusedValueKey {
+    typealias Value = Bool
+}
+
+private struct WorkspaceTabTeardownFocusedValueKey: FocusedValueKey {
+    typealias Value = @MainActor () -> Void
+}
+
+private struct WorkspaceProfilesPresentationFocusedValueKey: FocusedValueKey {
+    typealias Value = @MainActor () -> Void
+}
+
 private struct ComparisonFocusedValueKey: FocusedValueKey {
     typealias Value = ComparisonCoordinator
 }
@@ -432,6 +509,26 @@ extension FocusedValues {
     var workspaceState: WorkspaceState? {
         get { self[WorkspaceFocusedValueKey.self] }
         set { self[WorkspaceFocusedValueKey.self] = newValue }
+    }
+
+    var workspaceSessionState: WorkspaceSessionState? {
+        get { self[WorkspaceSessionFocusedValueKey.self] }
+        set { self[WorkspaceSessionFocusedValueKey.self] = newValue }
+    }
+
+    var workspaceTabModalPresented: Bool? {
+        get { self[WorkspaceTabModalPresentedFocusedValueKey.self] }
+        set { self[WorkspaceTabModalPresentedFocusedValueKey.self] = newValue }
+    }
+
+    var workspaceTabTeardown: (@MainActor () -> Void)? {
+        get { self[WorkspaceTabTeardownFocusedValueKey.self] }
+        set { self[WorkspaceTabTeardownFocusedValueKey.self] = newValue }
+    }
+
+    var workspaceProfilesPresentation: (@MainActor () -> Void)? {
+        get { self[WorkspaceProfilesPresentationFocusedValueKey.self] }
+        set { self[WorkspaceProfilesPresentationFocusedValueKey.self] = newValue }
     }
 
     var comparisonCoordinator: ComparisonCoordinator? {
@@ -574,6 +671,10 @@ enum StorageInspectorCommandActions {
 
 struct WorkspaceCommands: Commands {
     @FocusedValue(\.workspaceState) private var workspace
+    @FocusedValue(\.workspaceSessionState) private var workspaceSession
+    @FocusedValue(\.workspaceTabModalPresented) private var workspaceTabModalPresented
+    @FocusedValue(\.workspaceTabTeardown) private var workspaceTabTeardown
+    @FocusedValue(\.workspaceProfilesPresentation) private var workspaceProfilesPresentation
     @FocusedValue(\.comparisonCoordinator) private var comparison
     @FocusedValue(\.storageAnalysisStore) private var focusedStorage
 
@@ -584,6 +685,7 @@ struct WorkspaceCommands: Commands {
     var openWithProvider: (any OpenWithApplicationProviding)? = nil
     var selectionFolder: SelectionFolderModel? = nil
     var smartSearch: SmartSearchStore?
+    var getInfoInspector: GetInfoInspectorController? = nil
     let storage: StorageAnalysisStore
     let storageCleanupController: StorageCleanupController
     var materializer: any CloudMaterializing = LiveCloudMaterializationService()
@@ -602,7 +704,77 @@ struct WorkspaceCommands: Commands {
             .disabled(workspace == nil || !policy.canCreateFolder)
         }
 
+        CommandGroup(after: .windowList) {
+            Button("New Workspace Tab") {
+                guard tabCommandFocusPolicy.permitsTabMutation,
+                      let workspaceSession
+                else { return }
+                _ = WorkspaceTabCommandActions.newTab(
+                    in: workspaceSession,
+                    isModalPresented: tabInteractionPolicy.isModalPresented,
+                    isTextEditing: tabInteractionPolicy.isTextEditing,
+                    teardown: { workspaceTabTeardown?() }
+                )
+            }
+            .keyboardShortcut("t", modifiers: .command)
+            .disabled(!tabCommandFocusPolicy.permitsTabMutation)
+
+            Button("Close Workspace Tab") {
+                guard tabCommandFocusPolicy.permitsTabMutation,
+                      let workspaceSession
+                else { return }
+                _ = WorkspaceTabCommandActions.closeActiveTab(
+                    in: workspaceSession,
+                    isModalPresented: tabInteractionPolicy.isModalPresented,
+                    isTextEditing: tabInteractionPolicy.isTextEditing,
+                    canClose: { id in
+                        guard let tab = workspaceSession.tabs.first(where: { $0.id == id }) else {
+                            return false
+                        }
+                        return !operationController.hasActiveOrQueuedWork(boundTo: tab.workspace)
+                    },
+                    beforeClose: operationController.invalidateReversalHistory(for:),
+                    teardown: { workspaceTabTeardown?() }
+                )
+            }
+            .keyboardShortcut("w", modifiers: .command)
+            .disabled(
+                !tabCommandFocusPolicy.permitsTabMutation
+                    || workspaceSession?.tabs.count == 1
+                    || (workspace.map { operationController.hasActiveOrQueuedWork(boundTo: $0) } ?? true)
+            )
+
+            Button("Next Workspace Tab") {
+                guard tabCommandFocusPolicy.permitsTabMutation,
+                      let workspaceSession
+                else { return }
+                _ = WorkspaceTabCommandActions.selectNext(
+                    in: workspaceSession,
+                    isModalPresented: tabInteractionPolicy.isModalPresented,
+                    isTextEditing: tabInteractionPolicy.isTextEditing,
+                    teardown: { workspaceTabTeardown?() }
+                )
+            }
+            .keyboardShortcut(.tab, modifiers: .control)
+            .disabled(workspaceSession?.tabs.count ?? 0 < 2 || !tabCommandFocusPolicy.permitsTabMutation)
+
+            Button("Previous Workspace Tab") {
+                guard tabCommandFocusPolicy.permitsTabMutation,
+                      let workspaceSession
+                else { return }
+                _ = WorkspaceTabCommandActions.selectPrevious(
+                    in: workspaceSession,
+                    isModalPresented: tabInteractionPolicy.isModalPresented,
+                    isTextEditing: tabInteractionPolicy.isTextEditing,
+                    teardown: { workspaceTabTeardown?() }
+                )
+            }
+            .keyboardShortcut(.tab, modifiers: [.control, .shift])
+            .disabled(workspaceSession?.tabs.count ?? 0 < 2 || !tabCommandFocusPolicy.permitsTabMutation)
+        }
+
         CommandGroup(after: .newItem) {
+
             Button("Open") {
                 openSelection()
             }
@@ -614,6 +786,18 @@ struct WorkspaceCommands: Commands {
             }
             .keyboardShortcut(.space, modifiers: [])
             .disabled(!contextPolicy.quickLook.isEnabled || previewCoordinator == nil)
+
+            Button("Get Info") {
+                guard let workspace, let getInfoInspector else { return }
+                _ = WorkspaceGetInfoCommandActions.present(
+                    in: workspace,
+                    isTextEditing: workspace.activeTextEditingSession != nil,
+                    present: { getInfoInspector.present(items: $0) }
+                )
+            }
+            .keyboardShortcut("i", modifiers: .command)
+            .disabled(!getInfoPolicy.isEnabled)
+            .accessibilityIdentifier(GetInfoAccessibilityIdentifiers.command)
 
             Button("Close Preview") {
                 guard let previewCoordinator else { return }
@@ -675,6 +859,45 @@ struct WorkspaceCommands: Commands {
             }
             .keyboardShortcut("f", modifiers: [.command, .shift])
             .disabled(workspace == nil || smartSearch == nil || !policy.canNavigate)
+        }
+
+        CommandMenu("Workspace Profiles") {
+            Button("Save Workspace as Profile…") {
+                guard tabCommandFocusPolicy.permitsProfilesPresentation,
+                      let workspaceProfilesPresentation
+                else { return }
+                workspaceProfilesPresentation()
+            }
+            .disabled(!tabCommandFocusPolicy.permitsProfilesPresentation)
+
+            Divider()
+
+            ForEach(workspaceSession?.profiles ?? [], id: \.id) { profile in
+                Button(profile.name) {
+                    guard tabCommandFocusPolicy.permitsTabMutation,
+                          let workspaceSession
+                    else { return }
+                    _ = WorkspaceTabCommandActions.openProfile(
+                        profile.id,
+                        in: workspaceSession,
+                        isModalPresented: tabInteractionPolicy.isModalPresented,
+                        isTextEditing: tabInteractionPolicy.isTextEditing,
+                        allowsCurrentModalOwner: false,
+                        teardown: { workspaceTabTeardown?() }
+                    )
+                }
+                .disabled(!tabCommandFocusPolicy.permitsTabMutation)
+            }
+
+            Divider()
+
+            Button("Manage Workspace Profiles…") {
+                guard tabCommandFocusPolicy.permitsProfilesPresentation,
+                      let workspaceProfilesPresentation
+                else { return }
+                workspaceProfilesPresentation()
+            }
+            .disabled(!tabCommandFocusPolicy.permitsProfilesPresentation)
         }
 
         CommandMenu("File Operations") {
@@ -1088,6 +1311,32 @@ struct WorkspaceCommands: Commands {
             isOperationRunning: operationController.isRunning,
             pasteboardHasFileURLs: FileURLPasteboard.containsFileURLs(in: .general),
             selectedItems: selectedItemsForCommands,
+            isTextEditing: workspace?.activeTextEditingSession != nil
+        )
+    }
+
+    private var tabInteractionPolicy: WorkspaceTabInteractionPolicy {
+        WorkspaceTabInteractionPolicy(
+            isModalPresented: workspaceTabModalPresented ?? true,
+            isTextEditing: workspace.map { $0.activeTextEditingSession != nil } ?? true
+        )
+    }
+
+    private var tabCommandFocusPolicy: WorkspaceTabCommandFocusPolicy {
+        WorkspaceTabCommandFocusPolicy(
+            hasWorkspace: workspace != nil,
+            hasSession: workspaceSession != nil,
+            hasTeardown: workspaceTabTeardown != nil,
+            hasProfilesPresentation: workspaceProfilesPresentation != nil,
+            isModalPresented: workspaceTabModalPresented ?? true,
+            isTextEditing: workspace.map { $0.activeTextEditingSession != nil } ?? true
+        )
+    }
+
+    private var getInfoPolicy: GetInfoSelectionPolicy {
+        GetInfoSelectionPolicy(
+            selectionCount: workspace?.selectedURLsForCommands.count ?? 0,
+            capturedItemCount: selectedItemsForCommands.count,
             isTextEditing: workspace?.activeTextEditingSession != nil
         )
     }
