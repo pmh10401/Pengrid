@@ -76,6 +76,8 @@ warning. Pengrid does not ask you to disable macOS security controls.
   native linkage, and DMG checksum passed
 - The packaged app was installed as `/Applications/Pengrid.app`, verified as
   build 9, and launched from that exact path
+- The uploaded GitHub asset digest matched, and an unauthenticated public
+  redownload was byte-for-byte identical to the local DMG
 - DMG SHA-256:
   `d7060401f05bbaac7f1d64b76d5bce6b93708c75644c8c3737698e8a3144fd73`
 
@@ -160,6 +162,8 @@ GitHub 릴리스에서만 다운로드하고 경고를 이해하고 동의하는
   DMG 체크섬 통과
 - 패키징 앱을 `/Applications/Pengrid.app`에 설치하고 빌드 9와 해당 경로의
   실행을 확인
+- 업로드한 GitHub 자산 digest 일치 및 인증 없는 공개 재다운로드 파일의 로컬
+  DMG 바이트 단위 일치 확인
 - DMG SHA-256:
   `d7060401f05bbaac7f1d64b76d5bce6b93708c75644c8c3737698e8a3144fd73`
 
