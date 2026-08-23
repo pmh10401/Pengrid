@@ -1568,6 +1568,33 @@ final class FilePaneState {
     }
 }
 
+extension FilePaneState {
+    func selectAllVisible() {
+        selection = PaneSelectionActions.selectAll(visibleItems: visibleItems)
+        requestTableFocus()
+    }
+
+    func invertVisibleSelection() {
+        selection = PaneSelectionActions.invert(
+            current: selection,
+            visibleItems: visibleItems
+        )
+        requestTableFocus()
+    }
+
+    @discardableResult
+    func selectVisibleItemsWithSameExtension() -> Bool {
+        guard let matchingSelection = PaneSelectionActions.matchingExtension(
+            current: selection,
+            visibleItems: visibleItems
+        ) else { return false }
+
+        selection = matchingSelection
+        requestTableFocus()
+        return true
+    }
+}
+
 private final class PaneTaskLifecycle: @unchecked Sendable {
     private let lock = NSLock()
     private var loadTask: Task<Void, Never>?
