@@ -25,6 +25,7 @@ struct WorkspaceCommandPolicy: Equatable {
     var isTextEditing = false
 
     var canCreateFolder: Bool { !isTextEditing }
+    var canCreateFile: Bool { !isTextEditing }
     var canRename: Bool { !isOperationRunning && !isTextEditing && selectionCount == 1 }
     var canBatchRename: Bool {
         !isOperationRunning
@@ -66,6 +67,23 @@ struct WorkspaceCommandPolicy: Equatable {
     var pasteRoute: PasteboardCommandRoute {
         if isTextEditing { return .textResponder }
         return canPaste ? .fileSelection : .unavailable
+    }
+}
+
+struct WorkspaceSelectionCommandPolicy: Equatable {
+    let hasWorkspace: Bool
+    let isFiltering: Bool
+    let isTextEditing: Bool
+    let selectionCount: Int
+
+    private var canRun: Bool {
+        hasWorkspace && !isFiltering && !isTextEditing
+    }
+
+    var canSelectAllVisible: Bool { canRun }
+    var canInvertSelection: Bool { canRun }
+    var canSelectSameExtension: Bool {
+        canRun && selectionCount == 1
     }
 }
 
@@ -239,6 +257,63 @@ enum WorkspaceCommandActions {
             workspace: workspace,
             beginInlineRenameIn: pane
         )
+    }
+
+    @discardableResult
+    static func createFile(
+        in pane: FilePaneState,
+        workspace: WorkspaceState,
+        operationController: FileOperationController
+    ) async -> Bool {
+        let existing = Set(pane.items.map(\.name))
+        let name = KeepBothNamer.availableName(for: "New File", existing: existing)
+        return await operationController.createFile(
+            in: pane.currentDirectory,
+            named: name,
+            workspace: workspace,
+            beginInlineRenameIn: pane
+        )
+    }
+}
+
+@MainActor
+enum WorkspaceSelectionCommandActions {
+    static func selectAllVisible(in workspace: WorkspaceState) {
+        workspace.activePane.selectAllVisible()
+    }
+
+    static func selectAllVisible(
+        in workspace: WorkspaceState,
+        policy: WorkspaceSelectionCommandPolicy
+    ) {
+        guard policy.canSelectAllVisible else { return }
+        selectAllVisible(in: workspace)
+    }
+
+    static func invertSelection(in workspace: WorkspaceState) {
+        workspace.activePane.invertVisibleSelection()
+    }
+
+    static func invertSelection(
+        in workspace: WorkspaceState,
+        policy: WorkspaceSelectionCommandPolicy
+    ) {
+        guard policy.canInvertSelection else { return }
+        invertSelection(in: workspace)
+    }
+
+    @discardableResult
+    static func selectSameExtension(in workspace: WorkspaceState) -> Bool {
+        workspace.activePane.selectVisibleItemsWithSameExtension()
+    }
+
+    @discardableResult
+    static func selectSameExtension(
+        in workspace: WorkspaceState,
+        policy: WorkspaceSelectionCommandPolicy
+    ) -> Bool {
+        guard policy.canSelectSameExtension else { return false }
+        return selectSameExtension(in: workspace)
     }
 }
 
@@ -702,6 +777,13 @@ struct WorkspaceCommands: Commands {
             }
             .keyboardShortcut("n", modifiers: [.command, .shift])
             .disabled(workspace == nil || !policy.canCreateFolder)
+
+            Button("New Empty File") {
+                createFile()
+            }
+            .keyboardShortcut("n", modifiers: [.command, .option])
+            .disabled(workspace == nil || !policy.canCreateFile)
+            .accessibilityIdentifier(AccessibilityIdentifiers.workspaceCreateFile)
         }
 
         CommandGroup(after: .windowList) {
@@ -843,6 +925,41 @@ struct WorkspaceCommands: Commands {
         }
 
         CommandGroup(after: .pasteboard) {
+            Button("Select All Visible") {
+                guard let workspace else { return }
+                WorkspaceSelectionCommandActions.selectAllVisible(
+                    in: workspace,
+                    policy: selectionPolicy
+                )
+            }
+            .keyboardShortcut("a", modifiers: [.command, .option])
+            .disabled(!selectionPolicy.canSelectAllVisible)
+            .accessibilityIdentifier(AccessibilityIdentifiers.workspaceSelectAllVisible)
+
+            Button("Invert Selection") {
+                guard let workspace else { return }
+                WorkspaceSelectionCommandActions.invertSelection(
+                    in: workspace,
+                    policy: selectionPolicy
+                )
+            }
+            .keyboardShortcut("i", modifiers: [.command, .option])
+            .disabled(!selectionPolicy.canInvertSelection)
+            .accessibilityIdentifier(AccessibilityIdentifiers.workspaceInvertSelection)
+
+            Button("Select Same Extension") {
+                guard let workspace else { return }
+                _ = WorkspaceSelectionCommandActions.selectSameExtension(
+                    in: workspace,
+                    policy: selectionPolicy
+                )
+            }
+            .keyboardShortcut("e", modifiers: [.command, .option])
+            .disabled(!selectionPolicy.canSelectSameExtension)
+            .accessibilityIdentifier(AccessibilityIdentifiers.workspaceSelectSameExtension)
+
+            Divider()
+
             Button("Filter Files") {
                 guard let workspace, policy.canNavigate else { return }
                 WorkspaceFilterCommandActions.showFilter(in: workspace, canNavigate: policy.canNavigate)
@@ -1315,6 +1432,23 @@ struct WorkspaceCommands: Commands {
         )
     }
 
+    private var selectionPolicy: WorkspaceSelectionCommandPolicy {
+        guard let workspace else {
+            return WorkspaceSelectionCommandPolicy(
+                hasWorkspace: false,
+                isFiltering: false,
+                isTextEditing: true,
+                selectionCount: 0
+            )
+        }
+        return WorkspaceSelectionCommandPolicy(
+            hasWorkspace: true,
+            isFiltering: workspace.activePane.isFilterPresented,
+            isTextEditing: workspace.activeTextEditingSession != nil,
+            selectionCount: workspace.selectedURLsForCommands.count
+        )
+    }
+
     private var tabInteractionPolicy: WorkspaceTabInteractionPolicy {
         WorkspaceTabInteractionPolicy(
             isModalPresented: workspaceTabModalPresented ?? true,
@@ -1387,6 +1521,18 @@ struct WorkspaceCommands: Commands {
         let pane = workspace.activePane
         Task {
             _ = await WorkspaceCommandActions.createFolder(
+                in: pane,
+                workspace: workspace,
+                operationController: operationController
+            )
+        }
+    }
+
+    private func createFile() {
+        guard let workspace, policy.canCreateFile else { return }
+        let pane = workspace.activePane
+        Task {
+            _ = await WorkspaceCommandActions.createFile(
                 in: pane,
                 workspace: workspace,
                 operationController: operationController

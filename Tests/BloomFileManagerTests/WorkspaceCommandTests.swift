@@ -15,6 +15,221 @@ private actor EmptySmartSearchService: SmartSearching {
 
 @MainActor
 struct WorkspaceCommandTests {
+    @Test func advancedSelectionPolicyFailsClosedForMissingWorkspaceEditingFilteringAndSelection() {
+        let missingWorkspace = WorkspaceSelectionCommandPolicy(
+            hasWorkspace: false,
+            isFiltering: false,
+            isTextEditing: false,
+            selectionCount: 0
+        )
+        let editing = WorkspaceSelectionCommandPolicy(
+            hasWorkspace: true,
+            isFiltering: false,
+            isTextEditing: true,
+            selectionCount: 1
+        )
+        let filtering = WorkspaceSelectionCommandPolicy(
+            hasWorkspace: true,
+            isFiltering: true,
+            isTextEditing: false,
+            selectionCount: 1
+        )
+        let empty = WorkspaceSelectionCommandPolicy(
+            hasWorkspace: true,
+            isFiltering: false,
+            isTextEditing: false,
+            selectionCount: 0
+        )
+        let single = WorkspaceSelectionCommandPolicy(
+            hasWorkspace: true,
+            isFiltering: false,
+            isTextEditing: false,
+            selectionCount: 1
+        )
+        let multiple = WorkspaceSelectionCommandPolicy(
+            hasWorkspace: true,
+            isFiltering: false,
+            isTextEditing: false,
+            selectionCount: 2
+        )
+
+        for policy in [missingWorkspace, editing, filtering] {
+            #expect(!policy.canSelectAllVisible)
+            #expect(!policy.canInvertSelection)
+            #expect(!policy.canSelectSameExtension)
+        }
+        #expect(empty.canSelectAllVisible)
+        #expect(empty.canInvertSelection)
+        #expect(!empty.canSelectSameExtension)
+        #expect(single.canSelectAllVisible)
+        #expect(single.canInvertSelection)
+        #expect(single.canSelectSameExtension)
+        #expect(multiple.canSelectAllVisible)
+        #expect(multiple.canInvertSelection)
+        #expect(!multiple.canSelectSameExtension)
+    }
+
+    @Test func advancedSelectionActionsRouteToOnlyTheActivePaneAndRestoreTableFocus() async {
+        let left = URL(filePath: "/left", directoryHint: .isDirectory)
+        let right = URL(filePath: "/right", directoryHint: .isDirectory)
+        let leftItem = commandItem("left.txt", in: left)
+        let rightAnchor = commandItem("anchor.txt", in: right)
+        let rightMatch = commandItem("other.txt", in: right)
+        let rightDifferent = commandItem("notes.md", in: right)
+        let workspace = WorkspaceState(
+            leftURL: left,
+            rightURL: right,
+            listingService: StubDirectoryListingService(values: [
+                left: [leftItem],
+                right: [rightAnchor, rightMatch, rightDifferent]
+            ])
+        )
+        await workspace.loadInitialDirectories()
+        workspace.left.selection = []
+        workspace.right.selection = [rightAnchor.url]
+        workspace.activate(.right)
+        let selectAllPolicy = WorkspaceSelectionCommandPolicy(
+            hasWorkspace: true,
+            isFiltering: false,
+            isTextEditing: false,
+            selectionCount: workspace.selectedURLsForCommands.count
+        )
+
+        WorkspaceSelectionCommandActions.selectAllVisible(
+            in: workspace,
+            policy: selectAllPolicy
+        )
+        #expect(workspace.right.selection == Set([
+            rightAnchor.url, rightMatch.url, rightDifferent.url
+        ]))
+        #expect(workspace.left.selection.isEmpty)
+        #expect(workspace.right.focusRequestID != nil)
+
+        let beforeInvertFocus = workspace.right.focusRequestID
+        let invertPolicy = WorkspaceSelectionCommandPolicy(
+            hasWorkspace: true,
+            isFiltering: false,
+            isTextEditing: false,
+            selectionCount: workspace.selectedURLsForCommands.count
+        )
+        WorkspaceSelectionCommandActions.invertSelection(
+            in: workspace,
+            policy: invertPolicy
+        )
+        #expect(workspace.right.selection.isEmpty)
+        #expect(workspace.right.focusRequestID != beforeInvertFocus)
+
+        workspace.right.selection = [rightAnchor.url]
+        let sameExtensionPolicy = WorkspaceSelectionCommandPolicy(
+            hasWorkspace: true,
+            isFiltering: false,
+            isTextEditing: false,
+            selectionCount: 1
+        )
+        #expect(WorkspaceSelectionCommandActions.selectSameExtension(
+            in: workspace,
+            policy: sameExtensionPolicy
+        ))
+        #expect(workspace.right.selection == Set([rightAnchor.url, rightMatch.url]))
+    }
+
+    @Test func advancedSelectionActionsDoNotMutateOrRequestFocusWhenGatedOrAnchorIsInvalid() async {
+        let directory = URL(filePath: "/selection", directoryHint: .isDirectory)
+        let anchor = commandItem("anchor.txt", in: directory)
+        let other = commandItem("other.txt", in: directory)
+        let workspace = WorkspaceState(
+            leftURL: directory,
+            rightURL: URL(filePath: "/other", directoryHint: .isDirectory),
+            listingService: StubDirectoryListingService(values: [directory: [anchor, other]])
+        )
+        await workspace.loadInitialDirectories()
+        workspace.left.selection = [anchor.url]
+
+        let gated = WorkspaceSelectionCommandPolicy(
+            hasWorkspace: true,
+            isFiltering: true,
+            isTextEditing: false,
+            selectionCount: 1
+        )
+        WorkspaceSelectionCommandActions.selectAllVisible(in: workspace, policy: gated)
+        #expect(workspace.left.selection == [anchor.url])
+        #expect(workspace.left.focusRequestID == nil)
+        #expect(!WorkspaceSelectionCommandActions.selectSameExtension(
+            in: workspace,
+            policy: gated
+        ))
+
+        workspace.left.selection = [anchor.url, other.url]
+        let multiple = WorkspaceSelectionCommandPolicy(
+            hasWorkspace: true,
+            isFiltering: false,
+            isTextEditing: false,
+            selectionCount: 2
+        )
+        #expect(!WorkspaceSelectionCommandActions.selectSameExtension(
+            in: workspace,
+            policy: multiple
+        ))
+        #expect(workspace.left.selection == [anchor.url, other.url])
+        #expect(workspace.left.focusRequestID == nil)
+    }
+
+    @Test func workspaceCommandsExposeNewFileAndAdvancedSelectionShortcutsAndIdentifiers() throws {
+        let commands = try workspaceCommandsSource()
+        let newItemGroup = try #require(commandGroupBody(in: commands, anchoredAt: "CommandGroup(replacing: .newItem)"))
+        let editGroup = try #require(commandGroupBody(in: commands, anchoredAt: "CommandGroup(after: .pasteboard)"))
+
+        #expect(newItemGroup.contains("Button(\"New Empty File\")"))
+        #expect(newItemGroup.contains(".keyboardShortcut(\"n\", modifiers: [.command, .option])"))
+        #expect(commands.contains("WorkspaceCommandActions.createFile("))
+        #expect(editGroup.contains("Button(\"Select All Visible\")"))
+        #expect(editGroup.contains(".keyboardShortcut(\"a\", modifiers: [.command, .option])"))
+        #expect(editGroup.contains("Button(\"Invert Selection\")"))
+        #expect(editGroup.contains(".keyboardShortcut(\"i\", modifiers: [.command, .option])"))
+        #expect(editGroup.contains("Button(\"Select Same Extension\")"))
+        #expect(editGroup.contains(".keyboardShortcut(\"e\", modifiers: [.command, .option])"))
+        for identifier in [
+            "AccessibilityIdentifiers.workspaceSelectAllVisible",
+            "AccessibilityIdentifiers.workspaceInvertSelection",
+            "AccessibilityIdentifiers.workspaceSelectSameExtension"
+        ] {
+            #expect(editGroup.contains(identifier))
+        }
+    }
+
+    @Test func newFileCommandUsesLoadedSiblingNamesAndTargetsTheActivePane() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let left = root.url.appending(path: "left", directoryHint: .isDirectory)
+        let right = root.url.appending(path: "right", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: left, withIntermediateDirectories: false)
+        try FileManager.default.createDirectory(at: right, withIntermediateDirectories: false)
+        try Data().write(to: left.appending(path: "New File"))
+        let workspace = WorkspaceState(
+            leftURL: left,
+            rightURL: right,
+            listingService: LiveDirectoryListingService(batchSize: 64)
+        )
+        await workspace.loadInitialDirectories()
+        let controller = FileOperationController(
+            service: FileOperationService(fileSystem: LiveFileSystemAccess())
+        )
+
+        #expect(await WorkspaceCommandActions.createFile(
+            in: workspace.left,
+            workspace: workspace,
+            operationController: controller
+        ))
+        while controller.isRunning || !controller.queuedJobs.isEmpty {
+            await Task.yield()
+        }
+
+        let created = left.appending(path: "New File 2")
+        #expect(FileManager.default.fileExists(atPath: created.path))
+        #expect(workspace.left.selection == [created])
+        #expect(workspace.left.pendingRenameTarget?.url == created)
+    }
+
     @Test func workspaceProfileSheetUsesTheGuardedCurrentOwnerRoute() throws {
         let profilesView = try workspaceSource(named: "Views/WorkspaceProfilesView.swift")
         let commands = try workspaceCommandsSource()
