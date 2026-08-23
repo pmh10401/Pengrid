@@ -256,6 +256,7 @@ struct FileTableView: NSViewRepresentable {
     }
 
     static func dismantleNSView(_ scrollView: NSScrollView, coordinator: Coordinator) {
+        coordinator.discardUnstartedRenameForDismantle()
         NotificationCenter.default.removeObserver(
             coordinator,
             name: NSView.boundsDidChangeNotification,
@@ -344,6 +345,7 @@ extension FileTableView {
         private var lastAppliedProjectionToken: PaneProjectionToken?
         private var contextMenuItems: [FileItem] = []
         private var capturedContextMenuPresentation = FileContextMenuPresentation.hidden
+        private static let renameEditorActivationRetryLimit = 8
 
         private struct InlineEditingSnapshot {
             let identity: URL
@@ -921,16 +923,104 @@ extension FileTableView {
                 consumeRequest(requestID)
             }
             Task { @MainActor [weak self, weak tableView] in
-                await Task.yield()
-                guard let self, !self.isInlineEditingActive, tableView?.currentEditor() == nil else { return }
-                self.editingURL = nil
+                // AppKit can install the field editor on a later main-loop turn.
+                for _ in 0..<Self.renameEditorActivationRetryLimit {
+                    await Task.yield()
+                    guard let self else { return }
+                    guard self.lastHandledRenameRequestID == requestID,
+                          let source = self.editingURL
+                    else { return }
+                    guard let tableView,
+                          let currentRow = self.itemIndex(for: source)
+                    else {
+                        self.discardRequestedRename(requestID)
+                        return
+                    }
+                    guard self.selectionStillTargets(source) else {
+                        self.discardRequestedRename(requestID)
+                        return
+                    }
+                    var editor = self.fieldEditor(
+                        in: tableView,
+                        nameColumn: nameColumn,
+                        row: currentRow
+                    )
+                    if editor == nil,
+                       let textField = self.nameTextField(
+                           in: tableView,
+                           nameColumn: nameColumn,
+                           row: currentRow,
+                           makeIfNecessary: true
+                       ) {
+                        textField.selectText(nil)
+                        editor = textField.currentEditor() as? NSTextView
+                    }
+                    if let editor {
+                        editor.setSelectedRange(InlineRenameSelection.range(
+                            for: self.items[currentRow].name,
+                            isDirectory: self.items[currentRow].isDirectory
+                        ))
+                        return
+                    }
+                }
+                guard let self,
+                      self.lastHandledRenameRequestID == requestID,
+                      !self.isInlineEditingActive
+                else { return }
+                self.discardRequestedRename(requestID)
             }
-            if let editor = tableView.currentEditor() as? NSTextView {
+            if let editor = fieldEditor(in: tableView, nameColumn: nameColumn, row: row) {
                 editor.setSelectedRange(InlineRenameSelection.range(
                     for: items[row].name,
                     isDirectory: items[row].isDirectory
                 ))
             }
+        }
+
+        private func selectionStillTargets(_ source: URL) -> Bool {
+            let sourceIdentity = source.standardizedFileURL
+            return parent.selection.count == 1
+                && parent.selection.contains { $0.standardizedFileURL == sourceIdentity }
+        }
+
+        private func fieldEditor(
+            in tableView: NSTableView,
+            nameColumn: Int,
+            row: Int
+        ) -> NSTextView? {
+            nameTextField(
+                in: tableView,
+                nameColumn: nameColumn,
+                row: row,
+                makeIfNecessary: false
+            )?.currentEditor() as? NSTextView
+        }
+
+        private func nameTextField(
+            in tableView: NSTableView,
+            nameColumn: Int,
+            row: Int,
+            makeIfNecessary: Bool
+        ) -> NSTextField? {
+            (tableView.view(
+                atColumn: nameColumn,
+                row: row,
+                makeIfNecessary: makeIfNecessary
+            ) as? NSTableCellView)?.textField
+        }
+
+        private func discardRequestedRename(_ requestID: UUID) {
+            guard lastHandledRenameRequestID == requestID,
+                  editingURL != nil,
+                  !isInlineEditingActive
+            else { return }
+            editingURL = nil
+            parent.onDiscardRename()
+        }
+
+        func discardUnstartedRenameForDismantle() {
+            guard let requestID = lastHandledRenameRequestID else { return }
+            discardRequestedRename(requestID)
         }
 
         private func captureInlineEditing(in tableView: NSTableView) -> InlineEditingSnapshot? {
