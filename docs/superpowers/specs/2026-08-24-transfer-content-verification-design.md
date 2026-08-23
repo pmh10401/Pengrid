@@ -189,6 +189,23 @@ file or symbolic-link root retains equivalent parent-descriptor authority.
 Path-based `lstat`, `contentsOfDirectory`, or `readlink` alone is not
 sufficient for this subsystem.
 
+The root parent bytes and raw basename are split from one lossless filesystem
+representation of the input URL; Foundation path-component reconstruction is
+not used for descriptor authority. Unsafe or non-lossless root names fail
+closed. A manifest exposes an internal idempotent `close()` so the operation
+can deterministically release the retained parent/root descriptors; deinit is
+only a fallback.
+
+Each regular-file entry exposes an internal async reader scope rather than a
+path. The scope descriptor-walks from retained authority, validates every
+component, creates an `F_DUPFD_CLOEXEC` reader duplicate, keeps that duplicate
+alive across the Task 3 async hash call, and closes it afterward. It also
+exposes the exact device/inode/mode/size/mtime/ctime fields from which Task 3
+constructs `RawFileFingerprint`. The manifest layer uses a neutral typed error
+for change, shape, unsupported item/name, read, scope, and cancellation;
+the session maps a neutral change to source or staged-output failure based on
+which side it was processing.
+
 One root may contain at most 250,000 descendant entries; the root itself is not
 counted. The root is depth zero, and the deepest descendant may be at depth
 256. Exceeding either internal safety budget fails verification before

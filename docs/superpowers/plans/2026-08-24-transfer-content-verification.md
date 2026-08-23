@@ -316,6 +316,60 @@ struct LiveTransferVerificationManifestBuilder:
 }
 ~~~
 
+The following Task 2-only internal handoff is fixed now so Task 3 never
+reconstructs a path or invents descriptor lifetime rules:
+
+~~~swift
+enum TransferVerificationManifestError: Error, Equatable {
+    case changed
+    case structureMismatch
+    case unsupportedItem
+    case unsupportedName
+    case readFailed
+    case scopeTooLarge
+    case cancelled
+}
+
+struct TransferVerificationRegularFileEntry: @unchecked Sendable {
+    let comparisonKey: [String]
+    let device: UInt64
+    let inode: UInt64
+    let mode: UInt32
+    let logicalByteCount: Int64
+    let modificationSeconds: Int64
+    let modificationNanoseconds: Int64
+    let changeSeconds: Int64
+    let changeNanoseconds: Int64
+
+    func withReaderDescriptor<T: Sendable>(
+        _ body: @escaping @Sendable (Int32) async throws -> T
+    ) async throws -> T
+}
+
+extension TransferVerificationManifest {
+    var regularFiles: [TransferVerificationRegularFileEntry] { get }
+    func close()
+}
+~~~
+
+`close()` deterministically releases the retained root authority, is
+idempotent, and makes later reader acquisition fail closed; backing-storage
+deinitialization remains a fallback. `withReaderDescriptor` performs the
+component walk and validation synchronously, hands the async body an owned
+`F_DUPFD_CLOEXEC` duplicate, and closes that duplicate only after the body
+returns. Task 3 constructs its `RawFileFingerprint` directly from the listed
+fields. Manifest code throws the neutral internal error above; Task 3 maps
+`.changed` to source or staged-output failure according to the side it was
+processing, while the other cases map directly to their bounded public
+categories.
+
+The root parent path and raw basename come from one
+`rootURL.withUnsafeFileSystemRepresentation` byte sequence split at its final
+slash, not from `lastPathComponent`. An absent representation, empty basename,
+`.`/`..`, embedded NUL, or a basename that is not lossless UTF-8 fails with
+`.unsupportedName`. The raw parent bytes are used to open the parent descriptor;
+the raw basename is retained for every `*at` call.
+
 The manifest's internal entries retain raw component bytes, lossless display
 components, item kind, identity, mode, size, mtime/ctime stability data, and
 raw symlink payload. Regular entries expose an internal opaque entry handle and
