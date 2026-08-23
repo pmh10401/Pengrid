@@ -20,37 +20,43 @@ struct WorkspaceCommandTests {
             hasWorkspace: false,
             isFiltering: false,
             isTextEditing: false,
-            selectionCount: 0
+            selectionCount: 0,
+            hasValidSameExtensionSelection: false
         )
         let editing = WorkspaceSelectionCommandPolicy(
             hasWorkspace: true,
             isFiltering: false,
             isTextEditing: true,
-            selectionCount: 1
+            selectionCount: 1,
+            hasValidSameExtensionSelection: true
         )
         let filtering = WorkspaceSelectionCommandPolicy(
             hasWorkspace: true,
             isFiltering: true,
             isTextEditing: false,
-            selectionCount: 1
+            selectionCount: 1,
+            hasValidSameExtensionSelection: true
         )
         let empty = WorkspaceSelectionCommandPolicy(
             hasWorkspace: true,
             isFiltering: false,
             isTextEditing: false,
-            selectionCount: 0
+            selectionCount: 0,
+            hasValidSameExtensionSelection: false
         )
         let single = WorkspaceSelectionCommandPolicy(
             hasWorkspace: true,
             isFiltering: false,
             isTextEditing: false,
-            selectionCount: 1
+            selectionCount: 1,
+            hasValidSameExtensionSelection: true
         )
         let multiple = WorkspaceSelectionCommandPolicy(
             hasWorkspace: true,
             isFiltering: false,
             isTextEditing: false,
-            selectionCount: 2
+            selectionCount: 2,
+            hasValidSameExtensionSelection: true
         )
 
         for policy in [missingWorkspace, editing, filtering] {
@@ -92,7 +98,8 @@ struct WorkspaceCommandTests {
             hasWorkspace: true,
             isFiltering: false,
             isTextEditing: false,
-            selectionCount: workspace.selectedURLsForCommands.count
+            selectionCount: workspace.selectedURLsForCommands.count,
+            hasValidSameExtensionSelection: true
         )
 
         WorkspaceSelectionCommandActions.selectAllVisible(
@@ -110,7 +117,8 @@ struct WorkspaceCommandTests {
             hasWorkspace: true,
             isFiltering: false,
             isTextEditing: false,
-            selectionCount: workspace.selectedURLsForCommands.count
+            selectionCount: workspace.selectedURLsForCommands.count,
+            hasValidSameExtensionSelection: false
         )
         WorkspaceSelectionCommandActions.invertSelection(
             in: workspace,
@@ -124,7 +132,8 @@ struct WorkspaceCommandTests {
             hasWorkspace: true,
             isFiltering: false,
             isTextEditing: false,
-            selectionCount: 1
+            selectionCount: 1,
+            hasValidSameExtensionSelection: true
         )
         #expect(WorkspaceSelectionCommandActions.selectSameExtension(
             in: workspace,
@@ -149,7 +158,8 @@ struct WorkspaceCommandTests {
             hasWorkspace: true,
             isFiltering: true,
             isTextEditing: false,
-            selectionCount: 1
+            selectionCount: 1,
+            hasValidSameExtensionSelection: true
         )
         WorkspaceSelectionCommandActions.selectAllVisible(in: workspace, policy: gated)
         #expect(workspace.left.selection == [anchor.url])
@@ -164,7 +174,8 @@ struct WorkspaceCommandTests {
             hasWorkspace: true,
             isFiltering: false,
             isTextEditing: false,
-            selectionCount: 2
+            selectionCount: 2,
+            hasValidSameExtensionSelection: false
         )
         #expect(!WorkspaceSelectionCommandActions.selectSameExtension(
             in: workspace,
@@ -172,6 +183,69 @@ struct WorkspaceCommandTests {
         ))
         #expect(workspace.left.selection == [anchor.url, other.url])
         #expect(workspace.left.focusRequestID == nil)
+    }
+
+    @Test func sameExtensionPolicyFailsClosedForEveryInvalidSingleSelectionAnchor() {
+        let directory = URL(filePath: "/selection", directoryHint: .isDirectory)
+        let regular = commandItem("visible.txt", in: directory)
+        let directoryAnchor = FileItem(
+            url: directory.appending(path: "Folder", directoryHint: .isDirectory),
+            name: "Folder",
+            isDirectory: true,
+            isPackage: false,
+            modifiedAt: nil,
+            byteSize: nil,
+            typeDescription: "Folder"
+        )
+        let packageAnchor = FileItem(
+            url: directory.appending(path: "Archive.app", directoryHint: .isDirectory),
+            name: "Archive.app",
+            isDirectory: true,
+            isPackage: true,
+            modifiedAt: nil,
+            byteSize: nil,
+            typeDescription: "Application"
+        )
+        let extensionlessAnchor = FileItem(
+            url: directory.appending(path: "README"),
+            name: "README",
+            isDirectory: false,
+            isPackage: false,
+            modifiedAt: nil,
+            byteSize: nil,
+            typeDescription: "Document"
+        )
+
+        for anchor in [directoryAnchor, packageAnchor, extensionlessAnchor] {
+            let matching = PaneSelectionActions.matchingExtension(
+                current: [anchor.url],
+                visibleItems: [anchor, regular]
+            )
+            #expect(matching == nil)
+            let policy = WorkspaceSelectionCommandPolicy(
+                hasWorkspace: true,
+                isFiltering: false,
+                isTextEditing: false,
+                selectionCount: 1,
+                hasValidSameExtensionSelection: matching != nil
+            )
+            #expect(!policy.canSelectSameExtension)
+        }
+
+        let hiddenAnchor = commandItem("hidden.txt", in: directory)
+        let matching = PaneSelectionActions.matchingExtension(
+            current: [hiddenAnchor.url],
+            visibleItems: [regular]
+        )
+        #expect(matching == nil)
+        let hiddenPolicy = WorkspaceSelectionCommandPolicy(
+            hasWorkspace: true,
+            isFiltering: false,
+            isTextEditing: false,
+            selectionCount: 1,
+            hasValidSameExtensionSelection: matching != nil
+        )
+        #expect(!hiddenPolicy.canSelectSameExtension)
     }
 
     @Test func workspaceCommandsExposeNewFileAndAdvancedSelectionShortcutsAndIdentifiers() throws {
@@ -188,6 +262,7 @@ struct WorkspaceCommandTests {
         #expect(editGroup.contains(".keyboardShortcut(\"i\", modifiers: [.command, .option])"))
         #expect(editGroup.contains("Button(\"Select Same Extension\")"))
         #expect(editGroup.contains(".keyboardShortcut(\"e\", modifiers: [.command, .option])"))
+        #expect(editGroup.contains(".disabled(!selectionPolicy.canSelectSameExtension)"))
         for identifier in [
             "AccessibilityIdentifiers.workspaceSelectAllVisible",
             "AccessibilityIdentifiers.workspaceInvertSelection",
@@ -211,6 +286,11 @@ struct WorkspaceCommandTests {
             listingService: LiveDirectoryListingService(batchSize: 64)
         )
         await workspace.loadInitialDirectories()
+        workspace.left.beginFiltering()
+        workspace.left.updateFilterQuery("2")
+        #expect(await waitForCommandPaneCondition {
+            workspace.left.visibleItems.isEmpty
+        })
         let controller = FileOperationController(
             service: FileOperationService(fileSystem: LiveFileSystemAccess())
         )

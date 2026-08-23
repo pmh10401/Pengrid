@@ -75,6 +75,7 @@ struct WorkspaceSelectionCommandPolicy: Equatable {
     let isFiltering: Bool
     let isTextEditing: Bool
     let selectionCount: Int
+    let hasValidSameExtensionSelection: Bool
 
     private var canRun: Bool {
         hasWorkspace && !isFiltering && !isTextEditing
@@ -83,7 +84,7 @@ struct WorkspaceSelectionCommandPolicy: Equatable {
     var canSelectAllVisible: Bool { canRun }
     var canInvertSelection: Bool { canRun }
     var canSelectSameExtension: Bool {
-        canRun && selectionCount == 1
+        canRun && selectionCount == 1 && hasValidSameExtensionSelection
     }
 }
 
@@ -1438,14 +1439,21 @@ struct WorkspaceCommands: Commands {
                 hasWorkspace: false,
                 isFiltering: false,
                 isTextEditing: true,
-                selectionCount: 0
+                selectionCount: 0,
+                hasValidSameExtensionSelection: false
             )
         }
+        let activePane = workspace.activePane
+        let hasValidSameExtensionSelection = PaneSelectionActions.matchingExtension(
+            current: activePane.selection,
+            visibleItems: activePane.visibleItems
+        ) != nil
         return WorkspaceSelectionCommandPolicy(
             hasWorkspace: true,
-            isFiltering: workspace.activePane.isFilterPresented,
+            isFiltering: activePane.isFilterPresented,
             isTextEditing: workspace.activeTextEditingSession != nil,
-            selectionCount: workspace.selectedURLsForCommands.count
+            selectionCount: workspace.selectedURLsForCommands.count,
+            hasValidSameExtensionSelection: hasValidSameExtensionSelection
         )
     }
 
