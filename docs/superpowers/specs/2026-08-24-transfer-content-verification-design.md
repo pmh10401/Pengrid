@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-24
 
-**Status:** Draft approved in conversation; written review pending
+**Status:** Approved for implementation
 **Target branch:** `codex/transfer-content-verification`
 
 ## Context
@@ -149,7 +149,10 @@ The only user-selectable enabled policy is currently
 `.sha256(maxConcurrentPairs: 2)`. The pending-operation model captures only
 this policy value at enqueue time. It does not enumerate or fingerprint a
 source while the job is waiting. Retry reconstructs the pending operation with
-the captured value rather than consulting current Settings.
+the captured value rather than consulting current Settings. Internal/test
+construction clamps every enabled pair limit to `1...2`; zero or negative
+values therefore remain enabled with one worker instead of silently disabling
+verification or deadlocking a zero-worker session.
 
 ### Manifest model
 
@@ -171,10 +174,14 @@ make verification unavailable and fail the enabled operation before
 publication. Path traversal, a root replacement, a type transition, and
 duplicate relative paths fail closed.
 
-The manifest builder is descriptor-anchored. A directory root remains open for
-the lifetime of the verification. Children are enumerated and opened relative
-to an already verified parent descriptor with `openat` and
-`fstatat(..., AT_SYMLINK_NOFOLLOW)`; symbolic-link payloads are obtained with
+The manifest builder is descriptor-anchored. Every root retains its open parent
+descriptor and raw basename. A directory root additionally remains open for
+the lifetime of verification. At capture, recapture, and receipt revalidation,
+the no-follow entry observed with `fstatat` in the parent must still match the
+open root descriptor; retaining only the old directory descriptor is
+insufficient because its namespace entry could have been replaced. Children
+are enumerated and opened relative to an already verified parent descriptor with `openat` and
+`fstatat` using `AT_SYMLINK_NOFOLLOW`; symbolic-link payloads are obtained with
 `readlinkat`. Raw filesystem-name bytes are retained for equivalence keys,
 while only sanitized Strings cross into presentation. Every opened directory
 is checked against the no-follow identity observed in its parent. A regular
@@ -234,7 +241,10 @@ captured staged-root identity. It:
    content shape;
 2. schedules matching regular-file pairs with one operation-scoped permit pool
    limited to two pairs;
-3. opens both entries with `O_NOFOLLOW`;
+3. opens both regular-file entries with `O_RDONLY | O_NOFOLLOW | O_NONBLOCK |
+   O_CLOEXEC`, immediately rejects a type/fingerprint change with `fstat`, and
+   uses `O_DIRECTORY` for directory descriptors so a file-to-FIFO race cannot
+   block verification;
 4. alternates bounded chunk reads, updating independent SHA-256 states;
 5. advances logical-byte progress only after both sides have supplied the
    corresponding data;
@@ -322,9 +332,9 @@ and present report preserves the present report; and merging two present
 reports sums all fields with checked, saturating presentation counters. Existing
 Undo metadata merge precedence is unchanged.
 `FileOperationJobSnapshot` stores only the bounded terminal report needed for
-active/history presentation. Logger events record enabled, aggregate counts,
-logical-byte count, and a bounded failure category, never hashes or full
-paths.
+active/history presentation. A typed logger event accepts only enabled state,
+aggregate counts, logical-byte count, and a bounded failure-category enum. Its
+API has no path, basename, digest, underlying-error, or free-form-string field.
 
 ## Operation Data Flows
 
@@ -391,7 +401,9 @@ its corresponding publication primitive. If a later action fails
 revalidation, the transaction enters its existing rollback path for actions
 already published in this transaction. The residual interval described in the
 non-goals still applies; the UI and documentation do not call this an atomic
-filesystem snapshot.
+filesystem snapshot. A staged action replaces and releases its original source
+manifest when it installs the final receipt; it never keeps both generations
+through quarantine or publication.
 
 ### Disabled policy
 
@@ -424,11 +436,18 @@ The verifier distinguishes bounded failure categories:
 - unsupported item;
 - unsupported or unsafe filename;
 - identity unavailable;
-- read unavailable or failed; and
+- read unavailable or failed;
+- scope too large; and
 - cancelled.
 
 These categories are stable enum cases mapped to localized presentation; logger
 metadata never accepts a free-form category string.
+
+One policy-aware terminal-result normalization path covers queued cancellation,
+cancelled-before-start, early preparation failure, and normal completion. The
+same normalized value feeds `lastResult`, history, Retry metadata, Undo
+projection, and `onCompletion`; current Settings are never reread during that
+normalization.
 
 User-facing text states the category and a safe basename where useful. It does
 not include a digest or absolute path.
@@ -505,6 +524,10 @@ Implementation begins with failing Swift Testing cases.
 - symbolic-link payload equality without following targets;
 - special-item rejection;
 - root, child identity, type, and fingerprint replacement;
+- a directory-root namespace replacement while its previous descriptor remains
+  open;
+- a regular-file-to-FIFO race between no-follow inspection and open fails
+  promptly without blocking;
 - source additions or removals during verification.
 - descriptor-anchored traversal and `readlinkat` behavior;
 - depth 257 and entry 250,001 fail closed without staging publication;
@@ -586,6 +609,8 @@ Implementation begins with failing Swift Testing cases.
 - app bundle, icon, ad-hoc signature, and DMG checksum verification;
 - temporary APFS disk-image exercise for cross-volume move, recursive content,
   cancellation, and injected mismatch;
+- APFS harness contract tests for plist parsing, device/image/mount identity,
+  mountpoint substitution, partial attach, signal termination, and cleanup;
 - manual File Provider and VoiceOver rows marked `NOT RUN` unless actually
   completed.
 - operation leases remain active through hashing and a revoked/failed access
