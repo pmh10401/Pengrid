@@ -329,41 +329,21 @@ struct FileOperationMutationTests {
         #expect(await fileSystem.exists(directory.appending(path: "New File.txt")) == false)
     }
 
-    @Test func identifiedCreateFileWithAReplacedCreatedEntryOmitsTheUndoFingerprint() async throws {
+    @Test func identifiedCreateFileRefusesAReplacedCreatedEntryAndLogsFailure() async throws {
         let root = try TemporaryDirectory()
         defer { root.remove() }
         let destination = root.url.appending(path: "New File.txt")
+        let descriptors = MutationCreatedDescriptorRecorder()
         let fileSystem = LiveFileSystemAccess(onAfterEmptyItemCreated: { url, _ in
+            descriptors.captureOpenDescriptor(for: url)
             try FileManager.default.removeItem(at: url)
             try Data("replacement".utf8).write(to: url)
         })
         let directoryIdentity = try #require(await fileSystem.identity(of: root.url))
-        let service = FileOperationService(fileSystem: fileSystem)
+        let logger = MutationRecordingOperationLogger()
+        let service = FileOperationService(fileSystem: fileSystem, logger: logger)
 
-        let created = try await service.createFile(
-            in: root.url,
-            identifiedBy: directoryIdentity,
-            named: "New File.txt"
-        )
-
-        #expect(created.url == destination)
-        let replacementIdentity = try await fileSystem.identity(of: destination)
-        #expect(created.identity != replacementIdentity)
-        #expect(created.fingerprint == nil)
-        #expect(try String(contentsOf: destination, encoding: .utf8) == "replacement")
-    }
-
-    @Test func identifiedCreateFilePreservesThePublishedEntryWhenCancellationArrivesAfterPublication() async throws {
-        let root = try TemporaryDirectory()
-        defer { root.remove() }
-        let destination = root.url.appending(path: "New File.txt")
-        let fileSystem = LiveFileSystemAccess(onAfterEmptyItemCreated: { _, _ in
-            withUnsafeCurrentTask { $0?.cancel() }
-        })
-        let directoryIdentity = try #require(await fileSystem.identity(of: root.url))
-        let service = FileOperationService(fileSystem: fileSystem)
-
-        await #expect(throws: CancellationError.self) {
+        await #expect(throws: FileSystemAccessError.identityMismatch(destination)) {
             try await service.createFile(
                 in: root.url,
                 identifiedBy: directoryIdentity,
@@ -371,7 +351,90 @@ struct FileOperationMutationTests {
             )
         }
 
+        #expect(try String(contentsOf: destination, encoding: .utf8) == "replacement")
+        #expect(await logger.events == [.init(kind: .createFile, succeeded: 0, failed: 1)])
+        let descriptor = try #require(descriptors.descriptor)
+        #expect(Darwin.fcntl(descriptor, F_GETFD) == -1)
+    }
+
+    @Test func identifiedCreateFileWithSameInodeContentMutationProducesNoUndoAuthority() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let destination = root.url.appending(path: "New File.txt")
+        let fileSystem = LiveFileSystemAccess(onAfterEmptyItemCreated: { url, _ in
+            try Data("external content".utf8).write(to: url)
+        })
+        let directoryIdentity = try #require(await fileSystem.identity(of: root.url))
+        let logger = MutationRecordingOperationLogger()
+        let service = FileOperationService(fileSystem: fileSystem, logger: logger)
+
+        let created = try await service.createFile(
+            in: root.url,
+            identifiedBy: directoryIdentity,
+            named: "New File.txt"
+        )
+
+        let currentIdentity = try await fileSystem.identity(of: destination)
+        #expect(created.identity == currentIdentity)
+        #expect(created.fingerprint == nil)
+        #expect(try String(contentsOf: destination, encoding: .utf8) == "external content")
+        let result = FileOperationResult(
+            outcomes: [.succeeded(source: destination, destination: destination)],
+            undoDestinationIdentities: [destination: created.identity]
+        )
+        #expect(await FileOperationUndoService(fileSystem: fileSystem).makeRecipe(
+            kind: .createFile,
+            result: result,
+            allowsUndo: true
+        ) == nil)
+        #expect(await logger.events == [.init(kind: .createFile, succeeded: 1, failed: 0)])
+    }
+
+    @Test func identifiedCreateFileCommitsWhenCancellationArrivesAfterPublication() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let destination = root.url.appending(path: "New File.txt")
+        let fileSystem = LiveFileSystemAccess(onAfterEmptyItemCreated: { _, _ in
+            withUnsafeCurrentTask { $0?.cancel() }
+        })
+        let directoryIdentity = try #require(await fileSystem.identity(of: root.url))
+        let logger = MutationRecordingOperationLogger()
+        let service = FileOperationService(fileSystem: fileSystem, logger: logger)
+
+        let created = try await service.createFile(
+            in: root.url,
+            identifiedBy: directoryIdentity,
+            named: "New File.txt"
+        )
+
         #expect(FileManager.default.fileExists(atPath: destination.path))
+        let currentIdentity = try await fileSystem.identity(of: destination)
+        #expect(created.identity == currentIdentity)
+        #expect(created.fingerprint != nil)
+        #expect(await logger.events == [.init(kind: .createFile, succeeded: 1, failed: 0)])
+    }
+
+    @Test func identifiedCreateFileCancelsBeforeExclusivePublication() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let destination = root.url.appending(path: "New File.txt")
+        let fileSystem = LiveFileSystemAccess()
+        let directoryIdentity = try #require(await fileSystem.identity(of: root.url))
+        let service = FileOperationService(fileSystem: fileSystem)
+
+        let operation = Task {
+            try await service.createFile(
+                in: root.url,
+                identifiedBy: directoryIdentity,
+                named: "New File.txt"
+            )
+        }
+        operation.cancel()
+
+        await #expect(throws: CancellationError.self) {
+            try await operation.value
+        }
+        #expect(FileManager.default.fileExists(atPath: destination.path) == false)
     }
 
     @Test func identifiedCreateFileClosesTheCreatedDescriptorBeforeReturning() async throws {

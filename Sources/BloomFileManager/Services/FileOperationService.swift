@@ -367,10 +367,11 @@ actor FileOperationService {
                 parentIdentifiedBy: directoryIdentity
             )
             defer { Darwin.close(created.descriptor) }
-            try Task.checkCancellation()
-            let fingerprint = await createdOutputFingerprint(
+            let fingerprint = try await Self.createdEmptyFileFingerprint(
+                using: fileSystem,
                 at: destination,
-                identifiedBy: created.identity
+                identifiedBy: created.identity,
+                descriptor: created.descriptor
             )
             await logger.record(
                 kind: .createFile,
@@ -1419,6 +1420,74 @@ actor FileOperationService {
         } catch {
             return nil
         }
+    }
+
+    private nonisolated static func createdEmptyFileFingerprint(
+        using fileSystem: any FileSystemAccess,
+        at destination: URL,
+        identifiedBy identity: FileIdentity,
+        descriptor: Int32
+    ) async throws -> SourceFingerprint? {
+        guard try await uncancelledIdentity(of: destination, using: fileSystem) == identity else {
+            throw FileSystemAccessError.identityMismatch(destination)
+        }
+        guard try emptyRegularFile(descriptor) else { return nil }
+
+        let fingerprint: SourceFingerprint
+        do {
+            fingerprint = try await uncancelledFingerprint(of: destination, using: fileSystem)
+        } catch {
+            guard try await uncancelledIdentity(of: destination, using: fileSystem) == identity else {
+                throw FileSystemAccessError.identityMismatch(destination)
+            }
+            return nil
+        }
+
+        guard try await uncancelledIdentity(of: destination, using: fileSystem) == identity else {
+            throw FileSystemAccessError.identityMismatch(destination)
+        }
+        guard try emptyRegularFile(descriptor), describesEmptyRegularFile(fingerprint) else {
+            return nil
+        }
+        return fingerprint
+    }
+
+    private nonisolated static func uncancelledIdentity(
+        of url: URL,
+        using fileSystem: any FileSystemAccess
+    ) async throws -> FileIdentity? {
+        try await Task.detached {
+            try await fileSystem.identity(of: url)
+        }.value
+    }
+
+    private nonisolated static func uncancelledFingerprint(
+        of url: URL,
+        using fileSystem: any FileSystemAccess
+    ) async throws -> SourceFingerprint {
+        try await Task.detached {
+            try await fileSystem.fingerprint(of: url)
+        }.value
+    }
+
+    private nonisolated static func emptyRegularFile(_ descriptor: Int32) throws -> Bool {
+        var information = stat()
+        guard Darwin.fstat(descriptor, &information) == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        return information.st_mode & S_IFMT == S_IFREG && information.st_size == 0
+    }
+
+    private nonisolated static func describesEmptyRegularFile(
+        _ fingerprint: SourceFingerprint
+    ) -> Bool {
+        guard fingerprint.entries.count == 1,
+              let entry = fingerprint.entries.first else {
+            return false
+        }
+        return entry.relativePath == "."
+            && entry.mode & UInt32(S_IFMT) == UInt32(S_IFREG)
+            && entry.size == 0
     }
 
     private func reportProgress(
