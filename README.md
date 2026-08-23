@@ -55,6 +55,41 @@ Each pane keeps its own history, selection, sorting, and filename filter. Copy,
 move, Open in Other Pane, and reviewed comparison transfers use the pane and
 destination captured when the command starts.
 
+### Jump, create, and select with focused commands
+
+> The productivity workflows in this section describe the current source tree.
+> They are not a claim that these additions are available in the existing
+> Developer Preview 7 DMG.
+
+Press **Command-P** for **Quick Go…**, a scene-local typed palette. Its fixed
+candidate set contains safe commands (**Create Folder**, **Create File**,
+**Show Filter**, and **Smart Search**), the active pane's current, Back, and
+Forward locations, available favorites, workspace profiles, and saved searches.
+Matching uses normalized text and Pengrid's existing Hangul-initial (Korean
+initial-consonant) support. The palette does not run scripts, crawl an index, or
+materialize file contents.
+
+**New Empty File** uses **Option-Command-N**. It creates a regular file bound to
+the captured parent-directory identity through an exclusive no-overwrite
+operation; after the pane refreshes, the new row is selected and inline rename
+begins. Conservative Undo is offered only while the created file's exact
+identity and fingerprint remain unchanged.
+Loaded sibling collisions use `New File 2`, `New File 3`, and so on. Only an
+unseen racing collision at exclusive publication fails without overwriting it.
+
+The active pane's currently visible, unfiltered rows are the scope for
+**Select All Visible** (**Option-Command-A**), **Invert Selection**
+(**Option-Command-I**), and **Select Same Extension** (**Option-Command-E**).
+These commands are disabled while pane filtering or text editing is active.
+Select Same Extension additionally requires exactly one visible regular file
+with a real extension.
+
+The interaction ideas for new-file and advanced-selection commands were studied
+from [Nimble Commander](https://github.com/mikekazakov/nimble-commander), and
+the Command-P launcher was studied from [Shuffle](https://github.com/WizenPainter/shuffle)
+and [F2 Commander](https://github.com/candidtim/f2-commander). These are
+behavior references only; Pengrid copied no code from them.
+
 ### Keep several workspaces ready
 
 Use workspace tabs to keep independent dual-pane folder pairs open. **Command-T**
@@ -128,12 +163,17 @@ support, and privacy-preserving status text.
 | **Space** | Folder preview or system Quick Look |
 | **Command-F** | Filter the active pane |
 | **Command-Shift-F** | Smart Search from the active pane |
+| **Command-P** | Open the scene-local Quick Go… palette |
 | **Command-I** | Get Info for the captured selection |
 | **Command-T** | New workspace tab |
 | **Command-W** | Close active workspace tab when safe |
 | **Control-Tab** | Next workspace tab |
 | **Control-Shift-Tab** | Previous workspace tab |
 | **Command-D** | Duplicate the captured selection |
+| **Option-Command-N** | Create a new empty file and begin inline rename |
+| **Option-Command-A** | Select all visible rows in the active pane |
+| **Option-Command-I** | Invert the active pane's visible selection |
+| **Option-Command-E** | Select visible rows with the same extension |
 | **Option-Command-C** | Copy full paths in visible order |
 
 Batch Rename and the remaining context actions are available from the File
@@ -149,6 +189,9 @@ Operations menu or a row's context menu.
   directory metadata. Passwords are never saved or recoverable.
 - 7z, RAR, password-protected TAR, Developer ID signing, and notarization are
   not included in this Developer Preview.
+- Finder tag editing and byte-level transfer verification remain future work;
+  identity and fingerprint safety checks do not claim per-byte transfer
+  validation.
 - Manual checks that have not been run remain explicitly marked `NOT RUN` in
   the verification documents.
 

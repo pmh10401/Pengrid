@@ -63,6 +63,7 @@ struct WorkspaceTabModalPolicy: Equatable {
     var batchRenamePresented = false
     var pendingTrashPresented = false
     var synchronizationReviewPresented = false
+    var commandPalettePresented = false
 
     var isPresented: Bool {
         profilesPresented
@@ -73,6 +74,7 @@ struct WorkspaceTabModalPolicy: Equatable {
             || batchRenamePresented
             || pendingTrashPresented
             || synchronizationReviewPresented
+            || commandPalettePresented
     }
 }
 
@@ -94,6 +96,7 @@ enum WorkspaceTabTeardownActions {
         stopComparison: () -> Void,
         exitStorage: () -> Void,
         closePreview: () -> Void,
+        dismissCommandPalette: () -> Void,
         dismissSmartSearch: () -> Void,
         dismissBatchRename: () -> Void,
         dismissSelectionFolder: () -> Void,
@@ -105,6 +108,7 @@ enum WorkspaceTabTeardownActions {
         stopComparison()
         exitStorage()
         closePreview()
+        dismissCommandPalette()
         dismissSmartSearch()
         dismissBatchRename()
         dismissSelectionFolder()

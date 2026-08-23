@@ -4,6 +4,75 @@ import Testing
 
 @MainActor
 struct FilePaneStateTests {
+    @Test func selectAllVisibleUpdatesSelectionAndRequestsTableFocus() async {
+        let directory = URL(filePath: "/selection")
+        let first = makeItem(named: "one.txt", in: directory)
+        let second = makeItem(named: "two.txt", in: directory)
+        let pane = FilePaneState(
+            directory: directory,
+            listingService: StubDirectoryListingService(values: [directory: [first, second]])
+        )
+
+        await pane.navigate(to: directory, recordHistory: false)
+        pane.selectAllVisible()
+
+        #expect(pane.selection == Set([first.url, second.url]))
+        #expect(pane.focusRequestID != nil)
+    }
+
+    @Test func invertVisibleSelectionUpdatesSelectionAndRequestsTableFocus() async {
+        let directory = URL(filePath: "/selection")
+        let first = makeItem(named: "one.txt", in: directory)
+        let second = makeItem(named: "two.txt", in: directory)
+        let pane = FilePaneState(
+            directory: directory,
+            listingService: StubDirectoryListingService(values: [directory: [first, second]])
+        )
+
+        await pane.navigate(to: directory, recordHistory: false)
+        pane.selection = [first.url]
+        pane.invertVisibleSelection()
+
+        #expect(pane.selection == Set([second.url]))
+        #expect(pane.focusRequestID != nil)
+    }
+
+    @Test func selectSameVisibleExtensionUpdatesSelectionAndRequestsTableFocus() async {
+        let directory = URL(filePath: "/selection")
+        let anchor = makeItem(named: "anchor.txt", in: directory)
+        let matching = makeItem(named: "copy.txt", in: directory)
+        let different = makeItem(named: "notes.md", in: directory)
+        let pane = FilePaneState(
+            directory: directory,
+            listingService: StubDirectoryListingService(
+                values: [directory: [anchor, matching, different]]
+            )
+        )
+
+        await pane.navigate(to: directory, recordHistory: false)
+        pane.selection = [anchor.url]
+
+        #expect(pane.selectVisibleItemsWithSameExtension())
+        #expect(pane.selection == Set([anchor.url, matching.url]))
+        #expect(pane.focusRequestID != nil)
+    }
+
+    @Test func selectSameVisibleExtensionDoesNotRequestFocusForAnInvalidAnchor() async {
+        let directory = URL(filePath: "/selection")
+        let anchor = makeItem(named: "README", in: directory)
+        let pane = FilePaneState(
+            directory: directory,
+            listingService: StubDirectoryListingService(values: [directory: [anchor]])
+        )
+
+        await pane.navigate(to: directory, recordHistory: false)
+        pane.selection = [anchor.url]
+
+        #expect(!pane.selectVisibleItemsWithSameExtension())
+        #expect(pane.selection == Set([anchor.url]))
+        #expect(pane.focusRequestID == nil)
+    }
+
     @Test func projectionAcceptanceHandlerRunsAfterProjectionStateIsAssigned() async {
         let directory = URL(filePath: "/acceptance")
         let item = makeItem(named: "accepted.txt", byteSize: 1, in: directory)

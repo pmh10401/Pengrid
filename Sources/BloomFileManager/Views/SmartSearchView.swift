@@ -132,6 +132,7 @@ struct SmartSearchView: View {
     let operationController: FileOperationController
     let quickLookController: QuickLookController
     let materializer: any CloudMaterializing
+    var presentationOwner: UUID? = nil
 
     @Environment(\.dismiss) private var dismiss
     @FocusState private var focusedField: SmartSearchFocus?
@@ -160,6 +161,7 @@ struct SmartSearchView: View {
         operationController: FileOperationController,
         quickLookController: QuickLookController,
         materializer: any CloudMaterializing,
+        presentationOwner: UUID? = nil,
         announcer: any SmartSearchAnnouncementPosting = LiveSmartSearchAnnouncementPoster()
     ) {
         self.store = store
@@ -168,6 +170,7 @@ struct SmartSearchView: View {
         self.operationController = operationController
         self.quickLookController = quickLookController
         self.materializer = materializer
+        self.presentationOwner = presentationOwner
         _announcements = State(initialValue: SmartSearchAnnouncementCoordinator(poster: announcer))
     }
 
@@ -475,7 +478,11 @@ struct SmartSearchView: View {
                     Button(record.displayName) {
                         selectedSavedSearchID = record.id
                         savedSearchName = record.displayName
-                        store.openSavedSearch(record)
+                        if let presentationOwner {
+                            _ = store.openSavedSearch(record, owner: presentationOwner)
+                        } else {
+                            store.openSavedSearch(record)
+                        }
                         loadFilterDrafts()
                     }
                 }
@@ -703,8 +710,7 @@ struct SmartSearchView: View {
                 includeSafeRelativePaths: false
             )
             if !handoff.complete(accepted: accepted, dismiss: {
-                store.dismiss()
-                dismiss()
+                dismissSheet()
             }) {
                 actionError = handoff.errorMessage
             }
@@ -727,12 +733,20 @@ struct SmartSearchView: View {
             var handoff = SmartSearchMutationHandoff()
             let accepted = operationController.trash(requests, workspace: workspace, privacySafeProgress: true)
             if !handoff.complete(accepted: accepted, dismiss: {
-                store.dismiss()
-                dismiss()
+                dismissSheet()
             }) {
                 actionError = handoff.errorMessage
             }
         }
+    }
+
+    private func dismissSheet() {
+        if let presentationOwner {
+            store.dismiss(owner: presentationOwner)
+        } else {
+            store.dismiss()
+        }
+        dismiss()
     }
 
 

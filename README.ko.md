@@ -55,6 +55,38 @@ DMG를 연 다음 `Pengrid.app`을 `Applications` 폴더로 복사하세요.
 복사, 이동, Open in Other Pane 및 검토된 디렉터리 비교 전송은 명령 시작 시
 캡처한 패널과 목적지를 사용합니다.
 
+### 집중 명령으로 이동하고 파일을 만들고 선택하기
+
+> 이 절의 생산성 작업 흐름은 현재 소스 트리를 설명합니다. 이 기능이 기존
+> Developer Preview 7 DMG에 포함되어 있다는 뜻은 아닙니다.
+
+**Command-P**를 누르면 현재 scene에만 연결된 열거형 기반의 타입 안전 **Quick Go…** 팔레트가
+열립니다. 후보는 안전한 고정 명령(**Create Folder**, **Create File**, **Show
+Filter**, **Smart Search**), 활성 패널의 현재·뒤로·앞으로 위치, 사용할 수 있는
+즐겨찾기, 작업 공간 프로필 및 저장된 검색입니다. 매칭은 정규화된 텍스트와
+Pengrid의 기존 한글 초성(Hangul-initial) 지원을 함께 사용합니다. 팔레트는
+스크립트를 실행하거나 색인을 크롤링하거나 파일 콘텐츠를 materialize하지 않습니다.
+
+**New Empty File**은 **Option-Command-N**을 사용합니다. 캡처한 부모 디렉터리
+동일성에 묶인 일반 파일을 배타적·덮어쓰기 없는 작업으로 만듭니다. 패널을 새로
+고친 뒤 새 행을 선택하고 인라인 이름 변경을 시작합니다. 보수적인 Undo는 새
+파일의 정확한 동일성과 지문이 바뀌지 않은 동안에만 제공합니다.
+이미 불러온 형제 항목과 이름이 겹치면 `New File 2`, `New File 3`처럼 이름을
+정합니다. 배타적 공개 시점에만 발생하는 아직 보지 못한 경쟁 충돌은 덮어쓰지 않고 실패합니다.
+
+활성 패널의 현재 표시 항목, 즉 필터링되지 않은 행만
+**Select All Visible** (**Option-Command-A**), **Invert Selection**
+(**Option-Command-I**), **Select Same Extension** (**Option-Command-E**)의
+대상입니다. 패널 필터나 텍스트 편집이 활성화된 동안에는 이 명령들이
+비활성화됩니다. Select Same Extension은 표시된 일반 파일 하나를 정확히
+선택하고 실제 확장자가 있어야 사용할 수 있습니다.
+
+새 파일 및 고급 선택 명령의 상호작용 아이디어는
+[Nimble Commander](https://github.com/mikekazakov/nimble-commander)에서,
+Command-P 실행기의 아이디어는 [Shuffle](https://github.com/WizenPainter/shuffle)와
+[F2 Commander](https://github.com/candidtim/f2-commander)에서 동작을
+연구했습니다. 이는 동작 참고일 뿐이며 Pengrid가 코드를 복사한 것은 아닙니다.
+
 ### 여러 작업 공간을 준비해 두기
 
 작업 공간 탭으로 서로 독립된 두 패널 폴더 쌍을 여러 개 열어 둘 수 있습니다.
@@ -125,12 +157,17 @@ VoiceOver 레이블, Reduce Motion 및 개인정보를 노출하지 않는 상�
 | **Space** | 폴더 미리보기 또는 시스템 Quick Look |
 | **Command-F** | 활성 패널 필터 |
 | **Command-Shift-F** | 활성 패널에서 Smart Search 시작 |
+| **Command-P** | 현재 scene의 Quick Go… 팔레트 열기 |
 | **Command-I** | 캡처한 선택 항목의 Get Info |
 | **Command-T** | 새 작업 공간 탭 |
 | **Command-W** | 안전할 때 활성 작업 공간 탭 닫기 |
 | **Control-Tab** | 다음 작업 공간 탭 |
 | **Control-Shift-Tab** | 이전 작업 공간 탭 |
 | **Command-D** | 캡처한 선택 항목 복제 |
+| **Option-Command-N** | 새 빈 파일을 만들고 인라인 이름 변경 시작 |
+| **Option-Command-A** | 활성 패널의 표시 행 모두 선택 |
+| **Option-Command-I** | 활성 패널의 표시 선택 반전 |
+| **Option-Command-E** | 같은 확장자의 표시 행 선택 |
 | **Option-Command-C** | 화면 순서대로 전체 경로 복사 |
 
 Batch Rename과 나머지 컨텍스트 작업은 File Operations 메뉴 또는 행의
@@ -144,11 +181,13 @@ Batch Rename과 나머지 컨텍스트 작업은 File Operations 메뉴 또는 �
   암호는 저장하지 않으며 복구할 수 없습니다.
 - 7z, RAR, 암호 보호 TAR, Developer ID 서명 및 공증은 이 Developer
   Preview에 포함되지 않습니다.
+- Finder 태그 편집과 바이트 단위 전송 검증은 향후 작업입니다. 동일성 및 지문
+  안전 검사는 바이트 단위 전송 검증을 의미하지 않습니다.
 - 실행하지 않은 수동 검증은 검증 문서에 `NOT RUN`으로 명시합니다.
 
 자세한 동작, 안전 규칙 및 제한 사항은
 [기능 가이드](docs/user-guide.ko.md)와
-[현재 제한 사항](docs/current-limitations.md)을 참고하세요.
+[현재 제한 사항](docs/current-limitations.ko.md)을 참고하세요.
 
 ## 소스에서 빌드하기
 
@@ -173,7 +212,7 @@ open dist/Pengrid.app
 - [Developer Preview 7 릴리스 노트](docs/release-notes-v1.3.0-developer-preview.7.md)
 - [릴리스 및 패키징 가이드](docs/release.ko.md)
 - [아키텍처 설명](docs/architecture.md)
-- [현재 제한 사항](docs/current-limitations.md)
+- [현재 제한 사항](docs/current-limitations.ko.md)
 - [검증 기록](docs/verification/)
 
 Pengrid는 계속 개발 중입니다. 기여와 재현 가능한 문제 보고를 환영합니다.

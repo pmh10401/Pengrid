@@ -1068,6 +1068,84 @@ final class FileOperationController {
     }
 
     @discardableResult
+    func createFile(
+        in directory: URL,
+        named name: String,
+        workspace: WorkspaceState,
+        beginInlineRenameIn renamePane: FilePaneState? = nil,
+        onCompletion: (@MainActor (FileOperationResult) -> Void)? = nil
+    ) async -> Bool {
+        let proposedURL = directory.appending(path: name)
+        let renameCapture = IdentifiedRequestCapture()
+        let directoryIdentity: FileIdentity
+        do {
+            directoryIdentity = try await service.identity(of: directory)
+        } catch {
+            return beginOperation(
+                kind: .createFile,
+                totalCount: 1,
+                initialName: name,
+                touchedDirectories: [directory],
+                workspace: workspace,
+                cancellationSources: [proposedURL],
+                onCompletion: onCompletion
+            ) {
+                FileOperationResult(outcomes: [
+                    .failed(
+                        source: proposedURL,
+                        message: "file-preparation:directory-identity-unavailable"
+                    )
+                ])
+            }
+        }
+        return beginOperation(
+            kind: .createFile,
+            totalCount: 1,
+            initialName: name,
+            touchedDirectories: [directory],
+            workspace: workspace,
+            cancellationSources: [proposedURL],
+            onCompletion: { result in
+                if let renamePane, let target = renameCapture.take() {
+                    _ = renamePane.selectForInlineRename(target)
+                }
+                onCompletion?(result)
+            }
+        ) { [service] in
+            do {
+                let created = try await service.createFile(
+                    in: directory,
+                    identifiedBy: directoryIdentity,
+                    named: name
+                )
+                if renamePane != nil {
+                    renameCapture.store(IdentifiedFileRequest(
+                        url: created.url,
+                        identity: created.identity
+                    ))
+                }
+                return FileOperationResult(
+                    outcomes: [
+                        .succeeded(source: created.url, destination: created.url)
+                    ],
+                    undoDestinationIdentities: [created.url: created.identity],
+                    undoDestinationFingerprints: created.fingerprint.map {
+                        [created.url: $0]
+                    } ?? [:]
+                )
+            } catch is CancellationError {
+                return FileOperationResult(outcomes: [
+                    .cancelled(source: proposedURL)
+                ])
+            } catch {
+                return FileOperationResult(outcomes: [
+                    .failed(source: proposedURL, message: error.localizedDescription)
+                ])
+            }
+        }
+    }
+
+    @discardableResult
     func rename(
         _ source: URL,
         to name: String,

@@ -6,6 +6,7 @@ struct DirectoryEntryMetadata: Sendable {
     let isDirectory: Bool
     let isPackage: Bool
     let isSymbolicLink: Bool
+    let isRegularFile: Bool
     let modifiedAt: Date?
     let byteSize: Int64?
     let typeDescription: String
@@ -16,6 +17,7 @@ struct DirectoryEntryMetadata: Sendable {
         isDirectory: Bool,
         isPackage: Bool,
         isSymbolicLink: Bool = false,
+        isRegularFile: Bool? = nil,
         modifiedAt: Date?,
         byteSize: Int64?,
         typeDescription: String
@@ -25,6 +27,7 @@ struct DirectoryEntryMetadata: Sendable {
         self.isDirectory = isDirectory
         self.isPackage = isPackage
         self.isSymbolicLink = isSymbolicLink
+        self.isRegularFile = isRegularFile ?? (!isDirectory && !isPackage && !isSymbolicLink)
         self.modifiedAt = modifiedAt
         self.byteSize = byteSize
         self.typeDescription = typeDescription
@@ -37,6 +40,7 @@ struct DirectoryEntryMetadata: Sendable {
             isDirectory: isDirectory,
             isPackage: isPackage,
             isSymbolicLink: isSymbolicLink,
+            isRegularFile: isRegularFile,
             modifiedAt: modifiedAt,
             byteSize: byteSize,
             typeDescription: typeDescription,
@@ -54,6 +58,7 @@ struct LiveDirectoryEntryMetadataReader: DirectoryEntryMetadataReading {
         .isDirectoryKey,
         .isPackageKey,
         .isSymbolicLinkKey,
+        .isRegularFileKey,
         .contentModificationDateKey,
         .fileSizeKey,
         .localizedTypeDescriptionKey
@@ -69,6 +74,7 @@ struct LiveDirectoryEntryMetadataReader: DirectoryEntryMetadataReading {
             isDirectory: isDirectory,
             isPackage: values.isPackage == true,
             isSymbolicLink: values.isSymbolicLink == true,
+            isRegularFile: values.isRegularFile == true,
             modifiedAt: values.contentModificationDate,
             byteSize: isDirectory ? nil : values.fileSize.map(Int64.init),
             typeDescription: values.localizedTypeDescription ?? "File"

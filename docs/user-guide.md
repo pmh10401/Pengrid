@@ -40,6 +40,11 @@ Useful navigation and file commands include:
 | Rename one selected item | **Return** or **F2** |
 | Batch rename selected items | **Command-Control-R** |
 | New folder | **Command-Shift-N** |
+| Quick Go… palette | **Command-P** |
+| New Empty File | **Option-Command-N** |
+| Select All Visible | **Option-Command-A** |
+| Invert Selection | **Option-Command-I** |
+| Select Same Extension | **Option-Command-E** |
 | Copy and paste | **Command-C**, **Command-V** |
 | Back and Forward | **Command-[**, **Command-]** |
 | Parent folder | **Command-Up Arrow** |
@@ -84,6 +89,64 @@ its own filter and result count.
 
 Use Smart Search when you need a recursive search, metadata filters, saved
 queries, or actions across a larger result set.
+
+## Quick Go, new files, and visible-row selection
+
+> The productivity workflows in this section describe the current source tree.
+> They are not a claim that these additions are available in the existing
+> Developer Preview 7 DMG.
+
+### Quick Go… palette
+
+Choose **Go > Quick Go…** or press **Command-P**. The palette is a scene-local,
+typed surface: it searches only the candidates assembled for the focused
+workspace scene. Candidates are the fixed safe commands (**Create Folder**,
+**Create File**, **Show Filter**, and **Smart Search**), the active pane's
+current location, Back and Forward locations, available favorites, workspace
+profiles, and saved searches. Matching uses normalized text, including
+Pengrid's existing Hangul-initial (Korean initial-consonant) support.
+
+Quick Go does not execute scripts, crawl an index, or materialize file
+contents. Typed actions execute after the palette is dismissed rather than
+while its sheet is still presented.
+
+### New Empty File
+
+Choose **File > New Empty File** or press **Option-Command-N**. Pengrid creates
+one regular file bound to the captured parent-directory identity through an
+exclusive no-overwrite operation. A successful operation refreshes the pane,
+selects the new row, and then starts inline rename. If the name is already
+occupied in the loaded siblings, Pengrid chooses `New File 2`, `New File 3`,
+and so on. Only an unseen racing collision at exclusive publication fails
+rather than replacing the existing entry.
+
+Undo is conservative: it is available only while the created file's exact
+identity and fingerprint remain unchanged. If the file is replaced, edited,
+removed, or otherwise fails those checks, Pengrid does not remove it.
+
+### Visible-row selection commands
+
+These commands operate on the active pane's currently visible, unfiltered rows:
+
+| Command | Shortcut | Scope |
+| --- | --- | --- |
+| **Select All Visible** | **Option-Command-A** | Select every currently visible row |
+| **Invert Selection** | **Option-Command-I** | Invert selection only among visible rows |
+| **Select Same Extension** | **Option-Command-E** | Select visible regular files matching one anchor extension |
+
+All three commands are disabled while the active pane is filtering or any pane
+text editor is active. Select Same Extension also requires exactly one visible
+regular-file selection with a real extension; folders, packages, extensionless
+files, and anchors outside the visible rows do not enable it.
+
+### Behavior inspiration
+
+Pengrid studied interaction behavior from [Nimble
+Commander](https://github.com/mikekazakov/nimble-commander) for new-file and
+advanced-selection ideas, and from [Shuffle](https://github.com/WizenPainter/shuffle)
+and [F2 Commander](https://github.com/candidtim/f2-commander) for Command-P
+launcher ideas. These links document behavior inspiration only; Pengrid did
+not copy their code.
 
 ## Smart Search and Korean initial-consonant matching
 
@@ -183,8 +246,8 @@ Get Info opens with metadata only. **Calculate SHA-256** appears only for one
 captured regular non-symbolic-link file and runs only after its explicit button
 is chosen. That action revalidates identity and can require macOS to materialize
 an online-only file; opening or closing the inspector does not. This version
-does not edit tags, permissions, ownership, dates, extended attributes, or
-names.
+does not edit Finder tags, permissions, ownership, dates, extended attributes,
+or names. Finder tag editing remains future work.
 
 ## File-row context-menu productivity
 
@@ -365,6 +428,8 @@ Undo is available only when Pengrid can reverse its own unchanged mutation:
   or uncertain ownership disables or refuses Undo.
 
 Undo does not overwrite a later item and does not remove a modified output.
+These identity and no-follow fingerprint checks are not byte-level transfer
+verification; byte-level transfer verification remains future work.
 
 ## Preview-first batch rename
 

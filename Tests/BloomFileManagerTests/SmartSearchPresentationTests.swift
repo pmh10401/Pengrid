@@ -35,6 +35,15 @@ import Testing
     #expect(implementation.contains("without downloading cloud-only files"))
 }
 
+@Test func asynchronousSmartSearchCompletionsDismissOnlyTheirPresentationOwner() throws {
+    let implementation = try smartSearchSource(named: "Views/SmartSearchView.swift")
+
+    #expect(implementation.contains("private func dismissSheet()"))
+    #expect(implementation.contains("store.dismiss(owner: presentationOwner)"))
+    #expect(implementation.contains("dismissSheet()"))
+    #expect(!implementation.contains("store.dismiss()\n                dismiss()"))
+}
+
 @MainActor
 @Test func invocationCaptureRetainsPaneObjectsAndDestinationAfterActivePaneChanges() {
     let workspace = WorkspaceState(

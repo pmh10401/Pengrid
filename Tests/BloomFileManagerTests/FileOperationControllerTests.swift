@@ -5,6 +5,144 @@ import Testing
 @Suite(.timeLimit(.minutes(1)))
 @MainActor
 struct FileOperationControllerTests {
+    @Test func createFilePublishesTruthfulJobMetadataAndRefreshesBeforeInlineRename() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let directory = root.url.appending(path: "workspace", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        let created = directory.appending(path: "New File")
+        let listingService = SequencedListingService(
+            directory: directory,
+            firstItems: [],
+            refreshedItems: [fileItem(at: created)]
+        )
+        let workspace = WorkspaceState(
+            leftURL: directory,
+            rightURL: root.url,
+            listingService: listingService
+        )
+        await workspace.loadInitialDirectories()
+        let controller = FileOperationController(
+            service: FileOperationService(fileSystem: LiveFileSystemAccess())
+        )
+        var completionResult: FileOperationResult?
+        var rowWasVisibleAtCompletion = false
+
+        #expect(await controller.createFile(
+            in: directory,
+            named: "New File",
+            workspace: workspace,
+            beginInlineRenameIn: workspace.left,
+            onCompletion: { result in
+                completionResult = result
+                rowWasVisibleAtCompletion = workspace.left.visibleItems.contains { $0.url == created }
+            }
+        ))
+        #expect(controller.activeJob?.kind == .createFile)
+        #expect(controller.activeJob?.title == "Create File")
+
+        await waitUntilQueueIsIdle(controller)
+
+        #expect(completionResult?.outcomes == [
+            .succeeded(source: created, destination: created)
+        ])
+        #expect(completionResult?.undoDestinationIdentity(for: created) != nil)
+        #expect(completionResult?.undoDestinationFingerprint(for: created) != nil)
+        #expect(rowWasVisibleAtCompletion)
+        #expect(workspace.left.selection == [created])
+        let renameTarget = try #require(workspace.left.pendingRenameTarget)
+        #expect(renameTarget.url == created)
+        #expect(renameTarget.identity.entryIdentifier != "uncaptured")
+        #expect(controller.operationHistory.first?.kind == .createFile)
+        #expect(controller.operationHistory.first?.title == "Create File")
+    }
+
+    @Test func failedCreateFileDoesNotStartInlineRename() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let directory = root.url.appending(path: "workspace", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        let existing = directory.appending(path: "Existing")
+        try Data().write(to: existing)
+        let workspace = WorkspaceState(
+            leftURL: directory,
+            rightURL: root.url,
+            listingService: LiveDirectoryListingService(batchSize: 64)
+        )
+        await workspace.loadInitialDirectories()
+        workspace.left.selection = [existing]
+        let controller = FileOperationController(
+            service: FileOperationService(fileSystem: LiveFileSystemAccess())
+        )
+        var completionResult: FileOperationResult?
+
+        #expect(await controller.createFile(
+            in: directory,
+            named: "Existing",
+            workspace: workspace,
+            beginInlineRenameIn: workspace.left,
+            onCompletion: { completionResult = $0 }
+        ))
+        await waitUntilQueueIsIdle(controller)
+
+        #expect(completionResult?.outcomes.count == 1)
+        if case .failed = completionResult?.outcomes.first {
+            // Expected collision failure.
+        } else {
+            Issue.record("Expected a failed create-file outcome")
+        }
+        #expect(workspace.left.pendingRenameTarget == nil)
+        #expect(workspace.left.renameRequestID == nil)
+        #expect(controller.operationHistory.first?.kind == .createFile)
+        #expect(controller.operationHistory.first?.state == .failed)
+    }
+
+    @Test func cancellingQueuedCreateFilePublishesCancellationWithoutMutation() async throws {
+        let source = URL(filePath: "/source/item")
+        let directory = URL(filePath: "/destination", directoryHint: .isDirectory)
+        let collision = directory.appending(path: "item")
+        let cancelled = directory.appending(path: "Cancelled")
+        let fileSystem = RecordingFileSystem(
+            existingURLs: [source, directory, collision]
+        )
+        let workspace = WorkspaceState(
+            leftURL: directory,
+            rightURL: URL(filePath: "/elsewhere"),
+            listingService: StubDirectoryListingService(values: [:])
+        )
+        let controller = FileOperationController(
+            service: FileOperationService(fileSystem: fileSystem)
+        )
+        await workspace.loadInitialDirectories()
+
+        #expect(await controller.runTransfer(
+            [source],
+            to: directory,
+            mode: .copy,
+            workspace: workspace
+        ))
+        await waitForPendingConflict(controller)
+        var completionResult: FileOperationResult?
+        #expect(await controller.createFile(
+            in: directory,
+            named: "Cancelled",
+            workspace: workspace,
+            onCompletion: { completionResult = $0 }
+        ))
+        let queuedID = try #require(controller.queuedJobs.first(where: { $0.kind == .createFile })?.id)
+
+        #expect(controller.cancelQueuedJob(queuedID))
+        #expect(completionResult == FileOperationResult(outcomes: [
+            .cancelled(source: cancelled)
+        ]))
+        #expect(controller.operationHistory.first?.kind == .createFile)
+        #expect(controller.operationHistory.first?.state == .cancelled)
+        #expect(await !fileSystem.existingURLs.contains(cancelled))
+
+        controller.resolvePendingConflict(.skip, applyToAll: false)
+        await waitUntilQueueIsIdle(controller)
+    }
+
     @Test func duplicateQueuesASeparateKeepBothJobAndSelectsOnlyCapturedParentOutputs() async throws {
         let parent = URL(filePath: "/workspace", directoryHint: .isDirectory)
         let opposite = URL(filePath: "/other", directoryHint: .isDirectory)
