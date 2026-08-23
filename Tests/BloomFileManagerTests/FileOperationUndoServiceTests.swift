@@ -26,6 +26,43 @@ struct FileOperationUndoServiceTests {
         #expect(entries[0].currentFingerprint == fingerprint)
     }
 
+    @Test func createFileUndoRequiresTheUnchangedCreatedIdentityAndFingerprint() async throws {
+        let created = URL(filePath: "/workspace/New File.txt")
+        let fileSystem = RecordingFileSystem(existingURLs: [created])
+        let service = FileOperationUndoService(fileSystem: fileSystem)
+        let result = await authoritativeUndoResult(
+            outcomes: [.succeeded(source: created, destination: created)],
+            fileSystem: fileSystem
+        )
+
+        let unchanged = try #require(await service.makeRecipe(
+            kind: .createFile,
+            result: result,
+            allowsUndo: true
+        ))
+        guard case .removeCreated = unchanged else {
+            Issue.record("Expected an unchanged created file to be removable")
+            return
+        }
+
+        await fileSystem.mutateContents(at: created)
+        #expect(await service.makeRecipe(
+            kind: .createFile,
+            result: result,
+            allowsUndo: true
+        ) == nil)
+
+        await fileSystem.replaceIdentity(
+            at: created,
+            with: FileIdentity(entryIdentifier: "replacement-entry", resolvedIdentifier: "replacement")
+        )
+        #expect(await service.makeRecipe(
+            kind: .createFile,
+            result: result,
+            allowsUndo: true
+        ) == nil)
+    }
+
     @Test func successfulMoveBackReturnsSwappedMoveBackInverse() async throws {
         let original = URL(filePath: "/workspace/Before.txt")
         let moved = URL(filePath: "/workspace/After.txt")

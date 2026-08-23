@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 struct StorageCleanupMutationGroup: Sendable {
@@ -339,6 +340,53 @@ actor FileOperationService {
         } catch {
             await logger.record(
                 kind: .createFolder,
+                duration: Date().timeIntervalSince(startedAt),
+                succeeded: 0,
+                failed: 1,
+                skipped: 0
+            )
+            throw error
+        }
+    }
+
+    func createFile(
+        in directory: URL,
+        identifiedBy directoryIdentity: FileIdentity,
+        named name: String
+    ) async throws -> IdentifiedCreatedFileRequest {
+        let accessLeases = try accessCoordinator.acquireAccess(for: [directory])
+        defer { accessLeases.forEach { $0.finish() } }
+        let startedAt = Date()
+        let destination = directory.appending(path: name)
+        do {
+            try Task.checkCancellation()
+            try FilenameValidator.validate(name)
+            let created = try await fileSystem.createEmptyItemAndCaptureIdentity(
+                destination,
+                kind: .regularFile,
+                parentIdentifiedBy: directoryIdentity
+            )
+            defer { Darwin.close(created.descriptor) }
+            try Task.checkCancellation()
+            let fingerprint = await createdOutputFingerprint(
+                at: destination,
+                identifiedBy: created.identity
+            )
+            await logger.record(
+                kind: .createFile,
+                duration: Date().timeIntervalSince(startedAt),
+                succeeded: 1,
+                failed: 0,
+                skipped: 0
+            )
+            return IdentifiedCreatedFileRequest(
+                url: destination,
+                identity: created.identity,
+                fingerprint: fingerprint
+            )
+        } catch {
+            await logger.record(
+                kind: .createFile,
                 duration: Date().timeIntervalSince(startedAt),
                 succeeded: 0,
                 failed: 1,

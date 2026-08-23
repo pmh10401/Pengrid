@@ -172,7 +172,7 @@ actor FileOperationUndoService {
                 }
                 return entries.isEmpty ? nil : .moveBack(entries)
 
-            case .copy, .duplicate, .createFolder, .compress, .extract:
+            case .copy, .duplicate, .createFolder, .createFile, .compress, .extract:
                 var entries: [FileOperationUndoCreatedEntry] = []
                 for item in completed {
                     try Task.checkCancellation()

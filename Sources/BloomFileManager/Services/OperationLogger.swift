@@ -3,6 +3,7 @@ import os
 
 enum FileOperationKind: String, Sendable {
     case createFolder
+    case createFile
     case rename
     case trash
     case copy
