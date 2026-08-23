@@ -182,7 +182,7 @@ final class SmartSearchStore {
     }
 
     func present(initialRoot: URL) {
-        presentationOwner = nil
+        guard presentationOwner == nil else { return }
         performPresentation(initialRoot: initialRoot)
     }
 
@@ -199,7 +199,7 @@ final class SmartSearchStore {
 
     func dismiss(owner: UUID) {
         guard presentationOwner == owner else { return }
-        dismiss()
+        performDismissal()
     }
 
     private func claimPresentation(owner: UUID) -> Bool {
@@ -222,6 +222,11 @@ final class SmartSearchStore {
     }
 
     func dismiss() {
+        guard presentationOwner == nil else { return }
+        performDismissal()
+    }
+
+    private func performDismissal() {
         let hadActiveSearch = searchTask != nil
         cancelActiveSearch()
         if hadActiveSearch {
@@ -349,7 +354,7 @@ final class SmartSearchStore {
     }
 
     func openSavedSearch(_ record: SmartSearchRecord) {
-        presentationOwner = nil
+        guard presentationOwner == nil else { return }
         applySavedSearch(record)
     }
 

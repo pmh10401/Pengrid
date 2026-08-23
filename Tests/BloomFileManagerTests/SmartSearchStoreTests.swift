@@ -104,6 +104,37 @@ struct SmartSearchStoreTests {
         #expect(store.queryText == "report")
     }
 
+    @Test func staleAndUnownedPresentationCallsCannotDisruptTheCurrentOwner() throws {
+        let store = SmartSearchStore(
+            service: ReplacingSearchService(),
+            persistence: RecordingSmartSearchPersistence(data: nil)
+        )
+        let ownerA = UUID()
+        let ownerB = UUID()
+        let saved = SmartSearchRecord(
+            displayName: "Other",
+            query: try SmartSearchQuery(text: "other", roots: [URL(filePath: "/other")])
+        )
+
+        #expect(store.present(initialRoot: URL(filePath: "/a"), owner: ownerA))
+        store.dismiss(owner: ownerA)
+        #expect(store.present(initialRoot: URL(filePath: "/b"), owner: ownerB))
+        store.queryText = "owner-b"
+        let rootsBeforeUnownedCalls = store.roots
+
+        store.dismiss(owner: ownerA)
+        #expect(store.isPresented(for: ownerB))
+        store.present(initialRoot: URL(filePath: "/unowned"))
+        store.openSavedSearch(saved)
+        store.dismiss()
+
+        #expect(store.isPresented(for: ownerB))
+        #expect(store.queryText == "owner-b")
+        #expect(store.roots == rootsBeforeUnownedCalls)
+        store.dismiss(owner: ownerB)
+        #expect(!store.isPresented)
+    }
+
     @Test func reopeningAfterDismissalRestoresTheRetainedSearchState() async throws {
         let service = ReplacingSearchService()
         let store = SmartSearchStore(

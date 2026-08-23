@@ -710,8 +710,7 @@ struct SmartSearchView: View {
                 includeSafeRelativePaths: false
             )
             if !handoff.complete(accepted: accepted, dismiss: {
-                store.dismiss()
-                dismiss()
+                dismissSheet()
             }) {
                 actionError = handoff.errorMessage
             }
@@ -734,12 +733,20 @@ struct SmartSearchView: View {
             var handoff = SmartSearchMutationHandoff()
             let accepted = operationController.trash(requests, workspace: workspace, privacySafeProgress: true)
             if !handoff.complete(accepted: accepted, dismiss: {
-                store.dismiss()
-                dismiss()
+                dismissSheet()
             }) {
                 actionError = handoff.errorMessage
             }
         }
+    }
+
+    private func dismissSheet() {
+        if let presentationOwner {
+            store.dismiss(owner: presentationOwner)
+        } else {
+            store.dismiss()
+        }
+        dismiss()
     }
 
 
