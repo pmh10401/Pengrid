@@ -95,6 +95,28 @@ import Testing
         #expect(Set(input.map(\.id)).count == input.count)
     }
 
+    @Test func duplicateProfileAndSavedSearchIDsKeepTheFirstSourceItem() throws {
+        let profileID = UUID(uuidString: "00000000-0000-0000-0000-000000000006")!
+        let searchID = UUID(uuidString: "00000000-0000-0000-0000-000000000007")!
+        let firstProfile = try profile(id: profileID, name: "First Profile")
+        let secondProfile = try profile(id: profileID, name: "Second Profile")
+        let firstSearch = try savedSearch(id: searchID, name: "First Search")
+        let secondSearch = try savedSearch(id: searchID, name: "Second Search")
+
+        let items = CommandPaletteBuilder.build(
+            currentDirectory: URL(filePath: "/current"),
+            backHistory: [],
+            forwardHistory: [],
+            favorites: [],
+            profiles: [firstProfile, secondProfile],
+            savedSearches: [firstSearch, secondSearch]
+        )
+
+        #expect(items.filter { $0.action == .openProfile(firstProfile.id) }.map(\.title) == ["First Profile"])
+        #expect(items.filter { $0.action == .openSavedSearch(firstSearch.id) }.map(\.title) == ["First Search"])
+        #expect(Set(items.map(\.id)).count == items.count)
+    }
+
     private func profile(id: UUID, name: String) throws -> WorkspaceProfileRecord {
         try WorkspaceProfileRecord(
             id: WorkspaceProfileID(rawValue: id),

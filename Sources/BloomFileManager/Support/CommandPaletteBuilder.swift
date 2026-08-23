@@ -79,7 +79,7 @@ enum CommandPaletteBuilder {
                 source: .savedSearch
             )
         })
-        return items
+        return deduplicatingStableIDs(in: items)
     }
 
     private static let fixedCommands = [
@@ -113,5 +113,10 @@ enum CommandPaletteBuilder {
         let standardized = url.standardizedFileURL
         let name = standardized.lastPathComponent
         return name.isEmpty ? standardized.path : name
+    }
+
+    private static func deduplicatingStableIDs(in items: [CommandPaletteItem]) -> [CommandPaletteItem] {
+        var seenIDs = Set<String>()
+        return items.filter { seenIDs.insert($0.id).inserted }
     }
 }

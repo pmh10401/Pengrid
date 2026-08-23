@@ -12,6 +12,15 @@ import Testing
         #expect(CommandPaletteMatcher.ranked(items, query: "") == items)
     }
 
+    @Test func whitespaceOnlyQueryPreservesCandidateOrder() {
+        let items = [
+            CommandPaletteItem(title: "Zulu", action: .createFolder),
+            CommandPaletteItem(title: "Alpha", action: .createFile)
+        ]
+
+        #expect(CommandPaletteMatcher.ranked(items, query: " \n\t ") == items)
+    }
+
     @Test func exactPrefixAndSubstringTitleMatchesRankInThatOrder() {
         let items = [
             CommandPaletteItem(title: "Reopen Folder", action: .createFolder),

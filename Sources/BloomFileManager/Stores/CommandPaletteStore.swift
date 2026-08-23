@@ -12,11 +12,9 @@ final class CommandPaletteStore {
     private(set) var selectedItemID: String?
 
     private var pendingAction: CommandPaletteAction?
-    private var preservesPendingActionThroughDismissal = false
 
     func present(items: [CommandPaletteItem]) {
         pendingAction = nil
-        preservesPendingActionThroughDismissal = false
         self.items = items
         query = ""
         isPresented = true
@@ -28,24 +26,16 @@ final class CommandPaletteStore {
               let item = results.first(where: { $0.id == itemID })
         else { return }
         pendingAction = item.action
-        preservesPendingActionThroughDismissal = true
         isPresented = false
     }
 
     func dismiss() {
         isPresented = false
-        if preservesPendingActionThroughDismissal {
-            preservesPendingActionThroughDismissal = false
-        } else {
-            pendingAction = nil
-        }
+        pendingAction = nil
     }
 
     func takePendingAction() -> CommandPaletteAction? {
-        defer {
-            pendingAction = nil
-            preservesPendingActionThroughDismissal = false
-        }
+        defer { pendingAction = nil }
         return pendingAction
     }
 

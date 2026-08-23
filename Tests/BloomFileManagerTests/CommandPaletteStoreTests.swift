@@ -34,6 +34,17 @@ import Testing
         #expect(store.selectedItemID == file.id)
     }
 
+    @Test func queryWithNoResultsClearsSelection() {
+        let store = CommandPaletteStore()
+        let item = CommandPaletteItem(title: "Create Folder", action: .createFolder)
+
+        store.present(items: [item])
+        store.query = "missing"
+
+        #expect(store.results.isEmpty)
+        #expect(store.selectedItemID == nil)
+    }
+
     @Test func explicitDismissalClearsPendingAction() {
         let store = CommandPaletteStore()
         let item = CommandPaletteItem(title: "Create Folder", action: .createFolder)
@@ -45,7 +56,19 @@ import Testing
         #expect(store.takePendingAction() == nil)
     }
 
-    @Test func requestExecutionStoresOneShotActionAcrossDismissal() {
+    @Test func requestExecutionStoresOneShotAction() {
+        let store = CommandPaletteStore()
+        let item = CommandPaletteItem(title: "Create Folder", action: .createFolder)
+
+        store.present(items: [item])
+        store.requestExecution(itemID: item.id)
+
+        #expect(!store.isPresented)
+        #expect(store.takePendingAction() == .createFolder)
+        #expect(store.takePendingAction() == nil)
+    }
+
+    @Test func explicitDismissalAfterExecutionRequestClearsPendingAction() {
         let store = CommandPaletteStore()
         let item = CommandPaletteItem(title: "Create Folder", action: .createFolder)
 
@@ -53,9 +76,19 @@ import Testing
         store.requestExecution(itemID: item.id)
         store.dismiss()
 
-        #expect(!store.isPresented)
-        #expect(store.takePendingAction() == .createFolder)
         #expect(store.takePendingAction() == nil)
+    }
+
+    @Test func repeatedExecutionRequestKeepsTheFirstAction() {
+        let store = CommandPaletteStore()
+        let folder = CommandPaletteItem(title: "Create Folder", action: .createFolder)
+        let file = CommandPaletteItem(title: "Create File", action: .createFile)
+
+        store.present(items: [folder, file])
+        store.requestExecution(itemID: folder.id)
+        store.requestExecution(itemID: file.id)
+
+        #expect(store.takePendingAction() == .createFolder)
     }
 
     @Test func staleItemIDsAreRejected() {
