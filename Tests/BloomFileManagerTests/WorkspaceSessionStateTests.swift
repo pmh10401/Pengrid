@@ -93,7 +93,9 @@ struct WorkspaceSessionStateTests {
         try await Task.sleep(for: .milliseconds(180))
         #expect(fixture.persistence.load() == nil)
 
-        try await Task.sleep(for: .milliseconds(220))
+        #expect(await waitForWorkspaceSessionCondition {
+            fixture.persistence.load()?.tabs.first?.descriptor.splitRatio == 0.64
+        })
         let saved = try #require(fixture.persistence.load())
         #expect(saved.tabs[0].descriptor.splitRatio == 0.64)
     }
@@ -231,4 +233,17 @@ private struct TaggedDirectoryMonitor: DirectoryMonitor {
     func events(for directory: URL) -> AsyncStream<Void> {
         AsyncStream { $0.finish() }
     }
+}
+
+@MainActor
+private func waitForWorkspaceSessionCondition(
+    timeout: Duration = .seconds(2),
+    condition: @escaping @MainActor () -> Bool
+) async -> Bool {
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: timeout)
+    while !condition(), clock.now < deadline {
+        try? await Task.sleep(for: .milliseconds(5))
+    }
+    return condition()
 }
