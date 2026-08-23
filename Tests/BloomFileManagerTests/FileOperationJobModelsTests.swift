@@ -85,6 +85,59 @@ struct FileOperationJobModelsTests {
         ).fractionCompleted == 0.25)
     }
 
+    @Test func fractionProgressUsesNormalizedFractionAndKeepsItemsCompatibility() {
+        let items = FileOperationJobProgress(
+            completedCount: 1,
+            totalCount: 4,
+            detail: "Preparing"
+        )
+        let fraction = FileOperationJobProgress(
+            completedCount: 8,
+            totalCount: 20,
+            detail: "Verifying contents",
+            unit: .fraction,
+            normalizedFraction: 0.42
+        )
+        let nonfinite = FileOperationJobProgress(
+            completedCount: 8,
+            totalCount: 20,
+            detail: "Verifying contents",
+            unit: .fraction,
+            normalizedFraction: .nan
+        )
+
+        #expect(items.unit == .items)
+        #expect(items.normalizedFraction == nil)
+        #expect(items.fractionCompleted == 0.25)
+        #expect(fraction.unit == .fraction)
+        #expect(fraction.fractionCompleted == 0.42)
+        #expect(nonfinite.fractionCompleted == 0)
+    }
+
+    @Test func verificationAccessibilityUsesFilesPercentAndSafeBasename() {
+        let snapshot = FileOperationJobSnapshot(
+            id: UUID(),
+            kind: .copy,
+            itemDisplayName: "/Users/example/Private/Report.txt",
+            itemCount: 20,
+            state: .running,
+            progress: FileOperationJobProgress(
+                completedCount: 8,
+                totalCount: 20,
+                detail: "Verifying contents",
+                unit: .fraction,
+                normalizedFraction: 0.42
+            ),
+            canUndo: false
+        )
+
+        #expect(snapshot.accessibilityLabel.contains(
+            "Verifying contents, 42 percent, 8 of 20 files, Report.txt"
+        ))
+        #expect(!snapshot.accessibilityLabel.contains("1048576"))
+        #expect(!snapshot.accessibilityLabel.contains("/Users/"))
+    }
+
     @Test func retryAndUndoAvailabilityFollowTerminalState() {
         let id = UUID()
         let failed = FileOperationJobSnapshot(

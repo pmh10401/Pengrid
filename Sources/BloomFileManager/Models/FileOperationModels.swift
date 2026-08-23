@@ -291,6 +291,7 @@ struct FileOperationResult: Sendable, Equatable {
     private let undoDestinationFingerprints: [URL: SourceFingerprint]
     private let batchRenameUndoPlan: BatchRenameUndoPlan?
     private let selectionFolderUndoPlan: SelectionFolderUndoPlan?
+    let verificationReport: TransferVerificationReport?
 
     init(
         outcomes: [FileOperationItemOutcome],
@@ -298,7 +299,8 @@ struct FileOperationResult: Sendable, Equatable {
         undoDestinationIdentities: [URL: FileIdentity] = [:],
         undoDestinationFingerprints: [URL: SourceFingerprint] = [:],
         batchRenameUndoPlan: BatchRenameUndoPlan? = nil,
-        selectionFolderUndoPlan: SelectionFolderUndoPlan? = nil
+        selectionFolderUndoPlan: SelectionFolderUndoPlan? = nil,
+        verificationReport: TransferVerificationReport? = nil
     ) {
         self.outcomes = outcomes
         var normalized: [URL: ComparisonRelativePath] = [:]
@@ -326,6 +328,7 @@ struct FileOperationResult: Sendable, Equatable {
         self.undoDestinationFingerprints = normalizedUndoFingerprints
         self.batchRenameUndoPlan = batchRenameUndoPlan
         self.selectionFolderUndoPlan = selectionFolderUndoPlan
+        self.verificationReport = verificationReport
     }
 
     func safeRelativePath(for source: URL) -> ComparisonRelativePath? {
@@ -361,7 +364,8 @@ struct FileOperationResult: Sendable, Equatable {
             undoDestinationIdentities: undoDestinationIdentities,
             undoDestinationFingerprints: undoDestinationFingerprints,
             batchRenameUndoPlan: batchRenameUndoPlan,
-            selectionFolderUndoPlan: selectionFolderUndoPlan
+            selectionFolderUndoPlan: selectionFolderUndoPlan,
+            verificationReport: verificationReport
         )
     }
 
@@ -381,19 +385,32 @@ struct FileOperationResult: Sendable, Equatable {
         for (destination, fingerprint) in other.undoDestinationFingerprints {
             fingerprints[destination] = fingerprints[destination] ?? fingerprint
         }
+        let mergedVerificationReport: TransferVerificationReport?
+        switch (verificationReport, other.verificationReport) {
+        case (nil, nil):
+            mergedVerificationReport = nil
+        case (let report?, nil):
+            mergedVerificationReport = report
+        case (nil, let report?):
+            mergedVerificationReport = report
+        case (let left?, let right?):
+            mergedVerificationReport = left.merging(right)
+        }
         return FileOperationResult(
             outcomes: outcomes + other.outcomes,
             safeRelativePathsBySource: paths,
             undoDestinationIdentities: identities,
             undoDestinationFingerprints: fingerprints,
             batchRenameUndoPlan: batchRenameUndoPlan ?? other.batchRenameUndoPlan,
-            selectionFolderUndoPlan: selectionFolderUndoPlan ?? other.selectionFolderUndoPlan
+            selectionFolderUndoPlan: selectionFolderUndoPlan ?? other.selectionFolderUndoPlan,
+            verificationReport: mergedVerificationReport
         )
     }
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.outcomes == rhs.outcomes
             && lhs.safeRelativePathsBySource == rhs.safeRelativePathsBySource
+            && lhs.verificationReport == rhs.verificationReport
     }
 
     var hasFailures: Bool {
