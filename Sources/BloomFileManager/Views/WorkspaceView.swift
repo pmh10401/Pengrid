@@ -11,13 +11,24 @@ private struct PreviewSelectionKey: Hashable {
 struct WorkspaceModalPresentationState: Equatable {
     private(set) var presentedPasswordRequestID: UUID?
     private(set) var isSelectionFolderPresented = false
-
     private(set) var isSynchronizationReviewPresented = false
+    private(set) var isCommandPalettePresented = false
 
     var allowsOtherModalPresentation: Bool {
         presentedPasswordRequestID == nil
             && !isSelectionFolderPresented
             && !isSynchronizationReviewPresented
+            && !isCommandPalettePresented
+    }
+
+    mutating func beginCommandPalettePresentation() -> Bool {
+        guard allowsOtherModalPresentation else { return false }
+        isCommandPalettePresented = true
+        return true
+    }
+
+    mutating func endCommandPalettePresentation() {
+        isCommandPalettePresented = false
     }
 
     mutating func selectionFolderSheetDidAppear() {
@@ -32,7 +43,6 @@ struct WorkspaceModalPresentationState: Equatable {
     func allowsSelectionFolderPresentation(
         conflictPresented: Bool,
         searchPresented: Bool,
-        commandPalettePresented: Bool = false,
         batchRenamePresented: Bool,
         passwordPresented: Bool,
         synchronizationReviewPresented: Bool = false
@@ -40,7 +50,7 @@ struct WorkspaceModalPresentationState: Equatable {
         !isSelectionFolderPresented
             && !conflictPresented
             && !searchPresented
-            && !commandPalettePresented
+            && !isCommandPalettePresented
             && !batchRenamePresented
             && !passwordPresented
             && !synchronizationReviewPresented
@@ -59,7 +69,6 @@ struct WorkspaceModalPresentationState: Equatable {
     func allowsSynchronizationReviewPresentation(
         conflictPresented: Bool,
         searchPresented: Bool,
-        commandPalettePresented: Bool = false,
         batchRenamePresented: Bool,
         passwordPresented: Bool,
         selectionFolderPresented: Bool
@@ -68,7 +77,7 @@ struct WorkspaceModalPresentationState: Equatable {
             && presentedPasswordRequestID == nil
             && !conflictPresented
             && !searchPresented
-            && !commandPalettePresented
+            && !isCommandPalettePresented
             && !batchRenamePresented
             && !passwordPresented
             && !selectionFolderPresented
@@ -90,7 +99,6 @@ struct WorkspaceModalPresentationState: Equatable {
         pending: ArchivePasswordRequest?,
         conflictPresented: Bool,
         searchPresented: Bool,
-        commandPalettePresented: Bool = false,
         batchRenamePresented: Bool = false,
         selectionFolderPresented: Bool = false,
         synchronizationReviewPresented: Bool = false
@@ -101,7 +109,7 @@ struct WorkspaceModalPresentationState: Equatable {
         }
         guard !conflictPresented,
               !searchPresented,
-              !commandPalettePresented,
+              !isCommandPalettePresented,
               !batchRenamePresented,
               !selectionFolderPresented,
               !synchronizationReviewPresented
@@ -110,7 +118,20 @@ struct WorkspaceModalPresentationState: Equatable {
     }
 }
 
+struct CommandPaletteOrigin: Equatable {
+    let tabID: WorkspaceTabID
+    let paneID: PaneID
+}
+
 enum CommandPaletteActionRouting {
+    static func originIsCurrent(
+        _ origin: CommandPaletteOrigin,
+        activeTabID: WorkspaceTabID,
+        activePaneID: PaneID
+    ) -> Bool {
+        origin.tabID == activeTabID && origin.paneID == activePaneID
+    }
+
     static func route(
         _ action: CommandPaletteAction,
         profiles: [WorkspaceProfileID],
@@ -135,7 +156,6 @@ struct WorkspaceView: View {
     let batchRename: BatchRenameModel
     let smartSearch: SmartSearchStore
     let smartSearchRouter: SmartSearchActionRouter
-    let commandPalette: CommandPaletteStore
     let favorites: FavoritesStore
     let cloudLocations: CloudLocationsStore
     let comparison: ComparisonCoordinator
@@ -158,6 +178,8 @@ struct WorkspaceView: View {
     @State private var modalPresentationState = WorkspaceModalPresentationState()
     @State private var initialLoadState = WorkspaceTabInitialLoadState()
     @State private var profilesPresented = false
+    @State private var commandPalette = CommandPaletteStore()
+    @State private var commandPaletteOrigin: CommandPaletteOrigin?
 
     private var workspace: WorkspaceState {
         workspaceSession.activeWorkspace
@@ -281,7 +303,7 @@ struct WorkspaceView: View {
                 materializer: materializer
             )
         }
-        .sheet(isPresented: commandPalettePresentation, onDismiss: executeCommandPaletteAction) {
+        .sheet(isPresented: commandPalettePresentation, onDismiss: commandPaletteDidDismiss) {
             CommandPaletteView(store: commandPalette)
         }
         .sheet(isPresented: batchRenamePresentation) {
@@ -335,6 +357,7 @@ struct WorkspaceView: View {
         .focusedSceneValue(\.workspaceTabModalPresented, workspaceModalIsPresented)
         .focusedSceneValue(\.workspaceTabTeardown, teardownActiveWorkspace)
         .focusedSceneValue(\.workspaceProfilesPresentation, { profilesPresented = true })
+        .focusedSceneValue(\.workspaceCommandPalettePresentation, presentCommandPalette)
         .focusedSceneValue(\.comparisonCoordinator, comparison)
         .focusedSceneValue(\.storageAnalysisStore, storage)
     }
@@ -444,7 +467,7 @@ struct WorkspaceView: View {
             batchRenamePresented: batchRename.isPresented,
             pendingTrashPresented: workspace.pendingTrashRequest != nil,
             synchronizationReviewPresented: comparison.folderSynchronizationReview != .idle,
-            commandPalettePresented: commandPalette.isPresented
+            commandPalettePresented: modalPresentationState.isCommandPalettePresented
         ).isPresented
     }
 
@@ -453,7 +476,7 @@ struct WorkspaceView: View {
             stopComparison: comparison.stop,
             exitStorage: storage.exit,
             closePreview: previewCoordinator.closeAndRestoreFocus,
-            dismissCommandPalette: commandPalette.dismiss,
+            dismissCommandPalette: cancelCommandPalettePresentation,
             dismissSmartSearch: smartSearch.dismiss,
             dismissBatchRename: batchRename.dismiss,
             dismissSelectionFolder: selectionFolder.dismiss,
@@ -473,7 +496,6 @@ struct WorkspaceView: View {
     private var pendingConflict: Binding<IdentifiedFileConflict?> {
         Binding {
             guard modalPresentationState.allowsOtherModalPresentation,
-                  !commandPalette.isPresented,
                   !smartSearch.isPresented,
                   !batchRename.isPresented,
                   !selectionFolder.isPresented,
@@ -483,7 +505,6 @@ struct WorkspaceView: View {
         } set: { item in
             if item == nil,
                modalPresentationState.allowsOtherModalPresentation,
-               !commandPalette.isPresented,
                !smartSearch.isPresented,
                !batchRename.isPresented,
                !selectionFolder.isPresented,
@@ -496,7 +517,6 @@ struct WorkspaceView: View {
     private var smartSearchPresentation: Binding<Bool> {
         Binding {
             modalPresentationState.allowsOtherModalPresentation
-                && !commandPalette.isPresented
                 && operationController.pendingConflict == nil
                 && !batchRename.isPresented
                 && !selectionFolder.isPresented
@@ -504,7 +524,6 @@ struct WorkspaceView: View {
         } set: { isPresented in
             if !isPresented,
                modalPresentationState.allowsOtherModalPresentation,
-               !commandPalette.isPresented,
                operationController.pendingConflict == nil,
                !batchRename.isPresented,
                !selectionFolder.isPresented {
@@ -516,7 +535,6 @@ struct WorkspaceView: View {
     private var batchRenamePresentation: Binding<Bool> {
         Binding {
             modalPresentationState.allowsOtherModalPresentation
-                && !commandPalette.isPresented
                 && operationController.pendingConflict == nil
                 && !smartSearch.isPresented
                 && !selectionFolder.isPresented
@@ -524,7 +542,6 @@ struct WorkspaceView: View {
         } set: { isPresented in
             if !isPresented,
                modalPresentationState.allowsOtherModalPresentation,
-               !commandPalette.isPresented,
                operationController.pendingConflict == nil,
                !smartSearch.isPresented,
                !selectionFolder.isPresented {
@@ -539,7 +556,6 @@ struct WorkspaceView: View {
                 pending: passwordCoordinator.pendingRequest,
                 conflictPresented: operationController.pendingConflict != nil,
                 searchPresented: smartSearch.isPresented,
-                commandPalettePresented: commandPalette.isPresented,
                 batchRenamePresented: batchRename.isPresented,
                 selectionFolderPresented: selectionFolder.isPresented,
                 synchronizationReviewPresented: comparison.folderSynchronizationReview != .idle
@@ -559,7 +575,6 @@ struct WorkspaceView: View {
                 || modalPresentationState.allowsSelectionFolderPresentation(
                     conflictPresented: operationController.pendingConflict != nil,
                     searchPresented: smartSearch.isPresented,
-                    commandPalettePresented: commandPalette.isPresented,
                     batchRenamePresented: batchRename.isPresented,
                     passwordPresented: passwordCoordinator.pendingRequest != nil,
                     synchronizationReviewPresented: comparison.folderSynchronizationReview != .idle
@@ -573,7 +588,7 @@ struct WorkspaceView: View {
 
     private var trashConfirmationIsPresented: Binding<Bool> {
         Binding {
-            !commandPalette.isPresented && workspace.pendingTrashRequest != nil
+            !modalPresentationState.isCommandPalettePresented && workspace.pendingTrashRequest != nil
         } set: { isPresented in
             if !isPresented {
                 workspace.dismissTrashConfirmation()
@@ -590,10 +605,10 @@ struct WorkspaceView: View {
 
     private var profilesPresentation: Binding<Bool> {
         Binding {
-            !commandPalette.isPresented && profilesPresented
+            !modalPresentationState.isCommandPalettePresented && profilesPresented
         } set: { isPresented in
             if isPresented {
-                guard !commandPalette.isPresented else { return }
+                guard !modalPresentationState.isCommandPalettePresented else { return }
                 profilesPresented = true
             } else {
                 profilesPresented = false
@@ -603,14 +618,7 @@ struct WorkspaceView: View {
 
     private var commandPalettePresentation: Binding<Bool> {
         Binding {
-            modalPresentationState.allowsOtherModalPresentation
-                && operationController.pendingConflict == nil
-                && !smartSearch.isPresented
-                && !batchRename.isPresented
-                && !selectionFolder.isPresented
-                && comparison.folderSynchronizationReview == .idle
-                && workspace.pendingTrashRequest == nil
-                && commandPalette.isPresented
+            modalPresentationState.isCommandPalettePresented && commandPalette.isPresented
         } set: { isPresented in
             if !isPresented, commandPalette.isPresented {
                 commandPalette.dismiss()
@@ -618,9 +626,54 @@ struct WorkspaceView: View {
         }
     }
 
-    private func executeCommandPaletteAction() {
-        guard let action = commandPalette.takePendingAction() else {
-            workspace.activePane.requestTableFocus()
+    private func presentCommandPalette() {
+        guard workspace.activeTextEditingSession == nil,
+              !workspaceModalIsPresented,
+              !selectionFolder.isPresented,
+              passwordCoordinator.pendingRequest == nil,
+              modalPresentationState.beginCommandPalettePresentation()
+        else { return }
+        let pane = workspace.activePane
+        commandPaletteOrigin = CommandPaletteOrigin(
+            tabID: workspaceSession.activeTabID,
+            paneID: workspace.activePaneID
+        )
+        let favoriteCandidates = favorites.records.compactMap { record -> CommandPaletteFavoriteCandidate? in
+            let resolution = favorites.resolution(for: record)
+            guard case .available = resolution else { return nil }
+            return CommandPaletteFavoriteCandidate(record: record, resolution: resolution)
+        }
+        commandPalette.present(items: CommandPaletteBuilder.build(
+            currentDirectory: pane.currentDirectory,
+            backHistory: pane.backHistory,
+            forwardHistory: pane.forwardHistory,
+            favorites: favoriteCandidates,
+            profiles: workspaceSession.profiles,
+            savedSearches: smartSearch.savedSearches
+        ))
+    }
+
+    private func cancelCommandPalettePresentation() {
+        commandPalette.dismiss()
+        commandPaletteOrigin = nil
+        modalPresentationState.endCommandPalettePresentation()
+    }
+
+    private func commandPaletteDidDismiss() {
+        let action = commandPalette.takePendingAction()
+        let origin = commandPaletteOrigin
+        commandPaletteOrigin = nil
+        modalPresentationState.endCommandPalettePresentation()
+        guard let origin,
+              CommandPaletteActionRouting.originIsCurrent(
+                  origin,
+                  activeTabID: workspaceSession.activeTabID,
+                  activePaneID: workspace.activePaneID
+              )
+        else { return }
+        let originPane = origin.paneID == .left ? workspace.left : workspace.right
+        guard let action else {
+            originPane.requestTableFocus()
             return
         }
         guard let route = CommandPaletteActionRouting.route(
@@ -628,18 +681,16 @@ struct WorkspaceView: View {
             profiles: workspaceSession.profiles.map(\.id),
             savedSearchIDs: smartSearch.savedSearches.map(\.id)
         ) else {
-            workspace.activePane.requestTableFocus()
+            originPane.requestTableFocus()
             return
         }
-
-        let pane = workspace.activePane
         switch route {
         case let .navigate(url):
-            Task { await pane.navigate(to: url) }
+            Task { await originPane.navigate(to: url) }
         case .createFolder:
             Task {
                 _ = await WorkspaceCommandActions.createFolder(
-                    in: pane,
+                    in: originPane,
                     workspace: workspace,
                     operationController: operationController
                 )
@@ -647,7 +698,7 @@ struct WorkspaceView: View {
         case .createFile:
             Task {
                 _ = await WorkspaceCommandActions.createFile(
-                    in: pane,
+                    in: originPane,
                     workspace: workspace,
                     operationController: operationController
                 )

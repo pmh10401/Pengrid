@@ -349,39 +349,6 @@ enum WorkspaceSearchCommandActions {
 }
 
 @MainActor
-enum WorkspaceCommandPaletteActions {
-    static func present(
-        palette: CommandPaletteStore,
-        workspace: WorkspaceState?,
-        session: WorkspaceSessionState?,
-        favorites: FavoritesStore?,
-        savedSearches: [SmartSearchRecord],
-        isModalPresented: Bool,
-        isTextEditing: Bool
-    ) {
-        guard let workspace,
-              let session,
-              !isModalPresented,
-              !isTextEditing
-        else { return }
-        let pane = workspace.activePane
-        let favoriteCandidates = favorites?.records.compactMap { record -> CommandPaletteFavoriteCandidate? in
-            let resolution = favorites?.resolution(for: record)
-            guard let resolution, case .available = resolution else { return nil }
-            return CommandPaletteFavoriteCandidate(record: record, resolution: resolution)
-        } ?? []
-        palette.present(items: CommandPaletteBuilder.build(
-            currentDirectory: pane.currentDirectory,
-            backHistory: pane.backHistory,
-            forwardHistory: pane.forwardHistory,
-            favorites: favoriteCandidates,
-            profiles: session.profiles,
-            savedSearches: savedSearches
-        ))
-    }
-}
-
-@MainActor
 enum WorkspaceGetInfoCommandActions {
     @discardableResult
     static func present(
@@ -606,6 +573,10 @@ private struct WorkspaceProfilesPresentationFocusedValueKey: FocusedValueKey {
     typealias Value = @MainActor () -> Void
 }
 
+private struct WorkspaceCommandPalettePresentationFocusedValueKey: FocusedValueKey {
+    typealias Value = @MainActor () -> Void
+}
+
 private struct ComparisonFocusedValueKey: FocusedValueKey {
     typealias Value = ComparisonCoordinator
 }
@@ -638,6 +609,11 @@ extension FocusedValues {
     var workspaceProfilesPresentation: (@MainActor () -> Void)? {
         get { self[WorkspaceProfilesPresentationFocusedValueKey.self] }
         set { self[WorkspaceProfilesPresentationFocusedValueKey.self] = newValue }
+    }
+
+    var workspaceCommandPalettePresentation: (@MainActor () -> Void)? {
+        get { self[WorkspaceCommandPalettePresentationFocusedValueKey.self] }
+        set { self[WorkspaceCommandPalettePresentationFocusedValueKey.self] = newValue }
     }
 
     var comparisonCoordinator: ComparisonCoordinator? {
@@ -784,6 +760,7 @@ struct WorkspaceCommands: Commands {
     @FocusedValue(\.workspaceTabModalPresented) private var workspaceTabModalPresented
     @FocusedValue(\.workspaceTabTeardown) private var workspaceTabTeardown
     @FocusedValue(\.workspaceProfilesPresentation) private var workspaceProfilesPresentation
+    @FocusedValue(\.workspaceCommandPalettePresentation) private var workspaceCommandPalettePresentation
     @FocusedValue(\.comparisonCoordinator) private var comparison
     @FocusedValue(\.storageAnalysisStore) private var focusedStorage
 
@@ -794,8 +771,6 @@ struct WorkspaceCommands: Commands {
     var openWithProvider: (any OpenWithApplicationProviding)? = nil
     var selectionFolder: SelectionFolderModel? = nil
     var smartSearch: SmartSearchStore?
-    var commandPalette: CommandPaletteStore? = nil
-    var favorites: FavoritesStore? = nil
     var getInfoInspector: GetInfoInspectorController? = nil
     let storage: StorageAnalysisStore
     let storageCleanupController: StorageCleanupController
@@ -1151,22 +1126,13 @@ struct WorkspaceCommands: Commands {
 
         CommandMenu("Go") {
             Button("Quick Go…") {
-                guard let commandPalette else { return }
-                WorkspaceCommandPaletteActions.present(
-                    palette: commandPalette,
-                    workspace: workspace,
-                    session: workspaceSession,
-                    favorites: favorites,
-                    savedSearches: smartSearch?.savedSearches ?? [],
-                    isModalPresented: workspaceTabModalPresented ?? true,
-                    isTextEditing: workspace?.activeTextEditingSession != nil
-                )
+                workspaceCommandPalettePresentation?()
             }
             .keyboardShortcut("p", modifiers: .command)
             .disabled(
-                commandPalette == nil
-                    || workspace == nil
+                workspace == nil
                     || workspaceSession == nil
+                    || workspaceCommandPalettePresentation == nil
                     || workspaceTabModalPresented != false
                     || workspace?.activeTextEditingSession != nil
             )

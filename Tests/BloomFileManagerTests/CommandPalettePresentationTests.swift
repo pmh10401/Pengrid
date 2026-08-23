@@ -13,6 +13,7 @@ struct CommandPalettePresentationTests {
             "TextField(\"Search commands and locations\"",
             "List(selection: $selection)",
             "Button {",
+            ".focused($queryFieldIsFocused)",
             ".defaultFocus($queryFieldIsFocused, true)",
             ".onSubmit",
             ".onExitCommand",
@@ -55,18 +56,110 @@ struct CommandPalettePresentationTests {
         #expect(store.takePendingAction() == nil)
     }
 
+    @Test func modalOwnershipSurvivesExecutionUntilDismissalAndRejectsSecondPresentation() {
+        var modal = WorkspaceModalPresentationState()
+        let store = CommandPaletteStore()
+        let item = CommandPaletteItem(title: "Create Folder", action: .createFolder)
+
+        let didBegin = modal.beginCommandPalettePresentation()
+        #expect(didBegin)
+        store.present(items: [item])
+        store.requestExecution(itemID: item.id)
+
+        #expect(modal.isCommandPalettePresented)
+        #expect(!modal.allowsOtherModalPresentation)
+        let didRejectSecondPresentation = modal.beginCommandPalettePresentation()
+        #expect(!didRejectSecondPresentation)
+        #expect(store.takePendingAction() == .createFolder)
+        modal.endCommandPalettePresentation()
+        #expect(!modal.isCommandPalettePresented)
+    }
+
+    @Test func paletteModalOwnershipBlocksEveryOtherPresentationGate() {
+        var modal = WorkspaceModalPresentationState()
+        let didBegin = modal.beginCommandPalettePresentation()
+        #expect(didBegin)
+
+        #expect(!modal.allowsOtherModalPresentation)
+        #expect(!modal.allowsSelectionFolderPresentation(
+            conflictPresented: false,
+            searchPresented: false,
+            batchRenamePresented: false,
+            passwordPresented: false
+        ))
+        #expect(!modal.allowsSynchronizationReviewPresentation(
+            conflictPresented: false,
+            searchPresented: false,
+            batchRenamePresented: false,
+            passwordPresented: false,
+            selectionFolderPresented: false
+        ))
+        #expect(modal.passwordRequestToPresent(
+            pending: ArchivePasswordRequest(
+                id: UUID(),
+                purpose: .createAES256,
+                archiveBasename: "Archive.zip",
+                previousAttemptFailed: false
+            ),
+            conflictPresented: false,
+            searchPresented: false
+        ) == nil)
+    }
+
+    @Test func cancellationClearsActionButKeepsModalOwnershipUntilDismissalCompletes() {
+        var modal = WorkspaceModalPresentationState()
+        let store = CommandPaletteStore()
+        let item = CommandPaletteItem(title: "Create Folder", action: .createFolder)
+        let didBegin = modal.beginCommandPalettePresentation()
+        #expect(didBegin)
+        store.present(items: [item])
+
+        store.dismiss()
+
+        #expect(store.takePendingAction() == nil)
+        #expect(modal.isCommandPalettePresented)
+        modal.endCommandPalettePresentation()
+        #expect(!modal.isCommandPalettePresented)
+    }
+
+    @Test func originMustStillOwnTheSameTabAndPaneBeforeRouting() {
+        let origin = CommandPaletteOrigin(
+            tabID: WorkspaceTabID(rawValue: UUID()),
+            paneID: .right
+        )
+
+        #expect(CommandPaletteActionRouting.originIsCurrent(
+            origin,
+            activeTabID: origin.tabID,
+            activePaneID: .right
+        ))
+        #expect(!CommandPaletteActionRouting.originIsCurrent(
+            origin,
+            activeTabID: WorkspaceTabID(rawValue: UUID()),
+            activePaneID: .right
+        ))
+        #expect(!CommandPaletteActionRouting.originIsCurrent(
+            origin,
+            activeTabID: origin.tabID,
+            activePaneID: .left
+        ))
+    }
+
     @Test func workspaceOwnsPresentationAndDefersExecutionUntilOnDismiss() throws {
         let workspace = try commandPaletteSource(named: "Views/WorkspaceView.swift")
         let app = try commandPaletteSource(named: "App/BloomFileManagerApp.swift")
         let commands = try commandPaletteSource(named: "Support/WorkspaceCommands.swift")
 
-        #expect(workspace.contains(".sheet(isPresented: commandPalettePresentation, onDismiss: executeCommandPaletteAction)"))
+        #expect(workspace.contains(".sheet(isPresented: commandPalettePresentation, onDismiss: commandPaletteDidDismiss)"))
         #expect(workspace.contains("commandPalette.takePendingAction()"))
-        #expect(workspace.contains("workspace.activePane.requestTableFocus()"))
-        #expect(commands.contains("CommandPaletteBuilder.build("))
-        #expect(app.contains("@State private var commandPalette"))
-        #expect(app.contains("commandPalette: commandPalette"))
-        #expect(app.contains("favorites: favorites"))
+        #expect(workspace.contains("originPane.requestTableFocus()"))
+        #expect(workspace.contains("CommandPaletteBuilder.build("))
+        #expect(workspace.contains("CommandPaletteOrigin("))
+        #expect(workspace.contains("modalPresentationState.beginCommandPalettePresentation()"))
+        #expect(commands.contains("@FocusedValue(\\.workspaceCommandPalettePresentation)"))
+        #expect(commands.contains("workspaceCommandPalettePresentation?()"))
+        #expect(!app.contains("CommandPaletteStore"))
+        #expect(!app.contains("commandPalette: commandPalette"))
     }
 }
 

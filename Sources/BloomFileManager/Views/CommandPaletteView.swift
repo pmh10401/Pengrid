@@ -19,7 +19,7 @@ struct CommandPaletteView: View {
                 .textFieldStyle(.roundedBorder)
                 .accessibilityIdentifier(AccessibilityIdentifiers.commandPaletteQuery)
                 .accessibilityLabel("Search commands and locations")
-                .defaultFocus($queryFieldIsFocused, true)
+                .focused($queryFieldIsFocused)
                 .onSubmit(executeSelection)
 
             if store.results.isEmpty {
@@ -47,19 +47,21 @@ struct CommandPaletteView: View {
                     }
                 }
                 .accessibilityIdentifier(AccessibilityIdentifiers.commandPaletteResults)
-                .onChange(of: store.selectedItemID) { _, selectedItemID in
-                    selection = selectedItemID
-                }
             }
         }
         .padding()
         .frame(minWidth: 460, minHeight: 330)
         .accessibilityIdentifier(AccessibilityIdentifiers.commandPaletteSheet)
+        .defaultFocus($queryFieldIsFocused, true)
+        .onAppear { selection = store.selectedItemID }
+        .onChange(of: store.selectedItemID) { _, selectedItemID in
+            selection = selectedItemID
+        }
         .onExitCommand { store.dismiss() }
     }
 
     private func executeSelection() {
-        guard let selection else { return }
-        store.requestExecution(itemID: selection)
+        guard let selectedItemID = store.selectedItemID else { return }
+        store.requestExecution(itemID: selectedItemID)
     }
 }

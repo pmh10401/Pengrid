@@ -271,6 +271,37 @@ struct WorkspaceTabPresentationTests {
         #expect(events == ["palette"])
     }
 
+    @Test func commandPaletteOwnershipBlocksTabAndProfileMutationsDuringDismissal() throws {
+        let fixture = WorkspaceTabPresentationFixture()
+        let first = try fixture.tab(left: "/One/Left", right: "/One/Right")
+        let second = try fixture.tab(left: "/Two/Left", right: "/Two/Right")
+        let session = fixture.session(tabs: [first, second], active: first.id)
+        let profileID = try session.saveActiveProfile(named: "Release")
+        var modal = WorkspaceModalPresentationState()
+        let didBegin = modal.beginCommandPalettePresentation()
+        #expect(didBegin)
+
+        #expect(!WorkspaceTabCommandActions.select(
+            second.id,
+            in: session,
+            isModalPresented: WorkspaceTabModalPolicy(
+                commandPalettePresented: modal.isCommandPalettePresented
+            ).isPresented,
+            isTextEditing: false,
+            teardown: {}
+        ))
+        #expect(!WorkspaceTabCommandActions.openProfile(
+            profileID,
+            in: session,
+            isModalPresented: WorkspaceTabModalPolicy(
+                commandPalettePresented: modal.isCommandPalettePresented
+            ).isPresented,
+            isTextEditing: false,
+            allowsCurrentModalOwner: false,
+            teardown: {}
+        ))
+    }
+
     @Test func closingInvalidatesTheClosingRuntimeBeforeRemovingIt() throws {
         let fixture = WorkspaceTabPresentationFixture()
         let first = try fixture.tab(left: "/One/Left", right: "/One/Right")

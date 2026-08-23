@@ -278,7 +278,16 @@ struct WorkspaceCommandTests {
         #expect(commands.contains("Button(\"Quick Go…\")"))
         #expect(commands.contains(".keyboardShortcut(\"p\", modifiers: .command)"))
         #expect(commands.contains("CommandGroup(replacing: .printItem)"))
-        #expect(commands.contains("WorkspaceCommandPaletteActions.present("))
+        #expect(commands.contains("workspaceCommandPalettePresentation?()"))
+    }
+
+    @Test func quickGoUsesOnlyFocusedScenePresentationOwnership() throws {
+        let commands = try workspaceCommandsSource()
+        #expect(commands.contains("@FocusedValue(\\.workspaceCommandPalettePresentation)"))
+        #expect(commands.contains("workspaceCommandPalettePresentation?()"))
+        #expect(!commands.contains("var commandPalette:"))
+        #expect(!commands.contains("var favorites:"))
+        #expect(!commands.contains("WorkspaceCommandPaletteActions"))
     }
 
     @Test func newFileCommandUsesLoadedSiblingNamesAndTargetsTheActivePane() async throws {

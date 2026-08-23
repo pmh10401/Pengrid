@@ -87,7 +87,6 @@ struct BloomFileManagerApp: App {
     @State private var passwordCoordinator: ArchivePasswordPromptCoordinator
     @State private var smartSearch: SmartSearchStore
     @State private var smartSearchRouter: SmartSearchActionRouter
-    @State private var commandPalette: CommandPaletteStore
     @State private var getInfoInspector: GetInfoInspectorController
     @State private var favorites = FavoritesStore()
     @State private var cloudLocations: CloudLocationsStore
@@ -154,7 +153,6 @@ struct BloomFileManagerApp: App {
             service: searchService,
             persistence: persistence
         ))
-        _commandPalette = State(initialValue: CommandPaletteStore())
         let getInfoModel = GetInfoInspectorModel(
             inspector: LiveGetInfoInspectionService(
                 fileSystem: cloudDependencies.fileSystem,
@@ -263,7 +261,6 @@ struct BloomFileManagerApp: App {
                 batchRename: batchRename,
                 smartSearch: smartSearch,
                 smartSearchRouter: smartSearchRouter,
-                commandPalette: commandPalette,
                 favorites: favorites,
                 cloudLocations: cloudLocations,
                 comparison: comparison,
@@ -298,8 +295,6 @@ struct BloomFileManagerApp: App {
                 openWithProvider: openWithProvider,
                 selectionFolder: selectionFolder,
                 smartSearch: smartSearch,
-                commandPalette: commandPalette,
-                favorites: favorites,
                 getInfoInspector: getInfoInspector,
                 storage: storage,
                 storageCleanupController: storageCleanupController,
