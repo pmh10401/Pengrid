@@ -1009,6 +1009,300 @@ struct FileTableViewLifecycleTests {
         ])
     }
 
+    @Test func requestedRenameMakesTheFieldEditorTheKeyboardInputTarget() async throws {
+        let directory = URL(filePath: "/table-rename-input", directoryHint: .isDirectory)
+        let item = makeTableItem(named: "Report.pdf", in: directory)
+        let selection = SelectionRecorder(value: [item.url])
+        var consumedRequests = 0
+        let view = FileTableView(
+            items: [item],
+            selection: selection.binding,
+            renameRequestID: UUID(),
+            onActivatePane: {},
+            onOpen: { _ in },
+            onSortChange: { _ in },
+            onConsumeRenameRequest: { _ in consumedRequests += 1 }
+        )
+        let coordinator = view.makeCoordinator()
+        let scrollView = view.makeScrollView(coordinator: coordinator)
+        scrollView.frame = NSRect(x: 0, y: 0, width: 600, height: 240)
+        let tableView = try #require(scrollView.documentView as? PaneActivatingTableView)
+        tableView.frame = NSRect(x: 0, y: 0, width: 600, height: 240)
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 600, height: 240),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        defer { window.orderOut(nil) }
+        window.contentView = scrollView
+        window.makeKeyAndOrderFront(nil)
+        window.contentView?.layoutSubtreeIfNeeded()
+        tableView.reloadData()
+        tableView.layoutSubtreeIfNeeded()
+        tableView.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+
+        coordinator.apply(items: [item], selection: [item.url], to: tableView)
+        let textField = try #require(
+            (tableView.view(atColumn: 0, row: 0, makeIfNecessary: false) as? NSTableCellView)?.textField
+        )
+        #expect(await waitForTablePaneCondition {
+            textField.currentEditor() != nil
+                && window.firstResponder === textField.currentEditor()
+                && consumedRequests == 1
+        })
+        #expect(consumedRequests == 1)
+        let editor = try #require(textField.currentEditor() as? NSTextView)
+        #expect(window.firstResponder === editor)
+        #expect(editor.selectedRange() == NSRange(location: 0, length: 6))
+        editor.insertText("Draft", replacementRange: editor.selectedRange())
+        #expect(editor.string == "Draft.pdf")
+    }
+
+    @Test func renameFallbackDiscardsThePendingTargetWhenSelectionChanges() async {
+        let directory = URL(filePath: "/table-rename-selection", directoryHint: .isDirectory)
+        let item = makeTableItem(named: "Report.pdf", in: directory)
+        let selection = SelectionRecorder(value: [item.url])
+        var discardCount = 0
+        let view = FileTableView(
+            items: [item],
+            selection: selection.binding,
+            renameRequestID: UUID(),
+            onActivatePane: {},
+            onOpen: { _ in },
+            onSortChange: { _ in },
+            onDiscardRename: { discardCount += 1 }
+        )
+        let coordinator = view.makeCoordinator()
+        let tableView = RenameRecordingTableView()
+        tableView.addTableColumn(NSTableColumn(identifier: NSUserInterfaceItemIdentifier("name")))
+
+        coordinator.apply(items: [item], selection: [item.url], to: tableView)
+        selection.value = []
+
+        #expect(await waitForTablePaneCondition { discardCount == 1 })
+    }
+
+    @Test func renameFallbackDiscardsThePendingTargetWhenNoEditorCanBeCreated() async {
+        let directory = URL(filePath: "/table-rename-no-editor", directoryHint: .isDirectory)
+        let item = makeTableItem(named: "Report.pdf", in: directory)
+        let selection = SelectionRecorder(value: [item.url])
+        var discardCount = 0
+        let view = FileTableView(
+            items: [item],
+            selection: selection.binding,
+            renameRequestID: UUID(),
+            onActivatePane: {},
+            onOpen: { _ in },
+            onSortChange: { _ in },
+            onDiscardRename: { discardCount += 1 }
+        )
+        let coordinator = view.makeCoordinator()
+        let tableView = RenameRecordingTableView()
+        tableView.addTableColumn(NSTableColumn(identifier: NSUserInterfaceItemIdentifier("name")))
+
+        coordinator.apply(items: [item], selection: [item.url], to: tableView)
+
+        #expect(await waitForTablePaneCondition { discardCount == 1 })
+    }
+
+    @Test func renameFallbackPreservesAStandardizedSelectionIdentityWhileActivatingTheEditor() async {
+        let directory = URL(filePath: "/table-rename-standardized", directoryHint: .isDirectory)
+        let item = makeTableItem(named: "Report.pdf", in: directory)
+        let selectedAlias = URL(filePath: "/table-rename-standardized/folder/../Report.pdf")
+        let selection = SelectionRecorder(value: [selectedAlias])
+        var discardCount = 0
+        let view = FileTableView(
+            items: [item],
+            selection: selection.binding,
+            renameRequestID: UUID(),
+            onActivatePane: {},
+            onOpen: { _ in },
+            onSortChange: { _ in },
+            onDiscardRename: { discardCount += 1 }
+        )
+        let coordinator = view.makeCoordinator()
+        let tableView = RenameEditorHarnessTableView(
+            name: item.name,
+            installsTargetEditorWhenSelected: true
+        )
+        tableView.addTableColumn(NSTableColumn(identifier: NSUserInterfaceItemIdentifier("name")))
+
+        coordinator.apply(items: [item], selection: [selectedAlias], to: tableView)
+
+        #expect(await waitForTablePaneCondition {
+            tableView.nameTextField.selectTextCallCount == 1
+                && tableView.nameTextField.suppliedEditor.selectedRange() == NSRange(location: 0, length: 6)
+        })
+        #expect(discardCount == 0)
+        #expect(selection.value == [selectedAlias])
+    }
+
+    @Test func renameFallbackDiscardsThePendingTargetWhenTheRequestedItemDisappears() async {
+        let directory = URL(filePath: "/table-rename-removed", directoryHint: .isDirectory)
+        let item = makeTableItem(named: "Report.pdf", in: directory)
+        let selection = SelectionRecorder(value: [item.url])
+        var discardCount = 0
+        let view = FileTableView(
+            items: [item],
+            selection: selection.binding,
+            renameRequestID: UUID(),
+            onActivatePane: {},
+            onOpen: { _ in },
+            onSortChange: { _ in },
+            onDiscardRename: { discardCount += 1 }
+        )
+        let coordinator = view.makeCoordinator()
+        let tableView = RenameEditorHarnessTableView(
+            name: item.name,
+            installsTargetEditorWhenSelected: false
+        )
+        tableView.addTableColumn(NSTableColumn(identifier: NSUserInterfaceItemIdentifier("name")))
+
+        coordinator.apply(items: [item], selection: [item.url], to: tableView)
+        coordinator.apply(items: [], selection: [], to: tableView)
+
+        #expect(await waitForTablePaneCondition { discardCount == 1 })
+    }
+
+    @Test func renameFallbackIgnoresAFieldEditorOwnedByAnotherCell() async {
+        let directory = URL(filePath: "/table-rename-editor-owner", directoryHint: .isDirectory)
+        let item = makeTableItem(named: "Report.pdf", in: directory)
+        let selection = SelectionRecorder(value: [item.url])
+        let unrelatedEditor = NSTextView()
+        unrelatedEditor.string = "Unrelated.txt"
+        unrelatedEditor.setSelectedRange(NSRange(location: 0, length: 0))
+        var discardCount = 0
+        let view = FileTableView(
+            items: [item],
+            selection: selection.binding,
+            renameRequestID: UUID(),
+            onActivatePane: {},
+            onOpen: { _ in },
+            onSortChange: { _ in },
+            onDiscardRename: { discardCount += 1 }
+        )
+        let coordinator = view.makeCoordinator()
+        let tableView = RenameEditorHarnessTableView(
+            name: item.name,
+            installsTargetEditorWhenSelected: false,
+            unrelatedEditor: unrelatedEditor
+        )
+        tableView.addTableColumn(NSTableColumn(identifier: NSUserInterfaceItemIdentifier("name")))
+
+        coordinator.apply(items: [item], selection: [item.url], to: tableView)
+
+        #expect(await waitForTablePaneCondition { discardCount == 1 })
+        #expect(unrelatedEditor.selectedRange() == NSRange(location: 0, length: 0))
+    }
+
+    @Test func renameFallbackLetsAnActiveEditorFinishBeforeDiscarding() async {
+        let directory = URL(filePath: "/table-rename-active-editor", directoryHint: .isDirectory)
+        let item = makeTableItem(named: "Report.pdf", in: directory)
+        let selection = SelectionRecorder(value: [item.url])
+        var discardCount = 0
+        var editingEvents: [InlineTextEditingEvent] = []
+        let view = FileTableView(
+            items: [item],
+            selection: selection.binding,
+            renameRequestID: UUID(),
+            onActivatePane: {},
+            onOpen: { _ in },
+            onSortChange: { _ in },
+            onInlineEditingEvent: { editingEvents.append($0) },
+            onDiscardRename: { discardCount += 1 }
+        )
+        let coordinator = view.makeCoordinator()
+        let tableView = RenameRecordingTableView()
+        tableView.addTableColumn(NSTableColumn(identifier: NSUserInterfaceItemIdentifier("name")))
+        let textField = NSTextField(string: item.name)
+
+        coordinator.apply(items: [item], selection: [item.url], to: tableView)
+        coordinator.controlTextDidBeginEditing(Notification(
+            name: NSControl.textDidBeginEditingNotification,
+            object: textField
+        ))
+        selection.value = []
+        for _ in 0..<32 { await Task.yield() }
+
+        #expect(discardCount == 0)
+        coordinator.controlTextDidEndEditing(textEditingNotification(textField, movement: .cancel))
+        #expect(discardCount == 1)
+        #expect(editingEvents.count == 2)
+        if editingEvents.count == 2,
+           case let .began(beginToken) = editingEvents[0],
+           case let .ended(endToken) = editingEvents[1] {
+            #expect(beginToken == endToken)
+        } else {
+            Issue.record("Expected the active rename editor to finish its matching lifecycle")
+        }
+    }
+
+    @Test func dismantlingBeforeTheFieldEditorStartsDiscardsThePendingRename() {
+        let directory = URL(filePath: "/table-rename-dismantle", directoryHint: .isDirectory)
+        let item = makeTableItem(named: "Report.pdf", in: directory)
+        let selection = SelectionRecorder(value: [item.url])
+        var discardCount = 0
+        let view = FileTableView(
+            items: [item],
+            selection: selection.binding,
+            renameRequestID: UUID(),
+            onActivatePane: {},
+            onOpen: { _ in },
+            onSortChange: { _ in },
+            onDiscardRename: { discardCount += 1 }
+        )
+        let coordinator = view.makeCoordinator()
+        let tableView = PaneActivatingTableView()
+        tableView.addTableColumn(NSTableColumn(identifier: NSUserInterfaceItemIdentifier("name")))
+        let scrollView = NSScrollView()
+        scrollView.documentView = tableView
+
+        coordinator.apply(items: [item], selection: [item.url], to: tableView)
+        FileTableView.dismantleNSView(scrollView, coordinator: coordinator)
+
+        #expect(discardCount == 1)
+    }
+
+    @Test func dismantlingDoesNotInterruptAnActiveRenameEditor() {
+        let directory = URL(filePath: "/table-rename-active-dismantle", directoryHint: .isDirectory)
+        let item = makeTableItem(named: "Report.pdf", in: directory)
+        let selection = SelectionRecorder(value: [item.url])
+        var discardCount = 0
+        var editingEvents: [InlineTextEditingEvent] = []
+        let view = FileTableView(
+            items: [item],
+            selection: selection.binding,
+            renameRequestID: UUID(),
+            onActivatePane: {},
+            onOpen: { _ in },
+            onSortChange: { _ in },
+            onInlineEditingEvent: { editingEvents.append($0) },
+            onDiscardRename: { discardCount += 1 }
+        )
+        let coordinator = view.makeCoordinator()
+        let tableView = PaneActivatingTableView()
+        tableView.addTableColumn(NSTableColumn(identifier: NSUserInterfaceItemIdentifier("name")))
+        let scrollView = NSScrollView()
+        scrollView.documentView = tableView
+        let textField = NSTextField(string: item.name)
+
+        coordinator.apply(items: [item], selection: [item.url], to: tableView)
+        coordinator.controlTextDidBeginEditing(Notification(
+            name: NSControl.textDidBeginEditingNotification,
+            object: textField
+        ))
+        FileTableView.dismantleNSView(scrollView, coordinator: coordinator)
+
+        #expect(discardCount == 0)
+        #expect(editingEvents.count == 1)
+
+        coordinator.controlTextDidEndEditing(textEditingNotification(textField, movement: .cancel))
+
+        #expect(discardCount == 1)
+        #expect(editingEvents.count == 2)
+    }
+
     @Test func directCellEditingIsRejectedButRequestedRenameCommitsAndEscapeRestores() {
         let item = makeTableItem(named: "Report.pdf", in: URL(filePath: "/tmp/table-test"))
         let selection = SelectionRecorder(value: [item.url])
@@ -2700,6 +2994,70 @@ private final class RenameRecordingTableView: NSTableView {
 
     override func editColumn(_ column: Int, row: Int, with event: NSEvent?, select: Bool) {
         editRequests.append(RenameEditRequest(column: column, row: row))
+    }
+}
+
+@MainActor
+private final class RenameEditorHarnessTextField: NSTextField {
+    let suppliedEditor = NSTextView()
+    let installsEditorWhenSelected: Bool
+    private(set) var selectTextCallCount = 0
+    private var isEditorInstalled = false
+
+    init(name: String, installsEditorWhenSelected: Bool) {
+        self.installsEditorWhenSelected = installsEditorWhenSelected
+        super.init(frame: .zero)
+        stringValue = name
+        suppliedEditor.string = name
+    }
+
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    override func currentEditor() -> NSText? {
+        isEditorInstalled ? suppliedEditor : nil
+    }
+
+    override func selectText(_ sender: Any?) {
+        selectTextCallCount += 1
+        isEditorInstalled = installsEditorWhenSelected
+    }
+}
+
+@MainActor
+private final class RenameEditorHarnessTableView: UpdateRecordingTableView {
+    let nameTextField: RenameEditorHarnessTextField
+    private let nameCell = NSTableCellView()
+    private let unrelatedEditor: NSTextView?
+
+    init(
+        name: String,
+        installsTargetEditorWhenSelected: Bool,
+        unrelatedEditor: NSTextView? = nil
+    ) {
+        nameTextField = RenameEditorHarnessTextField(
+            name: name,
+            installsEditorWhenSelected: installsTargetEditorWhenSelected
+        )
+        self.unrelatedEditor = unrelatedEditor
+        super.init(frame: .zero)
+        nameCell.textField = nameTextField
+        nameCell.addSubview(nameTextField)
+    }
+
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    override func currentEditor() -> NSText? {
+        unrelatedEditor
+    }
+
+    override func editColumn(_ column: Int, row: Int, with event: NSEvent?, select: Bool) {}
+
+    override func view(atColumn column: Int, row: Int, makeIfNecessary: Bool) -> NSView? {
+        column == 0 && row == 0 ? nameCell : nil
     }
 }
 
