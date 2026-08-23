@@ -272,6 +272,15 @@ struct WorkspaceCommandTests {
         }
     }
 
+    @Test func workspaceCommandsExposeQuickGoInTheGoMenuAndReplacePrint() throws {
+        let commands = try workspaceCommandsSource()
+        #expect(commands.contains("CommandMenu(\"Go\")"))
+        #expect(commands.contains("Button(\"Quick Go…\")"))
+        #expect(commands.contains(".keyboardShortcut(\"p\", modifiers: .command)"))
+        #expect(commands.contains("CommandGroup(replacing: .printItem)"))
+        #expect(commands.contains("WorkspaceCommandPaletteActions.present("))
+    }
+
     @Test func newFileCommandUsesLoadedSiblingNamesAndTargetsTheActivePane() async throws {
         let root = try TemporaryDirectory()
         defer { root.remove() }

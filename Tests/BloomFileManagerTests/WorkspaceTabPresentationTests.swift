@@ -246,6 +246,31 @@ struct WorkspaceTabPresentationTests {
         #expect(teardownCount == 0)
     }
 
+    @Test func commandPaletteParticipatesInTheModalGateAndTeardown() throws {
+        let fixture = WorkspaceTabPresentationFixture()
+        let first = try fixture.tab(left: "/One/Left", right: "/One/Right")
+        let second = try fixture.tab(left: "/Two/Left", right: "/Two/Right")
+        let session = fixture.session(tabs: [first, second], active: first.id)
+        let policy = WorkspaceTabModalPolicy(commandPalettePresented: true)
+        var events: [String] = []
+
+        #expect(policy.isPresented)
+        #expect(!WorkspaceTabCommandActions.selectNext(
+            in: session,
+            isModalPresented: policy.isPresented,
+            isTextEditing: false,
+            teardown: { events.append("tab") }
+        ))
+        WorkspaceTabTeardownActions.perform(
+            stopComparison: {}, exitStorage: {}, closePreview: {},
+            dismissCommandPalette: { events.append("palette") },
+            dismissSmartSearch: {}, dismissBatchRename: {}, dismissSelectionFolder: {},
+            dismissSynchronizationReview: {}, dismissPendingTrash: {}, endTextEditing: {},
+            cancelPassword: {}
+        )
+        #expect(events == ["palette"])
+    }
+
     @Test func closingInvalidatesTheClosingRuntimeBeforeRemovingIt() throws {
         let fixture = WorkspaceTabPresentationFixture()
         let first = try fixture.tab(left: "/One/Left", right: "/One/Right")
@@ -287,6 +312,7 @@ struct WorkspaceTabPresentationTests {
             stopComparison: {},
             exitStorage: {},
             closePreview: {},
+            dismissCommandPalette: {},
             dismissSmartSearch: {},
             dismissBatchRename: {},
             dismissSelectionFolder: {},
@@ -310,6 +336,7 @@ struct WorkspaceTabPresentationTests {
             stopComparison: { events.append("comparison") },
             exitStorage: { events.append("storage") },
             closePreview: { events.append("preview") },
+            dismissCommandPalette: { events.append("palette") },
             dismissSmartSearch: { events.append("search") },
             dismissBatchRename: { events.append("rename") },
             dismissSelectionFolder: { events.append("selection") },
@@ -319,7 +346,7 @@ struct WorkspaceTabPresentationTests {
             cancelPassword: { events.append("password") }
         )
 
-        #expect(events == ["comparison", "storage", "preview", "search", "rename", "selection", "sync", "trash", "editing", "password"])
+        #expect(events == ["comparison", "storage", "preview", "palette", "search", "rename", "selection", "sync", "trash", "editing", "password"])
         #expect(!events.contains("getInfo"))
     }
 

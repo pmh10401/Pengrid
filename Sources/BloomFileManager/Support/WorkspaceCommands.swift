@@ -349,6 +349,39 @@ enum WorkspaceSearchCommandActions {
 }
 
 @MainActor
+enum WorkspaceCommandPaletteActions {
+    static func present(
+        palette: CommandPaletteStore,
+        workspace: WorkspaceState?,
+        session: WorkspaceSessionState?,
+        favorites: FavoritesStore?,
+        savedSearches: [SmartSearchRecord],
+        isModalPresented: Bool,
+        isTextEditing: Bool
+    ) {
+        guard let workspace,
+              let session,
+              !isModalPresented,
+              !isTextEditing
+        else { return }
+        let pane = workspace.activePane
+        let favoriteCandidates = favorites?.records.compactMap { record -> CommandPaletteFavoriteCandidate? in
+            let resolution = favorites?.resolution(for: record)
+            guard let resolution, case .available = resolution else { return nil }
+            return CommandPaletteFavoriteCandidate(record: record, resolution: resolution)
+        } ?? []
+        palette.present(items: CommandPaletteBuilder.build(
+            currentDirectory: pane.currentDirectory,
+            backHistory: pane.backHistory,
+            forwardHistory: pane.forwardHistory,
+            favorites: favoriteCandidates,
+            profiles: session.profiles,
+            savedSearches: savedSearches
+        ))
+    }
+}
+
+@MainActor
 enum WorkspaceGetInfoCommandActions {
     @discardableResult
     static func present(
@@ -761,6 +794,8 @@ struct WorkspaceCommands: Commands {
     var openWithProvider: (any OpenWithApplicationProviding)? = nil
     var selectionFolder: SelectionFolderModel? = nil
     var smartSearch: SmartSearchStore?
+    var commandPalette: CommandPaletteStore? = nil
+    var favorites: FavoritesStore? = nil
     var getInfoInspector: GetInfoInspectorController? = nil
     let storage: StorageAnalysisStore
     let storageCleanupController: StorageCleanupController
@@ -785,6 +820,10 @@ struct WorkspaceCommands: Commands {
             .keyboardShortcut("n", modifiers: [.command, .option])
             .disabled(workspace == nil || !policy.canCreateFile)
             .accessibilityIdentifier(AccessibilityIdentifiers.workspaceCreateFile)
+        }
+
+        CommandGroup(replacing: .printItem) {
+            Divider()
         }
 
         CommandGroup(after: .windowList) {
@@ -1111,6 +1150,29 @@ struct WorkspaceCommands: Commands {
         }
 
         CommandMenu("Go") {
+            Button("Quick Go…") {
+                guard let commandPalette else { return }
+                WorkspaceCommandPaletteActions.present(
+                    palette: commandPalette,
+                    workspace: workspace,
+                    session: workspaceSession,
+                    favorites: favorites,
+                    savedSearches: smartSearch?.savedSearches ?? [],
+                    isModalPresented: workspaceTabModalPresented ?? true,
+                    isTextEditing: workspace?.activeTextEditingSession != nil
+                )
+            }
+            .keyboardShortcut("p", modifiers: .command)
+            .disabled(
+                commandPalette == nil
+                    || workspace == nil
+                    || workspaceSession == nil
+                    || workspaceTabModalPresented != false
+                    || workspace?.activeTextEditingSession != nil
+            )
+
+            Divider()
+
             Button("Back") {
                 guard policy.canNavigate, let pane = workspace?.activePane else { return }
                 Task { await pane.goBack() }
@@ -1145,6 +1207,7 @@ struct WorkspaceCommands: Commands {
             .disabled(workspace == nil || !policy.canNavigate)
         }
 
+        Group {
         CommandMenu("Compare") {
             Button(comparisonPolicy.toggleTitle) {
                 guard let workspace, let comparison else { return }
@@ -1226,6 +1289,7 @@ struct WorkspaceCommands: Commands {
                 Task { await activeStorage.scanAgain() }
             }
             .disabled(!canScanAgain)
+        }
         }
     }
 

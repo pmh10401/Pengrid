@@ -36,6 +36,10 @@ enum AccessibilityIdentifiers {
     static let workspaceEncloseSelection = "workspace.encloseSelection"
     static let workspaceDuplicate = "workspace.duplicate"
     static let workspaceContextActionStatus = "workspace.contextActionStatus"
+    static let commandPaletteSheet = "commandPalette.sheet"
+    static let commandPaletteQuery = "commandPalette.query"
+    static let commandPaletteResults = "commandPalette.results"
+    static func commandPaletteRow(_ id: String) -> String { "commandPalette.row.\(id)" }
     static let fileTableBatchRename = "fileTable.batchRename"
     static let fileTableQuickLook = "fileTable.quickLook"
     static let fileTableOpenWith = "fileTable.openWith"
