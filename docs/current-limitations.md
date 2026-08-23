@@ -27,6 +27,10 @@ This list covers the current source tree and the Developer Preview 7 DMG.
 
 ## Productivity workflows
 
+> The productivity workflows in this section describe the current source tree.
+> They are not a claim that these additions are available in the existing
+> Developer Preview 7 DMG.
+
 - **Quick Go…** is a scene-local typed palette. Its candidates are limited to
   fixed safe commands (**Create Folder**, **Create File**, **Show Filter**, and
   **Smart Search**), the active pane's current/Back/Forward locations,
@@ -34,11 +38,12 @@ This list covers the current source tree and the Developer Preview 7 DMG.
   normalized text with the existing Hangul-initial (Korean initial-consonant)
   support. It does not execute scripts, crawl an index, or materialize file
   contents.
-- **New Empty File** uses **Option-Command-N** and performs exclusive,
-  no-overwrite, identity-bound regular-file creation. A successful create
-  refreshes the pane before selecting the new row and beginning inline rename.
-  Its Undo is available only while the exact created identity and fingerprint
-  remain unchanged.
+- **New Empty File** uses **Option-Command-N** and performs regular-file
+  creation bound to the captured parent-directory identity through an
+  exclusive, no-overwrite operation. A successful create refreshes the pane
+  before selecting the new row and beginning inline rename. Conservative Undo
+  is available only while the exact created identity and fingerprint remain
+  unchanged.
 - **Select All Visible** (**Option-Command-A**), **Invert Selection**
   (**Option-Command-I**), and **Select Same Extension**
   (**Option-Command-E**) operate on the active pane's currently visible,

@@ -57,6 +57,10 @@ destination captured when the command starts.
 
 ### Jump, create, and select with focused commands
 
+> The productivity workflows in this section describe the current source tree.
+> They are not a claim that these additions are available in the existing
+> Developer Preview 7 DMG.
+
 Press **Command-P** for **Quick Go…**, a scene-local typed palette. Its fixed
 candidate set contains safe commands (**Create Folder**, **Create File**,
 **Show Filter**, and **Smart Search**), the active pane's current, Back, and
@@ -65,10 +69,11 @@ Matching uses normalized text and Pengrid's existing Hangul-initial (Korean
 initial-consonant) support. The palette does not run scripts, crawl an index, or
 materialize file contents.
 
-**New Empty File** uses **Option-Command-N**. It creates an identity-bound
-regular file exclusively, without overwriting an existing entry; after the pane
-refreshes, the new row is selected and inline rename begins. Undo is offered
-only while the created file's exact identity and fingerprint remain unchanged.
+**New Empty File** uses **Option-Command-N**. It creates a regular file bound to
+the captured parent-directory identity through an exclusive no-overwrite
+operation; after the pane refreshes, the new row is selected and inline rename
+begins. Conservative Undo is offered only while the created file's exact
+identity and fingerprint remain unchanged.
 
 The active pane's currently visible, unfiltered rows are the scope for
 **Select All Visible** (**Option-Command-A**), **Invert Selection**

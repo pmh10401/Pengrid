@@ -57,6 +57,9 @@ DMG를 연 다음 `Pengrid.app`을 `Applications` 폴더로 복사하세요.
 
 ### 집중 명령으로 이동하고 파일을 만들고 선택하기
 
+> 이 절의 생산성 작업 흐름은 현재 소스 트리를 설명합니다. 이 기능이 기존
+> Developer Preview 7 DMG에 포함되어 있다는 뜻은 아닙니다.
+
 **Command-P**를 누르면 현재 scene에만 연결된 입력형 **Quick Go…** 팔레트가
 열립니다. 후보는 안전한 고정 명령(**Create Folder**, **Create File**, **Show
 Filter**, **Smart Search**), 활성 패널의 현재·뒤로·앞으로 위치, 사용할 수 있는
@@ -64,10 +67,10 @@ Filter**, **Smart Search**), 활성 패널의 현재·뒤로·앞으로 위치, 
 Pengrid의 기존 한글 초성(Hangul-initial) 지원을 함께 사용합니다. 팔레트는
 스크립트를 실행하거나 색인을 크롤링하거나 파일 콘텐츠를 materialize하지 않습니다.
 
-**New Empty File**은 **Option-Command-N**을 사용합니다. 기존 항목을 덮어쓰지
-않고 부모 동일성에 묶인 일반 파일을 배타적으로 만듭니다. 패널을 새로 고친 뒤
-새 행을 선택하고 인라인 이름 변경을 시작합니다. Undo는 새 파일의 정확한
-동일성과 지문이 바뀌지 않은 동안에만 제공합니다.
+**New Empty File**은 **Option-Command-N**을 사용합니다. 캡처한 부모 디렉터리
+동일성에 묶인 일반 파일을 배타적·덮어쓰기 없는 작업으로 만듭니다. 패널을 새로
+고친 뒤 새 행을 선택하고 인라인 이름 변경을 시작합니다. 보수적인 Undo는 새
+파일의 정확한 동일성과 지문이 바뀌지 않은 동안에만 제공합니다.
 
 활성 패널의 현재 표시 항목, 즉 필터링되지 않은 행만
 **Select All Visible** (**Option-Command-A**), **Invert Selection**
@@ -182,7 +185,7 @@ Batch Rename과 나머지 컨텍스트 작업은 File Operations 메뉴 또는 �
 
 자세한 동작, 안전 규칙 및 제한 사항은
 [기능 가이드](docs/user-guide.ko.md)와
-[현재 제한 사항](docs/current-limitations.md)을 참고하세요.
+[현재 제한 사항](docs/current-limitations.ko.md)을 참고하세요.
 
 ## 소스에서 빌드하기
 
@@ -207,7 +210,7 @@ open dist/Pengrid.app
 - [Developer Preview 7 릴리스 노트](docs/release-notes-v1.3.0-developer-preview.7.md)
 - [릴리스 및 패키징 가이드](docs/release.ko.md)
 - [아키텍처 설명](docs/architecture.md)
-- [현재 제한 사항](docs/current-limitations.md)
+- [현재 제한 사항](docs/current-limitations.ko.md)
 - [검증 기록](docs/verification/)
 
 Pengrid는 계속 개발 중입니다. 기여와 재현 가능한 문제 보고를 환영합니다.

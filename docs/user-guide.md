@@ -92,6 +92,10 @@ queries, or actions across a larger result set.
 
 ## Quick Go, new files, and visible-row selection
 
+> The productivity workflows in this section describe the current source tree.
+> They are not a claim that these additions are available in the existing
+> Developer Preview 7 DMG.
+
 ### Quick Go… palette
 
 Choose **Go > Quick Go…** or press **Command-P**. The palette is a scene-local,
@@ -103,16 +107,16 @@ profiles, and saved searches. Matching uses normalized text, including
 Pengrid's existing Hangul-initial (Korean initial-consonant) support.
 
 Quick Go does not execute scripts, crawl an index, or materialize file
-contents. Selecting a navigation candidate is also guarded by the originating
-scene's current tab and active pane, so a stale palette action is ignored.
+contents. Typed actions execute after the palette is dismissed rather than
+while its sheet is still presented.
 
 ### New Empty File
 
 Choose **File > New Empty File** or press **Option-Command-N**. Pengrid creates
-one regular file using an identity-bound, exclusive no-overwrite operation. A
-successful operation refreshes the pane, selects the new row, and then starts
-inline rename. If the name is already occupied, creation fails rather than
-replacing the existing entry.
+one regular file bound to the captured parent-directory identity through an
+exclusive no-overwrite operation. A successful operation refreshes the pane,
+selects the new row, and then starts inline rename. If the name is already
+occupied, creation fails rather than replacing the existing entry.
 
 Undo is conservative: it is available only while the created file's exact
 identity and fingerprint remain unchanged. If the file is replaced, edited,
