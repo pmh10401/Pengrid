@@ -180,87 +180,35 @@ struct WorkspaceView: View {
     @State private var profilesPresented = false
     @State private var commandPalette = CommandPaletteStore()
     @State private var commandPaletteOrigin: CommandPaletteOrigin?
+    @State private var smartSearchOwner = UUID()
 
     private var workspace: WorkspaceState {
         workspaceSession.activeWorkspace
     }
 
     var body: some View {
-        let hasOverlay = comparison.isActive || storage.isActive
-
-        VStack(spacing: 0) {
-            WorkspaceTabBarView(
-                session: workspaceSession,
-                canClose: { id in
-                    guard let tab = workspaceSession.tabs.first(where: { $0.id == id }) else {
-                        return false
-                    }
-                    return !operationController.hasActiveOrQueuedWork(boundTo: tab.workspace)
-                },
-                invalidateReversalHistory: operationController.invalidateReversalHistory(for:),
-                teardown: teardownActiveWorkspace,
-                isModalPresented: workspaceModalIsPresented,
-                isTextEditing: workspace.activeTextEditingSession != nil,
-                profilesPresented: $profilesPresented
-            )
-
-            ZStack {
-                ordinaryWorkspace
-                    .opacity(hasOverlay ? 0 : 1)
-                    .allowsHitTesting(!hasOverlay)
-                    .accessibilityHidden(hasOverlay)
-
-                if comparison.isActive {
-                    ComparisonWorkspaceView(
-                        workspace: workspace,
-                        comparison: comparison,
-                        operationController: operationController,
-                        searchPresented: smartSearch.isPresented,
-                        batchRenamePresented: batchRename.isPresented,
-                        trashPresented: workspace.pendingTrashRequest != nil,
-                        profilesPresented: profilesPresented,
-                        modalPresentationState: $modalPresentationState
-                    )
-                } else if storage.isActive {
-                    StorageInspectorView(
-                        workspace: workspace,
-                        storage: storage,
-                        cleanupController: storageCleanupController,
-                        quickLookController: quickLookController,
-                        materializer: materializer,
-                        fileSystem: fileSystem,
-                        workspaceActions: cloudWorkspaceActions,
-                        operationController: operationController,
-                        accessCoordinator: cloudAccessCoordinator
-                    )
-                }
+        workspaceModals
+        .alert("Move to Trash?", isPresented: trashConfirmationIsPresented) {
+            Button("Cancel", role: .cancel) { workspace.dismissTrashConfirmation() }
+            Button("Move to Trash", role: .destructive) {
+                guard let request = workspace.pendingTrashRequest else { return }
+                workspace.dismissTrashConfirmation()
+                _ = operationController.trash(request.items, workspace: workspace)
             }
+        } message: { Text(trashConfirmationMessage) }
+        .focusedSceneValue(\.workspaceState, workspace)
+        .focusedSceneValue(\.workspaceSessionState, workspaceSession)
+        .focusedSceneValue(\.workspaceTabModalPresented, workspaceModalIsPresented)
+        .focusedSceneValue(\.workspaceTabTeardown, teardownActiveWorkspace)
+        .focusedSceneValue(\.workspaceProfilesPresentation, { profilesPresented = true })
+        .focusedSceneValue(\.workspaceCommandPalettePresentation, presentCommandPalette)
+        .focusedSceneValue(\.workspaceSmartSearchPresentation, presentSmartSearch)
+        .focusedSceneValue(\.comparisonCoordinator, comparison)
+        .focusedSceneValue(\.storageAnalysisStore, storage)
+    }
 
-            HStack(spacing: 0) {
-                OperationStatusView(controller: operationController)
-                FileOperationCenterView(controller: operationController)
-            }
-            .frame(maxWidth: .infinity, alignment: .trailing)
-
-            HStack {
-                Text(workspace.activePaneID == .left ? "Left panel active" : "Right panel active")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Text(contextActionStatus)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .accessibilityIdentifier(AccessibilityIdentifiers.workspaceContextActionStatus)
-                    .accessibilityLabel("Context action status")
-                    .accessibilityValue(contextActionStatus)
-                Spacer()
-            }
-            .padding(.horizontal, 8)
-            .frame(height: 24)
-            .background(.bar)
-            .overlay(alignment: .top) { Divider() }
-            .accessibilityLabel("Active file pane")
-            .accessibilityValue(workspace.activePaneID == .left ? "Left" : "Right")
-        }
+    private var workspaceLifecycle: some View {
+        workspaceCore
         .task(id: workspaceSession.activeTabID) {
             let tabID = workspaceSession.activeTabID
             let loadState = initialLoadState
@@ -274,11 +222,16 @@ struct WorkspaceView: View {
         }
         .onDisappear {
             workspaceSession.flushPersistence()
+            smartSearch.dismiss(owner: smartSearchOwner)
         }
         .onChange(of: scenePhase) { _, phase in
             guard phase != .active else { return }
             workspaceSession.flushPersistence()
         }
+    }
+
+    private var workspaceModals: some View {
+        workspaceLifecycle
         .sheet(isPresented: profilesPresentation) {
             WorkspaceProfilesView(
                 session: workspaceSession,
@@ -300,7 +253,8 @@ struct WorkspaceView: View {
                 workspace: workspace,
                 operationController: operationController,
                 quickLookController: quickLookController,
-                materializer: materializer
+                materializer: materializer,
+                presentationOwner: smartSearchOwner
             )
         }
         .sheet(isPresented: commandPalettePresentation, onDismiss: commandPaletteDidDismiss) {
@@ -340,26 +294,88 @@ struct WorkspaceView: View {
                 passwordCoordinator.cancel(requestID: requestID)
             }
         }
-        .alert("Move to Trash?", isPresented: trashConfirmationIsPresented) {
-            Button("Cancel", role: .cancel) {
-                workspace.dismissTrashConfirmation()
+    }
+
+    private var workspaceCore: some View {
+        let hasOverlay = comparison.isActive || storage.isActive
+
+        return VStack(spacing: 0) {
+            WorkspaceTabBarView(
+                session: workspaceSession,
+                canClose: { id in
+                    guard let tab = workspaceSession.tabs.first(where: { $0.id == id }) else {
+                        return false
+                    }
+                    return !operationController.hasActiveOrQueuedWork(boundTo: tab.workspace)
+                },
+                invalidateReversalHistory: operationController.invalidateReversalHistory(for:),
+                teardown: teardownActiveWorkspace,
+                isModalPresented: workspaceModalIsPresented,
+                isTextEditing: workspace.activeTextEditingSession != nil,
+                profilesPresented: $profilesPresented
+            )
+
+            ZStack {
+                ordinaryWorkspace
+                    .opacity(hasOverlay ? 0 : 1)
+                    .allowsHitTesting(!hasOverlay)
+                    .accessibilityHidden(hasOverlay)
+
+                if comparison.isActive {
+                    ComparisonWorkspaceView(
+                        workspace: workspace,
+                        comparison: comparison,
+                        operationController: operationController,
+                        searchPresented: smartSearchIsPresented,
+                        batchRenamePresented: batchRename.isPresented,
+                        trashPresented: workspace.pendingTrashRequest != nil,
+                        profilesPresented: profilesPresented,
+                        modalPresentationState: $modalPresentationState
+                    )
+                } else if storage.isActive {
+                    StorageInspectorView(
+                        workspace: workspace,
+                        storage: storage,
+                        cleanupController: storageCleanupController,
+                        quickLookController: quickLookController,
+                        materializer: materializer,
+                        fileSystem: fileSystem,
+                        workspaceActions: cloudWorkspaceActions,
+                        operationController: operationController,
+                        accessCoordinator: cloudAccessCoordinator
+                    )
+                }
             }
-            Button("Move to Trash", role: .destructive) {
-                guard let request = workspace.pendingTrashRequest else { return }
-                workspace.dismissTrashConfirmation()
-                _ = operationController.trash(request.items, workspace: workspace)
+
+            HStack(spacing: 0) {
+                OperationStatusView(controller: operationController)
+                FileOperationCenterView(controller: operationController)
             }
-        } message: {
-            Text(trashConfirmationMessage)
+            .frame(maxWidth: .infinity, alignment: .trailing)
+
+            workspaceStatusBar
         }
-        .focusedSceneValue(\.workspaceState, workspace)
-        .focusedSceneValue(\.workspaceSessionState, workspaceSession)
-        .focusedSceneValue(\.workspaceTabModalPresented, workspaceModalIsPresented)
-        .focusedSceneValue(\.workspaceTabTeardown, teardownActiveWorkspace)
-        .focusedSceneValue(\.workspaceProfilesPresentation, { profilesPresented = true })
-        .focusedSceneValue(\.workspaceCommandPalettePresentation, presentCommandPalette)
-        .focusedSceneValue(\.comparisonCoordinator, comparison)
-        .focusedSceneValue(\.storageAnalysisStore, storage)
+    }
+
+    private var workspaceStatusBar: some View {
+        HStack {
+            Text(workspace.activePaneID == .left ? "Left panel active" : "Right panel active")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text(contextActionStatus)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .accessibilityIdentifier(AccessibilityIdentifiers.workspaceContextActionStatus)
+                .accessibilityLabel("Context action status")
+                .accessibilityValue(contextActionStatus)
+            Spacer()
+        }
+        .padding(.horizontal, 8)
+        .frame(height: 24)
+        .background(.bar)
+        .overlay(Divider(), alignment: .top)
+        .accessibilityLabel("Active file pane")
+        .accessibilityValue(workspace.activePaneID == .left ? "Left" : "Right")
     }
 
     private var ordinaryWorkspace: some View {
@@ -463,7 +479,7 @@ struct WorkspaceView: View {
             passwordPresented: modalPresentationState.presentedPasswordRequestID != nil,
             selectionFolderPresented: modalPresentationState.isSelectionFolderPresented,
             conflictPresented: operationController.pendingConflict != nil,
-            smartSearchPresented: smartSearch.isPresented,
+            smartSearchPresented: smartSearchIsPresented,
             batchRenamePresented: batchRename.isPresented,
             pendingTrashPresented: workspace.pendingTrashRequest != nil,
             synchronizationReviewPresented: comparison.folderSynchronizationReview != .idle,
@@ -477,7 +493,7 @@ struct WorkspaceView: View {
             exitStorage: storage.exit,
             closePreview: previewCoordinator.closeAndRestoreFocus,
             dismissCommandPalette: cancelCommandPalettePresentation,
-            dismissSmartSearch: smartSearch.dismiss,
+            dismissSmartSearch: { smartSearch.dismiss(owner: smartSearchOwner) },
             dismissBatchRename: batchRename.dismiss,
             dismissSelectionFolder: selectionFolder.dismiss,
             dismissSynchronizationReview: comparison.cancelFolderSynchronizationReview,
@@ -496,7 +512,7 @@ struct WorkspaceView: View {
     private var pendingConflict: Binding<IdentifiedFileConflict?> {
         Binding {
             guard modalPresentationState.allowsOtherModalPresentation,
-                  !smartSearch.isPresented,
+                  !smartSearchIsPresented,
                   !batchRename.isPresented,
                   !selectionFolder.isPresented,
                   comparison.folderSynchronizationReview == .idle
@@ -505,7 +521,7 @@ struct WorkspaceView: View {
         } set: { item in
             if item == nil,
                modalPresentationState.allowsOtherModalPresentation,
-               !smartSearch.isPresented,
+               !smartSearchIsPresented,
                !batchRename.isPresented,
                !selectionFolder.isPresented,
                operationController.pendingConflict != nil {
@@ -520,14 +536,14 @@ struct WorkspaceView: View {
                 && operationController.pendingConflict == nil
                 && !batchRename.isPresented
                 && !selectionFolder.isPresented
-                && smartSearch.isPresented
+                && smartSearchIsPresented
         } set: { isPresented in
             if !isPresented,
                modalPresentationState.allowsOtherModalPresentation,
                operationController.pendingConflict == nil,
                !batchRename.isPresented,
                !selectionFolder.isPresented {
-                smartSearch.dismiss()
+                smartSearch.dismiss(owner: smartSearchOwner)
             }
         }
     }
@@ -536,14 +552,14 @@ struct WorkspaceView: View {
         Binding {
             modalPresentationState.allowsOtherModalPresentation
                 && operationController.pendingConflict == nil
-                && !smartSearch.isPresented
+                && !smartSearchIsPresented
                 && !selectionFolder.isPresented
                 && batchRename.isPresented
         } set: { isPresented in
             if !isPresented,
                modalPresentationState.allowsOtherModalPresentation,
                operationController.pendingConflict == nil,
-               !smartSearch.isPresented,
+               !smartSearchIsPresented,
                !selectionFolder.isPresented {
                 batchRename.dismiss()
             }
@@ -555,7 +571,7 @@ struct WorkspaceView: View {
             modalPresentationState.passwordRequestToPresent(
                 pending: passwordCoordinator.pendingRequest,
                 conflictPresented: operationController.pendingConflict != nil,
-                searchPresented: smartSearch.isPresented,
+                searchPresented: smartSearchIsPresented,
                 batchRenamePresented: batchRename.isPresented,
                 selectionFolderPresented: selectionFolder.isPresented,
                 synchronizationReviewPresented: comparison.folderSynchronizationReview != .idle
@@ -574,7 +590,7 @@ struct WorkspaceView: View {
             return modalPresentationState.isSelectionFolderPresented
                 || modalPresentationState.allowsSelectionFolderPresentation(
                     conflictPresented: operationController.pendingConflict != nil,
-                    searchPresented: smartSearch.isPresented,
+                    searchPresented: smartSearchIsPresented,
                     batchRenamePresented: batchRename.isPresented,
                     passwordPresented: passwordCoordinator.pendingRequest != nil,
                     synchronizationReviewPresented: comparison.folderSynchronizationReview != .idle
@@ -706,7 +722,7 @@ struct WorkspaceView: View {
         case .showFilter:
             WorkspaceFilterCommandActions.showFilter(in: workspace, canNavigate: true)
         case .showSmartSearch:
-            WorkspaceSearchCommandActions.showSmartSearch(in: workspace, store: smartSearch)
+            presentSmartSearch()
         case let .openProfile(id):
             _ = WorkspaceTabCommandActions.openProfile(
                 id,
@@ -718,7 +734,16 @@ struct WorkspaceView: View {
             )
         case let .openSavedSearch(id):
             guard let record = smartSearch.savedSearches.first(where: { $0.id == id }) else { return }
-            smartSearch.openSavedSearch(record)
+            _ = smartSearch.openSavedSearch(record, owner: smartSearchOwner)
         }
+    }
+
+    private var smartSearchIsPresented: Bool {
+        smartSearch.isPresented(for: smartSearchOwner)
+    }
+
+    private func presentSmartSearch() {
+        guard workspace.activeTextEditingSession == nil, !workspaceModalIsPresented else { return }
+        _ = smartSearch.present(initialRoot: workspace.activePane.currentDirectory, owner: smartSearchOwner)
     }
 }

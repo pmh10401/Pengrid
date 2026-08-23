@@ -69,6 +69,41 @@ struct SmartSearchStoreTests {
         #expect(store.results == [result])
     }
 
+    @Test func presentationOwnershipRejectsAnotherSceneAndPreservesTheOwner() {
+        let store = SmartSearchStore(
+            service: ReplacingSearchService(),
+            persistence: RecordingSmartSearchPersistence(data: nil)
+        )
+        let owner = UUID()
+        let otherOwner = UUID()
+
+        #expect(store.present(initialRoot: URL(filePath: "/first"), owner: owner))
+        #expect(!store.present(initialRoot: URL(filePath: "/second"), owner: otherOwner))
+        #expect(store.isPresented(for: owner))
+        #expect(!store.isPresented(for: otherOwner))
+
+        store.dismiss(owner: otherOwner)
+        #expect(store.isPresented(for: owner))
+    }
+
+    @Test func savedSearchPresentationUsesTheRequestingOwnerWithoutStealing() throws {
+        let store = SmartSearchStore(
+            service: ReplacingSearchService(),
+            persistence: RecordingSmartSearchPersistence(data: nil)
+        )
+        let owner = UUID()
+        let otherOwner = UUID()
+        let saved = SmartSearchRecord(
+            displayName: "Reports",
+            query: try SmartSearchQuery(text: "report", roots: [URL(filePath: "/reports")])
+        )
+
+        #expect(store.openSavedSearch(saved, owner: owner))
+        #expect(!store.openSavedSearch(saved, owner: otherOwner))
+        #expect(store.isPresented(for: owner))
+        #expect(store.queryText == "report")
+    }
+
     @Test func reopeningAfterDismissalRestoresTheRetainedSearchState() async throws {
         let service = ReplacingSearchService()
         let store = SmartSearchStore(

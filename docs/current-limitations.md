@@ -43,7 +43,8 @@ This list covers the current source tree and the Developer Preview 7 DMG.
   exclusive, no-overwrite operation. A successful create refreshes the pane
   before selecting the new row and beginning inline rename. Conservative Undo
   is available only while the exact created identity and fingerprint remain
-  unchanged.
+  unchanged. Loaded sibling collisions choose `New File 2`, `New File 3`, and
+  so on; only an unseen racing collision at exclusive publication fails.
 - **Select All Visible** (**Option-Command-A**), **Invert Selection**
   (**Option-Command-I**), and **Select Same Extension**
   (**Option-Command-E**) operate on the active pane's currently visible,

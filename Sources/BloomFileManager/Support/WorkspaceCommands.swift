@@ -576,6 +576,9 @@ private struct WorkspaceProfilesPresentationFocusedValueKey: FocusedValueKey {
 private struct WorkspaceCommandPalettePresentationFocusedValueKey: FocusedValueKey {
     typealias Value = @MainActor () -> Void
 }
+private struct WorkspaceSmartSearchPresentationFocusedValueKey: FocusedValueKey {
+    typealias Value = @MainActor () -> Void
+}
 
 private struct ComparisonFocusedValueKey: FocusedValueKey {
     typealias Value = ComparisonCoordinator
@@ -614,6 +617,10 @@ extension FocusedValues {
     var workspaceCommandPalettePresentation: (@MainActor () -> Void)? {
         get { self[WorkspaceCommandPalettePresentationFocusedValueKey.self] }
         set { self[WorkspaceCommandPalettePresentationFocusedValueKey.self] = newValue }
+    }
+    var workspaceSmartSearchPresentation: (@MainActor () -> Void)? {
+        get { self[WorkspaceSmartSearchPresentationFocusedValueKey.self] }
+        set { self[WorkspaceSmartSearchPresentationFocusedValueKey.self] = newValue }
     }
 
     var comparisonCoordinator: ComparisonCoordinator? {
@@ -761,6 +768,7 @@ struct WorkspaceCommands: Commands {
     @FocusedValue(\.workspaceTabTeardown) private var workspaceTabTeardown
     @FocusedValue(\.workspaceProfilesPresentation) private var workspaceProfilesPresentation
     @FocusedValue(\.workspaceCommandPalettePresentation) private var workspaceCommandPalettePresentation
+    @FocusedValue(\.workspaceSmartSearchPresentation) private var workspaceSmartSearchPresentation
     @FocusedValue(\.comparisonCoordinator) private var comparison
     @FocusedValue(\.storageAnalysisStore) private var focusedStorage
 
@@ -797,9 +805,7 @@ struct WorkspaceCommands: Commands {
             .accessibilityIdentifier(AccessibilityIdentifiers.workspaceCreateFile)
         }
 
-        CommandGroup(replacing: .printItem) {
-            Divider()
-        }
+        CommandGroup(replacing: .printItem) {}
 
         CommandGroup(after: .windowList) {
             Button("New Workspace Tab") {
@@ -983,14 +989,11 @@ struct WorkspaceCommands: Commands {
             .disabled(workspace == nil || !policy.canNavigate)
 
             Button("Smart Search…") {
-                guard let workspace, let smartSearch, policy.canNavigate else { return }
-                WorkspaceSearchCommandActions.showSmartSearch(
-                    in: workspace,
-                    store: smartSearch
-                )
+                guard policy.canNavigate, let workspaceSmartSearchPresentation else { return }
+                workspaceSmartSearchPresentation()
             }
             .keyboardShortcut("f", modifiers: [.command, .shift])
-            .disabled(workspace == nil || smartSearch == nil || !policy.canNavigate)
+            .disabled(workspaceSmartSearchPresentation == nil || !policy.canNavigate)
         }
 
         CommandMenu("Workspace Profiles") {

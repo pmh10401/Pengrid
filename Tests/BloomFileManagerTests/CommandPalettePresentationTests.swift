@@ -16,6 +16,10 @@ struct CommandPalettePresentationTests {
             ".focused($queryFieldIsFocused)",
             ".defaultFocus($queryFieldIsFocused, true)",
             ".onSubmit",
+            ".onKeyPress(.upArrow)",
+            ".onKeyPress(.downArrow)",
+            ".onKeyPress(.return)",
+            ".onKeyPress(.escape)",
             ".onExitCommand",
             "ContentUnavailableView.search",
             "AccessibilityIdentifiers.commandPaletteSheet",
@@ -26,6 +30,17 @@ struct CommandPalettePresentationTests {
             #expect(source.contains(requiredSnippet))
         }
         #expect(!source.contains("accessibilityValue(item.subtitle"))
+    }
+
+    @Test func paletteCategoriesAndAccessibilityIdentifiersExcludeNavigationPaths() {
+        let identifier = AccessibilityIdentifiers.commandPaletteRow("navigate:/private/Example")
+        #expect(!identifier.contains("/private/Example"))
+        for source in [
+            CommandPaletteItemSource.command, .currentDirectory, .backHistory,
+            .forwardHistory, .favorite, .workspaceProfile, .savedSearch
+        ] {
+            #expect(!source.accessibilityCategory.isEmpty)
+        }
     }
 
     @Test func routingMapsLocalActionsAndFailsClosedForDeletedReferences() {

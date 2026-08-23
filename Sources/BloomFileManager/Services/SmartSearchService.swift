@@ -143,7 +143,8 @@ final class LocalSmartSearchService: SmartSearching, @unchecked Sendable {
             .isDirectoryKey,
             .isPackageKey,
             .isHiddenKey,
-            .isSymbolicLinkKey
+            .isSymbolicLinkKey,
+            .isRegularFileKey
         ]
         let filterKeys: Set<URLResourceKey> = [.contentModificationDateKey, .fileSizeKey]
         guard let enumerator = fileManager.enumerator(
@@ -241,6 +242,7 @@ final class LocalSmartSearchService: SmartSearching, @unchecked Sendable {
                                 isDirectory: isDirectory,
                                 isPackage: isPackage,
                                 isSymbolicLink: isSymbolicLink,
+                                isRegularFile: metadata.isRegularFile == true,
                                 modifiedAt: metadata.contentModificationDate,
                                 byteSize: byteSize,
                                 typeDescription: typeDescription,

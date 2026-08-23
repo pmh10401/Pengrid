@@ -140,6 +140,7 @@ final class LiveSpotlightSmartSearchService: SpotlightContentSearching, @uncheck
                 .isPackageKey,
                 .isHiddenKey,
                 .isSymbolicLinkKey,
+                .isRegularFileKey,
                 .contentModificationDateKey,
                 .fileSizeKey
             ]
@@ -181,6 +182,7 @@ final class LiveSpotlightSmartSearchService: SpotlightContentSearching, @uncheck
                     isDirectory: isDirectory,
                     isPackage: isPackage,
                     isSymbolicLink: isSymbolicLink,
+                    isRegularFile: metadata.isRegularFile == true,
                     modifiedAt: metadata.contentModificationDate,
                     byteSize: byteSize,
                     typeDescription: typeDescription,

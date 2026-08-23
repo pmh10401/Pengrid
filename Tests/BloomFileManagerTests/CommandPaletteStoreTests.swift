@@ -103,4 +103,32 @@ import Testing
         #expect(store.isPresented)
         #expect(store.takePendingAction() == nil)
     }
+
+    @Test func selectionNavigatesWithinResultBoundariesAndRejectsStaleIDs() {
+        let store = CommandPaletteStore()
+        let first = CommandPaletteItem(title: "First", action: .createFolder)
+        let second = CommandPaletteItem(title: "Second", action: .createFile)
+        store.present(items: [first, second])
+
+        store.selectNextResult()
+        #expect(store.selectedItemID == second.id)
+        store.selectNextResult()
+        #expect(store.selectedItemID == second.id)
+        store.selectPreviousResult()
+        #expect(store.selectedItemID == first.id)
+        #expect(!store.select(itemID: "stale"))
+        #expect(store.selectedItemID == first.id)
+    }
+
+    @Test func executesTheSelectedNonfirstResult() {
+        let store = CommandPaletteStore()
+        let first = CommandPaletteItem(title: "First", action: .createFolder)
+        let second = CommandPaletteItem(title: "Second", action: .createFile)
+        store.present(items: [first, second])
+
+        store.selectNextResult()
+        store.executeSelectedResult()
+
+        #expect(store.takePendingAction() == .createFile)
+    }
 }

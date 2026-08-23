@@ -74,6 +74,8 @@ the captured parent-directory identity through an exclusive no-overwrite
 operation; after the pane refreshes, the new row is selected and inline rename
 begins. Conservative Undo is offered only while the created file's exact
 identity and fingerprint remain unchanged.
+Loaded sibling collisions use `New File 2`, `New File 3`, and so on. Only an
+unseen racing collision at exclusive publication fails without overwriting it.
 
 The active pane's currently visible, unfiltered rows are the scope for
 **Select All Visible** (**Option-Command-A**), **Invert Selection**

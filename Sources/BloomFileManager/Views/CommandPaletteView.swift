@@ -21,6 +21,10 @@ struct CommandPaletteView: View {
                 .accessibilityLabel("Search commands and locations")
                 .focused($queryFieldIsFocused)
                 .onSubmit(executeSelection)
+                .onKeyPress(.upArrow) { store.selectPreviousResult(); return .handled }
+                .onKeyPress(.downArrow) { store.selectNextResult(); return .handled }
+                .onKeyPress(.return) { store.executeSelectedResult(); return .handled }
+                .onKeyPress(.escape) { store.dismiss(); return .handled }
 
             if store.results.isEmpty {
                 ContentUnavailableView.search
@@ -43,7 +47,7 @@ struct CommandPaletteView: View {
                         }
                         .tag(item.id)
                         .accessibilityIdentifier(AccessibilityIdentifiers.commandPaletteRow(item.id))
-                        .accessibilityLabel(item.title)
+                        .accessibilityLabel("\(item.title), \(item.source.accessibilityCategory)")
                     }
                 }
                 .accessibilityIdentifier(AccessibilityIdentifiers.commandPaletteResults)
@@ -56,6 +60,10 @@ struct CommandPaletteView: View {
         .onAppear { selection = store.selectedItemID }
         .onChange(of: store.selectedItemID) { _, selectedItemID in
             selection = selectedItemID
+        }
+        .onChange(of: selection) { _, selection in
+            guard let selection else { return }
+            _ = store.select(itemID: selection)
         }
         .onExitCommand { store.dismiss() }
     }

@@ -39,7 +39,7 @@ enum AccessibilityIdentifiers {
     static let commandPaletteSheet = "commandPalette.sheet"
     static let commandPaletteQuery = "commandPalette.query"
     static let commandPaletteResults = "commandPalette.results"
-    static func commandPaletteRow(_ id: String) -> String { "commandPalette.row.\(id)" }
+    static func commandPaletteRow(_ id: String) -> String { "commandPalette.row" }
     static let fileTableBatchRename = "fileTable.batchRename"
     static let fileTableQuickLook = "fileTable.quickLook"
     static let fileTableOpenWith = "fileTable.openWith"

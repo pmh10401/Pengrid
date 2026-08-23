@@ -116,7 +116,9 @@ Choose **File > New Empty File** or press **Option-Command-N**. Pengrid creates
 one regular file bound to the captured parent-directory identity through an
 exclusive no-overwrite operation. A successful operation refreshes the pane,
 selects the new row, and then starts inline rename. If the name is already
-occupied, creation fails rather than replacing the existing entry.
+occupied in the loaded siblings, Pengrid chooses `New File 2`, `New File 3`,
+and so on. Only an unseen racing collision at exclusive publication fails
+rather than replacing the existing entry.
 
 Undo is conservative: it is available only while the created file's exact
 identity and fingerprint remain unchanged. If the file is replaced, edited,

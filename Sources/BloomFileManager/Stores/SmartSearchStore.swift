@@ -165,6 +165,7 @@ final class SmartSearchStore {
     private let workLifetime = SmartSearchWorkLifetime()
     private var generation = 0
     private var hasPresented = false
+    private var presentationOwner: UUID?
 
     init(service: any SmartSearching, persistence: any SmartSearchPersisting) {
         self.service = service
@@ -181,6 +182,33 @@ final class SmartSearchStore {
     }
 
     func present(initialRoot: URL) {
+        presentationOwner = nil
+        performPresentation(initialRoot: initialRoot)
+    }
+
+    @discardableResult
+    func present(initialRoot: URL, owner: UUID) -> Bool {
+        guard claimPresentation(owner: owner) else { return false }
+        performPresentation(initialRoot: initialRoot)
+        return true
+    }
+
+    func isPresented(for owner: UUID) -> Bool {
+        isPresented && presentationOwner == owner
+    }
+
+    func dismiss(owner: UUID) {
+        guard presentationOwner == owner else { return }
+        dismiss()
+    }
+
+    private func claimPresentation(owner: UUID) -> Bool {
+        guard presentationOwner == nil || presentationOwner == owner else { return false }
+        presentationOwner = owner
+        return true
+    }
+
+    private func performPresentation(initialRoot: URL) {
         if hasPresented, !isPresented {
             isPresented = true
             return
@@ -201,6 +229,7 @@ final class SmartSearchStore {
             progressMessage = nil
         }
         isPresented = false
+        presentationOwner = nil
     }
 
     func submit() {
@@ -320,6 +349,18 @@ final class SmartSearchStore {
     }
 
     func openSavedSearch(_ record: SmartSearchRecord) {
+        presentationOwner = nil
+        applySavedSearch(record)
+    }
+
+    @discardableResult
+    func openSavedSearch(_ record: SmartSearchRecord, owner: UUID) -> Bool {
+        guard claimPresentation(owner: owner) else { return false }
+        applySavedSearch(record)
+        return true
+    }
+
+    private func applySavedSearch(_ record: SmartSearchRecord) {
         cancelActiveSearch()
         queryText = record.query.text
         roots = record.query.roots

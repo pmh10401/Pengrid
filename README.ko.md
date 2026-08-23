@@ -60,7 +60,7 @@ DMG를 연 다음 `Pengrid.app`을 `Applications` 폴더로 복사하세요.
 > 이 절의 생산성 작업 흐름은 현재 소스 트리를 설명합니다. 이 기능이 기존
 > Developer Preview 7 DMG에 포함되어 있다는 뜻은 아닙니다.
 
-**Command-P**를 누르면 현재 scene에만 연결된 입력형 **Quick Go…** 팔레트가
+**Command-P**를 누르면 현재 scene에만 연결된 열거형 기반의 타입 안전 **Quick Go…** 팔레트가
 열립니다. 후보는 안전한 고정 명령(**Create Folder**, **Create File**, **Show
 Filter**, **Smart Search**), 활성 패널의 현재·뒤로·앞으로 위치, 사용할 수 있는
 즐겨찾기, 작업 공간 프로필 및 저장된 검색입니다. 매칭은 정규화된 텍스트와
@@ -71,6 +71,8 @@ Pengrid의 기존 한글 초성(Hangul-initial) 지원을 함께 사용합니다
 동일성에 묶인 일반 파일을 배타적·덮어쓰기 없는 작업으로 만듭니다. 패널을 새로
 고친 뒤 새 행을 선택하고 인라인 이름 변경을 시작합니다. 보수적인 Undo는 새
 파일의 정확한 동일성과 지문이 바뀌지 않은 동안에만 제공합니다.
+이미 불러온 형제 항목과 이름이 겹치면 `New File 2`, `New File 3`처럼 이름을
+정합니다. 배타적 공개 시점에만 발생하는 아직 보지 못한 경쟁 충돌은 덮어쓰지 않고 실패합니다.
 
 활성 패널의 현재 표시 항목, 즉 필터링되지 않은 행만
 **Select All Visible** (**Option-Command-A**), **Invert Selection**

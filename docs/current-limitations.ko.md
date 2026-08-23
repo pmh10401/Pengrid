@@ -31,7 +31,7 @@
 > 이 절의 생산성 작업 흐름은 현재 소스 트리를 설명합니다. 이 기능이 기존
 > Developer Preview 7 DMG에 포함되어 있다는 뜻은 아닙니다.
 
-- **Quick Go…**는 현재 scene에만 연결된 입력형 팔레트입니다. 후보는 안전한 고정
+- **Quick Go…**는 현재 scene에만 연결된 열거형 기반의 타입 안전 팔레트입니다. 후보는 안전한 고정
   명령(**Create Folder**, **Create File**, **Show Filter**, **Smart Search**),
   활성 패널의 현재·뒤로·앞으로 위치, 사용할 수 있는 즐겨찾기, 작업 공간 프로필
   및 저장된 검색으로 제한됩니다. 매칭은 기존 한글 초성(Hangul-initial) 지원을
@@ -41,6 +41,8 @@
   동일성에 묶인 배타적·덮어쓰기 없는 일반 파일 생성을 수행합니다. 성공하면 새
   행을 선택하고 인라인 이름 변경을 시작하기 전에 패널을 새로 고칩니다. 보수적인
   Undo는 새 파일의 정확한 동일성과 지문이 유지되는 동안에만 사용할 수 있습니다.
+  불러온 형제 항목과의 충돌은 `New File 2`, `New File 3`처럼 처리하며, 배타적
+  공개 시점의 아직 보지 못한 경쟁 충돌만 실패합니다.
 - **Select All Visible** (**Option-Command-A**), **Invert Selection**
   (**Option-Command-I**), **Select Same Extension**
   (**Option-Command-E**)은 활성 패널의 현재 표시된 필터링되지 않은 행을

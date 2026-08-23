@@ -394,19 +394,39 @@ struct FileOperationMutationTests {
         let root = try TemporaryDirectory()
         defer { root.remove() }
         let destination = root.url.appending(path: "New File.txt")
+        let publication = AsyncStream<Void>.makeStream()
+        let releasePublicationHook = DispatchSemaphore(value: 0)
         let fileSystem = LiveFileSystemAccess(onAfterEmptyItemCreated: { _, _ in
-            withUnsafeCurrentTask { $0?.cancel() }
+            publication.continuation.yield()
+            publication.continuation.finish()
+            releasePublicationHook.wait()
         })
         let directoryIdentity = try #require(await fileSystem.identity(of: root.url))
         let logger = MutationRecordingOperationLogger()
         let service = FileOperationService(fileSystem: fileSystem, logger: logger)
 
-        let created = try await service.createFile(
-            in: root.url,
-            identifiedBy: directoryIdentity,
-            named: "New File.txt"
-        )
+        let operation = Task {
+            try await service.createFile(
+                in: root.url,
+                identifiedBy: directoryIdentity,
+                named: "New File.txt"
+            )
+        }
+        var releasedPublicationHook = false
+        defer {
+            if !releasedPublicationHook {
+                releasePublicationHook.signal()
+            }
+        }
+        for await _ in publication.stream {
+            operation.cancel()
+            releasePublicationHook.signal()
+            releasedPublicationHook = true
+            break
+        }
+        let created = try await operation.value
 
+        #expect(!Task.isCancelled)
         #expect(FileManager.default.fileExists(atPath: destination.path))
         let currentIdentity = try await fileSystem.identity(of: destination)
         #expect(created.identity == currentIdentity)

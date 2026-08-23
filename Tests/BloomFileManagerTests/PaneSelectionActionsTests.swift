@@ -196,6 +196,31 @@ struct PaneSelectionActionsTests {
         #expect(result == Set([anchor.url, matching.url]))
     }
 
+    @Test func matchingExtensionRejectsSymbolicLinksAndSpecialEntries() {
+        let directory = URL(filePath: "/selection")
+        let symlink = makeSelectionItem(named: "link.txt", in: directory, isSymbolicLink: true)
+        let special = makeSelectionItem(named: "socket.txt", in: directory, isRegularFile: false)
+
+        #expect(PaneSelectionActions.matchingExtension(current: [symlink.url], visibleItems: [symlink]) == nil)
+        #expect(PaneSelectionActions.matchingExtension(current: [special.url], visibleItems: [special]) == nil)
+    }
+
+    @Test func matchingExtensionUsesDisplayNameRatherThanBackingURL() throws {
+        let directory = URL(filePath: "/selection")
+        let anchor = FileItem(
+            url: directory.appending(path: "opaque"), name: "Report.txt", isDirectory: false,
+            isPackage: false, modifiedAt: nil, byteSize: 1, typeDescription: "Text"
+        )
+        let matching = FileItem(
+            url: directory.appending(path: "also-opaque"), name: "Copy.TXT", isDirectory: false,
+            isPackage: false, modifiedAt: nil, byteSize: 1, typeDescription: "Text"
+        )
+
+        #expect(try #require(PaneSelectionActions.matchingExtension(
+            current: [anchor.url], visibleItems: [anchor, matching]
+        )) == Set([anchor.url, matching.url]))
+    }
+
     @Test func matchingExtensionRejectsANonvisibleAnchor() {
         let directory = URL(filePath: "/selection")
         let visible = makeSelectionItem(named: "visible.txt", in: directory)
@@ -214,13 +239,17 @@ private func makeSelectionItem(
     named name: String,
     in directory: URL,
     isDirectory: Bool = false,
-    isPackage: Bool = false
+    isPackage: Bool = false,
+    isSymbolicLink: Bool = false,
+    isRegularFile: Bool = true
 ) -> FileItem {
     FileItem(
         url: directory.appending(path: name),
         name: name,
         isDirectory: isDirectory,
         isPackage: isPackage,
+        isSymbolicLink: isSymbolicLink,
+        isRegularFile: isRegularFile,
         modifiedAt: nil,
         byteSize: isDirectory ? nil : 1,
         typeDescription: isDirectory ? "Folder" : "Text"

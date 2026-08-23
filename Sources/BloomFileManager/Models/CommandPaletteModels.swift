@@ -20,6 +20,20 @@ enum CommandPaletteItemSource: Equatable, Sendable {
     case savedSearch
 }
 
+extension CommandPaletteItemSource {
+    var accessibilityCategory: String {
+        switch self {
+        case .command: "Command"
+        case .currentDirectory: "Current directory"
+        case .backHistory: "Back history"
+        case .forwardHistory: "Forward history"
+        case .favorite: "Favorite"
+        case .workspaceProfile: "Workspace profile"
+        case .savedSearch: "Saved search"
+        }
+    }
+}
+
 struct CommandPaletteItem: Identifiable, Equatable, Sendable {
     let id: String
     let title: String
