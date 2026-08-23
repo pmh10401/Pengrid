@@ -25,6 +25,31 @@ This list covers the current source tree and the Developer Preview 7 DMG.
 - An unregistered location under `~/Library/CloudStorage` has unknown mutation
   capability and batch rename fails closed there.
 
+## Productivity workflows
+
+- **Quick Go…** is a scene-local typed palette. Its candidates are limited to
+  fixed safe commands (**Create Folder**, **Create File**, **Show Filter**, and
+  **Smart Search**), the active pane's current/Back/Forward locations,
+  available favorites, workspace profiles, and saved searches. Matching uses
+  normalized text with the existing Hangul-initial (Korean initial-consonant)
+  support. It does not execute scripts, crawl an index, or materialize file
+  contents.
+- **New Empty File** uses **Option-Command-N** and performs exclusive,
+  no-overwrite, identity-bound regular-file creation. A successful create
+  refreshes the pane before selecting the new row and beginning inline rename.
+  Its Undo is available only while the exact created identity and fingerprint
+  remain unchanged.
+- **Select All Visible** (**Option-Command-A**), **Invert Selection**
+  (**Option-Command-I**), and **Select Same Extension**
+  (**Option-Command-E**) operate on the active pane's currently visible,
+  unfiltered rows. They are disabled while pane filtering or text editing is
+  active. Select Same Extension additionally requires exactly one visible
+  regular file with a real extension.
+- Finder tag editing is not shipped; Get Info remains read-only. Byte-level
+  transfer verification is also future work. Identity and fingerprint checks
+  protect operation ownership and conservative Undo but are not per-byte
+  transfer verification.
+
 ## Batch rename
 
 - Requires at least two fully loaded selections from one active pane and one

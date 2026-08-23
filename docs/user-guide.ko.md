@@ -38,6 +38,11 @@ Pengrid는 두 파일 패널을 동시에 표시합니다. 패널을 클릭하�
 | 선택 항목 하나 이름 변경 | **Return** 또는 **F2** |
 | 선택 항목 일괄 이름 변경 | **Command-Control-R** |
 | 새 폴더 | **Command-Shift-N** |
+| Quick Go… 팔레트 | **Command-P** |
+| New Empty File | **Option-Command-N** |
+| Select All Visible | **Option-Command-A** |
+| Invert Selection | **Option-Command-I** |
+| Select Same Extension | **Option-Command-E** |
 | 복사 및 붙여넣기 | **Command-C**, **Command-V** |
 | 뒤로 및 앞으로 | **Command-[**, **Command-]** |
 | 상위 폴더 | **Command-Up Arrow** |
@@ -82,6 +87,56 @@ Pengrid는 재시작할 때 작업 공간 폴더, 정렬, 분할 위치, 활성 
 
 재귀 검색, 메타데이터 조건, 검색 조건 저장 또는 더 넓은 결과 집합에 대한 작업이
 필요하면 Smart Search를 사용하세요.
+
+## Quick Go, 새 파일 및 표시 행 선택
+
+### Quick Go… 팔레트
+
+**Go > Quick Go…**를 선택하거나 **Command-P**를 누릅니다. 이 팔레트는 현재
+포커스를 가진 작업 공간 scene에만 연결된 입력형 화면이며, 그 scene을 위해
+구성된 후보만 검색합니다. 후보는 안전한 고정 명령(**Create Folder**, **Create
+File**, **Show Filter**, **Smart Search**), 활성 패널의 현재 위치와 뒤로·앞으로
+위치, 사용할 수 있는 즐겨찾기, 작업 공간 프로필 및 저장된 검색입니다. 매칭은
+정규화된 텍스트를 사용하며 Pengrid의 기존 한글 초성(Hangul-initial) 지원도
+포함합니다.
+
+Quick Go는 스크립트를 실행하거나 색인을 크롤링하거나 파일 콘텐츠를
+materialize하지 않습니다. 탐색 후보를 선택할 때도 원래 scene의 현재 탭과 활성
+패널을 확인하므로 오래된 팔레트 작업은 무시됩니다.
+
+### New Empty File
+
+**File > New Empty File**을 선택하거나 **Option-Command-N**을 누릅니다. Pengrid는
+동일성에 묶인 배타적·덮어쓰기 없는 작업으로 일반 파일 하나를 만듭니다. 작업이
+성공하면 패널을 새로 고치고 새 행을 선택한 뒤 인라인 이름 변경을 시작합니다.
+이름이 이미 사용 중이면 기존 항목을 바꾸지 않고 생성에 실패합니다.
+
+Undo는 보수적으로 제공합니다. 새 파일의 정확한 동일성과 지문이 바뀌지 않은
+동안에만 사용할 수 있습니다. 파일이 교체되거나 수정되거나 사라졌거나 이 검사에
+실패하면 Pengrid는 파일을 제거하지 않습니다.
+
+### 표시 행 선택 명령
+
+다음 명령은 활성 패널의 현재 표시된 필터링되지 않은 행만 대상으로 합니다.
+
+| 명령 | 단축키 | 범위 |
+| --- | --- | --- |
+| **Select All Visible** | **Option-Command-A** | 현재 표시된 모든 행 선택 |
+| **Invert Selection** | **Option-Command-I** | 표시된 행 안에서만 선택 반전 |
+| **Select Same Extension** | **Option-Command-E** | 확장자 하나를 기준으로 표시된 일반 파일 선택 |
+
+활성 패널이 필터링 중이거나 패널의 텍스트 편집기가 활성화된 동안에는 세 명령이
+모두 비활성화됩니다. Select Same Extension은 실제 확장자가 있는 표시된 일반
+파일 하나를 정확히 선택해야 활성화됩니다. 폴더, 패키지, 확장자가 없는 파일 및
+표시 범위 밖의 기준 항목으로는 사용할 수 없습니다.
+
+### 동작 참고 출처
+
+Pengrid는 새 파일 및 고급 선택 동작을 설계할 때
+[Nimble Commander](https://github.com/mikekazakov/nimble-commander)를,
+Command-P 실행기 아이디어를 살펴볼 때 [Shuffle](https://github.com/WizenPainter/shuffle)와
+[F2 Commander](https://github.com/candidtim/f2-commander)를 참고했습니다.
+이 링크는 동작을 연구한 출처일 뿐이며 Pengrid가 코드를 복사한 것은 아닙니다.
 
 ## Smart Search와 한글 초성 검색
 
@@ -180,7 +235,8 @@ Get Info를 열 때는 메타데이터만 읽습니다. **Calculate SHA-256**은
 파일 하나이며 심볼릭 링크가 아닌 경우에만 표시되고, 명시적으로 버튼을 눌렀을
 때만 실행됩니다. 이 작업은 동일성을 다시 확인하며 온라인 전용 파일은 macOS가
 다운로드해야 할 수 있습니다. 검사기를 열거나 닫는 동작은 다운로드하지 않습니다.
-이 버전은 태그, 권한, 소유권, 날짜, 확장 속성 또는 이름을 바꾸지 않습니다.
+이 버전은 Finder 태그, 권한, 소유권, 날짜, 확장 속성 또는 이름을 바꾸지
+않습니다. Finder 태그 편집은 향후 작업입니다.
 
 ## 파일 행 컨텍스트 메뉴 생산성 기능
 
@@ -349,6 +405,8 @@ Pengrid가 직접 만든 변경이 그대로 유지된 경우에만 Undo를 제�
   소유권이 있으면 Undo를 비활성화하거나 거부합니다.
 
 Undo는 나중에 생긴 항목을 덮어쓰거나 수정된 결과물을 제거하지 않습니다.
+이 동일성 및 no-follow 지문 검사는 바이트 단위 전송 검증이 아닙니다. 바이트
+단위 전송 검증은 향후 작업입니다.
 
 ## 미리보기 우선 일괄 이름 변경
 

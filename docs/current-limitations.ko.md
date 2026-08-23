@@ -26,6 +26,27 @@
 - 등록되지 않은 `~/Library/CloudStorage` 하위 위치는 변경 기능을 알 수 없으므로
   일괄 이름 변경을 fail closed 처리합니다.
 
+## 생산성 작업 흐름
+
+- **Quick Go…**는 현재 scene에만 연결된 입력형 팔레트입니다. 후보는 안전한 고정
+  명령(**Create Folder**, **Create File**, **Show Filter**, **Smart Search**),
+  활성 패널의 현재·뒤로·앞으로 위치, 사용할 수 있는 즐겨찾기, 작업 공간 프로필
+  및 저장된 검색으로 제한됩니다. 매칭은 기존 한글 초성(Hangul-initial) 지원을
+  포함한 정규화된 텍스트를 사용합니다. 스크립트를 실행하거나 색인을 크롤링하거나
+  파일 콘텐츠를 materialize하지 않습니다.
+- **New Empty File**은 **Option-Command-N**을 사용하며, 덮어쓰지 않는 배타적
+  동일성 기반 일반 파일 생성을 수행합니다. 성공하면 새 행을 선택하고 인라인
+  이름 변경을 시작하기 전에 패널을 새로 고칩니다. Undo는 새 파일의 정확한
+  동일성과 지문이 유지되는 동안에만 사용할 수 있습니다.
+- **Select All Visible** (**Option-Command-A**), **Invert Selection**
+  (**Option-Command-I**), **Select Same Extension**
+  (**Option-Command-E**)은 활성 패널의 현재 표시된 필터링되지 않은 행을
+  대상으로 합니다. 패널 필터나 텍스트 편집 중에는 비활성화됩니다. Select Same
+  Extension은 표시된 실제 확장자의 일반 파일 하나를 정확히 선택해야 합니다.
+- Finder 태그 편집은 제공하지 않으며 Get Info는 읽기 전용입니다. 바이트 단위
+  전송 검증도 향후 작업입니다. 동일성 및 지문 검사는 작업 소유권과 보수적인
+  Undo를 보호하지만 바이트 단위 전송 검증은 아닙니다.
+
 ## 일괄 이름 변경
 
 - 활성 패널의 같은 상위 폴더에서 완전히 로드한 항목을 두 개 이상 선택해야
