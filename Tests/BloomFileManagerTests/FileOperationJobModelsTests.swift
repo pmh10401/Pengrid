@@ -114,6 +114,33 @@ struct FileOperationJobModelsTests {
         #expect(nonfinite.fractionCompleted == 0)
     }
 
+    @Test func fractionProgressReplacesUntrustedDetailWithFixedVerificationLabel() {
+        let progress = FileOperationJobProgress(
+            completedCount: 8,
+            totalCount: 20,
+            detail: "/Users/example/Private/Report.txt sha256=secret 1048576",
+            unit: .fraction,
+            normalizedFraction: 0.42
+        )
+        let snapshot = FileOperationJobSnapshot(
+            id: UUID(),
+            kind: .copy,
+            itemDisplayName: "/Users/example/Private/Report.txt",
+            itemCount: 20,
+            state: .running,
+            progress: progress,
+            canUndo: false
+        )
+
+        #expect(progress.detail == "Verifying contents")
+        #expect(snapshot.accessibilityLabel.contains(
+            "Verifying contents, 42 percent, 8 of 20 files, Report.txt"
+        ))
+        #expect(!snapshot.accessibilityLabel.contains("/Users/"))
+        #expect(!snapshot.accessibilityLabel.contains("sha256"))
+        #expect(!snapshot.accessibilityLabel.contains("1048576"))
+    }
+
     @Test func verificationAccessibilityUsesFilesPercentAndSafeBasename() {
         let snapshot = FileOperationJobSnapshot(
             id: UUID(),

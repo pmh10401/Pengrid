@@ -90,7 +90,7 @@ struct FileOperationJobProgress: Sendable, Equatable {
     ) {
         self.completedCount = completedCount
         self.totalCount = totalCount
-        self.detail = detail
+        self.detail = unit == .fraction ? "Verifying contents" : detail
         self.unit = unit
         self.normalizedFraction = normalizedFraction.map(Self.clampedFraction)
     }
