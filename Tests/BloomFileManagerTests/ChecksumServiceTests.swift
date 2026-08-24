@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 import Testing
 @testable import BloomFileManager
 
@@ -176,6 +177,60 @@ import Testing
         #expect(values.last == 1)
     }
 
+    @Test func emptyFilesStillReportCompletionProgress() async throws {
+        let directory = try TemporaryDirectory()
+        defer { directory.remove() }
+        let file = directory.url.appending(path: "empty.bin")
+        try Data().write(to: file)
+        let progress = ChecksumProgressRecorder()
+        let service = LiveChecksumService(
+            materializer: InMemoryCloudMaterializer(),
+            rawHasher: RecordingRawHasher()
+        )
+
+        _ = try await service.checksum(
+            for: checksumRequest(for: file),
+            progress: { value in await progress.record(value) }
+        )
+
+        let values = await progress.values
+        #expect(values == [1])
+    }
+
+    @Test func rawHasherReceivesTheCompleteCapturedFingerprint() async throws {
+        let pair = try ChecksumFixture.equalFiles()
+        let rawHasher = RecordingRawHasher()
+        let service = LiveChecksumService(
+            materializer: InMemoryCloudMaterializer(),
+            chunkSize: 4_096,
+            rawHasher: rawHasher
+        )
+
+        _ = try await service.checksum(for: pair.leftRequest, progress: { _ in })
+
+        let captured = try #require(rawHasher.lastExpected)
+        let descriptor = pair.leftRequest.url.withUnsafeFileSystemRepresentation { path in
+            guard let path else { return Int32(-1) }
+            return Darwin.open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+        }
+        #expect(descriptor >= 0)
+        defer { Darwin.close(descriptor) }
+        let current = try RawFileFingerprint(descriptor: descriptor)
+        #expect(captured == current)
+    }
+
+    @Test func rawTypeErrorsMapToTheExistingChecksumCategory() async throws {
+        let pair = try ChecksumFixture.equalFiles()
+        let service = LiveChecksumService(
+            materializer: InMemoryCloudMaterializer(),
+            rawHasher: ThrowingRawHasher(error: .notRegularFile)
+        )
+
+        await #expect(throws: ChecksumError.typeChanged) {
+            try await service.checksum(for: pair.leftRequest, progress: { _ in })
+        }
+    }
+
     @Test func cacheEvictsTheOldestRequestAtItsBound() async {
         let requests = ChecksumFixture.fiveRequests()
         let cache = ChecksumCache(limit: 2)
@@ -203,5 +258,110 @@ import Testing
         let same = ChecksumResult(digest: Data([1]))
 
         #expect(ComparisonMatcher.applying(left: same, right: same, to: row).status == .identical(.checksum))
+    }
+}
+
+private func checksumRequest(for url: URL) throws -> ChecksumRequest {
+    var information = stat()
+    let status = url.withUnsafeFileSystemRepresentation { path in
+        guard let path else { return Int32(-1) }
+        return Darwin.lstat(path, &information)
+    }
+    guard status == 0 else {
+        throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+    }
+    let identity = "\(UInt64(information.st_dev)):\(UInt64(information.st_ino))"
+    return ChecksumRequest(
+        url: url,
+        fingerprint: ComparisonFingerprint(
+            identity: FileIdentity(
+                entryIdentifier: identity,
+                resolvedIdentifier: identity
+            ),
+            byteSize: Int64(information.st_size),
+            modifiedAt: Date(
+                timeIntervalSince1970: TimeInterval(information.st_mtimespec.tv_sec)
+                    + TimeInterval(information.st_mtimespec.tv_nsec) / 1_000_000_000
+            ),
+            rawModifiedAt: ComparisonModificationTimestamp(
+                seconds: Int64(information.st_mtimespec.tv_sec),
+                nanoseconds: Int64(information.st_mtimespec.tv_nsec)
+            )
+        )
+    )
+}
+
+private final class RecordingRawHasher: RawFileHashing, @unchecked Sendable {
+    private let lock = NSLock()
+    private let underlying = LiveRawFileHasher()
+    private var expectedFingerprints: [RawFileFingerprint] = []
+
+    var lastExpected: RawFileFingerprint? {
+        lock.lock()
+        defer { lock.unlock() }
+        return expectedFingerprints.last
+    }
+
+    func checksum(
+        descriptor: Int32,
+        expected: RawFileFingerprint,
+        chunkSize: Int,
+        progress: @escaping @Sendable (Int64) async -> Void
+    ) async throws -> Data {
+        record(expected)
+        return try await underlying.checksum(
+            descriptor: descriptor,
+            expected: expected,
+            chunkSize: chunkSize,
+            progress: progress
+        )
+    }
+
+    private func record(_ expected: RawFileFingerprint) {
+        lock.lock()
+        expectedFingerprints.append(expected)
+        lock.unlock()
+    }
+
+    func checksumPair(
+        sourceDescriptor: Int32,
+        sourceExpected: RawFileFingerprint,
+        stagedDescriptor: Int32,
+        stagedExpected: RawFileFingerprint,
+        chunkSize: Int,
+        progress: @escaping @Sendable (Int64) async -> Void
+    ) async throws -> (source: Data, staged: Data) {
+        try await underlying.checksumPair(
+            sourceDescriptor: sourceDescriptor,
+            sourceExpected: sourceExpected,
+            stagedDescriptor: stagedDescriptor,
+            stagedExpected: stagedExpected,
+            chunkSize: chunkSize,
+            progress: progress
+        )
+    }
+}
+
+private struct ThrowingRawHasher: RawFileHashing {
+    let error: RawFileHashingError
+
+    func checksum(
+        descriptor _: Int32,
+        expected _: RawFileFingerprint,
+        chunkSize _: Int,
+        progress _: @escaping @Sendable (Int64) async -> Void
+    ) async throws -> Data {
+        throw error
+    }
+
+    func checksumPair(
+        sourceDescriptor _: Int32,
+        sourceExpected _: RawFileFingerprint,
+        stagedDescriptor _: Int32,
+        stagedExpected _: RawFileFingerprint,
+        chunkSize _: Int,
+        progress _: @escaping @Sendable (Int64) async -> Void
+    ) async throws -> (source: Data, staged: Data) {
+        throw error
     }
 }

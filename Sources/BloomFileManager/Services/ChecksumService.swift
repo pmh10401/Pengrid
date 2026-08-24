@@ -1,4 +1,3 @@
-import CryptoKit
 import Darwin
 import Foundation
 
@@ -27,17 +26,34 @@ protocol ChecksumService: Sendable {
 actor LiveChecksumService: ChecksumService {
     private let materializer: any CloudMaterializing
     private let accessCoordinator: CloudLocationScopedAccessCoordinator
+    private let rawHasher: any RawFileHashing
     private let chunkSize: Int
     private let permits = AsyncPermitPool(limit: 2)
 
     init(
         materializer: any CloudMaterializing = LiveCloudMaterializationService(),
         accessCoordinator: CloudLocationScopedAccessCoordinator = .init(),
-        chunkSize: Int = 1_048_576
+        chunkSize: Int = 1_048_576,
+        rawHasher: any RawFileHashing = LiveRawFileHasher()
     ) {
         self.materializer = materializer
         self.accessCoordinator = accessCoordinator
+        self.rawHasher = rawHasher
         self.chunkSize = max(4_096, chunkSize)
+    }
+
+    init(
+        materializer: any CloudMaterializing = LiveCloudMaterializationService(),
+        accessCoordinator: CloudLocationScopedAccessCoordinator = .init(),
+        chunkSize: Int = 1_048_576,
+        hasher: any RawFileHashing
+    ) {
+        self.init(
+            materializer: materializer,
+            accessCoordinator: accessCoordinator,
+            chunkSize: chunkSize,
+            rawHasher: hasher
+        )
     }
 
     func checksum(
@@ -82,25 +98,90 @@ actor LiveChecksumService: ChecksumService {
         try await permits.acquire()
         do {
             try Task.checkCancellation()
-            let chunkSize = chunkSize
-            let worker = Task.detached(priority: .utility) {
-                try await streamChecksum(
-                    for: preparedRequest,
-                    chunkSize: chunkSize,
-                    progress: progress
+            let descriptor = try openForChecksum(preparedRequest.url)
+            defer { Darwin.close(descriptor) }
+
+            let expected: RawFileFingerprint
+            do {
+                expected = try validate(
+                    descriptor,
+                    preparedRequest.fingerprint
                 )
+            } catch {
+                throw mapRawHashingError(error)
             }
-            let result = try await withTaskCancellationHandler {
-                try await worker.value
-            } onCancel: {
-                worker.cancel()
+
+            let progressAccumulator = ChecksumProgressAccumulator(
+                totalByteCount: expected.logicalByteCount
+            )
+            let digest: Data
+            do {
+                digest = try await rawHasher.checksum(
+                    descriptor: descriptor,
+                    expected: expected,
+                    chunkSize: chunkSize,
+                    progress: { delta in
+                        let fraction = progressAccumulator.advance(by: delta)
+                        guard fraction > 0 else { return }
+                        await progress(fraction)
+                    }
+                )
+            } catch {
+                throw mapRawHashingError(error)
             }
+
+            try Task.checkCancellation()
+            do {
+                _ = try validate(
+                    descriptor,
+                    preparedRequest.fingerprint,
+                    matching: expected
+                )
+                try validateCurrentPath(
+                    preparedRequest,
+                    matching: expected
+                )
+            } catch {
+                throw mapRawHashingError(error)
+            }
+
+            await progress(progressAccumulator.finish())
             await permits.release()
-            return result
+            return ChecksumResult(digest: digest)
         } catch {
             await permits.release()
             throw error
         }
+    }
+}
+
+private final class ChecksumProgressAccumulator: @unchecked Sendable {
+    private let totalByteCount: Int64
+    private let lock = NSLock()
+    private var completedByteCount: Int64 = 0
+
+    init(totalByteCount: Int64) {
+        self.totalByteCount = max(0, totalByteCount)
+    }
+
+    func advance(by delta: Int64) -> Double {
+        lock.lock()
+        defer { lock.unlock() }
+        guard delta > 0 else { return 0 }
+        let (sum, overflowed) = completedByteCount.addingReportingOverflow(delta)
+        completedByteCount = min(
+            totalByteCount,
+            overflowed ? Int64.max : sum
+        )
+        guard totalByteCount > 0 else { return 0 }
+        return min(1, max(0, Double(completedByteCount) / Double(totalByteCount)))
+    }
+
+    func finish() -> Double {
+        lock.lock()
+        completedByteCount = totalByteCount
+        lock.unlock()
+        return 1
     }
 }
 
@@ -211,42 +292,10 @@ actor ChecksumCache {
     var count: Int { values.count }
 }
 
-private func streamChecksum(
-    for request: ChecksumRequest,
-    chunkSize: Int,
-    progress: @escaping @Sendable (Double) async -> Void
-) async throws -> ChecksumResult {
-    let descriptor = try openForChecksum(request.url)
-    defer { Darwin.close(descriptor) }
-
-    try validate(descriptor, request.fingerprint)
-    var hasher = SHA256()
-    var buffer = [UInt8](repeating: 0, count: chunkSize)
-    var consumed: Int64 = 0
-
-    while true {
-        try Task.checkCancellation()
-        let count = try readChunk(descriptor, into: &buffer)
-        if count == 0 { break }
-        hasher.update(data: Data(buffer[..<count]))
-        consumed += Int64(count)
-        let total = max(Int64(1), request.fingerprint.byteSize ?? 1)
-        let fraction = min(1, max(0, Double(consumed) / Double(total)))
-        await progress(fraction)
-    }
-
-    if consumed == 0 {
-        await progress(1)
-    }
-    try validate(descriptor, request.fingerprint)
-    try validateCurrentPath(request)
-    return ChecksumResult(digest: Data(hasher.finalize()))
-}
-
 private func openForChecksum(_ url: URL) throws -> Int32 {
     let descriptor = url.withUnsafeFileSystemRepresentation { path in
         guard let path else { return Int32(-1) }
-        return Darwin.open(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
+        return Darwin.open(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
     }
     guard descriptor >= 0 else {
         if errno == ELOOP { throw ChecksumError.typeChanged }
@@ -255,48 +304,70 @@ private func openForChecksum(_ url: URL) throws -> Int32 {
     return descriptor
 }
 
-private func readChunk(_ descriptor: Int32, into buffer: inout [UInt8]) throws -> Int {
-    while true {
-        let count = buffer.withUnsafeMutableBytes { bytes in
-            Darwin.read(descriptor, bytes.baseAddress, bytes.count)
-        }
-        if count >= 0 { return count }
-        if errno != EINTR {
-            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
-        }
-    }
-}
-
-private func validateCurrentPath(_ request: ChecksumRequest) throws {
+private func validateCurrentPath(
+    _ request: ChecksumRequest,
+    matching expected: RawFileFingerprint
+) throws {
     let descriptor = try openForChecksum(request.url)
     defer { Darwin.close(descriptor) }
-    try validate(descriptor, request.fingerprint)
+    _ = try validate(descriptor, request.fingerprint, matching: expected)
 }
 
-private func validate(_ descriptor: Int32, _ fingerprint: ComparisonFingerprint) throws {
-    var information = stat()
-    guard Darwin.fstat(descriptor, &information) == 0 else {
-        throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
-    }
-    guard information.st_mode & S_IFMT == S_IFREG else {
+private func validate(
+    _ descriptor: Int32,
+    _ fingerprint: ComparisonFingerprint,
+    matching expected: RawFileFingerprint? = nil
+) throws -> RawFileFingerprint {
+    let actual = try RawFileFingerprint(descriptor: descriptor)
+    guard actual.mode & UInt32(S_IFMT) == UInt32(S_IFREG) else {
         throw ChecksumError.typeChanged
     }
 
-    let identity = "\(UInt64(information.st_dev)):\(UInt64(information.st_ino))"
+    let identity = "\(actual.device):\(actual.inode)"
     guard identity == fingerprint.identity.entryIdentifier else {
         throw ChecksumError.identityChanged
     }
     guard let expectedSize = fingerprint.byteSize,
-          Int64(information.st_size) == expectedSize else {
+          actual.logicalByteCount == expectedSize else {
         throw ChecksumError.sizeChanged
     }
 
     let rawModifiedAt = ComparisonModificationTimestamp(
-        seconds: Int64(information.st_mtimespec.tv_sec),
-        nanoseconds: Int64(information.st_mtimespec.tv_nsec)
+        seconds: actual.modificationSeconds,
+        nanoseconds: actual.modificationNanoseconds
     )
     guard let expectedRawModifiedAt = fingerprint.rawModifiedAt,
           rawModifiedAt == expectedRawModifiedAt else {
         throw ChecksumError.identityChanged
+    }
+
+    if let expected, actual != expected {
+        if actual.mode & UInt32(S_IFMT) != expected.mode & UInt32(S_IFMT) {
+            throw ChecksumError.typeChanged
+        }
+        if actual.device != expected.device || actual.inode != expected.inode {
+            throw ChecksumError.identityChanged
+        }
+        if actual.logicalByteCount != expected.logicalByteCount {
+            throw ChecksumError.sizeChanged
+        }
+        throw ChecksumError.identityChanged
+    }
+    return actual
+}
+
+private func mapRawHashingError(_ error: Error) -> Error {
+    guard let error = error as? RawFileHashingError else { return error }
+    switch error {
+    case .notRegularFile:
+        return ChecksumError.typeChanged
+    case .descriptorIdentityChanged:
+        return ChecksumError.identityChanged
+    case .logicalSizeChanged:
+        return ChecksumError.sizeChanged
+    case .stabilityChanged:
+        return ChecksumError.identityChanged
+    case .invalidChunkSize, .invalidReadResult, .readFailed:
+        return error
     }
 }
