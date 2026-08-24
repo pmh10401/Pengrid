@@ -240,6 +240,58 @@ import Testing
     }
 }
 
+@Test func transferVerificationStatusUsesTruthfulBoundedAndPathSafeValues() {
+    let progress = TransferVerificationProgress(
+        phase: .hashing,
+        fractionCompleted: 1.4,
+        completedFileCount: 9,
+        totalFileCount: 2,
+        completedLogicalByteCount: 9_999,
+        totalLogicalByteCount: 10_000,
+        currentName: "/private/Secret\nReport.txt"
+    )
+
+    #expect(FileOperationStage.verifying(progress) == .verifying(progress))
+    let presentation = TransferVerificationOperationStatusPresentation(progress: progress)
+    #expect(presentation.title == "Verifying Contents")
+    #expect(presentation.percentage == 100)
+    #expect(presentation.completedFileCount == 2)
+    #expect(presentation.totalFileCount == 2)
+    #expect(presentation.currentName == "Secret Report.txt")
+    #expect(presentation.accessibilityLabel ==
+        "Verifying Contents, 100 percent, 2 of 2 files, current item Secret Report.txt")
+    #expect(!presentation.accessibilityLabel.contains("/private"))
+    #expect(!presentation.accessibilityLabel.contains("9999"))
+    #expect(!presentation.accessibilityLabel.contains("10000"))
+}
+
+@Test func transferVerificationPhaseTitlesRemainTruthfulAtZeroProgress() {
+    let expectations: [(TransferVerificationPhase, String)] = [
+        (.preparingManifest, "Preparing Verification"),
+        (.hashing, "Verifying Contents"),
+        (.finalValidation, "Finalizing Verification")
+    ]
+
+    for (phase, title) in expectations {
+        let presentation = TransferVerificationOperationStatusPresentation(
+            progress: TransferVerificationProgress(
+                phase: phase,
+                fractionCompleted: 0,
+                completedFileCount: 0,
+                totalFileCount: 0,
+                completedLogicalByteCount: 0,
+                totalLogicalByteCount: 0,
+                currentName: ""
+            )
+        )
+        #expect(presentation.title == title)
+        #expect(presentation.percentage == 0)
+        #expect(presentation.completedFileCount == 0)
+        #expect(presentation.totalFileCount == 0)
+        #expect(presentation.currentName == "Item")
+    }
+}
+
 @Test func selectionEnclosurePhasesHaveBoundedBasenameOnlyAccessibilityLabels() {
     let expectations: [(SelectionFolderTransactionPhase, String)] = [
         (.creatingFolder, "Creating Folder"),

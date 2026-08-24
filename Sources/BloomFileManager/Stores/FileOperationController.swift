@@ -8,6 +8,7 @@ enum FileOperationStage: Equatable {
     case batchRenaming(BatchRenameTransactionProgress)
     case enclosingSelection(SelectionFolderTransactionProgress)
     case synchronizing(FolderSynchronizationProgress)
+    case verifying(TransferVerificationProgress)
 }
 
 enum CloudOperationRequestGate {
@@ -58,6 +59,44 @@ struct ArchiveProgressPublicationGate {
         }
         lastPublishedAt = now
         lastPublishedProgress = (completedCount, totalCount)
+        return true
+    }
+
+    mutating func reset() {
+        lastPublishedAt = nil
+        lastPublishedProgress = nil
+    }
+}
+
+struct TransferVerificationProgressPublicationGate {
+    private var lastPublishedAt: ContinuousClock.Instant?
+    private var lastPublishedProgress: TransferVerificationProgress?
+    private let minimumInterval: Duration
+
+    init(minimumInterval: Duration = .milliseconds(100)) {
+        self.minimumInterval = minimumInterval
+    }
+
+    mutating func shouldPublish(
+        _ progress: TransferVerificationProgress,
+        at now: ContinuousClock.Instant
+    ) -> Bool {
+        if lastPublishedProgress == progress {
+            return false
+        }
+        let isFirst = lastPublishedProgress == nil
+        let phaseChanged = lastPublishedProgress?.phase != progress.phase
+        let isBoundary = progress.fractionCompleted <= 0
+            || progress.fractionCompleted >= 1
+        if !isFirst,
+           !phaseChanged,
+           !isBoundary,
+           let lastPublishedAt,
+           now - lastPublishedAt < minimumInterval {
+            return false
+        }
+        lastPublishedAt = now
+        lastPublishedProgress = progress
         return true
     }
 
@@ -157,7 +196,7 @@ final class FileOperationController {
                 totalCount: presentation.totalCount,
                 currentName: presentation.currentItemName
             )
-        case .preparing, .archiving, nil:
+        case .preparing, .archiving, .verifying, nil:
             return nil
         }
     }
@@ -177,7 +216,11 @@ final class FileOperationController {
     @ObservationIgnored private var reversalExecutions: [UUID: FileOperationReversalExecution] = [:]
     @ObservationIgnored private var activeOperationDidReplace = false
     @ObservationIgnored private var archiveProgressGate = ArchiveProgressPublicationGate()
+    @ObservationIgnored private var verificationProgressGate =
+        TransferVerificationProgressPublicationGate()
     @ObservationIgnored private let historyLimit: Int
+    @ObservationIgnored private let verificationPolicyProvider:
+        @MainActor () -> TransferVerificationPolicy
 
     init(
         service: FileOperationService,
@@ -186,7 +229,9 @@ final class FileOperationController {
         batchRenameService: BatchRenameTransactionService? = nil,
         selectionFolderTransactionService: SelectionFolderTransactionService? = nil,
         folderSynchronizationService: (any FolderSynchronizationExecuting)? = nil,
-        historyLimit: Int = 100
+        historyLimit: Int = 100,
+        verificationPolicyProvider:
+            @escaping @MainActor () -> TransferVerificationPolicy = { .disabled }
     ) {
         self.service = service
         self.materializer = materializer
@@ -205,6 +250,7 @@ final class FileOperationController {
             selectionFolderTransactionService: resolvedSelectionFolderTransactionService
         )
         self.historyLimit = max(historyLimit, 1)
+        self.verificationPolicyProvider = verificationPolicyProvider
     }
 
     var canAdmitFolderSynchronization: Bool {
@@ -349,10 +395,15 @@ final class FileOperationController {
         if pending.allowsRetry {
             retryOperations[id] = .init(pending)
         }
-        let cancellationResult = pending.cancellationResult
+        let cancellationResult = normalizedTerminalResult(
+            pending.cancellationResult,
+            verificationPolicy: pending.verificationPolicy
+        )
+        lastResult = cancellationResult
         recordHistory(pending.snapshot(
             state: .cancelled,
-            canRetry: pending.allowsRetry
+            canRetry: pending.allowsRetry,
+            verificationReport: cancellationResult.verificationReport
         ))
         pending.onCompletion?(cancellationResult)
         refreshUndoEligibility()
@@ -675,12 +726,14 @@ final class FileOperationController {
                     message: "transfer-preparation:destination-identity-unavailable"
                 )
             })
+            let verificationPolicy = verificationPolicyProvider()
             return beginOperation(
                 kind: mode == .copy ? .copy : .move,
                 totalCount: sources.count,
                 initialName: sources.first?.lastPathComponent ?? "",
                 touchedDirectories: touchedDirectories,
-                workspace: workspace
+                workspace: workspace,
+                verificationPolicy: verificationPolicy
             ) { result }
         }
 
@@ -708,12 +761,14 @@ final class FileOperationController {
             let result = FileOperationResult(outcomes: sources.map {
                 .failed(source: $0, message: error.localizedDescription)
             })
+            let verificationPolicy = verificationPolicyProvider()
             return beginOperation(
                 kind: mode == .copy ? .copy : .move,
                 totalCount: sources.count,
                 initialName: sources.first?.lastPathComponent ?? "",
                 touchedDirectories: touchedDirectories,
-                workspace: workspace
+                workspace: workspace,
+                verificationPolicy: verificationPolicy
             ) { result }
         }
     }
@@ -732,6 +787,7 @@ final class FileOperationController {
             sources.map { $0.deletingLastPathComponent() }
                 + requests.map(\.destinationRoot)
         )
+        let verificationPolicy = verificationPolicyProvider()
         return beginOperation(
             kind: mode == .copy ? .copy : .move,
             totalCount: requests.count,
@@ -744,8 +800,9 @@ final class FileOperationController {
             touchedDirectories: touchedDirectories,
             workspace: workspace,
             cancellationSources: sources,
+            verificationPolicy: verificationPolicy,
             onCompletion: onCompletion
-        ) { [weak self, service, materializer] in
+        ) { [weak self, service, materializer, verificationPolicy] in
             guard let self else {
                 return FileOperationResult(outcomes: sources.map { .cancelled(source: $0) })
             }
@@ -770,9 +827,14 @@ final class FileOperationController {
                     await self.waitIfPaused()
                     return decision
                 },
+                verificationPolicy: verificationPolicy,
                 progress: { [weak self] progress in
                     guard let self else { return }
                     await self.publish(stage: .operating(progress))
+                },
+                verificationProgress: { [weak self] progress in
+                    guard let self else { return }
+                    await self.publish(stage: .verifying(progress))
                 }
             )
             return includeSafeRelativePaths
@@ -820,6 +882,7 @@ final class FileOperationController {
         }
         let sources = requests.map(\.source)
         let capturedParent = snapshot.sourceDirectory.url.standardizedFileURL
+        let verificationPolicy = verificationPolicyProvider()
         return beginOperation(
             kind: .duplicate,
             totalCount: requests.count,
@@ -832,6 +895,7 @@ final class FileOperationController {
             touchedDirectories: [capturedParent],
             workspace: workspace,
             cancellationSources: sources,
+            verificationPolicy: verificationPolicy,
             onCompletion: { result in
                 guard !result.hasFailures,
                       pane.currentDirectory.standardizedFileURL == capturedParent
@@ -841,7 +905,7 @@ final class FileOperationController {
                     return destination.standardizedFileURL
                 })
             }
-        ) { [weak self, materializer, service] in
+        ) { [weak self, materializer, service, verificationPolicy] in
             guard let self else {
                 return FileOperationResult(outcomes: sources.map { .cancelled(source: $0) })
             }
@@ -852,10 +916,18 @@ final class FileOperationController {
             case let .ready(prepared):
                 preparedRequests = prepared
             }
-            return await service.duplicate(preparedRequests) { [weak self] progress in
-                guard let self else { return }
-                await self.publish(stage: .operating(progress))
-            }
+            return await service.duplicate(
+                preparedRequests,
+                verificationPolicy: verificationPolicy,
+                progress: { [weak self] progress in
+                    guard let self else { return }
+                    await self.publish(stage: .operating(progress))
+                },
+                verificationProgress: { [weak self] progress in
+                    guard let self else { return }
+                    await self.publish(stage: .verifying(progress))
+                }
+            )
         }
     }
 
@@ -1440,6 +1512,7 @@ final class FileOperationController {
         let cancellationSources = plan.draft.actions.flatMap { action in
             [action.source?.url, action.destination?.url].compactMap { $0 }
         }
+        let verificationPolicy = verificationPolicyProvider()
         return beginOperation(
             kind: .synchronizeFolder(plan.draft.direction),
             totalCount: plan.draft.actions.count,
@@ -1454,17 +1527,26 @@ final class FileOperationController {
             cancellationSources: cancellationSources,
             allowsRetry: false,
             requiresExclusiveQueue: true,
+            verificationPolicy: verificationPolicy,
             onCompletion: onCompletion
-        ) { [weak self, folderSynchronizationService] in
+        ) { [weak self, folderSynchronizationService, verificationPolicy] in
             guard let self else {
                 return FileOperationResult(outcomes: cancellationSources.map {
                     .cancelled(source: $0)
                 })
             }
-            return await folderSynchronizationService.execute(plan) { [weak self] progress in
-                guard let self else { return }
-                await self.publish(stage: .synchronizing(progress))
-            }
+            return await folderSynchronizationService.execute(
+                plan,
+                verificationPolicy: verificationPolicy,
+                progress: { [weak self] progress in
+                    guard let self else { return }
+                    await self.publish(stage: .synchronizing(progress))
+                },
+                verificationProgress: { [weak self] progress in
+                    guard let self else { return }
+                    await self.publish(stage: .verifying(progress))
+                }
+            )
         }
     }
 
@@ -1509,6 +1591,7 @@ final class FileOperationController {
         allowsRetry: Bool = true,
         requiresExclusiveQueue: Bool = false,
         archiveProtection: ArchiveProtection? = nil,
+        verificationPolicy: TransferVerificationPolicy = .disabled,
         onCompletion: (@MainActor (FileOperationResult) -> Void)? = nil,
         operation: @escaping @MainActor () async -> FileOperationResult
     ) -> Bool {
@@ -1523,6 +1606,7 @@ final class FileOperationController {
             allowsRetry: allowsRetry,
             requiresExclusiveQueue: requiresExclusiveQueue,
             archiveProtection: archiveProtection,
+            verificationPolicy: verificationPolicy,
             onCompletion: onCompletion,
             operation: operation
         ))
@@ -1616,6 +1700,7 @@ final class FileOperationController {
         applyToAllDecision = nil
         activeOperationDidReplace = false
         archiveProgressGate.reset()
+        verificationProgressGate.reset()
 
         operationTask = Task { [weak self] in
             guard let self else { return }
@@ -1629,12 +1714,16 @@ final class FileOperationController {
             }
             let completionTask = Task { @MainActor [weak self] in
                 guard let self else { return }
+                let terminalResult = self.normalizedTerminalResult(
+                    execution.result,
+                    verificationPolicy: pending.verificationPolicy
+                )
                 await self.completeOperation(
-                    with: execution.result,
+                    with: terminalResult,
                     pending: pending,
                     cancelledBeforeStart: execution.cancelledBeforeStart
                 )
-                pending.onCompletion?(execution.result)
+                pending.onCompletion?(terminalResult)
                 self.startNextOperationIfNeeded()
             }
             await completionTask.value
@@ -1672,6 +1761,13 @@ final class FileOperationController {
            !archiveProgressGate.shouldPublish(
                completedCount: completedCount,
                totalCount: totalCount,
+               at: ContinuousClock.now
+           ) {
+            return
+        }
+        if case let .verifying(progress) = newStage,
+           !verificationProgressGate.shouldPublish(
+               progress,
                at: ContinuousClock.now
            ) {
             return
@@ -1782,7 +1878,33 @@ final class FileOperationController {
                 totalCount: presentation.totalCount,
                 detail: presentation.progressDetail
             )
+        case let .verifying(progress):
+            return FileOperationJobProgress(
+                completedCount: progress.completedFileCount,
+                totalCount: progress.totalFileCount,
+                detail: "Verifying contents",
+                unit: .fraction,
+                normalizedFraction: progress.fractionCompleted
+            )
         }
+    }
+
+    private func normalizedTerminalResult(
+        _ result: FileOperationResult,
+        verificationPolicy: TransferVerificationPolicy
+    ) -> FileOperationResult {
+        guard verificationPolicy.effectivePairLimit != nil,
+              result.verificationReport == nil
+        else { return result }
+        return result.merging(FileOperationResult(
+            outcomes: [],
+            verificationReport: TransferVerificationReport(
+                verifiedFileCount: 0,
+                verifiedLogicalByteCount: 0,
+                noByteTransferItemCount: 0,
+                failedVerificationItemCount: 0
+            )
+        ))
     }
 
     private func completeOperation(
@@ -1861,7 +1983,8 @@ final class FileOperationController {
         recordHistory(pending.snapshot(
             state: completedState,
             canUndo: false,
-            canRetry: canRetry
+            canRetry: canRetry,
+            verificationReport: result.verificationReport
         ))
         if result.outcomes.contains(where: {
             if case .recoveryNeeded = $0 { return true }
@@ -1878,6 +2001,7 @@ final class FileOperationController {
         applyToAllDecision = nil
         activeOperationDidReplace = false
         archiveProgressGate.reset()
+        verificationProgressGate.reset()
         refreshUndoEligibility()
     }
 
@@ -2008,7 +2132,8 @@ final class FileOperationController {
             state: state,
             progress: progress,
             canUndo: canUndo,
-            canRetry: original.isRetryEligible
+            canRetry: original.isRetryEligible,
+            verificationReport: original.verificationReport
         )
     }
 
@@ -2141,6 +2266,7 @@ private final class RetryFileOperation {
     private let cancellationSources: [URL]
     private let requiresExclusiveQueue: Bool
     private let archiveProtection: ArchiveProtection?
+    private let verificationPolicy: TransferVerificationPolicy
     private let operation: @MainActor () async -> FileOperationResult
 
     init(_ pending: PendingFileOperation) {
@@ -2153,6 +2279,7 @@ private final class RetryFileOperation {
         self.cancellationSources = pending.cancellationSources
         self.requiresExclusiveQueue = pending.requiresExclusiveQueue
         self.archiveProtection = pending.archiveProtection
+        self.verificationPolicy = pending.verificationPolicy
         self.operation = pending.operation
     }
 
@@ -2169,6 +2296,7 @@ private final class RetryFileOperation {
             allowsRetry: true,
             requiresExclusiveQueue: requiresExclusiveQueue,
             archiveProtection: archiveProtection,
+            verificationPolicy: verificationPolicy,
             onCompletion: nil,
             operation: operation
         )
@@ -2188,6 +2316,7 @@ private struct PendingFileOperation {
     let allowsRetry: Bool
     let requiresExclusiveQueue: Bool
     let archiveProtection: ArchiveProtection?
+    let verificationPolicy: TransferVerificationPolicy
     let reversalDirection: FileOperationReversalDirection?
     let reversalRecord: FileOperationReversalRecord?
     let onCompletion: (@MainActor (FileOperationResult) -> Void)?
@@ -2205,6 +2334,7 @@ private struct PendingFileOperation {
         allowsRetry: Bool,
         requiresExclusiveQueue: Bool,
         archiveProtection: ArchiveProtection?,
+        verificationPolicy: TransferVerificationPolicy = .disabled,
         reversalDirection: FileOperationReversalDirection? = nil,
         reversalRecord: FileOperationReversalRecord? = nil,
         onCompletion: (@MainActor (FileOperationResult) -> Void)?,
@@ -2220,6 +2350,7 @@ private struct PendingFileOperation {
         self.allowsRetry = allowsRetry
         self.requiresExclusiveQueue = requiresExclusiveQueue
         self.archiveProtection = archiveProtection
+        self.verificationPolicy = verificationPolicy
         self.reversalDirection = reversalDirection
         self.reversalRecord = reversalRecord
         self.onCompletion = onCompletion
@@ -2238,7 +2369,8 @@ private struct PendingFileOperation {
     func snapshot(
         state: FileOperationJobState,
         canUndo: Bool = false,
-        canRetry: Bool = true
+        canRetry: Bool = true,
+        verificationReport: TransferVerificationReport? = nil
     ) -> FileOperationJobSnapshot {
         FileOperationJobSnapshot(
             id: id,
@@ -2248,7 +2380,8 @@ private struct PendingFileOperation {
             state: state,
             progress: nil,
             canUndo: canUndo,
-            canRetry: canRetry && allowsRetry
+            canRetry: canRetry && allowsRetry,
+            verificationReport: verificationReport
         )
     }
 

@@ -311,6 +311,39 @@ struct FolderSynchronizationOperationStatusPresentation: Equatable, Sendable {
     }
 }
 
+struct TransferVerificationOperationStatusPresentation: Equatable, Sendable {
+    let title: String
+    let percentage: Int
+    let completedFileCount: Int
+    let totalFileCount: Int
+    let currentName: String
+    let accessibilityLabel: String
+
+    init(progress: TransferVerificationProgress) {
+        title = switch progress.phase {
+        case .preparingManifest: "Preparing Verification"
+        case .hashing: "Verifying Contents"
+        case .finalValidation: "Finalizing Verification"
+        }
+        percentage = Int((progress.fractionCompleted * 100).rounded())
+        totalFileCount = max(progress.totalFileCount, 0)
+        completedFileCount = min(
+            max(progress.completedFileCount, 0),
+            totalFileCount
+        )
+        let sanitized = progress.currentName
+            .components(separatedBy: .newlines)
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        currentName = sanitized.isEmpty
+            ? "Item"
+            : URL(filePath: sanitized).lastPathComponent
+        accessibilityLabel = "\(title), \(percentage) percent, "
+            + "\(completedFileCount) of \(totalFileCount) files, "
+            + "current item \(currentName)"
+    }
+}
+
 struct OperationStatusView: View {
     let controller: FileOperationController
 
@@ -339,6 +372,8 @@ struct OperationStatusView: View {
                 selectionFolderStatus(progress)
             case let .synchronizing(progress):
                 folderSynchronizationStatus(progress)
+            case let .verifying(progress):
+                transferVerificationStatus(progress)
             }
         }
         .accessibilityIdentifier(AccessibilityIdentifiers.operationStatus)
@@ -401,6 +436,42 @@ struct OperationStatusView: View {
             Text("\(presentation.completedCount) of \(presentation.totalCount)")
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
+
+            Button("Cancel") {
+                controller.cancel()
+            }
+            .controlSize(.small)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(presentation.accessibilityLabel)
+        .modifier(StatusBarStyle())
+    }
+
+    private func transferVerificationStatus(
+        _ progress: TransferVerificationProgress
+    ) -> some View {
+        let presentation = TransferVerificationOperationStatusPresentation(progress: progress)
+        return HStack(spacing: 10) {
+            Text(presentation.title)
+                .font(.caption.weight(.semibold))
+
+            ProgressView(value: progress.fractionCompleted, total: 1)
+                .frame(maxWidth: 180)
+
+            Text(presentation.currentName)
+                .font(.caption)
+                .lineLimit(1)
+                .truncationMode(.middle)
+
+            Spacer(minLength: 8)
+
+            Text(
+                "\(presentation.percentage)% · "
+                    + "\(presentation.completedFileCount) of "
+                    + "\(presentation.totalFileCount) files"
+            )
+            .font(.caption.monospacedDigit())
+            .foregroundStyle(.secondary)
 
             Button("Cancel") {
                 controller.cancel()
