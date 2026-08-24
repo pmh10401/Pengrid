@@ -42,6 +42,8 @@ struct LiveTransferVerificationSessionFactory: TransferVerificationSessionFactor
     private let hasher: any RawFileHashing
     private let chunkSize: Int
     private let onWorkerStarted: (@Sendable () -> Void)?
+    private let onProgressProducerWaiting:
+        (@Sendable (TransferVerificationProgress, Int) -> Void)?
 
     init(
         manifestBuilder: any TransferVerificationManifestBuilding =
@@ -53,6 +55,7 @@ struct LiveTransferVerificationSessionFactory: TransferVerificationSessionFactor
         self.hasher = hasher
         self.chunkSize = clampedTransferVerificationChunkSize(chunkSize)
         onWorkerStarted = nil
+        onProgressProducerWaiting = nil
     }
 
     #if DEBUG
@@ -61,12 +64,15 @@ struct LiveTransferVerificationSessionFactory: TransferVerificationSessionFactor
             LiveTransferVerificationManifestBuilder(),
         hasher: any RawFileHashing = LiveRawFileHasher(),
         chunkSize: Int = 1_048_576,
-        onWorkerStarted: (@Sendable () -> Void)?
+        onWorkerStarted: (@Sendable () -> Void)?,
+        onProgressProducerWaiting:
+            (@Sendable (TransferVerificationProgress, Int) -> Void)? = nil
     ) {
         self.manifestBuilder = manifestBuilder
         self.hasher = hasher
         self.chunkSize = clampedTransferVerificationChunkSize(chunkSize)
         self.onWorkerStarted = onWorkerStarted
+        self.onProgressProducerWaiting = onProgressProducerWaiting
     }
     #endif
 
@@ -79,7 +85,8 @@ struct LiveTransferVerificationSessionFactory: TransferVerificationSessionFactor
             hasher: hasher,
             pairLimit: pairLimit,
             chunkSize: chunkSize,
-            onWorkerStarted: onWorkerStarted
+            onWorkerStarted: onWorkerStarted,
+            onProgressProducerWaiting: onProgressProducerWaiting
         )
     }
 }
@@ -91,13 +98,17 @@ private struct LiveTransferVerificationSession: TransferVerificationSession {
     private let chunkSize: Int
     private let permits: AsyncPermitPool
     private let onWorkerStarted: (@Sendable () -> Void)?
+    private let onProgressProducerWaiting:
+        (@Sendable (TransferVerificationProgress, Int) -> Void)?
 
     init(
         manifestBuilder: any TransferVerificationManifestBuilding,
         hasher: any RawFileHashing,
         pairLimit: Int,
         chunkSize: Int,
-        onWorkerStarted: (@Sendable () -> Void)?
+        onWorkerStarted: (@Sendable () -> Void)?,
+        onProgressProducerWaiting:
+            (@Sendable (TransferVerificationProgress, Int) -> Void)?
     ) {
         self.manifestBuilder = manifestBuilder
         self.hasher = hasher
@@ -105,6 +116,7 @@ private struct LiveTransferVerificationSession: TransferVerificationSession {
         self.chunkSize = clampedTransferVerificationChunkSize(chunkSize)
         permits = AsyncPermitPool(limit: min(max(pairLimit, 1), 2))
         self.onWorkerStarted = onWorkerStarted
+        self.onProgressProducerWaiting = onProgressProducerWaiting
     }
 
     func captureSource(
@@ -129,7 +141,10 @@ private struct LiveTransferVerificationSession: TransferVerificationSession {
         stagedIdentity: FileIdentity,
         progress: @escaping @Sendable (TransferVerificationProgress) async -> Void
     ) async throws -> TransferVerificationCompletion {
-        let delivery = TransferVerificationProgressDelivery(handler: progress)
+        let delivery = TransferVerificationProgressDelivery(
+            handler: progress,
+            onProgressProducerWaiting: onProgressProducerWaiting
+        )
         await delivery.publish(
             phase: .preparingManifest,
             fraction: 0,
@@ -169,7 +184,8 @@ private struct LiveTransferVerificationSession: TransferVerificationSession {
             initialStaged = try await captureStaged(
                 at: stagedURL,
                 identity: stagedIdentity,
-                comparisonPolicy: source.comparisonPolicy
+                comparisonPolicy: source.comparisonPolicy,
+                protectedManifests: [source, hashingSource]
             )
             guard let initialStaged else {
                 throw TransferVerificationFailure(
@@ -218,6 +234,7 @@ private struct LiveTransferVerificationSession: TransferVerificationSession {
                 pairs: pairs,
                 source: hashingSource,
                 staged: initialStaged,
+                callerSource: source,
                 delivery: delivery
             )
             await delivery.publish(
@@ -243,13 +260,18 @@ private struct LiveTransferVerificationSession: TransferVerificationSession {
 
             finalSource = try await recaptureAndRequireStable(
                 hashingSource,
-                side: .source
+                side: .source,
+                protectedManifests: [source, initialStaged]
             )
+            guard let finalSource else {
+                throw TransferVerificationFailure(category: .structureMismatch)
+            }
             finalStaged = try await recaptureAndRequireStable(
                 initialStaged,
-                side: .staged
+                side: .staged,
+                protectedManifests: [source, hashingSource, finalSource]
             )
-            guard let finalSource, let finalStaged else {
+            guard let finalStaged else {
                 throw TransferVerificationFailure(category: .structureMismatch)
             }
             do {
@@ -307,13 +329,18 @@ private struct LiveTransferVerificationSession: TransferVerificationSession {
             try Task.checkCancellation()
             currentSource = try await recaptureAndRequireStable(
                 receipt.source,
-                side: .source
+                side: .source,
+                protectedManifests: [receipt.staged]
             )
+            guard let currentSource else {
+                throw TransferVerificationFailure(category: .structureMismatch)
+            }
             currentStaged = try await recaptureAndRequireStable(
                 receipt.staged,
-                side: .staged
+                side: .staged,
+                protectedManifests: [receipt.source, currentSource]
             )
-            guard let currentSource, let currentStaged else {
+            guard let currentStaged else {
                 throw TransferVerificationFailure(category: .structureMismatch)
             }
             do {
@@ -336,14 +363,21 @@ private struct LiveTransferVerificationSession: TransferVerificationSession {
     private func captureStaged(
         at url: URL,
         identity: FileIdentity,
-        comparisonPolicy: FilenameComparisonPolicy
+        comparisonPolicy: FilenameComparisonPolicy,
+        protectedManifests: [TransferVerificationManifest]
     ) async throws -> TransferVerificationManifest {
         do {
-            return try await manifestBuilder.capture(
+            let candidate = try await manifestBuilder.capture(
                 at: url,
                 identifiedBy: identity,
                 comparisonPolicy: comparisonPolicy
             )
+            guard !protectedManifests.contains(where: {
+                candidate.hasSameAuthority(as: $0)
+            }) else {
+                throw TransferVerificationFailure(category: .readFailed)
+            }
+            return candidate
         } catch {
             throw mapFailure(error, side: .staged, safeName: nil)
         }
@@ -352,7 +386,8 @@ private struct LiveTransferVerificationSession: TransferVerificationSession {
     private func recaptureAndRequireStable(
         _ manifest: TransferVerificationManifest,
         side: TransferVerificationFailureSide,
-        safeName: String? = nil
+        safeName: String? = nil,
+        protectedManifests: [TransferVerificationManifest] = []
     ) async throws -> TransferVerificationManifest {
         let resolvedSafeName = safeName
         var current: TransferVerificationManifest?
@@ -362,7 +397,10 @@ private struct LiveTransferVerificationSession: TransferVerificationSession {
             // assigning it to the service-owned slot, requiring stability, or
             // closing it on an error.  A violating builder may have returned a
             // borrowed manifest that the caller still owns.
-            guard !candidate.hasSameAuthority(as: manifest) else {
+            let protected = [manifest] + protectedManifests
+            guard !protected.contains(where: {
+                candidate.hasSameAuthority(as: $0)
+            }) else {
                 throw TransferVerificationFailure(
                     category: .readFailed,
                     safeName: resolvedSafeName
@@ -391,6 +429,7 @@ private struct LiveTransferVerificationSession: TransferVerificationSession {
         pairs: [TransferVerificationRegularFilePair],
         source: TransferVerificationManifest,
         staged: TransferVerificationManifest,
+        callerSource: TransferVerificationManifest,
         delivery: TransferVerificationProgressDelivery
     ) async throws {
         guard !pairs.isEmpty else { return }
@@ -450,7 +489,8 @@ private struct LiveTransferVerificationSession: TransferVerificationSession {
                 rawFailure.error,
                 safeName: rawFailure.safeName,
                 source: source,
-                staged: staged
+                staged: staged,
+                callerSource: callerSource
             )
             failures.append(
                 TransferVerificationWorkerFailure(
@@ -568,7 +608,8 @@ private struct LiveTransferVerificationSession: TransferVerificationSession {
         _ error: Error,
         safeName: String?,
         source: TransferVerificationManifest,
-        staged: TransferVerificationManifest
+        staged: TransferVerificationManifest,
+        callerSource: TransferVerificationManifest
     ) async -> TransferVerificationFailure {
         if error is TransferVerificationPairContentMismatch {
             return TransferVerificationFailure(
@@ -588,6 +629,7 @@ private struct LiveTransferVerificationSession: TransferVerificationSession {
                 hashFailure.underlying,
                 source: source,
                 staged: staged,
+                callerSource: callerSource,
                 safeName: safeName
             )
         }
@@ -598,6 +640,7 @@ private struct LiveTransferVerificationSession: TransferVerificationSession {
         _ error: Error,
         source: TransferVerificationManifest,
         staged: TransferVerificationManifest,
+        callerSource: TransferVerificationManifest,
         safeName: String?
     ) async -> TransferVerificationFailure {
         if isCancellation(error) {
@@ -608,7 +651,8 @@ private struct LiveTransferVerificationSession: TransferVerificationSession {
             let currentSource = try await recaptureAndRequireStable(
                 source,
                 side: .source,
-                safeName: safeName
+                safeName: safeName,
+                protectedManifests: [callerSource, staged]
             )
             currentSource.close()
         } catch let sourceFailure {
@@ -619,7 +663,8 @@ private struct LiveTransferVerificationSession: TransferVerificationSession {
             let currentStaged = try await recaptureAndRequireStable(
                 staged,
                 side: .staged,
-                safeName: safeName
+                safeName: safeName,
+                protectedManifests: [callerSource, source]
             )
             currentStaged.close()
         } catch let stagedFailure {
@@ -733,7 +778,7 @@ private struct TransferVerificationPairSideFailure: Error, @unchecked Sendable {
 
 private struct TransferVerificationPairContentMismatch: Error, Sendable {}
 
-private struct TransferVerificationPendingProgress {
+private struct TransferVerificationPendingProgress: @unchecked Sendable {
     let progress: TransferVerificationProgress
     let continuation: CheckedContinuation<Void, Never>
 }
@@ -765,6 +810,8 @@ private actor TransferVerificationFailureGate {
 
 private actor TransferVerificationProgressDelivery {
     private let handler: @Sendable (TransferVerificationProgress) async -> Void
+    private let onProgressProducerWaiting:
+        (@Sendable (TransferVerificationProgress, Int) -> Void)?
     private var pending: [TransferVerificationPendingProgress] = []
     private var pendingHead = 0
     private var isDelivering = false
@@ -777,8 +824,13 @@ private actor TransferVerificationProgressDelivery {
     private var totalLogicalByteCount: Int64 = 0
     private var lastName = ""
 
-    init(handler: @escaping @Sendable (TransferVerificationProgress) async -> Void) {
+    init(
+        handler: @escaping @Sendable (TransferVerificationProgress) async -> Void,
+        onProgressProducerWaiting:
+            (@Sendable (TransferVerificationProgress, Int) -> Void)? = nil
+    ) {
         self.handler = handler
+        self.onProgressProducerWaiting = onProgressProducerWaiting
     }
 
     func publish(
@@ -886,6 +938,11 @@ private actor TransferVerificationProgressDelivery {
                     continuation: continuation
                 )
             )
+            #if DEBUG
+            // The continuation is installed before the test probe fires, so
+            // the producer is already parked when the probe is observed.
+            onProgressProducerWaiting?(progress, pending.count - pendingHead)
+            #endif
         }
     }
 
