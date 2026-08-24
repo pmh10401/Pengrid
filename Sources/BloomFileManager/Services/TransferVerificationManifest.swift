@@ -556,11 +556,20 @@ private struct TransferVerificationPathArena {
     }
 }
 
+struct TransferVerificationRootAuthorityToken: Hashable, Sendable {
+    private let rawValue: UUID
+
+    init() {
+        rawValue = UUID()
+    }
+}
+
 fileprivate final class TransferVerificationRootAuthority: @unchecked Sendable {
     private let stateLock = NSLock()
     private var isClosed = false
     private let parentDescriptor: TransferVerificationOwnedDescriptor
     private let directoryRootDescriptor: TransferVerificationOwnedDescriptor?
+    let authorityToken = TransferVerificationRootAuthorityToken()
     let rawRootName: [UInt8]
     let rootFingerprint: TransferVerificationNodeFingerprint
     let rootKind: TransferVerificationEntryKind
@@ -1225,7 +1234,7 @@ struct TransferVerificationManifest: @unchecked Sendable {
         storage.pathStorage.metrics
     }
 
-    /// Returns whether both manifests retain the same root authority object.
+    /// Returns whether both manifests retain the same root authority token.
     ///
     /// This is intentionally internal rather than debug-only.  A builder's
     /// `recapture` implementation is required to return a fresh manifest with
@@ -1233,7 +1242,13 @@ struct TransferVerificationManifest: @unchecked Sendable {
     /// fail closed before invoking `requireStable` or closing a returned
     /// manifest when a custom builder violates that contract.
     func hasSameAuthority(as other: TransferVerificationManifest) -> Bool {
-        storage.authority === other.storage.authority
+        authorityToken == other.authorityToken
+    }
+
+    /// The token is an internal identity value only. It is never included in
+    /// verification errors, summaries, or progress values.
+    var authorityToken: TransferVerificationRootAuthorityToken {
+        storage.authority.authorityToken
     }
 
     #if DEBUG
@@ -1566,8 +1581,9 @@ protocol TransferVerificationManifestBuilding: Sendable {
     /// Recaptures `manifest` into a new generation.
     ///
     /// The returned manifest must own a fresh root authority that is
-    /// independently closeable from the input manifest. Implementations must
-    /// not return the input manifest itself or share its root authority.
+    /// independently closeable from the input manifest and therefore carry a
+    /// different authority identity token. Implementations must not return the
+    /// input manifest itself or share its root authority.
     func recapture(
         _ manifest: TransferVerificationManifest
     ) async throws -> TransferVerificationManifest

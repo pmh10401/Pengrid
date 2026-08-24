@@ -42,6 +42,10 @@ struct TransferVerificationServiceTests {
         #expect(completion.receipt.source.regularFileCount == 1)
         #expect(completion.receipt.staged.regularFileCount == 1)
         #expect(completion.receipt.source.regularFiles.first?.comparisonKey == ["payload.bin"])
+        #expect(completion.receipt.borrowedAuthorityTokens == Set([source.authorityToken]))
+        #expect(!completion.receipt.borrowedAuthorityTokens.contains(
+            completion.receipt.source.authorityToken
+        ))
     }
 
     @Test func unequalRealFilesFailWithBoundedContentMismatch() async throws {
@@ -479,7 +483,6 @@ struct TransferVerificationServiceTests {
 
     @Test func cancelledVerifyClosesAllServiceOwnedGenerations() async throws {
         let fixture = try VerificationFixture.singleFile(contents: Data("same".utf8))
-        defer { fixture.temporary.remove() }
         let ledger = DescriptorLedger()
         let builder = LiveTransferVerificationManifestBuilder(
             testHooks: TransferVerificationManifestTestHooks(
@@ -492,6 +495,8 @@ struct TransferVerificationServiceTests {
             comparisonPolicy: .caseSensitiveCanonical
         )
         let sourceOpenCount = ledger.openCount
+        let lease = TestResourceLease(source: source, temporary: fixture.temporary)
+        defer { lease.releaseNormally() }
         let hasher = BlockingPairHasher()
         let session = try #require(
             LiveTransferVerificationSessionFactory(
@@ -508,14 +513,18 @@ struct TransferVerificationServiceTests {
             )
         }
         defer {
-            verificationTask.cancel()
-            Task { await hasher.state.release() }
+            scheduleLateTaskCleanup(
+                verificationTask,
+                lease: lease,
+                onTimeout: { await hasher.state.release() }
+            )
         }
         try await waitForTestSignal(hasher.state.entered)
         verificationTask.cancel()
         await hasher.state.release()
         let outcome = await awaitBoundedTaskResult(
             verificationTask,
+            lease: lease,
             onTimeout: { await hasher.state.release() }
         )
         guard case .failure = outcome else {
@@ -523,7 +532,7 @@ struct TransferVerificationServiceTests {
             return
         }
         #expect(ledger.openCount == sourceOpenCount)
-        source.close()
+        lease.releaseNormally()
         #expect(ledger.unbalancedLeaseIDs.isEmpty)
     }
     #endif
@@ -587,7 +596,6 @@ struct TransferVerificationServiceTests {
 
     @Test func cancellationAtTerminalProgressFailsBeforeReceiptPublication() async throws {
         let fixture = try VerificationFixture.singleFile(contents: Data("same".utf8))
-        defer { fixture.temporary.remove() }
         #if DEBUG
         let ledger = DescriptorLedger()
         let builder = LiveTransferVerificationManifestBuilder(
@@ -604,7 +612,8 @@ struct TransferVerificationServiceTests {
         #else
         let source = try await capture(fixture.source, identity: fixture.sourceIdentity)
         #endif
-        defer { source.close() }
+        let lease = TestResourceLease(source: source, temporary: fixture.temporary)
+        defer { lease.releaseNormally() }
         let terminalGate = TestGate()
         #if DEBUG
         let session = try #require(
@@ -636,8 +645,11 @@ struct TransferVerificationServiceTests {
             )
         }
         defer {
-            verificationTask.cancel()
-            Task { await terminalGate.release() }
+            scheduleLateTaskCleanup(
+                verificationTask,
+                lease: lease,
+                onTimeout: { await terminalGate.release() }
+            )
         }
         try await waitForTestSignal(terminalGate.entered)
         verificationTask.cancel()
@@ -645,6 +657,7 @@ struct TransferVerificationServiceTests {
 
         let outcome = await awaitBoundedTaskResult(
             verificationTask,
+            lease: lease,
             onTimeout: { await terminalGate.release() }
         )
         guard case let .failure(error) = outcome else {
@@ -666,7 +679,11 @@ struct TransferVerificationServiceTests {
                 progress: { _ in }
             )
         }
-        let retryOutcome = await awaitBoundedTaskResult(retryTask)
+        let retryOutcome = await awaitBoundedTaskResult(
+            retryTask,
+            lease: lease,
+            onTimeout: { await terminalGate.release() }
+        )
         guard case let .success(retry) = retryOutcome else {
             Issue.record("same-session retry did not finish after terminal cancellation")
             return
@@ -675,16 +692,16 @@ struct TransferVerificationServiceTests {
         retry.receipt.staged.close()
 #if DEBUG
         #expect(ledger.openCount == sourceOpenCount)
-        source.close()
+        lease.releaseNormally()
         #expect(ledger.unbalancedLeaseIDs.isEmpty)
 #endif
     }
 
     @Test func cancellationDuringHashReleasesPermitForTheSameSession() async throws {
         let fixture = try VerificationFixture.singleFile(contents: Data("same".utf8))
-        defer { fixture.temporary.remove() }
         let source = try await capture(fixture.source, identity: fixture.sourceIdentity)
-        defer { source.close() }
+        let lease = TestResourceLease(source: source, temporary: fixture.temporary)
+        defer { lease.releaseNormally() }
         let hasher = BlockingPairHasher()
         let session = try #require(
             LiveTransferVerificationSessionFactory(hasher: hasher)
@@ -700,8 +717,11 @@ struct TransferVerificationServiceTests {
             )
         }
         defer {
-            verificationTask.cancel()
-            Task { await hasher.state.release() }
+            scheduleLateTaskCleanup(
+                verificationTask,
+                lease: lease,
+                onTimeout: { await hasher.state.release() }
+            )
         }
         try await waitForTestSignal(hasher.state.entered)
         verificationTask.cancel()
@@ -709,6 +729,7 @@ struct TransferVerificationServiceTests {
 
         let outcome = await awaitBoundedTaskResult(
             verificationTask,
+            lease: lease,
             onTimeout: { await hasher.state.release() }
         )
         guard case let .failure(error) = outcome else {
@@ -725,7 +746,11 @@ struct TransferVerificationServiceTests {
                 progress: { _ in }
             )
         }
-        let retryOutcome = await awaitBoundedTaskResult(retryTask)
+        let retryOutcome = await awaitBoundedTaskResult(
+            retryTask,
+            lease: lease,
+            onTimeout: { await hasher.state.release() }
+        )
         guard case let .success(retry) = retryOutcome else {
             Issue.record("same-session retry did not finish after hash cancellation")
             return
@@ -737,21 +762,18 @@ struct TransferVerificationServiceTests {
 
     @Test func slowProgressHandlerBackpressuresConcurrentProducers() async throws {
         let fixture = try VerificationFixture.files(count: 2, bytes: 0)
-        defer { fixture.temporary.remove() }
         let source = try await capture(fixture.source, identity: fixture.sourceIdentity)
-        defer { source.close() }
+        let lease = TestResourceLease(source: source, temporary: fixture.temporary)
+        defer { lease.releaseNormally() }
         let hasher = BurstProgressHasher()
+        let progressProbe = ProgressBackpressureProbe()
         let progressGate = TestGate()
         let session = try #require(
             LiveTransferVerificationSessionFactory(
                 hasher: hasher,
                 onWorkerStarted: nil,
                 onProgressProducerWaiting: { _, pendingDepth in
-                    Task {
-                        await hasher.state.markSecondProgressBackpressured(
-                            pendingDepth: pendingDepth
-                        )
-                    }
+                    progressProbe.record(pendingDepth)
                 }
             )
                 .makeSession(policy: .sha256(maxConcurrentPairs: 2))
@@ -773,26 +795,30 @@ struct TransferVerificationServiceTests {
             )
         }
         defer {
-            verificationTask.cancel()
-            Task {
-                await progressGate.release()
-                await hasher.state.allowSecondFirstProgress()
-            }
+            scheduleLateTaskCleanup(
+                verificationTask,
+                lease: lease,
+                onTimeout: {
+                    await progressGate.release()
+                    await hasher.state.allowSecondFirstProgress()
+                }
+            )
         }
         try await waitForTestSignal(hasher.state.secondStarted)
         try await waitForTestSignal(progressGate.entered)
         await hasher.state.allowSecondFirstProgress()
         try await waitForTestSignal(hasher.state.secondAboutToPublish)
-        try await waitForTestSignal(hasher.state.secondProgressBackpressured)
+        try await progressProbe.waitForPublication()
         // The delivery actor has appended the second event to its pending
         // queue while the first handler is still blocked. The producer must
         // remain suspended at that exact backpressure boundary.
-        #expect(await hasher.state.secondProgressPendingDepth == 1)
+        #expect(progressProbe.pendingDepth == 1)
         #expect(await !hasher.state.secondFirstReturned.isSignaled())
 
         await progressGate.release()
         let outcome = await awaitBoundedTaskResult(
             verificationTask,
+            lease: lease,
             onTimeout: { await progressGate.release() }
         )
         guard case let .success(completion) = outcome else {
@@ -805,9 +831,9 @@ struct TransferVerificationServiceTests {
 
     @Test func workerFailureCancelsSiblingBeforeHashFailureDiagnosis() async throws {
         let fixture = try VerificationFixture.files(count: 2, bytes: 0)
-        defer { fixture.temporary.remove() }
         let source = try await capture(fixture.source, identity: fixture.sourceIdentity)
-        defer { source.close() }
+        let lease = TestResourceLease(source: source, temporary: fixture.temporary)
+        defer { lease.releaseNormally() }
         let diagnosisGate = TestGate()
         let builder = GatedRecaptureBuilder(diagnosisGate: diagnosisGate)
         let hasher = FailureSiblingHasher()
@@ -827,11 +853,14 @@ struct TransferVerificationServiceTests {
             )
         }
         defer {
-            outcomeTask.cancel()
-            Task {
-                await diagnosisGate.release()
-                await hasher.state.releaseSibling()
-            }
+            scheduleLateTaskCleanup(
+                outcomeTask,
+                lease: lease,
+                onTimeout: {
+                    await diagnosisGate.release()
+                    await hasher.state.releaseSibling()
+                }
+            )
         }
         try await waitForTestSignal(diagnosisGate.entered)
         do {
@@ -846,6 +875,7 @@ struct TransferVerificationServiceTests {
         await hasher.state.releaseSibling()
         let outcome = await awaitBoundedTaskResult(
             outcomeTask,
+            lease: lease,
             onTimeout: {
                 await diagnosisGate.release()
                 await hasher.state.releaseSibling()
@@ -865,7 +895,14 @@ struct TransferVerificationServiceTests {
                 progress: { _ in }
             )
         }
-        let retryOutcome = await awaitBoundedTaskResult(retryTask)
+        let retryOutcome = await awaitBoundedTaskResult(
+            retryTask,
+            lease: lease,
+            onTimeout: {
+                await diagnosisGate.release()
+                await hasher.state.releaseSibling()
+            }
+        )
         guard case let .success(retry) = retryOutcome else {
             Issue.record("same-session retry did not finish after worker failure")
             return
@@ -886,26 +923,28 @@ struct TransferVerificationServiceTests {
         ]
 
         for item in cases {
-            let probe = ChunkSizeProbe()
-            let source = try await capture(fixture.source, identity: fixture.sourceIdentity)
-            defer { source.close() }
-            let session = try #require(
-                LiveTransferVerificationSessionFactory(
-                    hasher: ChunkSizeRecordingHasher(probe: probe),
-                    chunkSize: item.requested
-                ).makeSession(policy: .sha256(maxConcurrentPairs: 1))
-            )
-            let completion = try await session.verify(
-                source: source,
-                stagedURL: fixture.staged,
-                stagedIdentity: fixture.stagedIdentity,
-                progress: { _ in }
-            )
-            defer {
-                completion.receipt.source.close()
-                completion.receipt.staged.close()
+            do {
+                let probe = ChunkSizeProbe()
+                let source = try await capture(fixture.source, identity: fixture.sourceIdentity)
+                defer { source.close() }
+                let session = try #require(
+                    LiveTransferVerificationSessionFactory(
+                        hasher: ChunkSizeRecordingHasher(probe: probe),
+                        chunkSize: item.requested
+                    ).makeSession(policy: .sha256(maxConcurrentPairs: 1))
+                )
+                let completion = try await session.verify(
+                    source: source,
+                    stagedURL: fixture.staged,
+                    stagedIdentity: fixture.stagedIdentity,
+                    progress: { _ in }
+                )
+                defer {
+                    completion.receipt.source.close()
+                    completion.receipt.staged.close()
+                }
+                #expect(await probe.value == item.expected)
             }
-            #expect(await probe.value == item.expected)
         }
     }
 
@@ -1128,6 +1167,8 @@ struct TransferVerificationServiceTests {
                 progress: { _ in }
             )
         }
+        #expect(await builder.aliasHitCount == 1)
+        #expect(await builder.recaptureCount == 2)
         try await source.regularFiles[0].withReaderDescriptor { _ in () }
     }
 
@@ -1153,6 +1194,8 @@ struct TransferVerificationServiceTests {
                 progress: { _ in }
             )
         }
+        #expect(await builder.aliasHitCount == 1)
+        #expect(await builder.recaptureCount == 3)
         try await source.regularFiles[0].withReaderDescriptor { _ in () }
     }
 
@@ -1184,6 +1227,8 @@ struct TransferVerificationServiceTests {
         await #expect(throws: TransferVerificationFailure(category: .readFailed)) {
             try await session.revalidate(completion.receipt)
         }
+        #expect(await builder.aliasHitCount == 1)
+        #expect(await builder.recaptureCount == 4)
         try await completion.receipt.source.regularFiles[0].withReaderDescriptor { _ in () }
         try await completion.receipt.staged.regularFiles[0].withReaderDescriptor { _ in () }
     }
@@ -1216,6 +1261,78 @@ struct TransferVerificationServiceTests {
         await #expect(throws: TransferVerificationFailure(category: .readFailed)) {
             try await session.revalidate(completion.receipt)
         }
+        #expect(await builder.aliasHitCount == 1)
+        #expect(await builder.recaptureCount == 5)
+        try await completion.receipt.source.regularFiles[0].withReaderDescriptor { _ in () }
+        try await completion.receipt.staged.regularFiles[0].withReaderDescriptor { _ in () }
+    }
+
+    @Test func revalidateSourceReturningOriginalCallerAuthorityFailsWithoutClosingReceipt() async throws {
+        let fixture = try VerificationFixture.singleFile(contents: Data("same".utf8))
+        defer { fixture.temporary.remove() }
+        let source = try await capture(fixture.source, identity: fixture.sourceIdentity)
+        defer { source.close() }
+        let builder = CrossAuthorityRecaptureBuilder(
+            caller: source,
+            mode: .revalidateSourceToCaller
+        )
+        let session = try #require(
+            LiveTransferVerificationSessionFactory(manifestBuilder: builder)
+                .makeSession(policy: .sha256(maxConcurrentPairs: 1))
+        )
+        let completion = try await session.verify(
+            source: source,
+            stagedURL: fixture.staged,
+            stagedIdentity: fixture.stagedIdentity,
+            progress: { _ in }
+        )
+        defer {
+            completion.receipt.source.close()
+            completion.receipt.staged.close()
+        }
+        await builder.setReceipt(completion.receipt)
+
+        await #expect(throws: TransferVerificationFailure(category: .readFailed)) {
+            try await session.revalidate(completion.receipt)
+        }
+        #expect(await builder.aliasHitCount == 1)
+        #expect(await builder.recaptureCount == 4)
+        try await source.regularFiles[0].withReaderDescriptor { _ in () }
+        try await completion.receipt.source.regularFiles[0].withReaderDescriptor { _ in () }
+        try await completion.receipt.staged.regularFiles[0].withReaderDescriptor { _ in () }
+    }
+
+    @Test func revalidateStagedReturningOriginalCallerAuthorityFailsWithoutClosingReceipt() async throws {
+        let fixture = try VerificationFixture.singleFile(contents: Data("same".utf8))
+        defer { fixture.temporary.remove() }
+        let source = try await capture(fixture.source, identity: fixture.sourceIdentity)
+        defer { source.close() }
+        let builder = CrossAuthorityRecaptureBuilder(
+            caller: source,
+            mode: .revalidateStagedToCaller
+        )
+        let session = try #require(
+            LiveTransferVerificationSessionFactory(manifestBuilder: builder)
+                .makeSession(policy: .sha256(maxConcurrentPairs: 1))
+        )
+        let completion = try await session.verify(
+            source: source,
+            stagedURL: fixture.staged,
+            stagedIdentity: fixture.stagedIdentity,
+            progress: { _ in }
+        )
+        defer {
+            completion.receipt.source.close()
+            completion.receipt.staged.close()
+        }
+        await builder.setReceipt(completion.receipt)
+
+        await #expect(throws: TransferVerificationFailure(category: .readFailed)) {
+            try await session.revalidate(completion.receipt)
+        }
+        #expect(await builder.aliasHitCount == 1)
+        #expect(await builder.recaptureCount == 5)
+        try await source.regularFiles[0].withReaderDescriptor { _ in () }
         try await completion.receipt.source.regularFiles[0].withReaderDescriptor { _ in () }
         try await completion.receipt.staged.regularFiles[0].withReaderDescriptor { _ in () }
     }
@@ -1247,6 +1364,8 @@ struct TransferVerificationServiceTests {
                 progress: { _ in }
             )
         }
+        #expect(await builder.aliasHitCount == 1)
+        #expect(await builder.recaptureCount == 2)
         try await source.regularFiles[0].withReaderDescriptor { _ in () }
     }
 
@@ -1336,9 +1455,242 @@ struct TransferVerificationServiceTests {
             try await session.revalidate(completion.receipt)
         }
     }
+
+    @Test func boundedTaskTimeoutReturnsBeforeNonCooperativeOperationReleases() async throws {
+        let fixture = try VerificationFixture.singleFile(contents: Data("same".utf8))
+        let source = try await capture(fixture.source, identity: fixture.sourceIdentity)
+        let lease = TestResourceLease(source: source, temporary: fixture.temporary)
+        defer { lease.releaseNormally() }
+        let operationGate = TestGate()
+        let operationEntered = TestSignal()
+        let operation = Task<Int, Error> {
+            await operationEntered.signal()
+            await operationGate.waitForRelease()
+            try await source.regularFiles[0].withReaderDescriptor { _ in () }
+            return 1
+        }
+        let timeoutStarted = TestSignal()
+        let helperReturned = TestSignal()
+        let helperTask = Task {
+            let result = await awaitBoundedTaskResult(
+                operation,
+                timeout: .milliseconds(20),
+                lease: lease,
+                onTimeout: { await timeoutStarted.signal() }
+            )
+            await helperReturned.signal()
+            return result
+        }
+
+        try await waitForTestSignal(operationEntered)
+        try await waitForTestSignal(timeoutStarted)
+        #expect(lease.didTransfer)
+        #expect(lease.cleanupCount == 0)
+        var returnedBeforeRelease = false
+        do {
+            try await waitForTestSignal(helperReturned, timeout: .milliseconds(100))
+            returnedBeforeRelease = true
+        } catch is VerificationTestTimeout {
+            // The pre-fix helper awaited the non-cooperative task here.
+        }
+        #expect(returnedBeforeRelease)
+
+        await operationGate.release()
+        let result = await helperTask.value
+        guard case .failure = result else {
+            Issue.record("non-cooperative operation unexpectedly succeeded")
+            return
+        }
+        try await lease.waitForCleanup()
+        #expect(lease.cleanupCount == 1)
+    }
+
+    @Test func boundedTaskCallerCancellationTransfersLeaseBeforeReturning() async throws {
+        let fixture = try VerificationFixture.singleFile(contents: Data("same".utf8))
+        let source = try await capture(fixture.source, identity: fixture.sourceIdentity)
+        let lease = TestResourceLease(source: source, temporary: fixture.temporary)
+        defer { lease.releaseNormally() }
+        let operationGate = TestGate()
+        let operationEntered = TestSignal()
+        let operation = Task<Int, Error> {
+            await operationEntered.signal()
+            await operationGate.waitForRelease()
+            try await source.regularFiles[0].withReaderDescriptor { _ in () }
+            return 1
+        }
+        let releaseStarted = TestSignal()
+        let releasePermission = TestGate()
+        let helperReturned = TestSignal()
+        let helperTask = Task {
+            let result = await awaitBoundedTaskResult(
+                operation,
+                lease: lease,
+                onTimeout: {
+                    await releaseStarted.signal()
+                    await releasePermission.waitForRelease()
+                    await operationGate.release()
+                }
+            )
+            await helperReturned.signal()
+            return result
+        }
+        defer {
+            Task.detached {
+                await releasePermission.release()
+                await operationGate.release()
+            }
+        }
+
+        try await waitForTestSignal(operationEntered)
+        helperTask.cancel()
+        do {
+            try await waitForTestSignal(helperReturned, timeout: .milliseconds(100))
+        } catch is VerificationTestTimeout {
+            #expect(Bool(false), "caller cancellation did not return within the bound")
+            if lease.transferToLateCleanup() {
+                let lateCleanup = Task.detached {
+                    let result = await operation.result
+                    closeTimedOutVerificationReceipt(result)
+                    lease.releaseAfterOperation()
+                }
+                _ = lateCleanup
+            }
+            return
+        }
+        let result = await helperTask.value
+        guard case .failure = result else {
+            Issue.record("caller cancellation unexpectedly succeeded")
+            return
+        }
+        try await waitForTestSignal(releaseStarted)
+        #expect(lease.didTransfer)
+        #expect(lease.cleanupCount == 0)
+
+        await releasePermission.release()
+        try await lease.waitForCleanup()
+        #expect(lease.cleanupCount == 1)
+    }
 }
 
 private struct VerificationTestTimeout: Error {}
+
+private final class TestResourceLease: @unchecked Sendable {
+    private enum State: Equatable {
+        case owned
+        case transferred
+        case released
+    }
+
+    private let lock = NSLock()
+    private var state: State = .owned
+    private var source: TransferVerificationManifest?
+    private var temporary: TemporaryDirectory?
+    private var cleanupCountStorage = 0
+    private var cleanupWaiters: [CheckedContinuation<Void, any Error>] = []
+
+    init(
+        source: TransferVerificationManifest? = nil,
+        temporary: TemporaryDirectory? = nil
+    ) {
+        self.source = source
+        self.temporary = temporary
+    }
+
+    var cleanupCount: Int {
+        lock.withLock { cleanupCountStorage }
+    }
+
+    var didTransfer: Bool {
+        lock.withLock { state == .transferred }
+    }
+
+    @discardableResult
+    func transferToLateCleanup() -> Bool {
+        lock.withLock {
+            guard state == .owned else { return false }
+            state = .transferred
+            return true
+        }
+    }
+
+    func releaseNormally() {
+        release(if: .owned)
+    }
+
+    func releaseAfterOperation() {
+        release(if: .transferred)
+    }
+
+    private func release(if expectedState: State) {
+        let resources: (
+            source: TransferVerificationManifest?,
+            temporary: TemporaryDirectory?
+        )? = lock.withLock {
+            guard state == expectedState else { return nil }
+            state = .released
+            let resources = (source, temporary)
+            source = nil
+            temporary = nil
+            return resources
+        }
+        guard let resources else { return }
+        resources.source?.close()
+        resources.temporary?.remove()
+        let waiters: [CheckedContinuation<Void, any Error>] = lock.withLock {
+            cleanupCountStorage += 1
+            let waiters = cleanupWaiters
+            cleanupWaiters.removeAll(keepingCapacity: false)
+            return waiters
+        }
+        for waiter in waiters {
+            waiter.resume()
+        }
+    }
+
+    func waitForCleanup(timeout: Duration = .seconds(2)) async throws {
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask {
+                try await self.waitForCleanup()
+            }
+            group.addTask {
+                try await Task.sleep(for: timeout)
+                throw VerificationTestTimeout()
+            }
+            defer { group.cancelAll() }
+            try await group.next()!
+        }
+    }
+
+    private func waitForCleanup() async throws {
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation {
+                (continuation: CheckedContinuation<Void, any Error>) in
+                let outcome: Result<Void, Error>? = lock.withLock {
+                    if cleanupCountStorage > 0 {
+                        return .success(())
+                    }
+                    if Task.isCancelled {
+                        return .failure(CancellationError())
+                    }
+                    cleanupWaiters.append(continuation)
+                    return nil
+                }
+                if let outcome {
+                    continuation.resume(with: outcome)
+                }
+            }
+        } onCancel: {
+            let waiters: [CheckedContinuation<Void, any Error>] = lock.withLock {
+                let waiters = cleanupWaiters
+                cleanupWaiters.removeAll(keepingCapacity: false)
+                return waiters
+            }
+            for waiter in waiters {
+                waiter.resume(throwing: CancellationError())
+            }
+        }
+    }
+}
 
 private func waitForTestSignal(
     _ signal: TestSignal,
@@ -1360,13 +1712,26 @@ private func waitForTestSignal(
 private func awaitBoundedTaskResult<Success: Sendable>(
     _ task: Task<Success, Error>,
     timeout: Duration = .seconds(2),
-    onTimeout: @escaping @Sendable () async -> Void = {}
+    lease: TestResourceLease,
+    onTimeout: @escaping @Sendable () async -> Void
 ) async -> Result<Success, Error> {
     let race = BoundedTaskResultRace()
     let (stream, continuation) = AsyncStream<Result<Success, Error>>.makeStream()
+    let finishTimeout: @Sendable () -> Void = {
+        guard race.claim() else { return }
+        task.cancel()
+        if lease.transferToLateCleanup() {
+            launchLateTaskCleanup(
+                task,
+                lease: lease,
+                onTimeout: onTimeout
+            )
+        }
+        continuation.yield(.failure(VerificationTestTimeout()))
+    }
     let relayTask = Task {
         let result = await task.result
-        guard await race.claim() else { return }
+        guard race.claim() else { return }
         continuation.yield(result)
     }
     let timeoutTask = Task {
@@ -1375,31 +1740,65 @@ private func awaitBoundedTaskResult<Success: Sendable>(
         } catch {
             return
         }
-        guard await race.claim() else { return }
-        task.cancel()
-        await onTimeout()
-        // Every timeout caller releases its controlled gate above. Await the
-        // cooperative operation so descriptor/fixture cleanup is complete
-        // before this helper returns its timeout result.
-        _ = await task.result
-        continuation.yield(.failure(VerificationTestTimeout()))
+        finishTimeout()
     }
 
-    var iterator = stream.makeAsyncIterator()
-    let result = await iterator.next()
+    let result = await withTaskCancellationHandler {
+        var iterator = stream.makeAsyncIterator()
+        return await iterator.next()
+    } onCancel: {
+        finishTimeout()
+    }
     continuation.finish()
     relayTask.cancel()
     timeoutTask.cancel()
     return result ?? .failure(VerificationTestTimeout())
 }
 
-private actor BoundedTaskResultRace {
+private func scheduleLateTaskCleanup<Success: Sendable>(
+    _ task: Task<Success, Error>,
+    lease: TestResourceLease,
+    onTimeout: @escaping @Sendable () async -> Void
+) {
+    task.cancel()
+    guard lease.transferToLateCleanup() else { return }
+    launchLateTaskCleanup(task, lease: lease, onTimeout: onTimeout)
+}
+
+private func launchLateTaskCleanup<Success: Sendable>(
+    _ task: Task<Success, Error>,
+    lease: TestResourceLease,
+    onTimeout: @escaping @Sendable () async -> Void
+) {
+    let cleanupTask = Task.detached {
+        await onTimeout()
+        let result = await task.result
+        closeTimedOutVerificationReceipt(result)
+        lease.releaseAfterOperation()
+    }
+    _ = cleanupTask
+}
+
+private func closeTimedOutVerificationReceipt<Success>(
+    _ result: Result<Success, Error>
+) {
+    guard case let .success(value) = result,
+          let completion = value as? TransferVerificationCompletion
+    else { return }
+    completion.receipt.source.close()
+    completion.receipt.staged.close()
+}
+
+private final class BoundedTaskResultRace: @unchecked Sendable {
+    private let lock = NSLock()
     private var didClaim = false
 
     func claim() -> Bool {
-        guard !didClaim else { return false }
-        didClaim = true
-        return true
+        lock.withLock {
+            guard !didClaim else { return false }
+            didClaim = true
+            return true
+        }
     }
 }
 
@@ -1524,11 +1923,9 @@ private struct BlockingPairHasher: RawFileHashing {
 private actor BurstProgressState {
     let secondStarted = TestSignal()
     let secondAboutToPublish = TestSignal()
-    let secondProgressBackpressured = TestSignal()
     let secondFirstReturned = TestSignal()
     private let secondProgressPermission = TestGate()
     private var callCount = 0
-    private(set) var secondProgressPendingDepth: Int?
 
     func begin() async -> Int {
         callCount += 1
@@ -1544,11 +1941,6 @@ private actor BurstProgressState {
 
     func signalSecondAboutToPublish() async {
         await secondAboutToPublish.signal()
-    }
-
-    func markSecondProgressBackpressured(pendingDepth: Int) async {
-        secondProgressPendingDepth = pendingDepth
-        await secondProgressBackpressured.signal()
     }
 
     func waitForSecondProgressPermission() async {
@@ -1867,6 +2259,68 @@ private actor ProgressRecorder {
     }
 }
 
+private final class ProgressBackpressureProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recordedDepth: Int?
+    private var waiter: CheckedContinuation<Void, any Error>?
+
+    var pendingDepth: Int? {
+        lock.withLock { recordedDepth }
+    }
+
+    func record(_ depth: Int) {
+        let continuation: CheckedContinuation<Void, any Error>? = lock.withLock {
+            recordedDepth = depth
+            defer { waiter = nil }
+            return waiter
+        }
+        continuation?.resume()
+    }
+
+    func waitForPublication(timeout: Duration = .seconds(2)) async throws {
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask {
+                try await self.waitForPublication()
+            }
+            group.addTask {
+                try await Task.sleep(for: timeout)
+                throw VerificationTestTimeout()
+            }
+            defer { group.cancelAll() }
+            try await group.next()!
+        }
+    }
+
+    private func waitForPublication() async throws {
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation {
+                (continuation: CheckedContinuation<Void, any Error>) in
+                let outcome: Result<Void, Error>? = lock.withLock {
+                    if recordedDepth != nil {
+                        return .success(())
+                    }
+                    if Task.isCancelled {
+                        return .failure(CancellationError())
+                    }
+                    waiter = continuation
+                    return nil
+                }
+                if let outcome {
+                    continuation.resume(with: outcome)
+                }
+            }
+        } onCancel: {
+            let continuation: CheckedContinuation<Void, any Error>? = lock.withLock {
+                guard waiter != nil else { return nil }
+                let continuation = waiter
+                waiter = nil
+                return continuation
+            }
+            continuation?.resume(throwing: CancellationError())
+        }
+    }
+}
+
 private actor ProgressCallbackProbe {
     private(set) var count = 0
     private(set) var highWater = 0
@@ -2146,12 +2600,15 @@ private enum CrossAuthorityRecaptureMode: Sendable {
     case finalStagedToCaller
     case revalidateSourceToStaged
     case revalidateStagedToSource
+    case revalidateSourceToCaller
+    case revalidateStagedToCaller
     case diagnosisSourceToCaller
 }
 
 private actor CrossAuthorityRecaptureState {
     private let mode: CrossAuthorityRecaptureMode
     private var recaptureCount = 0
+    private var aliasHitCount = 0
     private var receipt: TransferVerificationReceipt?
 
     init(mode: CrossAuthorityRecaptureMode) {
@@ -2164,18 +2621,31 @@ private actor CrossAuthorityRecaptureState {
 
     func alias(caller: TransferVerificationManifest) -> TransferVerificationManifest? {
         recaptureCount += 1
+        let result: TransferVerificationManifest?
         switch mode {
         case .finalSourceToCaller where recaptureCount == 2,
                 .finalStagedToCaller where recaptureCount == 3,
+                .revalidateSourceToCaller where recaptureCount == 4,
+                .revalidateStagedToCaller where recaptureCount == 5,
                 .diagnosisSourceToCaller where recaptureCount == 2:
-            return caller
+            result = caller
         case .revalidateSourceToStaged where recaptureCount == 4:
-            return receipt?.staged
+            result = receipt?.staged
         case .revalidateStagedToSource where recaptureCount == 5:
-            return receipt?.source
+            result = receipt?.source
         default:
-            return nil
+            result = nil
         }
+        if result != nil { aliasHitCount += 1 }
+        return result
+    }
+
+    func aliasHits() -> Int {
+        aliasHitCount
+    }
+
+    func recaptureCalls() -> Int {
+        recaptureCount
     }
 }
 
@@ -2194,6 +2664,14 @@ private struct CrossAuthorityRecaptureBuilder: TransferVerificationManifestBuild
 
     func setReceipt(_ receipt: TransferVerificationReceipt) async {
         await state.setReceipt(receipt)
+    }
+
+    var aliasHitCount: Int {
+        get async { await state.aliasHits() }
+    }
+
+    var recaptureCount: Int {
+        get async { await state.recaptureCalls() }
     }
 
     func capture(

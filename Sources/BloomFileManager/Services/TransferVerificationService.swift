@@ -7,6 +7,17 @@ private func clampedTransferVerificationChunkSize(_ value: Int) -> Int {
 struct TransferVerificationReceipt: @unchecked Sendable {
     let source: TransferVerificationManifest
     let staged: TransferVerificationManifest
+    let borrowedAuthorityTokens: Set<TransferVerificationRootAuthorityToken>
+
+    init(
+        source: TransferVerificationManifest,
+        staged: TransferVerificationManifest,
+        borrowedAuthorityTokens: Set<TransferVerificationRootAuthorityToken>
+    ) {
+        self.source = source
+        self.staged = staged
+        self.borrowedAuthorityTokens = borrowedAuthorityTokens
+    }
 }
 
 struct TransferVerificationCompletion: @unchecked Sendable {
@@ -297,7 +308,8 @@ private struct LiveTransferVerificationSession: TransferVerificationSession {
 
             let receipt = TransferVerificationReceipt(
                 source: finalSource,
-                staged: finalStaged
+                staged: finalStaged,
+                borrowedAuthorityTokens: [source.authorityToken]
             )
             let summary = TransferVerificationSummary(
                 verifiedFileCount: pairs.count,
@@ -330,7 +342,8 @@ private struct LiveTransferVerificationSession: TransferVerificationSession {
             currentSource = try await recaptureAndRequireStable(
                 receipt.source,
                 side: .source,
-                protectedManifests: [receipt.staged]
+                protectedManifests: [receipt.staged],
+                protectedAuthorityTokens: Array(receipt.borrowedAuthorityTokens)
             )
             guard let currentSource else {
                 throw TransferVerificationFailure(category: .structureMismatch)
@@ -338,7 +351,8 @@ private struct LiveTransferVerificationSession: TransferVerificationSession {
             currentStaged = try await recaptureAndRequireStable(
                 receipt.staged,
                 side: .staged,
-                protectedManifests: [receipt.source, currentSource]
+                protectedManifests: [receipt.source, currentSource],
+                protectedAuthorityTokens: Array(receipt.borrowedAuthorityTokens)
             )
             guard let currentStaged else {
                 throw TransferVerificationFailure(category: .structureMismatch)
@@ -364,7 +378,8 @@ private struct LiveTransferVerificationSession: TransferVerificationSession {
         at url: URL,
         identity: FileIdentity,
         comparisonPolicy: FilenameComparisonPolicy,
-        protectedManifests: [TransferVerificationManifest]
+        protectedManifests: [TransferVerificationManifest],
+        protectedAuthorityTokens: [TransferVerificationRootAuthorityToken] = []
     ) async throws -> TransferVerificationManifest {
         do {
             let candidate = try await manifestBuilder.capture(
@@ -372,9 +387,10 @@ private struct LiveTransferVerificationSession: TransferVerificationSession {
                 identifiedBy: identity,
                 comparisonPolicy: comparisonPolicy
             )
-            guard !protectedManifests.contains(where: {
-                candidate.hasSameAuthority(as: $0)
-            }) else {
+            let protectedTokens = Set(
+                protectedManifests.map(\.authorityToken) + protectedAuthorityTokens
+            )
+            guard !protectedTokens.contains(candidate.authorityToken) else {
                 throw TransferVerificationFailure(category: .readFailed)
             }
             return candidate
@@ -387,7 +403,8 @@ private struct LiveTransferVerificationSession: TransferVerificationSession {
         _ manifest: TransferVerificationManifest,
         side: TransferVerificationFailureSide,
         safeName: String? = nil,
-        protectedManifests: [TransferVerificationManifest] = []
+        protectedManifests: [TransferVerificationManifest] = [],
+        protectedAuthorityTokens: [TransferVerificationRootAuthorityToken] = []
     ) async throws -> TransferVerificationManifest {
         let resolvedSafeName = safeName
         var current: TransferVerificationManifest?
@@ -397,10 +414,11 @@ private struct LiveTransferVerificationSession: TransferVerificationSession {
             // assigning it to the service-owned slot, requiring stability, or
             // closing it on an error.  A violating builder may have returned a
             // borrowed manifest that the caller still owns.
-            let protected = [manifest] + protectedManifests
-            guard !protected.contains(where: {
-                candidate.hasSameAuthority(as: $0)
-            }) else {
+            let protectedTokens = Set(
+                ([manifest] + protectedManifests).map(\.authorityToken)
+                    + protectedAuthorityTokens
+            )
+            guard !protectedTokens.contains(candidate.authorityToken) else {
                 throw TransferVerificationFailure(
                     category: .readFailed,
                     safeName: resolvedSafeName
@@ -652,7 +670,8 @@ private struct LiveTransferVerificationSession: TransferVerificationSession {
                 source,
                 side: .source,
                 safeName: safeName,
-                protectedManifests: [callerSource, staged]
+                protectedManifests: [callerSource, staged],
+                protectedAuthorityTokens: [callerSource.authorityToken]
             )
             currentSource.close()
         } catch let sourceFailure {
@@ -664,7 +683,8 @@ private struct LiveTransferVerificationSession: TransferVerificationSession {
                 staged,
                 side: .staged,
                 safeName: safeName,
-                protectedManifests: [callerSource, source]
+                protectedManifests: [callerSource, source],
+                protectedAuthorityTokens: [callerSource.authorityToken]
             )
             currentStaged.close()
         } catch let stagedFailure {
