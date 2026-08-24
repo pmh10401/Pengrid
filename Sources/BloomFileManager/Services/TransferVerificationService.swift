@@ -1,5 +1,9 @@
 import Foundation
 
+private func clampedTransferVerificationChunkSize(_ value: Int) -> Int {
+    min(max(4_096, value), 4_194_304)
+}
+
 struct TransferVerificationReceipt: @unchecked Sendable {
     let source: TransferVerificationManifest
     let staged: TransferVerificationManifest
@@ -47,7 +51,7 @@ struct LiveTransferVerificationSessionFactory: TransferVerificationSessionFactor
     ) {
         self.manifestBuilder = manifestBuilder
         self.hasher = hasher
-        self.chunkSize = max(4_096, chunkSize)
+        self.chunkSize = clampedTransferVerificationChunkSize(chunkSize)
         onWorkerStarted = nil
     }
 
@@ -61,7 +65,7 @@ struct LiveTransferVerificationSessionFactory: TransferVerificationSessionFactor
     ) {
         self.manifestBuilder = manifestBuilder
         self.hasher = hasher
-        self.chunkSize = max(4_096, chunkSize)
+        self.chunkSize = clampedTransferVerificationChunkSize(chunkSize)
         self.onWorkerStarted = onWorkerStarted
     }
     #endif
@@ -98,7 +102,7 @@ private struct LiveTransferVerificationSession: TransferVerificationSession {
         self.manifestBuilder = manifestBuilder
         self.hasher = hasher
         self.pairLimit = min(max(pairLimit, 1), 2)
-        self.chunkSize = max(4_096, chunkSize)
+        self.chunkSize = clampedTransferVerificationChunkSize(chunkSize)
         permits = AsyncPermitPool(limit: min(max(pairLimit, 1), 2))
         self.onWorkerStarted = onWorkerStarted
     }
@@ -267,6 +271,7 @@ private struct LiveTransferVerificationSession: TransferVerificationSession {
                 currentName: ""
             )
             await delivery.flush()
+            try Task.checkCancellation()
 
             let receipt = TransferVerificationReceipt(
                 source: finalSource,
@@ -381,11 +386,11 @@ private struct LiveTransferVerificationSession: TransferVerificationSession {
         guard !pairs.isEmpty else { return }
         let queue = TransferVerificationPairIndexQueue(count: pairs.count)
         let failureGate = TransferVerificationFailureGate()
-        var failures: [TransferVerificationWorkerFailure] = []
+        var rawFailures: [TransferVerificationRawWorkerFailure] = []
         let workerCount = min(pairLimit, pairs.count)
         var cancelledWorkers = false
 
-        await withTaskGroup(of: TransferVerificationWorkerFailure?.self) { group in
+        await withTaskGroup(of: TransferVerificationRawWorkerFailure?.self) { group in
             for _ in 0..<workerCount {
                 #if DEBUG
                 onWorkerStarted?()
@@ -393,25 +398,23 @@ private struct LiveTransferVerificationSession: TransferVerificationSession {
                 group.addTask {
                     while !Task.isCancelled, !(await failureGate.hasFailed()) {
                         guard let index = await queue.next() else { return nil }
+                        guard !(await failureGate.hasFailed()) else { return nil }
+                        let safeName = pairs[index].source.comparisonKey.last
                         do {
                             try Task.checkCancellation()
                             try await self.hashPair(
                                 pairs[index],
                                 source: source,
                                 staged: staged,
-                                delivery: delivery
+                                delivery: delivery,
+                                safeName: safeName
                             )
                         } catch {
-                            let failure = await self.mapPairFailure(
-                                error,
-                                pair: pairs[index],
-                                source: source,
-                                staged: staged
-                            )
                             await failureGate.markFailed()
-                            return TransferVerificationWorkerFailure(
+                            return TransferVerificationRawWorkerFailure(
                                 index: index,
-                                failure: failure
+                                error: error,
+                                safeName: safeName
                             )
                         }
                     }
@@ -421,13 +424,30 @@ private struct LiveTransferVerificationSession: TransferVerificationSession {
 
             for await result in group {
                 if let result {
-                    failures.append(result)
+                    rawFailures.append(result)
                     if !cancelledWorkers {
                         cancelledWorkers = true
                         group.cancelAll()
                     }
                 }
             }
+        }
+
+        var failures: [TransferVerificationWorkerFailure] = []
+        failures.reserveCapacity(rawFailures.count)
+        for rawFailure in rawFailures {
+            let failure = await self.mapPairFailure(
+                rawFailure.error,
+                safeName: rawFailure.safeName,
+                source: source,
+                staged: staged
+            )
+            failures.append(
+                TransferVerificationWorkerFailure(
+                    index: rawFailure.index,
+                    failure: failure
+                )
+            )
         }
 
         let nonCancellationFailures = failures.filter {
@@ -444,7 +464,8 @@ private struct LiveTransferVerificationSession: TransferVerificationSession {
         _ pair: TransferVerificationRegularFilePair,
         source: TransferVerificationManifest,
         staged: TransferVerificationManifest,
-        delivery: TransferVerificationProgressDelivery
+        delivery: TransferVerificationProgressDelivery,
+        safeName: String?
     ) async throws {
         try await withPermit {
             do {
@@ -479,7 +500,7 @@ private struct LiveTransferVerificationSession: TransferVerificationSession {
                                     progress: { delta in
                                         await delivery.recordHashBytes(
                                             delta,
-                                            currentName: pair.source.comparisonKey.last ?? ""
+                                            currentName: safeName ?? ""
                                         )
                                     }
                                 )
@@ -516,7 +537,7 @@ private struct LiveTransferVerificationSession: TransferVerificationSession {
                 )
             }
         }
-        await delivery.recordHashFile(currentName: pair.source.comparisonKey.last ?? "")
+        await delivery.recordHashFile(currentName: safeName ?? "")
     }
 
     private func withPermit<T: Sendable>(
@@ -535,11 +556,10 @@ private struct LiveTransferVerificationSession: TransferVerificationSession {
 
     private func mapPairFailure(
         _ error: Error,
-        pair: TransferVerificationRegularFilePair,
+        safeName: String?,
         source: TransferVerificationManifest,
         staged: TransferVerificationManifest
     ) async -> TransferVerificationFailure {
-        let safeName = pair.source.comparisonKey.last
         if error is TransferVerificationPairContentMismatch {
             return TransferVerificationFailure(
                 category: .contentMismatch,
@@ -697,6 +717,12 @@ private enum TransferVerificationFailureSide: Sendable {
     case staged
 }
 
+private struct TransferVerificationRawWorkerFailure: @unchecked Sendable {
+    let index: Int
+    let error: Error
+    let safeName: String?
+}
+
 private struct TransferVerificationWorkerFailure: Sendable {
     let index: Int
     let failure: TransferVerificationFailure
@@ -712,6 +738,11 @@ private struct TransferVerificationPairSideFailure: Error, @unchecked Sendable {
 }
 
 private struct TransferVerificationPairContentMismatch: Error, Sendable {}
+
+private struct TransferVerificationPendingProgress {
+    let progress: TransferVerificationProgress
+    let continuation: CheckedContinuation<Void, Never>
+}
 
 private actor TransferVerificationPairIndexQueue {
     private let count: Int
@@ -740,7 +771,7 @@ private actor TransferVerificationFailureGate {
 
 private actor TransferVerificationProgressDelivery {
     private let handler: @Sendable (TransferVerificationProgress) async -> Void
-    private var pending: [TransferVerificationProgress] = []
+    private var pending: [TransferVerificationPendingProgress] = []
     private var pendingHead = 0
     private var isDelivering = false
     private var flushWaiters: [CheckedContinuation<Void, Never>] = []
@@ -847,13 +878,29 @@ private actor TransferVerificationProgressDelivery {
     }
 
     private func enqueue(_ progress: TransferVerificationProgress) async {
-        pending.append(progress)
-        guard !isDelivering else { return }
-        isDelivering = true
+        guard isDelivering else {
+            isDelivering = true
+            await handler(progress)
+            await drainPending()
+            return
+        }
+
+        await withCheckedContinuation { continuation in
+            pending.append(
+                TransferVerificationPendingProgress(
+                    progress: progress,
+                    continuation: continuation
+                )
+            )
+        }
+    }
+
+    private func drainPending() async {
         while pendingHead < pending.count {
             let next = pending[pendingHead]
             pendingHead += 1
-            await handler(next)
+            await handler(next.progress)
+            next.continuation.resume()
         }
         pending.removeAll(keepingCapacity: true)
         pendingHead = 0
