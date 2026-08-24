@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct OperationStatusSummary: Equatable, Sendable {
@@ -344,8 +345,56 @@ struct TransferVerificationOperationStatusPresentation: Equatable, Sendable {
     }
 }
 
+struct TransferVerificationAnnouncementCoordinator: Sendable {
+    private var lastPhase: TransferVerificationPhase?
+    private var highestPercentageBucket: Int?
+
+    mutating func message(
+        for progress: TransferVerificationProgress
+    ) -> String? {
+        let presentation = TransferVerificationOperationStatusPresentation(
+            progress: progress
+        )
+        let bucket = min(max(presentation.percentage / 10, 0), 10)
+
+        guard progress.phase == lastPhase else {
+            lastPhase = progress.phase
+            highestPercentageBucket = bucket
+            return presentation.accessibilityLabel
+        }
+        guard highestPercentageBucket == nil
+                || bucket > highestPercentageBucket! else {
+            return nil
+        }
+        highestPercentageBucket = bucket
+        return presentation.accessibilityLabel
+    }
+
+    mutating func reset() {
+        lastPhase = nil
+        highestPercentageBucket = nil
+    }
+}
+
+@MainActor
+private enum TransferVerificationAnnouncementPoster {
+    static func post(_ message: String) {
+        let application = NSApplication.shared
+        NSAccessibility.post(
+            element: application.mainWindow ?? application,
+            notification: .announcementRequested,
+            userInfo: [
+                .announcement: message,
+                .priority: NSAccessibilityPriorityLevel.medium.rawValue
+            ]
+        )
+    }
+}
+
 struct OperationStatusView: View {
     let controller: FileOperationController
+    @State private var verificationAnnouncements =
+        TransferVerificationAnnouncementCoordinator()
 
     var body: some View {
         Group {
@@ -354,6 +403,16 @@ struct OperationStatusView: View {
             } else if let result = controller.lastResult {
                 completedStatus(result)
             }
+        }
+        .onChange(of: controller.stage, initial: true) { _, stage in
+            guard case let .verifying(progress)? = stage else {
+                verificationAnnouncements.reset()
+                return
+            }
+            guard let message = verificationAnnouncements.message(
+                for: progress
+            ) else { return }
+            TransferVerificationAnnouncementPoster.post(message)
         }
     }
 
@@ -477,8 +536,10 @@ struct OperationStatusView: View {
                 controller.cancel()
             }
             .controlSize(.small)
+            .accessibilityLabel("Cancel content verification")
+            .help("Cancel after safe cleanup")
         }
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .contain)
         .accessibilityLabel(presentation.accessibilityLabel)
         .modifier(StatusBarStyle())
     }

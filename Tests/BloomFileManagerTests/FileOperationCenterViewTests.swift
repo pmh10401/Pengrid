@@ -125,4 +125,101 @@ struct FileOperationCenterViewTests {
         #expect(actions.showsPause)
         #expect(!actions.showsResume)
     }
+
+    @Test func fractionProgressRemainsDeterminateWhenFileTotalsAreZero() {
+        let fraction = FileOperationJobProgress(
+            completedCount: 0,
+            totalCount: 0,
+            detail: "private detail is replaced",
+            unit: .fraction,
+            normalizedFraction: 0.42
+        )
+        let emptyItems = FileOperationJobProgress(
+            completedCount: 0,
+            totalCount: 0,
+            detail: "Preparing"
+        )
+
+        #expect(FileOperationCenterProgressPresentation.determinateFraction(
+            for: fraction
+        ) == 0.42)
+        #expect(FileOperationCenterProgressPresentation.determinateFraction(
+            for: emptyItems
+        ) == nil)
+    }
+
+    @Test func verificationHistorySummarizesVerifiedAndNoByteTransferItems() {
+        let job = verificationHistoryJob(report: TransferVerificationReport(
+            verifiedFileCount: 3,
+            verifiedLogicalByteCount: 1_800_000_000,
+            noByteTransferItemCount: 2,
+            failedVerificationItemCount: 0
+        ))
+
+        #expect(FileOperationHistoryPresentation.verificationDetail(job: job)
+            == "Verified 3 files · 1.8 GB. No byte transfer: 2 items.")
+        #expect(FileOperationHistoryPresentation.detail(job: job) ==
+            "3 items. Undo is available while every item remains unchanged. "
+                + "Verified 3 files · 1.8 GB. No byte transfer: 2 items.")
+        #expect(FileOperationHistoryPresentation.detail(job: job)
+            .contains("1800000000") == false)
+    }
+
+    @Test func mixedVerificationFailureNeverClaimsTotalSuccess() {
+        let detail = FileOperationHistoryPresentation.verificationDetail(
+            job: verificationHistoryJob(report: TransferVerificationReport(
+                verifiedFileCount: 3,
+                verifiedLogicalByteCount: 9_999_999,
+                noByteTransferItemCount: 0,
+                failedVerificationItemCount: 1
+            ))
+        )
+
+        #expect(detail == "Content verification failed for 1 item. "
+            + "Matched before verification ended: 3 files · 10 MB.")
+        #expect(detail?.contains("3 files verified.") == false)
+        #expect(detail?.contains("9999999") == false)
+    }
+
+    @Test func sameVolumeMoveHistoryReportsOnlyNoByteTransfer() {
+        let detail = FileOperationHistoryPresentation.verificationDetail(
+            job: verificationHistoryJob(report: TransferVerificationReport(
+                verifiedFileCount: 0,
+                verifiedLogicalByteCount: 0,
+                noByteTransferItemCount: 1,
+                failedVerificationItemCount: 0
+            ))
+        )
+
+        #expect(detail == "No byte transfer: 1 item.")
+    }
+
+    @Test func disabledAndEnabledZeroVerificationHistoryStayDistinct() {
+        #expect(FileOperationHistoryPresentation.verificationDetail(
+            job: verificationHistoryJob(report: nil)
+        ) == nil)
+        #expect(FileOperationHistoryPresentation.verificationDetail(
+            job: verificationHistoryJob(report: TransferVerificationReport(
+                verifiedFileCount: 0,
+                verifiedLogicalByteCount: 0,
+                noByteTransferItemCount: 0,
+                failedVerificationItemCount: 0
+            ))
+        ) == "Content verification: enabled; no files were verified.")
+    }
+
+    private func verificationHistoryJob(
+        report: TransferVerificationReport?
+    ) -> FileOperationJobSnapshot {
+        FileOperationJobSnapshot(
+            id: UUID(),
+            kind: .copy,
+            itemDisplayName: "/Users/example/Private/Report.txt",
+            itemCount: 3,
+            state: .succeeded,
+            progress: nil,
+            canUndo: true,
+            verificationReport: report
+        )
+    }
 }

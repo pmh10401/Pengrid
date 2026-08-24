@@ -8,6 +8,9 @@ import Testing
     #expect(AccessibilityIdentifiers.leftPane == "leftPane")
     #expect(AccessibilityIdentifiers.rightPane == "rightPane")
     #expect(AccessibilityIdentifiers.operationStatus == "operationStatus")
+    #expect(AccessibilityIdentifiers.fileOperationsSettings == "fileOperationsSettings")
+    #expect(AccessibilityIdentifiers.verifyTransferredContents
+        == "verifyTransferredContents")
     #expect(
         AccessibilityIdentifiers.workspaceCompressProtectedZIP
             == "workspace.compressProtectedZIP"
@@ -359,6 +362,29 @@ func stalePasswordDismissalCannotCancelNewCoordinatorRequest() async throws {
     #expect(!publishing.statusAccessibilityLabel.contains(privateParentPath))
 }
 
+@Test func transferVerificationAccessibilityExposesOnlyABoundedBasename() {
+    let digest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    let presentation = TransferVerificationOperationStatusPresentation(
+        progress: TransferVerificationProgress(
+            phase: .hashing,
+            fractionCompleted: 0.42,
+            completedFileCount: 8,
+            totalFileCount: 20,
+            completedLogicalByteCount: 1_048_576,
+            totalLogicalByteCount: 2_097_152,
+            currentName: "/Users/example/\(digest)/docs/private-tree/Report\n.txt"
+        )
+    )
+
+    #expect(presentation.currentName == "Report .txt")
+    #expect(!presentation.accessibilityLabel.contains("\n"))
+    #expect(!presentation.accessibilityLabel.contains("/Users/"))
+    #expect(!presentation.accessibilityLabel.contains("1048576"))
+    #expect(!presentation.accessibilityLabel.contains("2097152"))
+    #expect(!presentation.accessibilityLabel.contains(digest))
+    #expect(!presentation.accessibilityLabel.contains("docs/private-tree"))
+}
+
 @Test func accessibilityModifiersAreStaticallyWiredIntoViews() throws {
     let filePane = try source(named: "Views/FilePaneView.swift")
     #expect(filePane.contains("AccessibilityIdentifiers.leftPane"))
@@ -394,6 +420,21 @@ func stalePasswordDismissalCannotCancelNewCoordinatorRequest() async throws {
     #expect(operationStatus.occurrences(
         of: ".accessibilityIdentifier(AccessibilityIdentifiers.operationStatus)"
     ) == 2)
+    #expect(operationStatus.contains("TransferVerificationAnnouncementCoordinator"))
+    #expect(operationStatus.contains("notification: .announcementRequested"))
+    #expect(operationStatus.contains(
+        ".accessibilityLabel(\"Cancel content verification\")"
+    ))
+
+    let fileOperationsSettings = try source(
+        named: "Views/FileOperationsSettingsView.swift"
+    )
+    #expect(fileOperationsSettings.contains(
+        ".accessibilityIdentifier(AccessibilityIdentifiers.fileOperationsSettings)"
+    ))
+    #expect(fileOperationsSettings.contains(
+        "AccessibilityIdentifiers.verifyTransferredContents"
+    ))
 
     let operationCenter = try source(named: "Views/FileOperationCenterView.swift")
     #expect(operationCenter.contains("AccessibilityIdentifiers.operationCenter"))
@@ -449,6 +490,21 @@ func stalePasswordDismissalCannotCancelNewCoordinatorRequest() async throws {
     #expect(app.contains("makeRoutingArchiveOperationService("))
     #expect(app.contains("passwordProvider: passwordCoordinator"))
     #expect(app.contains("passwordCoordinator: passwordCoordinator"))
+    #expect(app.occurrences(of: "TransferVerificationPreference()") == 1)
+    #expect(app.contains(
+        "verificationPolicyProvider: { transferVerificationPreference.policy }"
+    ))
+    #expect(app.contains(
+        "FileOperationsSettingsView(preference: transferVerificationPreference)"
+    ))
+    #expect(app.occurrences(of: ".tabItem") == 2)
+    let fileOperationsTab = try #require(app.range(
+        of: "PengridSettingsTab.fileOperations.title"
+    ))
+    let cloudLocationsTab = try #require(app.range(
+        of: "PengridSettingsTab.cloudLocations.title"
+    ))
+    #expect(fileOperationsTab.lowerBound < cloudLocationsTab.lowerBound)
 
     let storageWorkspace = try source(
         named: "Views/StorageInspector/StorageInspectorView.swift"
