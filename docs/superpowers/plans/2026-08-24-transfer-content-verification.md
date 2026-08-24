@@ -331,7 +331,7 @@ enum TransferVerificationManifestError: Error, Equatable {
 }
 
 struct TransferVerificationRegularFileEntry: @unchecked Sendable {
-    let comparisonKey: [String]
+    var comparisonKey: [String] { get }
     let device: UInt64
     let inode: UInt64
     let mode: UInt32
@@ -346,8 +346,16 @@ struct TransferVerificationRegularFileEntry: @unchecked Sendable {
     ) async throws -> T
 }
 
+struct TransferVerificationRegularFilePair: @unchecked Sendable {
+    let source: TransferVerificationRegularFileEntry
+    let staged: TransferVerificationRegularFileEntry
+}
+
 extension TransferVerificationManifest {
     var regularFiles: [TransferVerificationRegularFileEntry] { get }
+    func regularFilePairs(
+        matching staged: TransferVerificationManifest
+    ) throws -> [TransferVerificationRegularFilePair]
     func close()
 }
 ~~~
@@ -357,8 +365,14 @@ idempotent, and makes later reader acquisition fail closed; backing-storage
 deinitialization remains a fallback. `withReaderDescriptor` performs the
 component walk and validation synchronously, hands the async body an owned
 `F_DUPFD_CLOEXEC` duplicate, and closes that duplicate only after the body
-returns. Task 3 constructs its `RawFileFingerprint` directly from the listed
-fields. Manifest code throws the neutral internal error above; Task 3 maps
+returns. `comparisonKey` is computed on demand from the shared parent-linked
+component storage and is intended for bounded diagnostics and tests. Task 3
+uses `regularFilePairs(matching:)`, which walks the two comparison trees without
+materializing a dictionary of full path arrays. It constructs each
+`RawFileFingerprint` directly from the listed fields. Same-root comparison,
+content-shape comparison, and pair materialization check task cancellation
+throughout their bounded scans, including wide sibling dictionaries. Manifest code throws the
+neutral internal error above; Task 3 maps
 `.changed` to source or staged-output failure according to the side it was
 processing, while the other cases map directly to their bounded public
 categories.
@@ -370,18 +384,24 @@ slash, not from `lastPathComponent`. An absent representation, empty basename,
 `.unsupportedName`. The raw parent bytes are used to open the parent descriptor;
 the raw basename is retained for every `*at` call.
 
-The manifest's internal entries retain raw component bytes, lossless display
-components, item kind, identity, mode, size, mtime/ctime stability data, and
-raw symlink payload. Regular entries expose an internal opaque entry handle and
-all fields needed to construct Task 3's `RawFileFingerprint`; callers never
-rebuild a path string to open them. `TransferVerificationRootAuthority` always
+The manifest stores each raw component, lossless display component, normalized
+comparison component, item kind, identity, mode, size, mtime/ctime stability
+data, and raw symlink payload once in a shared parent-linked path graph. It does
+not retain a full component array per entry or regular-file handle, so retained
+path storage remains linear in the entry count and actual component bytes.
+Regular entries expose an internal opaque node handle and all fields needed to
+construct Task 3's `RawFileFingerprint`; callers never rebuild a path string to
+open them. `TransferVerificationRootAuthority` always
 owns an open parent descriptor plus the raw root basename. A directory root
 also owns its open root descriptor. At initial capture, recapture, and receipt
 revalidation it compares `fstatat(parentFD, rootName, AT_SYMLINK_NOFOLLOW)`
 with `fstat(rootFD)` before trusting a directory-root namespace entry. It opens
 regular entries component-by-component relative to verified directory
 descriptors, duplicates descriptors for readers, and closes each owned
-descriptor exactly once. Nofollow identity checks compare the captured entry
+descriptor exactly once. Directory capture uses an FD-free iterative worklist;
+it reopens and validates each directory component from the retained root while
+closing the previous component immediately, so depth 256 does not require 256
+simultaneously open descriptors. Nofollow identity checks compare the captured entry
 identity/device/inode, never `FileIdentity.refersToSameItem`, because that
 helper intentionally uses the resolved target identity and is unsafe for a
 symbolic-link root.
@@ -399,6 +419,9 @@ directory-root namespace replacement while its old descriptor remains open,
 regular-file-to-FIFO replacement between nofollow inspection and open,
 symlink replacement versus target replacement, child replacement,
 addition/removal, and type transition.
+Use a synthetic parent-linked tree at the full 250,000-descendant and depth-256
+boundary to exercise retained storage and regular-file pairing without creating
+250,000 filesystem entries or retaining one full path array per file.
 
 - [ ] **Step 2: Add filename-policy RED cases.**
 
@@ -406,7 +429,8 @@ Feed synthetic losslessly decoded entry components containing canonically
 equivalent spellings and case variants into the comparison-key builder, so the
 test does not depend on the host volume's case/normalization behavior. Assert
 both `caseSensitiveCanonical` and `caseInsensitiveCanonical` outcomes and
-collision rejection. Separately create an invalid UTF-8 filename with POSIX
+collision rejection. The production path arena must use the same tested unique-
+key insertion primitive rather than duplicate collision logic. Separately create an invalid UTF-8 filename with POSIX
 `openat`; assert capture fails with `.unsupportedName` and does not emit
 replacement characters.
 
@@ -443,7 +467,10 @@ and `..` raw names.
 Same-root stability includes identity and per-entry stability data. Cross-root
 content shape includes normalized relative key, kind, regular-file size, and
 symlink payload but excludes inode and non-approved metadata. Reject two source
-entries that map to one destination comparison key.
+entries that map to one destination comparison key. Check cancellation before
+and during node comparison, wide child matching, and regular-file pair
+materialization so a 250,000-entry operation cannot monopolize its worker after
+the task is cancelled.
 
 - [ ] **Step 6: Run GREEN, leak checks, and commit.**
 
@@ -625,7 +652,9 @@ history value is formed.
 
 - [ ] **Step 5: Implement paired verification.**
 
-For every matching regular-file entry, duplicate descriptor authority, acquire
+Obtain matching entries from `source.regularFilePairs(matching: staged)`; do not
+build a dictionary keyed by `comparisonKey`. For every returned regular-file
+pair, duplicate descriptor authority, acquire
 one pair permit, alternate source/staging chunks, compare SHA-256 digests, and
 release the permit in every path. Each verify invocation starts only
 `min(pairLimit, pairCount)` workers; workers pull the next index from a bounded
