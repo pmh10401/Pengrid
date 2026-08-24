@@ -532,8 +532,10 @@ struct DarwinRawFileReadDriver: RawFileReadDriving {
 }
 
 protocol RawFileHashing: Sendable {
-    /// Returned digests are ephemeral buffers for immediate equality testing
-    /// inside TransferVerificationSession and must not be retained or exposed.
+    /// `checksum` returns one file's digest for the existing ChecksumResult;
+    /// `checksumPair` returns ephemeral buffers for immediate equality testing
+    /// inside TransferVerificationSession and neither digest may be retained
+    /// or exposed after that comparison.
     func checksum(
         descriptor: Int32,
         expected: RawFileFingerprint,
@@ -600,10 +602,15 @@ struct LiveTransferVerificationSessionFactory:
 ~~~
 
 Descriptor arguments remain owned by the caller; `RawFileHashing` neither
-closes nor retains them after the async call returns. The progress argument is
-a nonnegative delta of logical bytes newly matched by both sides, not an
-absolute byte counter. Before and after reading, the raw hasher requires a
-regular-file descriptor and matches all fields of the supplied fingerprint.
+closes nor retains them after the async call returns. For `checksum`, progress
+is a nonnegative delta of logical bytes newly consumed from the single file,
+and `LiveChecksumService` converts those deltas to bounded fractions while
+feeding the returned digest into the existing `ChecksumResult`. For
+`checksumPair`, progress is instead a nonnegative delta of logical bytes newly
+matched in the two-sided common prefix, and the returned digest buffers are
+compared immediately and discarded. Before and after reading, the raw hasher
+requires regular-file descriptors and matches all fields of each supplied
+fingerprint.
 
 The factory returns nil for `.disabled`. Each enabled session owns one
 `AsyncPermitPool`; its requested limit is clamped to `1...2`, so zero and
@@ -643,7 +650,10 @@ Move descriptor validation and chunk reads out of private
 `ChecksumService.swift` functions into `LiveRawFileHasher`. Keep
 `LiveChecksumService` responsible for its existing `.checksum`
 materialization, scoped access, and global single-file permits. It opens the
-path no-follow, calls the raw hasher, then reopens and validates the path. The
+path no-follow, calls the raw hasher for one file, adapts its byte deltas to
+bounded single-file progress, and returns that digest through the existing
+`ChecksumResult`; paired verification alone uses common-prefix progress and
+ephemeral immediate comparison. It then reopens and validates the path. The
 blocking read loop runs in a utility-priority detached worker wrapped by a task
 cancellation handler; the caller keeps descriptors alive until that worker has
 fully returned. `TransferVerificationService` compares returned digest buffers

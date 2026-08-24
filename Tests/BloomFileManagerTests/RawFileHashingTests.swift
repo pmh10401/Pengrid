@@ -150,6 +150,7 @@ import Testing
 
     @Test func nonRegularDescriptorsAreRejectedBeforeReading() async throws {
         let directory = try TemporaryDirectory()
+        defer { directory.remove() }
         let descriptor = try RawHashSupport.open(directory.url)
         defer { Darwin.close(descriptor) }
         let fingerprint = try RawFileFingerprint(descriptor: descriptor)
@@ -312,6 +313,12 @@ import Testing
             staged.descriptor
         ])
         #expect(await recorder.values == [1, 1])
+        #expect(Darwin.fcntl(source.descriptor, F_GETFD) != -1)
+        #expect(Darwin.fcntl(staged.descriptor, F_GETFD) != -1)
+        source.closeDescriptor()
+        staged.closeDescriptor()
+        #expect(Darwin.fcntl(source.descriptor, F_GETFD) == -1)
+        #expect(Darwin.fcntl(staged.descriptor, F_GETFD) == -1)
     }
 
     @Test func pairedProgressCountsOnlyCommonPrefixGrowth() async throws {
@@ -364,6 +371,179 @@ import Testing
         #expect(digests.source == Data(SHA256.hash(data: Data())))
         #expect(digests.staged == Data(SHA256.hash(data: Data())))
         #expect(await recorder.values.isEmpty)
+    }
+
+    @Test func pairedCancellationWhileSourceReadReturnsStopsBeforeStagedRead() async throws {
+        let source = try RawHashFixture(contents: Data([0x01]))
+        let staged = try RawHashFixture(contents: Data([0x02]))
+        let driver = PairBlockingReadDriver(blockedDescriptor: source.descriptor)
+        let recorder = DeltaRecorder()
+        let worker = Task {
+            try await LiveRawFileHasher(readDriver: driver).checksumPair(
+                sourceDescriptor: source.descriptor,
+                sourceExpected: source.fingerprint,
+                stagedDescriptor: staged.descriptor,
+                stagedExpected: staged.fingerprint,
+                chunkSize: 1,
+                progress: { await recorder.record($0) }
+            )
+        }
+
+        while !driver.didStartBlockedRead {
+            await Task.yield()
+        }
+        worker.cancel()
+        driver.releaseBlockedRead()
+
+        await #expect(throws: CancellationError.self) {
+            try await worker.value
+        }
+        #expect(driver.recordedCalls == [source.descriptor])
+        #expect(await recorder.values.isEmpty)
+        #expect(Darwin.fcntl(source.descriptor, F_GETFD) != -1)
+        #expect(Darwin.fcntl(staged.descriptor, F_GETFD) != -1)
+        source.closeDescriptor()
+        staged.closeDescriptor()
+    }
+
+    @Test func pairedCancellationWhileStagedReadReturnsStopsBeforeHashingOrProgress() async throws {
+        let source = try RawHashFixture(contents: Data([0x03]))
+        let staged = try RawHashFixture(contents: Data([0x04]))
+        let driver = PairBlockingReadDriver(blockedDescriptor: staged.descriptor)
+        let recorder = DeltaRecorder()
+        let worker = Task {
+            try await LiveRawFileHasher(readDriver: driver).checksumPair(
+                sourceDescriptor: source.descriptor,
+                sourceExpected: source.fingerprint,
+                stagedDescriptor: staged.descriptor,
+                stagedExpected: staged.fingerprint,
+                chunkSize: 1,
+                progress: { await recorder.record($0) }
+            )
+        }
+
+        while !driver.didStartBlockedRead {
+            await Task.yield()
+        }
+        worker.cancel()
+        driver.releaseBlockedRead()
+
+        await #expect(throws: CancellationError.self) {
+            try await worker.value
+        }
+        #expect(driver.recordedCalls == [source.descriptor, staged.descriptor])
+        #expect(await recorder.values.isEmpty)
+        #expect(Darwin.fcntl(source.descriptor, F_GETFD) != -1)
+        #expect(Darwin.fcntl(staged.descriptor, F_GETFD) != -1)
+        source.closeDescriptor()
+        staged.closeDescriptor()
+    }
+
+    @Test func pairedCancellationDuringEINTRRetryStopsBeforeTheNextRead() async throws {
+        let source = try RawHashFixture(contents: Data())
+        let staged = try RawHashFixture(contents: Data())
+        let driver = InterruptRetryGateDriver()
+        let worker = Task {
+            try await LiveRawFileHasher(readDriver: driver).checksumPair(
+                sourceDescriptor: source.descriptor,
+                sourceExpected: source.fingerprint,
+                stagedDescriptor: staged.descriptor,
+                stagedExpected: staged.fingerprint,
+                chunkSize: 1,
+                progress: { _ in }
+            )
+        }
+
+        while !driver.didStartFirstRead {
+            await Task.yield()
+        }
+        worker.cancel()
+        driver.releaseFirstRead()
+        try await Task.sleep(for: .milliseconds(20))
+        driver.releaseRetryRead()
+
+        await #expect(throws: CancellationError.self) {
+            try await worker.value
+        }
+        #expect(driver.readCallCount == 1)
+        #expect(Darwin.fcntl(source.descriptor, F_GETFD) != -1)
+        #expect(Darwin.fcntl(staged.descriptor, F_GETFD) != -1)
+        source.closeDescriptor()
+        staged.closeDescriptor()
+    }
+
+    @Test func pairedSourceMutationAfterReadIsRejected() async throws {
+        let source = try RawHashFixture(contents: Data([0x05, 0x06]))
+        let staged = try RawHashFixture(contents: Data([0x07, 0x08]))
+        let driver = ScriptedReadDriver(scripts: [
+            source.descriptor: [.data([0x05]), .data([0x06]), .end],
+            staged.descriptor: [.data([0x07]), .data([0x08]), .end]
+        ])
+        source.mutateDuringProgress { [source] in source.appendByte(0x09) }
+
+        await #expect(throws: RawFileHashingError.logicalSizeChanged) {
+            try await LiveRawFileHasher(readDriver: driver).checksumPair(
+                sourceDescriptor: source.descriptor,
+                sourceExpected: source.fingerprint,
+                stagedDescriptor: staged.descriptor,
+                stagedExpected: staged.fingerprint,
+                chunkSize: 1,
+                progress: { [source] _ in source.runPendingMutationSync() }
+            )
+        }
+        #expect(Darwin.fcntl(source.descriptor, F_GETFD) != -1)
+        #expect(Darwin.fcntl(staged.descriptor, F_GETFD) != -1)
+        source.closeDescriptor()
+        staged.closeDescriptor()
+    }
+
+    @Test func pairedStagedMutationAfterReadIsRejected() async throws {
+        let source = try RawHashFixture(contents: Data([0x0A, 0x0B]))
+        let staged = try RawHashFixture(contents: Data([0x0C, 0x0D]))
+        let driver = ScriptedReadDriver(scripts: [
+            source.descriptor: [.data([0x0A]), .data([0x0B]), .end],
+            staged.descriptor: [.data([0x0C]), .data([0x0D]), .end]
+        ])
+        staged.mutateDuringProgress { [staged] in staged.appendByte(0x0E) }
+
+        await #expect(throws: RawFileHashingError.logicalSizeChanged) {
+            try await LiveRawFileHasher(readDriver: driver).checksumPair(
+                sourceDescriptor: source.descriptor,
+                sourceExpected: source.fingerprint,
+                stagedDescriptor: staged.descriptor,
+                stagedExpected: staged.fingerprint,
+                chunkSize: 1,
+                progress: { [staged] _ in staged.runPendingMutationSync() }
+            )
+        }
+        #expect(Darwin.fcntl(source.descriptor, F_GETFD) != -1)
+        #expect(Darwin.fcntl(staged.descriptor, F_GETFD) != -1)
+        source.closeDescriptor()
+        staged.closeDescriptor()
+    }
+
+    @Test func pairedReadFailuresPreserveCallerDescriptorOwnership() async throws {
+        let source = try RawHashFixture(contents: Data([0x0F]))
+        let staged = try RawHashFixture(contents: Data([0x10]))
+        let driver = ScriptedReadDriver(scripts: [
+            source.descriptor: [.failure(.EIO)],
+            staged.descriptor: [.end]
+        ])
+
+        await #expect(throws: RawFileHashingError.readFailed(.EIO)) {
+            try await LiveRawFileHasher(readDriver: driver).checksumPair(
+                sourceDescriptor: source.descriptor,
+                sourceExpected: source.fingerprint,
+                stagedDescriptor: staged.descriptor,
+                stagedExpected: staged.fingerprint,
+                chunkSize: 1,
+                progress: { _ in }
+            )
+        }
+        #expect(Darwin.fcntl(source.descriptor, F_GETFD) != -1)
+        #expect(Darwin.fcntl(staged.descriptor, F_GETFD) != -1)
+        source.closeDescriptor()
+        staged.closeDescriptor()
     }
 
     @Test func callersOwnTheirDescriptorsAfterHashingCompletes() async throws {
@@ -621,6 +801,7 @@ private final class OnceMutation: @unchecked Sendable {
         }
         hasRun = true
         operation = self.operation
+        self.operation = nil
         lock.unlock()
         try operation?()
     }
@@ -721,6 +902,60 @@ private final class GatedReadDriver: RawFileReadDriving, @unchecked Sendable {
             gate.wait()
         }
         return .bytes(0)
+    }
+}
+
+private final class PairBlockingReadDriver: RawFileReadDriving, @unchecked Sendable {
+    private let gate = DispatchSemaphore(value: 0)
+    private let lock = NSLock()
+    private let blockedDescriptor: Int32
+    private var calls: [Int32] = []
+    private var callCounts: [Int32: Int] = [:]
+    private var hasBlockedReadStarted = false
+
+    init(blockedDescriptor: Int32) {
+        self.blockedDescriptor = blockedDescriptor
+    }
+
+    var didStartBlockedRead: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return hasBlockedReadStarted
+    }
+
+    var recordedCalls: [Int32] {
+        lock.lock()
+        defer { lock.unlock() }
+        return calls
+    }
+
+    func releaseBlockedRead() {
+        gate.signal()
+    }
+
+    func read(
+        descriptor: Int32,
+        into buffer: UnsafeMutableRawBufferPointer
+    ) -> RawFileReadResult {
+        lock.lock()
+        calls.append(descriptor)
+        let callCount = (callCounts[descriptor] ?? 0) + 1
+        callCounts[descriptor] = callCount
+        let isFirstRead = callCount == 1
+        if descriptor == blockedDescriptor && isFirstRead {
+            hasBlockedReadStarted = true
+        }
+        lock.unlock()
+
+        if descriptor == blockedDescriptor && isFirstRead {
+            gate.wait()
+        }
+        guard isFirstRead else { return .bytes(0) }
+        buffer.storeBytes(
+            of: descriptor == blockedDescriptor ? UInt8(0x11) : UInt8(0x22),
+            as: UInt8.self
+        )
+        return .bytes(1)
     }
 }
 

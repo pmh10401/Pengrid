@@ -181,6 +181,7 @@ struct LiveRawFileHasher: RawFileHashing {
                         into: &sourceBuffer,
                         driver: readDriver
                     )
+                    try Task.checkCancellation()
                     if count == 0 {
                         sourceFinished = true
                     } else {
@@ -195,6 +196,7 @@ struct LiveRawFileHasher: RawFileHashing {
                         into: &stagedBuffer,
                         driver: readDriver
                     )
+                    try Task.checkCancellation()
                     if count == 0 {
                         stagedFinished = true
                     } else {

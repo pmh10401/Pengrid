@@ -177,6 +177,24 @@ import Testing
         #expect(values.last == 1)
     }
 
+    @Test func nonemptyChecksumsDoNotDuplicateTerminalProgress() async throws {
+        let directory = try TemporaryDirectory()
+        defer { directory.remove() }
+        let file = directory.url.appending(path: "three-bytes.bin")
+        try Data([1, 2, 3]).write(to: file)
+        let progress = ChecksumProgressRecorder()
+        let service = LiveChecksumService(
+            materializer: InMemoryCloudMaterializer(),
+            rawHasher: ProgressScriptRawHasher(deltas: [1, 1, 1])
+        )
+
+        _ = try await service.checksum(for: checksumRequest(for: file)) { value in
+            await progress.record(value)
+        }
+
+        #expect(await progress.values == [1.0 / 3.0, 2.0 / 3.0, 1.0])
+    }
+
     @Test func emptyFilesStillReportCompletionProgress() async throws {
         let directory = try TemporaryDirectory()
         defer { directory.remove() }
@@ -195,6 +213,33 @@ import Testing
 
         let values = await progress.values
         #expect(values == [1])
+    }
+
+    @Test func cancellationDuringEmptyTerminalProgressIsObservedBeforeReturningDigest() async throws {
+        let directory = try TemporaryDirectory()
+        defer { directory.remove() }
+        let file = directory.url.appending(path: "empty.bin")
+        try Data().write(to: file)
+        let gate = TerminalProgressGate()
+        let service = LiveChecksumService(
+            materializer: InMemoryCloudMaterializer(),
+            rawHasher: RecordingRawHasher()
+        )
+        let worker = Task {
+            try await service.checksum(for: checksumRequest(for: file)) { value in
+                #expect(value == 1)
+                await gate.waitForRelease()
+            }
+        }
+
+        while !(await gate.didEnter) {
+            await Task.yield()
+        }
+        worker.cancel()
+        await gate.release()
+        await #expect(throws: CancellationError.self) {
+            try await worker.value
+        }
     }
 
     @Test func rawHasherReceivesTheCompleteCapturedFingerprint() async throws {
@@ -227,6 +272,18 @@ import Testing
         )
 
         await #expect(throws: ChecksumError.typeChanged) {
+            try await service.checksum(for: pair.leftRequest, progress: { _ in })
+        }
+    }
+
+    @Test func rawReadFailuresPreserveThePOSIXChecksumContract() async throws {
+        let pair = try ChecksumFixture.equalFiles()
+        let service = LiveChecksumService(
+            materializer: InMemoryCloudMaterializer(),
+            rawHasher: ThrowingRawHasher(error: .readFailed(.EIO))
+        )
+
+        await #expect(throws: POSIXError(.EIO)) {
             try await service.checksum(for: pair.leftRequest, progress: { _ in })
         }
     }
@@ -363,5 +420,52 @@ private struct ThrowingRawHasher: RawFileHashing {
         progress _: @escaping @Sendable (Int64) async -> Void
     ) async throws -> (source: Data, staged: Data) {
         throw error
+    }
+}
+
+private struct ProgressScriptRawHasher: RawFileHashing {
+    let deltas: [Int64]
+
+    func checksum(
+        descriptor _: Int32,
+        expected _: RawFileFingerprint,
+        chunkSize _: Int,
+        progress: @escaping @Sendable (Int64) async -> Void
+    ) async throws -> Data {
+        for delta in deltas {
+            await progress(delta)
+        }
+        return Data([0xAA])
+    }
+
+    func checksumPair(
+        sourceDescriptor _: Int32,
+        sourceExpected _: RawFileFingerprint,
+        stagedDescriptor _: Int32,
+        stagedExpected _: RawFileFingerprint,
+        chunkSize _: Int,
+        progress _: @escaping @Sendable (Int64) async -> Void
+    ) async throws -> (source: Data, staged: Data) {
+        return (Data([0xAA]), Data([0xBB]))
+    }
+}
+
+private actor TerminalProgressGate {
+    private(set) var didEnter = false
+    private var isReleased = false
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    func waitForRelease() async {
+        didEnter = true
+        guard !isReleased else { return }
+        await withCheckedContinuation { continuation in
+            self.continuation = continuation
+        }
+    }
+
+    func release() {
+        isReleased = true
+        continuation?.resume()
+        continuation = nil
     }
 }

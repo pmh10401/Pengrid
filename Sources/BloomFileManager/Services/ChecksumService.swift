@@ -145,7 +145,10 @@ actor LiveChecksumService: ChecksumService {
                 throw mapRawHashingError(error)
             }
 
-            await progress(progressAccumulator.finish())
+            if let terminalFraction = progressAccumulator.finishIfNeeded() {
+                await progress(terminalFraction)
+            }
+            try Task.checkCancellation()
             await permits.release()
             return ChecksumResult(digest: digest)
         } catch {
@@ -177,8 +180,12 @@ private final class ChecksumProgressAccumulator: @unchecked Sendable {
         return min(1, max(0, Double(completedByteCount) / Double(totalByteCount)))
     }
 
-    func finish() -> Double {
+    func finishIfNeeded() -> Double? {
         lock.lock()
+        guard totalByteCount == 0 || completedByteCount < totalByteCount else {
+            lock.unlock()
+            return nil
+        }
         completedByteCount = totalByteCount
         lock.unlock()
         return 1
@@ -367,7 +374,9 @@ private func mapRawHashingError(_ error: Error) -> Error {
         return ChecksumError.sizeChanged
     case .stabilityChanged:
         return ChecksumError.identityChanged
-    case .invalidChunkSize, .invalidReadResult, .readFailed:
+    case .invalidChunkSize, .invalidReadResult:
         return error
+    case .readFailed(let code):
+        return POSIXError(code)
     }
 }
