@@ -134,6 +134,16 @@ Pengrid는 실행 전에 화면에 보이는 선택을 캡처하므로 이후 �
 동기화 같은 독점 트랜잭션은 단계적 게시와 보수적인 롤백 검사를 사용합니다.
 동기화는 다시 시도할 수 없고, 완료 후 Undo로 되돌리지 않습니다.
 
+> 전송 내용 검증은 현재 소스 트리에 구현되어 있지만, 공개된 Developer Preview
+> 7 DMG에는 포함되어 있지 않습니다.
+
+소스 빌드에는 기본값이 꺼진 **File Operations** 설정 **Verify transferred file
+contents before publishing**이 있습니다. 이 설정을 켜면 복사, Duplicate, 다른
+볼륨으로 이동, 검토된 동기화의 복사·교체 작업에서 비공개 스테이징 결과를 게시하기
+전에 일반 파일 데이터를 SHA-256으로 비교합니다. 링크를 따라가지 않고 재귀 트리
+구조와 심볼릭 링크 payload도 확인합니다. 진행률은 바이트 가중 백분율과 파일
+개수 기준 진행을 함께 표시합니다.
+
 ### 압축 파일 만들고 풀기
 
 **ZIP**, **TAR**, **TAR.GZ/TGZ**, **TAR.BZ2/TBZ/TBZ2** 및
@@ -181,8 +191,10 @@ Batch Rename과 나머지 컨텍스트 작업은 File Operations 메뉴 또는 �
   암호는 저장하지 않으며 복구할 수 없습니다.
 - 7z, RAR, 암호 보호 TAR, Developer ID 서명 및 공증은 이 Developer
   Preview에 포함되지 않습니다.
-- Finder 태그 편집과 바이트 단위 전송 검증은 향후 작업입니다. 동일성 및 지문
-  안전 검사는 바이트 단위 전송 검증을 의미하지 않습니다.
+- Finder 태그 편집은 향후 작업입니다. 선택 가능한 전송 내용 검증은 현재 소스에
+  있지만 Developer Preview 7 DMG에는 없습니다. 리소스 포크, 확장 속성, ACL,
+  소유권, 플래그, 생성일, 하드 링크 관계 및 sparse allocation은 검증 범위에서
+  제외합니다.
 - 실행하지 않은 수동 검증은 검증 문서에 `NOT RUN`으로 명시합니다.
 
 자세한 동작, 안전 규칙 및 제한 사항은
@@ -213,6 +225,7 @@ open dist/Pengrid.app
 - [릴리스 및 패키징 가이드](docs/release.ko.md)
 - [아키텍처 설명](docs/architecture.md)
 - [현재 제한 사항](docs/current-limitations.ko.md)
+- [전송 내용 검증 기록](docs/verification/transfer-content-verification.ko.md)
 - [검증 기록](docs/verification/)
 
 Pengrid는 계속 개발 중입니다. 기여와 재현 가능한 문제 보고를 환영합니다.
