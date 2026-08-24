@@ -351,29 +351,39 @@ private struct LiveTransferVerificationSession: TransferVerificationSession {
 
     private func recaptureAndRequireStable(
         _ manifest: TransferVerificationManifest,
-        side: TransferVerificationFailureSide
+        side: TransferVerificationFailureSide,
+        safeName: String? = nil
     ) async throws -> TransferVerificationManifest {
+        let resolvedSafeName = safeName
         var current: TransferVerificationManifest?
         do {
-            current = try await manifestBuilder.recapture(manifest)
-            guard let current else {
+            let candidate = try await manifestBuilder.recapture(manifest)
+            // A recapture is a new ownership generation.  Check this before
+            // assigning it to the service-owned slot, requiring stability, or
+            // closing it on an error.  A violating builder may have returned a
+            // borrowed manifest that the caller still owns.
+            guard !candidate.hasSameAuthority(as: manifest) else {
                 throw TransferVerificationFailure(
-                    category: side == .source ? .sourceChanged : .stagedOutputChanged
+                    category: .readFailed,
+                    safeName: resolvedSafeName
                 )
             }
+            current = candidate
             do {
-                try manifestBuilder.requireStable(current, against: manifest)
+                try manifestBuilder.requireStable(candidate, against: manifest)
             } catch {
-                current.close()
+                current?.close()
+                current = nil
                 throw error
             }
-            return current
+            return candidate
         } catch {
             current?.close()
+            current = nil
             if let failure = error as? TransferVerificationFailure {
                 throw failure
             }
-            throw mapFailure(error, side: side, safeName: nil)
+            throw mapFailure(error, side: side, safeName: resolvedSafeName)
         }
     }
 
@@ -594,41 +604,27 @@ private struct LiveTransferVerificationSession: TransferVerificationSession {
             return TransferVerificationFailure(category: .cancelled)
         }
 
-        var currentSource: TransferVerificationManifest?
         do {
-            currentSource = try await manifestBuilder.recapture(source)
-            guard let currentSource else {
-                return TransferVerificationFailure(category: .sourceChanged)
-            }
-            do {
-                try manifestBuilder.requireStable(currentSource, against: source)
-            } catch let stabilityError {
-                currentSource.close()
-                return mapFailure(stabilityError, side: .source, safeName: safeName)
-            }
-        } catch let recaptureError {
-            currentSource?.close()
-            return mapFailure(recaptureError, side: .source, safeName: safeName)
+            let currentSource = try await recaptureAndRequireStable(
+                source,
+                side: .source,
+                safeName: safeName
+            )
+            currentSource.close()
+        } catch let sourceFailure {
+            return mapFailure(sourceFailure, side: .source, safeName: safeName)
         }
-        currentSource?.close()
 
-        var currentStaged: TransferVerificationManifest?
         do {
-            currentStaged = try await manifestBuilder.recapture(staged)
-            guard let currentStaged else {
-                return TransferVerificationFailure(category: .stagedOutputChanged)
-            }
-            do {
-                try manifestBuilder.requireStable(currentStaged, against: staged)
-            } catch let stabilityError {
-                currentStaged.close()
-                return mapFailure(stabilityError, side: .staged, safeName: safeName)
-            }
-        } catch let recaptureError {
-            currentStaged?.close()
-            return mapFailure(recaptureError, side: .staged, safeName: safeName)
+            let currentStaged = try await recaptureAndRequireStable(
+                staged,
+                side: .staged,
+                safeName: safeName
+            )
+            currentStaged.close()
+        } catch let stagedFailure {
+            return mapFailure(stagedFailure, side: .staged, safeName: safeName)
         }
-        currentStaged?.close()
         return mapFailure(error, side: nil, safeName: safeName)
     }
 
@@ -705,9 +701,7 @@ private struct LiveTransferVerificationSession: TransferVerificationSession {
         from second: TransferVerificationManifest
     ) {
         guard let first else { return }
-        #if DEBUG
-        if first.sharesAuthorityForTesting(with: second) { return }
-        #endif
+        guard !first.hasSameAuthority(as: second) else { return }
         first.close()
     }
 }

@@ -466,7 +466,10 @@ struct TransferVerificationServiceTests {
             progress: { _ in }
         )
         let openBeforeReceiptClose = ledger.openCount
-        #expect(openBeforeReceiptClose == sourceOpenCount + 4)
+        // The receipt retains exactly the final source and staged generation,
+        // each with its root-parent and root-directory descriptor leases.
+        let expectedReceiptGenerationLeaseCount = 4
+        #expect(openBeforeReceiptClose == sourceOpenCount + expectedReceiptGenerationLeaseCount)
 
         source.close()
         completion.receipt.source.close()
@@ -504,11 +507,21 @@ struct TransferVerificationServiceTests {
                 progress: { _ in }
             )
         }
+        defer {
+            verificationTask.cancel()
+            Task { await hasher.state.release() }
+        }
         try await waitForTestSignal(hasher.state.entered)
         verificationTask.cancel()
         await hasher.state.release()
-        let outcome = await verificationTask.result
-        #expect((try? outcome.get()) == nil)
+        let outcome = await awaitBoundedTaskResult(
+            verificationTask,
+            onTimeout: { await hasher.state.release() }
+        )
+        guard case .failure = outcome else {
+            Issue.record("cancelled verification unexpectedly returned a receipt")
+            return
+        }
         #expect(ledger.openCount == sourceOpenCount)
         source.close()
         #expect(ledger.unbalancedLeaseIDs.isEmpty)
@@ -575,14 +588,37 @@ struct TransferVerificationServiceTests {
     @Test func cancellationAtTerminalProgressFailsBeforeReceiptPublication() async throws {
         let fixture = try VerificationFixture.singleFile(contents: Data("same".utf8))
         defer { fixture.temporary.remove() }
+        #if DEBUG
+        let ledger = DescriptorLedger()
+        let builder = LiveTransferVerificationManifestBuilder(
+            testHooks: TransferVerificationManifestTestHooks(
+                onDescriptorEvent: { ledger.record($0) }
+            )
+        )
+        let source = try await builder.capture(
+            at: fixture.source,
+            identifiedBy: fixture.sourceIdentity,
+            comparisonPolicy: .caseSensitiveCanonical
+        )
+        let sourceOpenCount = ledger.openCount
+        #else
         let source = try await capture(fixture.source, identity: fixture.sourceIdentity)
+        #endif
         defer { source.close() }
         let terminalGate = TestGate()
+        #if DEBUG
+        let session = try #require(
+            LiveTransferVerificationSessionFactory(manifestBuilder: builder).makeSession(
+                policy: .sha256(maxConcurrentPairs: 1)
+            )
+        )
+        #else
         let session = try #require(
             LiveTransferVerificationSessionFactory().makeSession(
                 policy: .sha256(maxConcurrentPairs: 1)
             )
         )
+        #endif
 
         let verificationTask = Task {
             try await session.verify(
@@ -599,25 +635,49 @@ struct TransferVerificationServiceTests {
                 }
             )
         }
+        defer {
+            verificationTask.cancel()
+            Task { await terminalGate.release() }
+        }
         try await waitForTestSignal(terminalGate.entered)
         verificationTask.cancel()
         await terminalGate.release()
 
-        let outcome = await verificationTask.result
+        let outcome = await awaitBoundedTaskResult(
+            verificationTask,
+            onTimeout: { await terminalGate.release() }
+        )
         guard case let .failure(error) = outcome else {
             Issue.record("terminal cancellation unexpectedly returned a receipt")
             return
         }
         #expect((error as? TransferVerificationFailure)?.category == .cancelled)
+        #if DEBUG
+        // Cancellation after the terminal callback must close every
+        // intermediate generation before the retry starts.
+        #expect(ledger.openCount == sourceOpenCount)
+        #endif
 
-        let retry = try await session.verify(
-            source: source,
-            stagedURL: fixture.staged,
-            stagedIdentity: fixture.stagedIdentity,
-            progress: { _ in }
-        )
+        let retryTask = Task {
+            try await session.verify(
+                source: source,
+                stagedURL: fixture.staged,
+                stagedIdentity: fixture.stagedIdentity,
+                progress: { _ in }
+            )
+        }
+        let retryOutcome = await awaitBoundedTaskResult(retryTask)
+        guard case let .success(retry) = retryOutcome else {
+            Issue.record("same-session retry did not finish after terminal cancellation")
+            return
+        }
         retry.receipt.source.close()
         retry.receipt.staged.close()
+#if DEBUG
+        #expect(ledger.openCount == sourceOpenCount)
+        source.close()
+        #expect(ledger.unbalancedLeaseIDs.isEmpty)
+#endif
     }
 
     @Test func cancellationDuringHashReleasesPermitForTheSameSession() async throws {
@@ -639,23 +699,37 @@ struct TransferVerificationServiceTests {
                 progress: { _ in }
             )
         }
+        defer {
+            verificationTask.cancel()
+            Task { await hasher.state.release() }
+        }
         try await waitForTestSignal(hasher.state.entered)
         verificationTask.cancel()
         await hasher.state.release()
 
-        let outcome = await verificationTask.result
+        let outcome = await awaitBoundedTaskResult(
+            verificationTask,
+            onTimeout: { await hasher.state.release() }
+        )
         guard case let .failure(error) = outcome else {
             Issue.record("hash cancellation unexpectedly returned a receipt")
             return
         }
         #expect((error as? TransferVerificationFailure)?.category == .cancelled)
 
-        let retry = try await session.verify(
-            source: source,
-            stagedURL: fixture.staged,
-            stagedIdentity: fixture.stagedIdentity,
-            progress: { _ in }
-        )
+        let retryTask = Task {
+            try await session.verify(
+                source: source,
+                stagedURL: fixture.staged,
+                stagedIdentity: fixture.stagedIdentity,
+                progress: { _ in }
+            )
+        }
+        let retryOutcome = await awaitBoundedTaskResult(retryTask)
+        guard case let .success(retry) = retryOutcome else {
+            Issue.record("same-session retry did not finish after hash cancellation")
+            return
+        }
         retry.receipt.source.close()
         retry.receipt.staged.close()
         #expect(await hasher.state.callCount == 2)
@@ -688,21 +762,37 @@ struct TransferVerificationServiceTests {
                 }
             )
         }
+        defer {
+            verificationTask.cancel()
+            Task {
+                await progressGate.release()
+                await hasher.state.allowSecondFirstProgress()
+            }
+        }
         try await waitForTestSignal(hasher.state.secondStarted)
         try await waitForTestSignal(progressGate.entered)
+        await hasher.state.allowSecondFirstProgress()
+        try await waitForTestSignal(hasher.state.secondAboutToPublish)
 
         do {
             try await waitForTestSignal(
-                hasher.state.finished,
+                hasher.state.secondFirstReturned,
                 timeout: .milliseconds(200)
             )
-            Issue.record("a producer completed while the first progress callback was blocked")
+            Issue.record("the second progress publication returned while the first callback was blocked")
         } catch is VerificationTestTimeout {
-            // Expected: the second producer is backpressured by the serialized drain.
+            // Expected: the second producer is backpressured before its first publication returns.
         }
 
         await progressGate.release()
-        let completion = try await verificationTask.value
+        let outcome = await awaitBoundedTaskResult(
+            verificationTask,
+            onTimeout: { await progressGate.release() }
+        )
+        guard case let .success(completion) = outcome else {
+            Issue.record("verification did not finish after progress gate release")
+            return
+        }
         completion.receipt.source.close()
         completion.receipt.staged.close()
     }
@@ -730,6 +820,13 @@ struct TransferVerificationServiceTests {
                 progress: { _ in }
             )
         }
+        defer {
+            outcomeTask.cancel()
+            Task {
+                await diagnosisGate.release()
+                await hasher.state.releaseSibling()
+            }
+        }
         try await waitForTestSignal(diagnosisGate.entered)
         do {
             try await waitForTestSignal(
@@ -741,19 +838,32 @@ struct TransferVerificationServiceTests {
         }
         await diagnosisGate.release()
         await hasher.state.releaseSibling()
-        let outcome = await outcomeTask.result
+        let outcome = await awaitBoundedTaskResult(
+            outcomeTask,
+            onTimeout: {
+                await diagnosisGate.release()
+                await hasher.state.releaseSibling()
+            }
+        )
         guard case let .failure(error) = outcome else {
             Issue.record("worker failure unexpectedly returned a receipt")
             return
         }
         #expect((error as? TransferVerificationFailure)?.category == .readFailed)
 
-        let retry = try await session.verify(
-            source: source,
-            stagedURL: fixture.staged,
-            stagedIdentity: fixture.stagedIdentity,
-            progress: { _ in }
-        )
+        let retryTask = Task {
+            try await session.verify(
+                source: source,
+                stagedURL: fixture.staged,
+                stagedIdentity: fixture.stagedIdentity,
+                progress: { _ in }
+            )
+        }
+        let retryOutcome = await awaitBoundedTaskResult(retryTask)
+        guard case let .success(retry) = retryOutcome else {
+            Issue.record("same-session retry did not finish after worker failure")
+            return
+        }
         retry.receipt.source.close()
         retry.receipt.staged.close()
     }
@@ -772,6 +882,7 @@ struct TransferVerificationServiceTests {
         for item in cases {
             let probe = ChunkSizeProbe()
             let source = try await capture(fixture.source, identity: fixture.sourceIdentity)
+            defer { source.close() }
             let session = try #require(
                 LiveTransferVerificationSessionFactory(
                     hasher: ChunkSizeRecordingHasher(probe: probe),
@@ -784,9 +895,10 @@ struct TransferVerificationServiceTests {
                 stagedIdentity: fixture.stagedIdentity,
                 progress: { _ in }
             )
-            source.close()
-            completion.receipt.source.close()
-            completion.receipt.staged.close()
+            defer {
+                completion.receipt.source.close()
+                completion.receipt.staged.close()
+            }
             #expect(await probe.value == item.expected)
         }
     }
@@ -882,6 +994,112 @@ struct TransferVerificationServiceTests {
         #expect(await probe.callCount == 0)
     }
 
+    @Test func sourceMutationBeforeVerifySkipsStagedCaptureAndHashing() async throws {
+        let fixture = try VerificationFixture.singleFile(contents: Data("same".utf8))
+        defer { fixture.temporary.remove() }
+        let source = try await capture(fixture.source, identity: fixture.sourceIdentity)
+        defer { source.close() }
+        try Data("changed".utf8).write(
+            to: fixture.source.appending(path: "payload.bin")
+        )
+        let captureProbe = CaptureProbe()
+        let hashProbe = HashProbe()
+        let session = try #require(
+            LiveTransferVerificationSessionFactory(
+                manifestBuilder: CaptureProbeBuilder(
+                    stagedRoot: fixture.staged,
+                    probe: captureProbe
+                ),
+                hasher: ProbeHasher(probe: hashProbe)
+            ).makeSession(policy: .sha256(maxConcurrentPairs: 1))
+        )
+
+        await #expect(throws: TransferVerificationFailure(
+            category: .sourceChanged
+        )) {
+            _ = try await session.verify(
+                source: source,
+                stagedURL: fixture.staged,
+                stagedIdentity: fixture.stagedIdentity,
+                progress: { _ in }
+            )
+        }
+        #expect(await captureProbe.stagedCaptureCount == 0)
+        #expect(await hashProbe.callCount == 0)
+    }
+
+    @Test func initialRecaptureAuthorityAliasingFailsWithoutClosingCallerManifest() async throws {
+        let fixture = try VerificationFixture.singleFile(contents: Data("same".utf8))
+        defer { fixture.temporary.remove() }
+        let source = try await capture(fixture.source, identity: fixture.sourceIdentity)
+        defer { source.close() }
+        let session = try #require(
+            LiveTransferVerificationSessionFactory(
+                manifestBuilder: AliasRecaptureBuilder(aliasOnCall: 1)
+            ).makeSession(policy: .sha256(maxConcurrentPairs: 1))
+        )
+
+        await #expect(throws: TransferVerificationFailure(category: .readFailed)) {
+            _ = try await session.verify(
+                source: source,
+                stagedURL: fixture.staged,
+                stagedIdentity: fixture.stagedIdentity,
+                progress: { _ in }
+            )
+        }
+        try await source.regularFiles[0].withReaderDescriptor { _ in () }
+    }
+
+    @Test func finalRecaptureAuthorityAliasingFailsWithoutPublishingReceipt() async throws {
+        let fixture = try VerificationFixture.singleFile(contents: Data("same".utf8))
+        defer { fixture.temporary.remove() }
+        let source = try await capture(fixture.source, identity: fixture.sourceIdentity)
+        defer { source.close() }
+        let session = try #require(
+            LiveTransferVerificationSessionFactory(
+                manifestBuilder: AliasRecaptureBuilder(aliasOnCall: 2)
+            ).makeSession(policy: .sha256(maxConcurrentPairs: 1))
+        )
+
+        await #expect(throws: TransferVerificationFailure(category: .readFailed)) {
+            _ = try await session.verify(
+                source: source,
+                stagedURL: fixture.staged,
+                stagedIdentity: fixture.stagedIdentity,
+                progress: { _ in }
+            )
+        }
+        try await source.regularFiles[0].withReaderDescriptor { _ in () }
+    }
+
+    @Test func revalidateAuthorityAliasingFailsAndLeavesReceiptUsable() async throws {
+        let fixture = try VerificationFixture.singleFile(contents: Data("same".utf8))
+        defer { fixture.temporary.remove() }
+        let source = try await capture(fixture.source, identity: fixture.sourceIdentity)
+        defer { source.close() }
+        let builder = AliasRecaptureBuilder(aliasOnCall: 4)
+        let session = try #require(
+            LiveTransferVerificationSessionFactory(manifestBuilder: builder)
+                .makeSession(policy: .sha256(maxConcurrentPairs: 1))
+        )
+        let completion = try await session.verify(
+            source: source,
+            stagedURL: fixture.staged,
+            stagedIdentity: fixture.stagedIdentity,
+            progress: { _ in }
+        )
+        defer {
+            completion.receipt.source.close()
+            completion.receipt.staged.close()
+        }
+
+        await #expect(throws: TransferVerificationFailure(category: .readFailed)) {
+            try await session.revalidate(completion.receipt)
+        }
+        try await completion.receipt.source.regularFiles[0].withReaderDescriptor { _ in () }
+        try await completion.receipt.staged.regularFiles[0].withReaderDescriptor { _ in () }
+    }
+
     @Test func sourceDescendantMutationIsCaughtByReceiptRevalidation() async throws {
         let fixture = try VerificationFixture.nestedFiles()
         defer { fixture.temporary.remove() }
@@ -957,6 +1175,48 @@ private func waitForTestSignal(
         }
         defer { group.cancelAll() }
         try await group.next()!
+    }
+}
+
+private func awaitBoundedTaskResult<Success: Sendable>(
+    _ task: Task<Success, Error>,
+    timeout: Duration = .seconds(2),
+    onTimeout: @escaping @Sendable () async -> Void = {}
+) async -> Result<Success, Error> {
+    let race = BoundedTaskResultRace()
+    let (stream, continuation) = AsyncStream<Result<Success, Error>>.makeStream()
+    let relayTask = Task {
+        let result = await task.result
+        guard await race.claim() else { return }
+        continuation.yield(result)
+    }
+    let timeoutTask = Task {
+        do {
+            try await Task.sleep(for: timeout)
+        } catch {
+            return
+        }
+        guard await race.claim() else { return }
+        task.cancel()
+        await onTimeout()
+        continuation.yield(.failure(VerificationTestTimeout()))
+    }
+
+    var iterator = stream.makeAsyncIterator()
+    let result = await iterator.next()
+    continuation.finish()
+    relayTask.cancel()
+    timeoutTask.cancel()
+    return result ?? .failure(VerificationTestTimeout())
+}
+
+private actor BoundedTaskResultRace {
+    private var didClaim = false
+
+    func claim() -> Bool {
+        guard !didClaim else { return false }
+        didClaim = true
+        return true
     }
 }
 
@@ -1076,7 +1336,9 @@ private struct BlockingPairHasher: RawFileHashing {
 
 private actor BurstProgressState {
     let secondStarted = TestSignal()
-    let finished = TestSignal()
+    let secondAboutToPublish = TestSignal()
+    let secondFirstReturned = TestSignal()
+    private let secondProgressPermission = TestGate()
     private var callCount = 0
 
     func begin() async -> Int {
@@ -1085,6 +1347,22 @@ private actor BurstProgressState {
             await secondStarted.signal()
         }
         return callCount
+    }
+
+    func allowSecondFirstProgress() async {
+        await secondProgressPermission.release()
+    }
+
+    func signalSecondAboutToPublish() async {
+        await secondAboutToPublish.signal()
+    }
+
+    func waitForSecondProgressPermission() async {
+        await secondProgressPermission.waitForRelease()
+    }
+
+    func markSecondFirstReturned() async {
+        await secondFirstReturned.signal()
     }
 }
 
@@ -1112,10 +1390,13 @@ private struct BurstProgressHasher: RawFileHashing {
         if ordinal == 1 {
             await progress(1)
         } else {
+            await state.waitForSecondProgressPermission()
+            await state.signalSecondAboutToPublish()
+            await progress(1)
+            await state.markSecondFirstReturned()
             for _ in 0 ..< 64 {
                 await progress(1)
             }
-            await state.finished.signal()
         }
         return (Data([0]), Data([0]))
     }
@@ -1537,6 +1818,118 @@ private struct MutatingCaptureBuilder: TransferVerificationManifestBuilding {
         _ manifest: TransferVerificationManifest
     ) async throws -> TransferVerificationManifest {
         try await base.recapture(manifest)
+    }
+
+    func requireStable(
+        _ current: TransferVerificationManifest,
+        against captured: TransferVerificationManifest
+    ) throws {
+        try base.requireStable(current, against: captured)
+    }
+
+    func requireEquivalentContentShape(
+        source: TransferVerificationManifest,
+        staged: TransferVerificationManifest
+    ) throws {
+        try base.requireEquivalentContentShape(source: source, staged: staged)
+    }
+}
+
+private actor CaptureProbe {
+    private(set) var stagedCaptureCount = 0
+
+    func recordStagedCapture() {
+        stagedCaptureCount += 1
+    }
+}
+
+private struct CaptureProbeBuilder: TransferVerificationManifestBuilding {
+    private let base = LiveTransferVerificationManifestBuilder()
+    private let stagedRoot: URL
+    private let probe: CaptureProbe
+
+    init(stagedRoot: URL? = nil, probe: CaptureProbe) {
+        self.stagedRoot = stagedRoot ?? URL(filePath: "/__unconfigured-staged-root__")
+        self.probe = probe
+    }
+
+    func capture(
+        at rootURL: URL,
+        identifiedBy expectedIdentity: FileIdentity,
+        comparisonPolicy: FilenameComparisonPolicy
+    ) async throws -> TransferVerificationManifest {
+        if rootURL == stagedRoot {
+            await probe.recordStagedCapture()
+        }
+        return try await base.capture(
+            at: rootURL,
+            identifiedBy: expectedIdentity,
+            comparisonPolicy: comparisonPolicy
+        )
+    }
+
+    func recapture(
+        _ manifest: TransferVerificationManifest
+    ) async throws -> TransferVerificationManifest {
+        try await base.recapture(manifest)
+    }
+
+    func requireStable(
+        _ current: TransferVerificationManifest,
+        against captured: TransferVerificationManifest
+    ) throws {
+        try base.requireStable(current, against: captured)
+    }
+
+    func requireEquivalentContentShape(
+        source: TransferVerificationManifest,
+        staged: TransferVerificationManifest
+    ) throws {
+        try base.requireEquivalentContentShape(source: source, staged: staged)
+    }
+}
+
+private actor AliasRecaptureState {
+    private let aliasOnCall: Int
+    private var recaptureCount = 0
+
+    init(aliasOnCall: Int) {
+        self.aliasOnCall = aliasOnCall
+    }
+
+    func shouldAlias() -> Bool {
+        recaptureCount += 1
+        return recaptureCount == aliasOnCall
+    }
+}
+
+private struct AliasRecaptureBuilder: TransferVerificationManifestBuilding {
+    private let base = LiveTransferVerificationManifestBuilder()
+    private let state: AliasRecaptureState
+
+    init(aliasOnCall: Int) {
+        state = AliasRecaptureState(aliasOnCall: aliasOnCall)
+    }
+
+    func capture(
+        at rootURL: URL,
+        identifiedBy expectedIdentity: FileIdentity,
+        comparisonPolicy: FilenameComparisonPolicy
+    ) async throws -> TransferVerificationManifest {
+        try await base.capture(
+            at: rootURL,
+            identifiedBy: expectedIdentity,
+            comparisonPolicy: comparisonPolicy
+        )
+    }
+
+    func recapture(
+        _ manifest: TransferVerificationManifest
+    ) async throws -> TransferVerificationManifest {
+        if await state.shouldAlias() {
+            return manifest
+        }
+        return try await base.recapture(manifest)
     }
 
     func requireStable(

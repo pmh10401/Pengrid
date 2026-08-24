@@ -1225,6 +1225,17 @@ struct TransferVerificationManifest: @unchecked Sendable {
         storage.pathStorage.metrics
     }
 
+    /// Returns whether both manifests retain the same root authority object.
+    ///
+    /// This is intentionally internal rather than debug-only.  A builder's
+    /// `recapture` implementation is required to return a fresh manifest with
+    /// an independently closeable authority; callers use this comparison to
+    /// fail closed before invoking `requireStable` or closing a returned
+    /// manifest when a custom builder violates that contract.
+    func hasSameAuthority(as other: TransferVerificationManifest) -> Bool {
+        storage.authority === other.storage.authority
+    }
+
     #if DEBUG
     static func makeSyntheticPairForTesting(
         descendantCount: Int,
@@ -1337,7 +1348,7 @@ struct TransferVerificationManifest: @unchecked Sendable {
     func sharesAuthorityForTesting(
         with other: TransferVerificationManifest
     ) -> Bool {
-        storage.authority === other.storage.authority
+        hasSameAuthority(as: other)
     }
 
     private static func makeSyntheticManifestForTesting(
@@ -1552,6 +1563,11 @@ protocol TransferVerificationManifestBuilding: Sendable {
         comparisonPolicy: FilenameComparisonPolicy
     ) async throws -> TransferVerificationManifest
 
+    /// Recaptures `manifest` into a new generation.
+    ///
+    /// The returned manifest must own a fresh root authority that is
+    /// independently closeable from the input manifest. Implementations must
+    /// not return the input manifest itself or share its root authority.
     func recapture(
         _ manifest: TransferVerificationManifest
     ) async throws -> TransferVerificationManifest
