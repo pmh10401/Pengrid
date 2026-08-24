@@ -1190,6 +1190,216 @@ struct FileOperationMutationTests {
             typeDescription: "File"
         )
     }
+
+    @Test func disabledDuplicateNeverCreatesAVerificationSessionOrChangesItsEvents() async throws {
+        let parent = URL(filePath: "/workspace", directoryHint: .isDirectory)
+        let source = parent.appending(path: "Report.txt")
+        let fileSystem = RecordingFileSystem(existingURLs: [parent, source])
+        let factory = RecordingTransferVerificationSessionFactory(
+            eventSource: { await fileSystem.events }
+        )
+        let logger = MutationRecordingOperationLogger()
+        let service = FileOperationService(
+            fileSystem: fileSystem,
+            logger: logger,
+            verificationSessionFactory: factory
+        )
+        let sourceIdentity = try #require(await fileSystem.identity(of: source))
+        let parentIdentity = try #require(await fileSystem.identity(of: parent))
+        let request = IdentifiedTransferRequest(
+            source: source,
+            sourceIdentity: sourceIdentity,
+            destinationRoot: parent,
+            destinationRootIdentity: parentIdentity,
+            relativeParentComponents: []
+        )
+
+        let result = await service.duplicate(
+            [request],
+            verificationPolicy: .disabled,
+            progress: { _ in }
+        )
+
+        #expect(result.outcomes == [
+            .succeeded(source: source, destination: parent.appending(path: "Report 2.txt"))
+        ])
+        #expect(factory.policies.isEmpty)
+        #expect(await factory.recorder.events.isEmpty)
+        #expect(await logger.verificationEvents.isEmpty)
+    }
+
+    @Test func enabledDuplicateVerifiesEachCandidateBeforeExclusivePublication() async throws {
+        let parent = URL(filePath: "/workspace", directoryHint: .isDirectory)
+        let source = parent.appending(path: "Report.txt")
+        let destination = parent.appending(path: "Report 2.txt")
+        let fileSystem = RecordingFileSystem(existingURLs: [parent, source])
+        let factory = RecordingTransferVerificationSessionFactory(
+            eventSource: { await fileSystem.events }
+        )
+        let service = FileOperationService(
+            fileSystem: fileSystem,
+            verificationSessionFactory: factory
+        )
+        let sourceIdentity = try #require(await fileSystem.identity(of: source))
+        let parentIdentity = try #require(await fileSystem.identity(of: parent))
+        let request = IdentifiedTransferRequest(
+            source: source,
+            sourceIdentity: sourceIdentity,
+            destinationRoot: parent,
+            destinationRootIdentity: parentIdentity,
+            relativeParentComponents: []
+        )
+
+        let result = await service.duplicate(
+            [request],
+            verificationPolicy: .sha256(maxConcurrentPairs: 2),
+            progress: { _ in },
+            verificationProgress: { _ in }
+        )
+
+        #expect(result.outcomes == [.succeeded(source: source, destination: destination)])
+        #expect(result.verificationReport == TransferVerificationReport(
+            verifiedFileCount: 1,
+            verifiedLogicalByteCount: 0,
+            noByteTransferItemCount: 0,
+            failedVerificationItemCount: 0
+        ))
+        #expect(factory.policies == [.sha256(maxConcurrentPairs: 2)])
+
+        let events = await factory.recorder.events
+        guard events.count == 3 else {
+            Issue.record("Expected capture, verify, and revalidate events")
+            return
+        }
+        guard case let .capture(_, capturedIdentity, comparisonPolicy, captureFilesystemEvents) = events[0],
+              case let .verify(_, _, verifyFilesystemEvents) = events[1],
+              case let .revalidate(revalidateFilesystemEvents) = events[2]
+        else {
+            Issue.record("Unexpected duplicate verification event order")
+            return
+        }
+
+        #expect(capturedIdentity == sourceIdentity)
+        #expect(comparisonPolicy == .caseSensitiveCanonical)
+        #expect(captureFilesystemEvents.contains("names:/workspace"))
+        #expect(verifyFilesystemEvents.contains {
+            $0.hasPrefix("copy:/workspace/Report.txt->/workspace/.bloom-staging-")
+        })
+        #expect(revalidateFilesystemEvents.contains {
+            $0.hasPrefix("moveExclusiveChecked:/workspace/.bloom-staging-")
+        } == false)
+        #expect(await fileSystem.events.contains {
+            $0.hasPrefix("moveExclusiveChecked:/workspace/.bloom-staging-")
+        })
+    }
+
+    @Test func enabledDuplicateNameRaceBuildsFreshVerificationEvidenceForTheRetry() async throws {
+        let parent = URL(filePath: "/workspace", directoryHint: .isDirectory)
+        let source = parent.appending(path: "Report.txt")
+        let racedDestination = parent.appending(path: "Report 2.txt")
+        let finalDestination = parent.appending(path: "Report 3.txt")
+        let fileSystem = RecordingFileSystem(
+            existingURLs: [parent, source],
+            raceDestinationBeforeExclusiveMove: racedDestination
+        )
+        let factory = RecordingTransferVerificationSessionFactory(
+            eventSource: { await fileSystem.events }
+        )
+        let service = FileOperationService(
+            fileSystem: fileSystem,
+            verificationSessionFactory: factory
+        )
+        let request = IdentifiedTransferRequest(
+            source: source,
+            sourceIdentity: try #require(await fileSystem.identity(of: source)),
+            destinationRoot: parent,
+            destinationRootIdentity: try #require(await fileSystem.identity(of: parent)),
+            relativeParentComponents: []
+        )
+
+        let result = await service.duplicate(
+            [request],
+            verificationPolicy: .sha256(maxConcurrentPairs: 2),
+            progress: { _ in }
+        )
+
+        #expect(result.outcomes == [
+            .succeeded(source: source, destination: finalDestination)
+        ])
+        #expect(factory.policies == [.sha256(maxConcurrentPairs: 2)])
+        let events = await factory.recorder.events
+        #expect(events.count == 6)
+        #expect(events.compactMap {
+            if case .capture = $0 { return 1 }
+            return nil
+        }.count == 2)
+        #expect(events.compactMap {
+            if case .verify = $0 { return 1 }
+            return nil
+        }.count == 2)
+        #expect(events.compactMap {
+            if case .revalidate = $0 { return 1 }
+            return nil
+        }.count == 2)
+        #expect(await fileSystem.exists(racedDestination))
+        #expect(await fileSystem.exists(finalDestination))
+        #expect(await fileSystem.existingURLs.contains {
+            $0.lastPathComponent.hasPrefix(".bloom-staging-")
+        } == false)
+    }
+
+    @Test func enabledDuplicateMismatchPublishesNothingAndLogsOneFailure() async throws {
+        let parent = URL(filePath: "/workspace", directoryHint: .isDirectory)
+        let source = parent.appending(path: "Report.txt")
+        let destination = parent.appending(path: "Report 2.txt")
+        let fileSystem = RecordingFileSystem(existingURLs: [parent, source])
+        let logger = MutationRecordingOperationLogger()
+        let factory = RecordingTransferVerificationSessionFactory(
+            eventSource: { await fileSystem.events },
+            configuration: .init(
+                verifyFailuresByCall: [1: .contentMismatch]
+            )
+        )
+        let service = FileOperationService(
+            fileSystem: fileSystem,
+            logger: logger,
+            verificationSessionFactory: factory
+        )
+        let request = IdentifiedTransferRequest(
+            source: source,
+            sourceIdentity: try #require(await fileSystem.identity(of: source)),
+            destinationRoot: parent,
+            destinationRootIdentity: try #require(await fileSystem.identity(of: parent)),
+            relativeParentComponents: []
+        )
+
+        let result = await service.duplicate(
+            [request],
+            verificationPolicy: .sha256(maxConcurrentPairs: 2),
+            progress: { _ in }
+        )
+
+        #expect(result.hasFailures)
+        #expect(result.verificationReport == TransferVerificationReport(
+            verifiedFileCount: 0,
+            verifiedLogicalByteCount: 0,
+            noByteTransferItemCount: 0,
+            failedVerificationItemCount: 1
+        ))
+        #expect(await fileSystem.exists(source))
+        #expect(await fileSystem.exists(destination) == false)
+        #expect(await fileSystem.events.contains {
+            $0.hasPrefix("moveExclusiveChecked:")
+        } == false)
+        #expect(await logger.verificationEvents == [TransferVerificationLogEvent(
+            enabled: true,
+            verifiedFileCount: 0,
+            verifiedLogicalByteCount: 0,
+            noByteTransferItemCount: 0,
+            failedVerificationItemCount: 1,
+            failureCategory: .contentMismatch
+        )])
+    }
 }
 
 private actor TrashProgressRecorder {
@@ -1208,6 +1418,7 @@ private actor MutationRecordingOperationLogger: OperationLogging {
     }
 
     private(set) var events: [Event] = []
+    private(set) var verificationEvents: [TransferVerificationLogEvent] = []
 
     func record(
         kind: FileOperationKind,
@@ -1217,6 +1428,12 @@ private actor MutationRecordingOperationLogger: OperationLogging {
         skipped: Int
     ) async {
         events.append(.init(kind: kind, succeeded: succeeded, failed: failed))
+    }
+
+    func recordTransferVerification(
+        _ event: TransferVerificationLogEvent
+    ) async {
+        verificationEvents.append(event)
     }
 }
 

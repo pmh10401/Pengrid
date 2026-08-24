@@ -241,6 +241,177 @@ struct CloudLocationScopedAccessTests {
         #expect(driver.stoppedURLs == [directory.url])
     }
 
+    @Test func verifiedTransferHoldsOneScopeThroughCaptureVerificationPublicationAndLogging() async throws {
+        let root = URL(filePath: "/Cloud/Manual", directoryHint: .isDirectory)
+        let source = root.appending(path: "Source.txt")
+        let destinationRoot = root.appending(
+            path: "Destination",
+            directoryHint: .isDirectory
+        )
+        let destination = destinationRoot.appending(path: "Source.txt")
+        let driver = RecordingSecurityScopeDriver()
+        let coordinator = CloudLocationScopedAccessCoordinator(driver: driver)
+        coordinator.replaceManualRoots([root])
+        let fileSystem = RecordingFileSystem(
+            existingURLs: [source, destinationRoot]
+        )
+        let phaseProbe = ScopedVerificationLeaseProbe()
+        let logger = ScopedVerificationOperationLogger(driver: driver)
+        let factory = RecordingTransferVerificationSessionFactory(
+            eventSource: { await fileSystem.events },
+            configuration: .init(onPhase: { _ in
+                await phaseProbe.append(driver.activeCount > 0)
+            })
+        )
+        let service = FileOperationService(
+            fileSystem: fileSystem,
+            logger: logger,
+            accessCoordinator: coordinator,
+            verificationSessionFactory: factory
+        )
+        let request = IdentifiedTransferRequest(
+            source: source,
+            sourceIdentity: try #require(await fileSystem.identity(of: source)),
+            destinationRoot: destinationRoot,
+            destinationRootIdentity: try #require(
+                await fileSystem.identity(of: destinationRoot)
+            ),
+            relativeParentComponents: []
+        )
+
+        let result = await service.transfer(
+            [request],
+            mode: .copy,
+            resolveConflict: { _ in .cancel },
+            verificationPolicy: .sha256(maxConcurrentPairs: 2),
+            progress: { _ in }
+        )
+
+        #expect(result.hasFailures == false)
+        #expect(await fileSystem.exists(destination))
+        #expect(await phaseProbe.samples == [true, true, true])
+        #expect(logger.verificationActiveSamples == [true])
+        #expect(driver.startedURLs == [root])
+        #expect(driver.stoppedURLs == [root])
+        #expect(driver.activeCount == 0)
+    }
+
+    @Test func failedVerifiedTransferKeepsScopeThroughCleanupAndBalancesItAfterward() async throws {
+        let root = URL(filePath: "/Cloud/Manual", directoryHint: .isDirectory)
+        let source = root.appending(path: "Source.txt")
+        let destinationRoot = root.appending(
+            path: "Destination",
+            directoryHint: .isDirectory
+        )
+        let driver = RecordingSecurityScopeDriver()
+        let coordinator = CloudLocationScopedAccessCoordinator(driver: driver)
+        coordinator.replaceManualRoots([root])
+        let fileSystem = RecordingFileSystem(
+            existingURLs: [source, destinationRoot]
+        )
+        let phaseProbe = ScopedVerificationLeaseProbe()
+        let logger = ScopedVerificationOperationLogger(driver: driver)
+        let factory = RecordingTransferVerificationSessionFactory(
+            eventSource: { await fileSystem.events },
+            configuration: .init(
+                verifyFailuresByCall: [1: .contentMismatch],
+                onPhase: { _ in
+                    await phaseProbe.append(driver.activeCount > 0)
+                }
+            )
+        )
+        let service = FileOperationService(
+            fileSystem: fileSystem,
+            logger: logger,
+            accessCoordinator: coordinator,
+            verificationSessionFactory: factory
+        )
+        let request = IdentifiedTransferRequest(
+            source: source,
+            sourceIdentity: try #require(await fileSystem.identity(of: source)),
+            destinationRoot: destinationRoot,
+            destinationRootIdentity: try #require(
+                await fileSystem.identity(of: destinationRoot)
+            ),
+            relativeParentComponents: []
+        )
+
+        let result = await service.transfer(
+            [request],
+            mode: .copy,
+            resolveConflict: { _ in .cancel },
+            verificationPolicy: .sha256(maxConcurrentPairs: 2),
+            progress: { _ in }
+        )
+
+        #expect(result.hasFailures)
+        #expect(await phaseProbe.samples == [true, true])
+        #expect(logger.verificationActiveSamples == [true])
+        #expect(await fileSystem.existingURLs.contains {
+            $0.lastPathComponent.hasPrefix(".bloom-staging-")
+        } == false)
+        #expect(driver.startedURLs == [root])
+        #expect(driver.stoppedURLs == [root])
+        #expect(driver.activeCount == 0)
+    }
+
+    @Test func cancelledVerifiedTransferBalancesScopeAfterPrivateCleanup() async throws {
+        let root = URL(filePath: "/Cloud/Manual", directoryHint: .isDirectory)
+        let source = root.appending(path: "Source.txt")
+        let destinationRoot = root.appending(
+            path: "Destination",
+            directoryHint: .isDirectory
+        )
+        let driver = RecordingSecurityScopeDriver()
+        let coordinator = CloudLocationScopedAccessCoordinator(driver: driver)
+        coordinator.replaceManualRoots([root])
+        let fileSystem = RecordingFileSystem(
+            existingURLs: [source, destinationRoot]
+        )
+        let logger = ScopedVerificationOperationLogger(driver: driver)
+        let factory = RecordingTransferVerificationSessionFactory(
+            eventSource: { await fileSystem.events },
+            configuration: .init(
+                verifyFailuresByCall: [1: .cancelled],
+                cancellingVerifyCalls: [1]
+            )
+        )
+        let service = FileOperationService(
+            fileSystem: fileSystem,
+            logger: logger,
+            accessCoordinator: coordinator,
+            verificationSessionFactory: factory
+        )
+        let request = IdentifiedTransferRequest(
+            source: source,
+            sourceIdentity: try #require(await fileSystem.identity(of: source)),
+            destinationRoot: destinationRoot,
+            destinationRootIdentity: try #require(
+                await fileSystem.identity(of: destinationRoot)
+            ),
+            relativeParentComponents: []
+        )
+
+        let result = await Task {
+            await service.transfer(
+                [request],
+                mode: .copy,
+                resolveConflict: { _ in .cancel },
+                verificationPolicy: .sha256(maxConcurrentPairs: 2),
+                progress: { _ in }
+            )
+        }.value
+
+        #expect(result.outcomes == [.cancelled(source: source)])
+        #expect(logger.verificationActiveSamples == [true])
+        #expect(await fileSystem.existingURLs.contains {
+            $0.lastPathComponent.hasPrefix(".bloom-staging-")
+        } == false)
+        #expect(driver.startedURLs == [root])
+        #expect(driver.stoppedURLs == [root])
+        #expect(driver.activeCount == 0)
+    }
+
     @MainActor
     @Test func runtimeDependenciesShareStoreRegistrationWithListingServices() async throws {
         let directory = try TemporaryDirectory()
@@ -756,6 +927,10 @@ private final class RecordingSecurityScopeDriver: SecurityScopedResourceAccessin
         lock.withLock { stopped }
     }
 
+    var activeCount: Int {
+        lock.withLock { started.count - stopped.count }
+    }
+
     func startAccessing(_ url: URL) -> Bool {
         lock.withLock { started.append(url) }
         return true
@@ -763,6 +938,45 @@ private final class RecordingSecurityScopeDriver: SecurityScopedResourceAccessin
 
     func stopAccessing(_ url: URL) {
         lock.withLock { stopped.append(url) }
+    }
+}
+
+private actor ScopedVerificationLeaseProbe {
+    private(set) var samples: [Bool] = []
+
+    func append(_ value: Bool) {
+        samples.append(value)
+    }
+}
+
+private final class ScopedVerificationOperationLogger:
+    OperationLogging,
+    @unchecked Sendable
+{
+    private let driver: RecordingSecurityScopeDriver
+    private let lock = NSLock()
+    private var activeSamples: [Bool] = []
+
+    init(driver: RecordingSecurityScopeDriver) {
+        self.driver = driver
+    }
+
+    var verificationActiveSamples: [Bool] {
+        lock.withLock { activeSamples }
+    }
+
+    func record(
+        kind: FileOperationKind,
+        duration: TimeInterval,
+        succeeded: Int,
+        failed: Int,
+        skipped: Int
+    ) async {}
+
+    func recordTransferVerification(
+        _ event: TransferVerificationLogEvent
+    ) async {
+        lock.withLock { activeSamples.append(driver.activeCount > 0) }
     }
 }
 
