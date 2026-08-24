@@ -198,6 +198,75 @@ struct FileOperationControllerTests {
         #expect(await fileSystem.existingURLs.contains(destination))
     }
 
+    @Test func enabledDuplicateCapturesPolicyAndPreservesVerificationReportThroughUndoProjection() async throws {
+        let parent = URL(filePath: "/workspace", directoryHint: .isDirectory)
+        let opposite = URL(filePath: "/other", directoryHint: .isDirectory)
+        let source = parent.appending(path: "Report.txt")
+        let item = FileItem(
+            url: source,
+            name: "Report.txt",
+            isDirectory: false,
+            isPackage: false,
+            modifiedAt: .distantPast,
+            byteSize: 12,
+            typeDescription: "Text"
+        )
+        let fileSystem = RecordingFileSystem(existingURLs: [parent, opposite, source])
+        let factory = RecordingTransferVerificationSessionFactory(
+            eventSource: { await fileSystem.events }
+        )
+        let workspace = WorkspaceState(
+            leftURL: parent,
+            rightURL: opposite,
+            listingService: StubDirectoryListingService(values: [parent: [item], opposite: []])
+        )
+        await workspace.loadInitialDirectories()
+        let snapshot = ContextActionSnapshot(
+            draft: ContextActionDraft(
+                sources: [item],
+                sourcePaneID: .left,
+                oppositePaneID: .right,
+                sourceDirectory: parent,
+                oppositeDirectory: opposite,
+                sourceCapability: .writable,
+                oppositeCapability: .readOnly
+            )!,
+            sources: [ContextActionSource(
+                item: item,
+                identity: try #require(await fileSystem.identity(of: source))
+            )],
+            sourceDirectory: IdentifiedFileRequest(
+                url: parent,
+                identity: try #require(await fileSystem.identity(of: parent))
+            ),
+            oppositeDirectory: IdentifiedFileRequest(
+                url: opposite,
+                identity: try #require(await fileSystem.identity(of: opposite))
+            )
+        )!
+        let policy = TransferVerificationPolicyBox(.sha256(maxConcurrentPairs: 2))
+        let controller = FileOperationController(
+            service: FileOperationService(
+                fileSystem: fileSystem,
+                verificationSessionFactory: factory
+            ),
+            materializer: InMemoryCloudMaterializer(),
+            verificationPolicyProvider: { policy.read() }
+        )
+
+        #expect(controller.duplicate(snapshot, in: workspace.left, workspace: workspace))
+        await waitUntilQueueIsIdle(controller)
+
+        let report = try #require(controller.lastResult?.verificationReport)
+        let history = try #require(controller.operationHistory.first)
+        #expect(factory.policies == [.sha256(maxConcurrentPairs: 2)])
+        #expect(policy.readCount == 1)
+        #expect(report.verifiedFileCount == 1)
+        #expect(report.failedVerificationItemCount == 0)
+        #expect(history.verificationReport == report)
+        #expect(history.canUndo)
+    }
+
     @Test func duplicatePartialFailureKeepsStableOrderAndNeverOffersGroupUndo() async throws {
         let parent = URL(filePath: "/workspace", directoryHint: .isDirectory)
         let opposite = URL(filePath: "/other", directoryHint: .isDirectory)
@@ -312,6 +381,80 @@ struct FileOperationControllerTests {
         #expect(interval)
         #expect(final)
         #expect(!duplicateFinal)
+    }
+
+    @Test func transferVerificationPublicationIsLimitedExceptForPhasesAndBoundaries() {
+        var gate = TransferVerificationProgressPublicationGate()
+        let start = ContinuousClock.now
+        let initial = transferVerificationProgress(
+            phase: .preparingManifest,
+            fraction: 0,
+            completedFileCount: 0
+        )
+        let early = transferVerificationProgress(
+            phase: .preparingManifest,
+            fraction: 0.1,
+            completedFileCount: 1
+        )
+        let nextPhase = transferVerificationProgress(
+            phase: .hashing,
+            fraction: 0.2,
+            completedFileCount: 1
+        )
+        let throttled = transferVerificationProgress(
+            phase: .hashing,
+            fraction: 0.3,
+            completedFileCount: 1
+        )
+        let interval = transferVerificationProgress(
+            phase: .hashing,
+            fraction: 0.4,
+            completedFileCount: 2
+        )
+        let final = transferVerificationProgress(
+            phase: .finalValidation,
+            fraction: 1,
+            completedFileCount: 4
+        )
+
+        let publishesInitial = gate.shouldPublish(initial, at: start)
+        let publishesDuplicateInitial = gate.shouldPublish(
+            initial,
+            at: start.advanced(by: .milliseconds(1))
+        )
+        let publishesEarly = gate.shouldPublish(
+            early,
+            at: start.advanced(by: .milliseconds(50))
+        )
+        let publishesNextPhase = gate.shouldPublish(
+            nextPhase,
+            at: start.advanced(by: .milliseconds(51))
+        )
+        let publishesThrottled = gate.shouldPublish(
+            throttled,
+            at: start.advanced(by: .milliseconds(100))
+        )
+        let publishesInterval = gate.shouldPublish(
+            interval,
+            at: start.advanced(by: .milliseconds(151))
+        )
+        let publishesFinal = gate.shouldPublish(
+            final,
+            at: start.advanced(by: .milliseconds(152))
+        )
+        let publishesDuplicateFinal = gate.shouldPublish(
+            final,
+            at: start.advanced(by: .milliseconds(153))
+        )
+
+        #expect(publishesInitial)
+        #expect(!publishesDuplicateInitial)
+        #expect(!publishesEarly)
+        #expect(publishesNextPhase)
+        #expect(!publishesThrottled)
+        #expect(publishesInterval)
+        #expect(publishesFinal)
+        #expect(!publishesDuplicateFinal)
     }
 
     @Test func compressionUsesTheRequestedArchiveFormat() async {
@@ -2095,6 +2238,294 @@ struct FileOperationControllerTests {
         #expect(await fileSystem.existingURLs.contains(source))
     }
 
+    @Test func enabledTransferCancelledBeforeWorkerStartPublishesOneNormalizedResult() async throws {
+        let source = URL(filePath: "/workspace/queued.txt")
+        let destination = URL(filePath: "/destination", directoryHint: .isDirectory)
+        let fileSystem = RecordingFileSystem(existingURLs: [source, destination])
+        let factory = RecordingTransferVerificationSessionFactory(
+            eventSource: { await fileSystem.events }
+        )
+        let policy = TransferVerificationPolicyBox(.sha256(maxConcurrentPairs: 2))
+        let controller = FileOperationController(
+            service: FileOperationService(
+                fileSystem: fileSystem,
+                verificationSessionFactory: factory
+            ),
+            materializer: InMemoryCloudMaterializer(),
+            verificationPolicyProvider: { policy.read() }
+        )
+        let workspace = WorkspaceState(
+            leftURL: source.deletingLastPathComponent(),
+            rightURL: destination,
+            listingService: StubDirectoryListingService(values: [:])
+        )
+        let request = try await identifiedTransferRequest(
+            source: source,
+            destination: destination,
+            fileSystem: fileSystem
+        )
+        var completions: [FileOperationResult] = []
+
+        let accepted = controller.runIdentifiedTransfer(
+            [request],
+            mode: .copy,
+            workspace: workspace,
+            onCompletion: { completions.append($0) }
+        )
+        #expect(accepted)
+        controller.cancelActiveJob()
+        await waitUntilQueueIsIdle(controller)
+
+        let expected = FileOperationResult(
+            outcomes: [.cancelled(source: source)],
+            verificationReport: emptyTransferVerificationReport
+        )
+        #expect(controller.lastResult == expected)
+        #expect(completions == [expected])
+        #expect(controller.operationHistory.first?.verificationReport
+            == emptyTransferVerificationReport)
+        #expect(factory.policies.isEmpty)
+        #expect(policy.readCount == 1)
+    }
+
+    @Test func enabledIdentityPreparationFailureRetainsAnAllZeroReport() async {
+        let source = URL(filePath: "/source/item.txt")
+        let destination = URL(filePath: "/destination", directoryHint: .isDirectory)
+        let fileSystem = RecordingFileSystem(
+            existingURLs: [source, destination],
+            failures: [
+                .identity(destination): CocoaError(.fileReadNoSuchFile)
+            ]
+        )
+        let policy = TransferVerificationPolicyBox(.sha256(maxConcurrentPairs: 2))
+        let controller = FileOperationController(
+            service: FileOperationService(fileSystem: fileSystem),
+            materializer: InMemoryCloudMaterializer(),
+            verificationPolicyProvider: { policy.read() }
+        )
+        let workspace = WorkspaceState(
+            leftURL: source.deletingLastPathComponent(),
+            rightURL: destination,
+            listingService: StubDirectoryListingService(values: [:])
+        )
+
+        #expect(await controller.runTransfer(
+            [source],
+            to: destination,
+            mode: .copy,
+            workspace: workspace
+        ))
+        await waitUntilQueueIsIdle(controller)
+
+        #expect(controller.lastResult?.verificationReport == emptyTransferVerificationReport)
+        #expect(controller.operationHistory.first?.verificationReport
+            == emptyTransferVerificationReport)
+        #expect(policy.readCount == 1)
+    }
+
+    @Test func queuedAndRetriedEnabledTransferKeepsItsCapturedPolicy() async throws {
+        let holdingSource = URL(filePath: "/source/hold.txt")
+        let verifiedSource = URL(filePath: "/source/verify.txt")
+        let destination = URL(filePath: "/destination", directoryHint: .isDirectory)
+        let collision = destination.appending(path: holdingSource.lastPathComponent)
+        let fileSystem = RecordingFileSystem(
+            existingURLs: [holdingSource, verifiedSource, destination, collision]
+        )
+        var verificationConfiguration = RecordingTransferVerificationConfiguration()
+        verificationConfiguration.verifyFailuresByCall = [1: .contentMismatch]
+        let factory = RecordingTransferVerificationSessionFactory(
+            eventSource: { await fileSystem.events },
+            configuration: verificationConfiguration
+        )
+        let policy = TransferVerificationPolicyBox(.disabled)
+        let controller = FileOperationController(
+            service: FileOperationService(
+                fileSystem: fileSystem,
+                verificationSessionFactory: factory
+            ),
+            materializer: InMemoryCloudMaterializer(),
+            verificationPolicyProvider: { policy.read() }
+        )
+        let workspace = WorkspaceState(
+            leftURL: holdingSource.deletingLastPathComponent(),
+            rightURL: destination,
+            listingService: StubDirectoryListingService(values: [:])
+        )
+
+        #expect(await controller.runTransfer(
+            [holdingSource],
+            to: destination,
+            mode: .copy,
+            workspace: workspace
+        ))
+        await waitForPendingConflict(controller)
+
+        policy.value = .sha256(maxConcurrentPairs: 2)
+        let request = try await identifiedTransferRequest(
+            source: verifiedSource,
+            destination: destination,
+            fileSystem: fileSystem
+        )
+        var completions: [FileOperationResult] = []
+        let accepted = controller.runIdentifiedTransfer(
+            [request],
+            mode: .copy,
+            workspace: workspace,
+            onCompletion: { completions.append($0) }
+        )
+        #expect(accepted)
+        policy.value = .disabled
+        controller.resolvePendingConflict(.skip, applyToAll: false)
+        await waitUntilQueueIsIdle(controller)
+
+        let failed = try #require(controller.operationHistory.first(where: {
+            $0.itemDisplayName == verifiedSource.lastPathComponent
+        }))
+        let failedReport = try #require(failed.verificationReport)
+        #expect(failed.state == .failed)
+        #expect(failed.canRetry)
+        #expect(failedReport.failedVerificationItemCount == 1)
+        #expect(completions.count == 1)
+        #expect(completions.first?.verificationReport == failedReport)
+        #expect(factory.policies == [.sha256(maxConcurrentPairs: 2)])
+
+        #expect(controller.retryJob(failed.id))
+        await waitUntilQueueIsIdle(controller)
+
+        let retried = try #require(controller.operationHistory.first)
+        let retriedReport = try #require(retried.verificationReport)
+        #expect(retried.itemDisplayName == verifiedSource.lastPathComponent)
+        #expect(retried.state == .succeeded)
+        #expect(retried.canUndo)
+        #expect(retriedReport.failedVerificationItemCount == 0)
+        #expect(controller.lastResult?.verificationReport == retriedReport)
+        #expect(factory.policies == [
+            .sha256(maxConcurrentPairs: 2),
+            .sha256(maxConcurrentPairs: 2)
+        ])
+        #expect(policy.readCount == 2)
+    }
+
+    @Test func disabledTransferRetryRemainsDisabledAfterPreferenceIsEnabled() async throws {
+        let source = URL(filePath: "/source/failing.txt")
+        let destination = URL(filePath: "/destination", directoryHint: .isDirectory)
+        let copyError = CocoaError(.fileWriteUnknown)
+        let fileSystem = RecordingFileSystem(
+            existingURLs: [source, destination],
+            copyErrorsBySource: [source: copyError]
+        )
+        let factory = RecordingTransferVerificationSessionFactory(
+            eventSource: { await fileSystem.events }
+        )
+        let policy = TransferVerificationPolicyBox(.disabled)
+        let controller = FileOperationController(
+            service: FileOperationService(
+                fileSystem: fileSystem,
+                verificationSessionFactory: factory
+            ),
+            materializer: InMemoryCloudMaterializer(),
+            verificationPolicyProvider: { policy.read() }
+        )
+        let workspace = WorkspaceState(
+            leftURL: source.deletingLastPathComponent(),
+            rightURL: destination,
+            listingService: StubDirectoryListingService(values: [:])
+        )
+        let request = try await identifiedTransferRequest(
+            source: source,
+            destination: destination,
+            fileSystem: fileSystem
+        )
+
+        #expect(controller.runIdentifiedTransfer(
+            [request],
+            mode: .copy,
+            workspace: workspace
+        ))
+        await waitUntilQueueIsIdle(controller)
+        let original = try #require(controller.operationHistory.first)
+        #expect(original.state == .failed)
+        #expect(original.canRetry)
+        #expect(original.verificationReport == nil)
+
+        policy.value = .sha256(maxConcurrentPairs: 2)
+        #expect(controller.retryJob(original.id))
+        await waitUntilQueueIsIdle(controller)
+
+        #expect(controller.operationHistory.first?.state == .failed)
+        #expect(controller.operationHistory.first?.verificationReport == nil)
+        #expect(controller.lastResult?.verificationReport == nil)
+        #expect(factory.policies.isEmpty)
+        #expect(policy.readCount == 1)
+    }
+
+    @Test func cancellingQueuedEnabledTransferPublishesItsCapturedNormalizedResult() async throws {
+        let holdingSource = URL(filePath: "/source/hold.txt")
+        let queuedSource = URL(filePath: "/source/queued.txt")
+        let destination = URL(filePath: "/destination", directoryHint: .isDirectory)
+        let collision = destination.appending(path: holdingSource.lastPathComponent)
+        let fileSystem = RecordingFileSystem(
+            existingURLs: [holdingSource, queuedSource, destination, collision]
+        )
+        let factory = RecordingTransferVerificationSessionFactory(
+            eventSource: { await fileSystem.events }
+        )
+        let policy = TransferVerificationPolicyBox(.disabled)
+        let controller = FileOperationController(
+            service: FileOperationService(
+                fileSystem: fileSystem,
+                verificationSessionFactory: factory
+            ),
+            materializer: InMemoryCloudMaterializer(),
+            verificationPolicyProvider: { policy.read() }
+        )
+        let workspace = WorkspaceState(
+            leftURL: holdingSource.deletingLastPathComponent(),
+            rightURL: destination,
+            listingService: StubDirectoryListingService(values: [:])
+        )
+
+        #expect(await controller.runTransfer(
+            [holdingSource],
+            to: destination,
+            mode: .copy,
+            workspace: workspace
+        ))
+        await waitForPendingConflict(controller)
+        policy.value = .sha256(maxConcurrentPairs: 2)
+        let request = try await identifiedTransferRequest(
+            source: queuedSource,
+            destination: destination,
+            fileSystem: fileSystem
+        )
+        var completions: [FileOperationResult] = []
+        let accepted = controller.runIdentifiedTransfer(
+            [request],
+            mode: .copy,
+            workspace: workspace,
+            onCompletion: { completions.append($0) }
+        )
+        #expect(accepted)
+        let queuedID = try #require(controller.queuedJobs.first?.id)
+        policy.value = .disabled
+
+        #expect(controller.cancelQueuedJob(queuedID))
+        let expected = FileOperationResult(
+            outcomes: [.cancelled(source: queuedSource)],
+            verificationReport: emptyTransferVerificationReport
+        )
+        #expect(controller.lastResult == expected)
+        #expect(completions == [expected])
+        #expect(controller.operationHistory.first(where: { $0.id == queuedID })?
+            .verificationReport == emptyTransferVerificationReport)
+        #expect(controller.operationHistory.first(where: { $0.id == queuedID })?.canRetry == true)
+        #expect(factory.policies.isEmpty)
+        #expect(policy.readCount == 2)
+
+        controller.resolvePendingConflict(.skip, applyToAll: false)
+        await waitUntilQueueIsIdle(controller)
+    }
+
     @Test func queuedJobsCanBeMovedBeforeTheyExecute() async {
         let firstSource = URL(filePath: "/source/first")
         let destinationDirectory = URL(filePath: "/destination", directoryHint: .isDirectory)
@@ -3114,6 +3545,7 @@ struct FileOperationControllerTests {
         #expect(fixture.controller.hasExclusiveOperationActive)
         await fixture.executor.waitUntilStarted()
         #expect(await fixture.executor.executeCount == 1)
+        #expect(await fixture.executor.verificationPolicies == [.disabled])
         await fixture.executor.releaseHeldExecution()
         await waitUntilQueueIsIdle(fixture.controller)
 
@@ -3283,6 +3715,91 @@ struct FileOperationControllerTests {
 
         await fixture.executor.releaseHeldExecution()
         await waitUntilQueueIsIdle(fixture.controller)
+    }
+
+    @Test func enabledSynchronizationPublishesVerificationFractionAndNormalizedTerminalResult() async throws {
+        let verification = transferVerificationProgress(
+            phase: .hashing,
+            fraction: 0.42,
+            completedFileCount: 2,
+            totalFileCount: 5,
+            currentName: "/private/Secret\nReport.txt"
+        )
+        let policy = TransferVerificationPolicyBox(.sha256(maxConcurrentPairs: 2))
+        let fixture = try FolderSynchronizationQueueFixture(
+            holdUntilReleased: true,
+            verificationProgressToPublish: [verification],
+            verificationPolicyProvider: { policy.read() }
+        )
+        var completions: [FileOperationResult] = []
+
+        let accepted = fixture.controller.synchronizeFolder(
+            plan: fixture.plan,
+            workspace: fixture.workspace,
+            onCompletion: { completions.append($0) }
+        )
+        #expect(accepted)
+        await fixture.executor.waitUntilStarted()
+        #expect(await waitUntilBounded {
+            fixture.controller.stage == .verifying(verification)
+        })
+
+        #expect(fixture.controller.progress == nil)
+        #expect(fixture.controller.activeJob?.progress == FileOperationJobProgress(
+            completedCount: 2,
+            totalCount: 5,
+            detail: "ignored for fraction progress",
+            unit: .fraction,
+            normalizedFraction: 0.42
+        ))
+        #expect(fixture.controller.activeJob?.accessibilityLabel.contains("42 percent") == true)
+        #expect(fixture.controller.activeJob?.accessibilityLabel.contains("Secret Report.txt") == false)
+        #expect(await fixture.executor.verificationPolicies == [
+            .sha256(maxConcurrentPairs: 2)
+        ])
+
+        await fixture.executor.releaseHeldExecution()
+        await waitUntilQueueIsIdle(fixture.controller)
+
+        #expect(policy.readCount == 1)
+        #expect(fixture.controller.lastResult?.verificationReport
+            == emptyTransferVerificationReport)
+        #expect(fixture.controller.operationHistory.first?.verificationReport
+            == emptyTransferVerificationReport)
+        #expect(completions.first?.verificationReport == emptyTransferVerificationReport)
+    }
+
+    @Test func verificationCallbackAcknowledgesPauseBeforeDuplicateProgressIsThrottled() async throws {
+        let progress = transferVerificationProgress(
+            phase: .hashing,
+            fraction: 0.25,
+            completedFileCount: 1,
+            totalFileCount: 4
+        )
+        let fixture = try FolderSynchronizationQueueFixture(
+            verificationProgressToPublish: [progress, progress],
+            suspendBeforeVerificationProgressIndex: 1,
+            verificationPolicyProvider: { .sha256(maxConcurrentPairs: 2) }
+        )
+
+        #expect(fixture.controller.synchronizeFolder(
+            plan: fixture.plan,
+            workspace: fixture.workspace
+        ))
+        await fixture.executor.waitUntilVerificationProgressSuspends()
+        #expect(fixture.controller.stage == .verifying(progress))
+
+        await fixture.controller.pauseActiveJob()
+        #expect(fixture.controller.activeJob?.state == .pauseRequested)
+        await fixture.executor.releaseSuspendedVerificationProgress()
+        #expect(await waitUntilBounded {
+            fixture.controller.activeJob?.state == .paused
+        })
+        #expect(fixture.controller.stage == .verifying(progress))
+
+        await fixture.controller.resumeActiveJob()
+        await waitUntilQueueIsIdle(fixture.controller)
+        #expect(fixture.controller.operationHistory.first?.state == .succeeded)
     }
 
     @Test func identifiedConflictUsesStableContentIdentity() {
@@ -3719,7 +4236,11 @@ private struct FolderSynchronizationQueueFixture {
     init(
         holdUntilReleased: Bool = false,
         result: FileOperationResult? = nil,
-        progressToPublish: [FolderSynchronizationProgress] = []
+        progressToPublish: [FolderSynchronizationProgress] = [],
+        verificationProgressToPublish: [TransferVerificationProgress] = [],
+        suspendBeforeVerificationProgressIndex: Int? = nil,
+        verificationPolicyProvider:
+            @escaping @MainActor () -> TransferVerificationPolicy = { .disabled }
     ) throws {
         plan = try makeFolderSynchronizationQueuePlan()
         let sourceURL = plan.draft.actions[0].source?.url
@@ -3729,7 +4250,9 @@ private struct FolderSynchronizationQueueFixture {
                 .succeeded(source: sourceURL, destination: plan.draft.destinationRoot.appending(path: "copy.txt"))
             ]),
             holdUntilReleased: holdUntilReleased,
-            progressToPublish: progressToPublish
+            progressToPublish: progressToPublish,
+            verificationProgressToPublish: verificationProgressToPublish,
+            suspendBeforeVerificationProgressIndex: suspendBeforeVerificationProgressIndex
         )
         controller = FileOperationController(
             service: FileOperationService(
@@ -3738,7 +4261,9 @@ private struct FolderSynchronizationQueueFixture {
                     plan.draft.destinationRoot
                 ])
             ),
-            folderSynchronizationService: executor
+            materializer: InMemoryCloudMaterializer(),
+            folderSynchronizationService: executor,
+            verificationPolicyProvider: verificationPolicyProvider
         )
         workspace = WorkspaceState(
             leftURL: plan.draft.sourceRoot,
@@ -3810,43 +4335,68 @@ private func makeFolderSynchronizationQueuePlan(
 
 actor RecordingFolderSynchronizationExecutor: FolderSynchronizationExecuting {
     private(set) var executeCount = 0
+    private(set) var verificationPolicies: [TransferVerificationPolicy] = []
     private let result: FileOperationResult
     private let holdUntilReleased: Bool
     private let progressToPublish: [FolderSynchronizationProgress]
+    private let verificationProgressToPublish: [TransferVerificationProgress]
+    private let suspendBeforeVerificationProgressIndex: Int?
     private var startWaiters: [CheckedContinuation<Void, Never>] = []
+    private var verificationSuspensionWaiters: [CheckedContinuation<Void, Never>] = []
     private var release: CheckedContinuation<Void, Never>?
+    private var verificationProgressRelease: CheckedContinuation<Void, Never>?
     private var releaseRequested = false
     private var hasStarted = false
+    private var hasSuspendedVerificationProgress = false
 
     init(
         result: FileOperationResult,
         holdUntilReleased: Bool,
-        progressToPublish: [FolderSynchronizationProgress]
+        progressToPublish: [FolderSynchronizationProgress],
+        verificationProgressToPublish: [TransferVerificationProgress] = [],
+        suspendBeforeVerificationProgressIndex: Int? = nil
     ) {
         self.result = result
         self.holdUntilReleased = holdUntilReleased
         self.progressToPublish = progressToPublish
+        self.verificationProgressToPublish = verificationProgressToPublish
+        self.suspendBeforeVerificationProgressIndex = suspendBeforeVerificationProgressIndex
     }
 
     init() {
         self.init(
             result: FileOperationResult(outcomes: []),
             holdUntilReleased: false,
-            progressToPublish: []
+            progressToPublish: [],
+            verificationProgressToPublish: [],
+            suspendBeforeVerificationProgressIndex: nil
         )
     }
 
     func execute(
         _ plan: PreparedFolderSynchronizationPlan,
-        progress: @escaping @Sendable (FolderSynchronizationProgress) async -> Void
+        verificationPolicy: TransferVerificationPolicy,
+        progress: @escaping @Sendable (FolderSynchronizationProgress) async -> Void,
+        verificationProgress: @escaping TransferVerificationProgressHandler
     ) async -> FileOperationResult {
         executeCount += 1
+        verificationPolicies.append(verificationPolicy)
         hasStarted = true
         let waiters = startWaiters
         startWaiters.removeAll()
         waiters.forEach { $0.resume() }
         for update in progressToPublish {
             await progress(update)
+        }
+        for (index, update) in verificationProgressToPublish.enumerated() {
+            if index == suspendBeforeVerificationProgressIndex {
+                hasSuspendedVerificationProgress = true
+                let waiters = verificationSuspensionWaiters
+                verificationSuspensionWaiters.removeAll()
+                waiters.forEach { $0.resume() }
+                await withCheckedContinuation { verificationProgressRelease = $0 }
+            }
+            await verificationProgress(update)
         }
         if holdUntilReleased {
             if releaseRequested {
@@ -3861,6 +4411,16 @@ actor RecordingFolderSynchronizationExecutor: FolderSynchronizationExecuting {
     func waitUntilStarted() async {
         if hasStarted { return }
         await withCheckedContinuation { startWaiters.append($0) }
+    }
+
+    func waitUntilVerificationProgressSuspends() async {
+        if hasSuspendedVerificationProgress { return }
+        await withCheckedContinuation { verificationSuspensionWaiters.append($0) }
+    }
+
+    func releaseSuspendedVerificationProgress() {
+        verificationProgressRelease?.resume()
+        verificationProgressRelease = nil
     }
 
     func releaseHeldExecution() {
@@ -4094,6 +4654,60 @@ private actor SequencedListingService: DirectoryListingService {
         requestCount += 1
         return requestCount == 1 ? (firstItems, false) : (refreshedItems, true)
     }
+}
+
+@MainActor
+private final class TransferVerificationPolicyBox {
+    var value: TransferVerificationPolicy
+    private(set) var readCount = 0
+
+    init(_ value: TransferVerificationPolicy) {
+        self.value = value
+    }
+
+    func read() -> TransferVerificationPolicy {
+        readCount += 1
+        return value
+    }
+}
+
+private let emptyTransferVerificationReport = TransferVerificationReport(
+    verifiedFileCount: 0,
+    verifiedLogicalByteCount: 0,
+    noByteTransferItemCount: 0,
+    failedVerificationItemCount: 0
+)
+
+private func transferVerificationProgress(
+    phase: TransferVerificationPhase,
+    fraction: Double,
+    completedFileCount: Int,
+    totalFileCount: Int = 4,
+    currentName: String = "Item.txt"
+) -> TransferVerificationProgress {
+    TransferVerificationProgress(
+        phase: phase,
+        fractionCompleted: fraction,
+        completedFileCount: completedFileCount,
+        totalFileCount: totalFileCount,
+        completedLogicalByteCount: Int64(completedFileCount),
+        totalLogicalByteCount: Int64(totalFileCount),
+        currentName: currentName
+    )
+}
+
+private func identifiedTransferRequest(
+    source: URL,
+    destination: URL,
+    fileSystem: RecordingFileSystem
+) async throws -> IdentifiedTransferRequest {
+    IdentifiedTransferRequest(
+        source: source,
+        sourceIdentity: try #require(await fileSystem.identity(of: source)),
+        destinationRoot: destination,
+        destinationRootIdentity: try #require(await fileSystem.identity(of: destination)),
+        relativeParentComponents: []
+    )
 }
 
 @MainActor

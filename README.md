@@ -140,6 +140,16 @@ Folder with Selection, and one-way folder synchronization use staged
 publication and conservative rollback checks. Synchronization is
 non-retryable and is not exposed as Undo after it finishes.
 
+> Transferred-content verification is implemented in the current source tree,
+> but it is not included in the published Developer Preview 7 DMG.
+
+Source builds add a default-off **File Operations** setting named **Verify
+transferred file contents before publishing**. When enabled, copy, Duplicate,
+cross-volume move, and reviewed synchronization copy/replace actions compare
+regular-file data with SHA-256 in private staging before publication. Recursive
+tree structure and symbolic-link payloads are also checked without following
+links. Progress shows a byte-weighted percentage beside a file-weighted count.
+
 ### Create and extract archives
 
 Pengrid creates and extracts **ZIP**, **TAR**, **TAR.GZ/TGZ**,
@@ -189,9 +199,10 @@ Operations menu or a row's context menu.
   directory metadata. Passwords are never saved or recoverable.
 - 7z, RAR, password-protected TAR, Developer ID signing, and notarization are
   not included in this Developer Preview.
-- Finder tag editing and byte-level transfer verification remain future work;
-  identity and fingerprint safety checks do not claim per-byte transfer
-  validation.
+- Finder tag editing remains future work. Optional transferred-content
+  verification is present in current source but not in the Developer Preview 7
+  DMG. It excludes resource forks, extended attributes, ACLs, ownership, flags,
+  creation dates, hard-link relationships, and sparse allocation.
 - Manual checks that have not been run remain explicitly marked `NOT RUN` in
   the verification documents.
 
@@ -223,6 +234,7 @@ retain the internal name `BloomFileManager` for compatibility.
 - [Release and packaging guide](docs/release.md)
 - [Architecture notes](docs/architecture.md)
 - [Current limitations](docs/current-limitations.md)
+- [Transferred-content verification record](docs/verification/transfer-content-verification.md)
 - [Verification records](docs/verification/)
 
 Pengrid is under active development. Contributions and reproducible issue

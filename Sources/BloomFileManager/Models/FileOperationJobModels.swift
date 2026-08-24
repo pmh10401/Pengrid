@@ -69,16 +69,45 @@ enum FileOperationJobState: Sendable, Equatable {
     }
 }
 
+enum FileOperationJobProgressUnit: Sendable, Equatable {
+    case items
+    case fraction
+}
+
 struct FileOperationJobProgress: Sendable, Equatable {
     let completedCount: Int
     let totalCount: Int
     let detail: String
+    let unit: FileOperationJobProgressUnit
+    let normalizedFraction: Double?
+
+    init(
+        completedCount: Int,
+        totalCount: Int,
+        detail: String,
+        unit: FileOperationJobProgressUnit = .items,
+        normalizedFraction: Double? = nil
+    ) {
+        self.completedCount = completedCount
+        self.totalCount = totalCount
+        self.detail = unit == .fraction ? "Verifying contents" : detail
+        self.unit = unit
+        self.normalizedFraction = normalizedFraction.map(Self.clampedFraction)
+    }
 
     var fractionCompleted: Double {
+        if unit == .fraction {
+            return normalizedFraction ?? 0
+        }
         let safeTotal = max(totalCount, 0)
         guard safeTotal > 0 else { return 0 }
         let safeCompleted = min(max(completedCount, 0), safeTotal)
         return Double(safeCompleted) / Double(safeTotal)
+    }
+
+    private static func clampedFraction(_ value: Double) -> Double {
+        guard value.isFinite else { return 0 }
+        return min(max(value, 0), 1)
     }
 }
 
@@ -89,6 +118,7 @@ struct FileOperationJobSnapshot: Identifiable, Sendable, Equatable {
     let itemCount: Int
     let state: FileOperationJobState
     let progress: FileOperationJobProgress?
+    let verificationReport: TransferVerificationReport?
     private let retryEligible: Bool
     private let undoEligible: Bool
 
@@ -100,7 +130,8 @@ struct FileOperationJobSnapshot: Identifiable, Sendable, Equatable {
         state: FileOperationJobState,
         progress: FileOperationJobProgress?,
         canUndo: Bool,
-        canRetry: Bool = true
+        canRetry: Bool = true,
+        verificationReport: TransferVerificationReport? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -108,6 +139,7 @@ struct FileOperationJobSnapshot: Identifiable, Sendable, Equatable {
         self.itemCount = max(itemCount, 0)
         self.state = state
         self.progress = progress
+        self.verificationReport = verificationReport
         retryEligible = canRetry
         undoEligible = canUndo
     }
@@ -134,6 +166,13 @@ struct FileOperationJobSnapshot: Identifiable, Sendable, Equatable {
     }
 
     var accessibilityLabel: String {
+        if let progress, progress.unit == .fraction {
+            let safeTotal = max(progress.totalCount, 0)
+            let safeCompleted = min(max(progress.completedCount, 0), safeTotal)
+            let percent = Int((progress.fractionCompleted * 100).rounded())
+            return "\(title), \(state.label), \(progress.detail), \(percent) percent, "
+                + "\(safeCompleted) of \(safeTotal) files, \(itemDisplayName)"
+        }
         let countLabel = itemCount == 1 ? "1 item" : "\(itemCount) items"
         let progressLabel = progress.map {
             ", \(min(max($0.completedCount, 0), max($0.totalCount, 0))) of \(max($0.totalCount, 0)), \($0.detail)"

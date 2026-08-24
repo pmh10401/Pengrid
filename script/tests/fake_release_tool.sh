@@ -10,6 +10,10 @@ record() {
 
 case "$tool_name" in
   swift)
+    if [[ "${FAKE_SWIFT_DEVELOPER_DIR_PROBE:-0}" == 1 ]]; then
+      record "SWIFT_DEVELOPER_DIR ${DEVELOPER_DIR-<unset>}"
+      exit "${FAKE_SWIFT_DEVELOPER_DIR_PROBE_EXIT:-79}"
+    fi
     is_icon_helper=false
     for argument in "$@"; do
       if [[ "$argument" == "-" ]]; then
@@ -49,6 +53,14 @@ case "$tool_name" in
       exit 0
     fi
     exit 64
+    ;;
+  uname)
+    [[ "${1:-}" == '-m' && $# -eq 1 ]] || exit 64
+    record 'UNAME -m'
+    echo 'arm64'
+    ;;
+  pkill)
+    record "PKILL $*"
     ;;
   xcodebuild)
     record "XCODEBUILD"

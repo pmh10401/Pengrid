@@ -240,6 +240,159 @@ import Testing
     }
 }
 
+@Test func transferVerificationStatusUsesTruthfulBoundedAndPathSafeValues() {
+    let progress = TransferVerificationProgress(
+        phase: .hashing,
+        fractionCompleted: 1.4,
+        completedFileCount: 9,
+        totalFileCount: 2,
+        completedLogicalByteCount: 9_999,
+        totalLogicalByteCount: 10_000,
+        currentName: "/private/Secret\nReport.txt"
+    )
+
+    #expect(FileOperationStage.verifying(progress) == .verifying(progress))
+    let presentation = TransferVerificationOperationStatusPresentation(progress: progress)
+    #expect(presentation.title == "Verifying Contents")
+    #expect(presentation.percentage == 100)
+    #expect(presentation.completedFileCount == 2)
+    #expect(presentation.totalFileCount == 2)
+    #expect(presentation.currentName == "Secret Report.txt")
+    #expect(presentation.accessibilityLabel ==
+        "Verifying Contents, 100 percent, 2 of 2 files, current item Secret Report.txt")
+    #expect(!presentation.accessibilityLabel.contains("/private"))
+    #expect(!presentation.accessibilityLabel.contains("9999"))
+    #expect(!presentation.accessibilityLabel.contains("10000"))
+}
+
+@Test func transferVerificationPhaseTitlesRemainTruthfulAtZeroProgress() {
+    let expectations: [(TransferVerificationPhase, String)] = [
+        (.preparingManifest, "Preparing Verification"),
+        (.hashing, "Verifying Contents"),
+        (.finalValidation, "Finalizing Verification")
+    ]
+
+    for (phase, title) in expectations {
+        let presentation = TransferVerificationOperationStatusPresentation(
+            progress: TransferVerificationProgress(
+                phase: phase,
+                fractionCompleted: 0,
+                completedFileCount: 0,
+                totalFileCount: 0,
+                completedLogicalByteCount: 0,
+                totalLogicalByteCount: 0,
+                currentName: ""
+            )
+        )
+        #expect(presentation.title == title)
+        #expect(presentation.percentage == 0)
+        #expect(presentation.completedFileCount == 0)
+        #expect(presentation.totalFileCount == 0)
+        #expect(presentation.currentName == "Item")
+    }
+}
+
+@Test func transferVerificationPercentageIsByteWeightedIndependentlyOfFileCount() {
+    let presentation = TransferVerificationOperationStatusPresentation(
+        progress: TransferVerificationProgress(
+            phase: .hashing,
+            fractionCompleted: 0.42,
+            completedFileCount: 1,
+            totalFileCount: 100,
+            completedLogicalByteCount: 420_000,
+            totalLogicalByteCount: 1_000_000,
+            currentName: "Large.mov"
+        )
+    )
+
+    #expect(presentation.percentage == 42)
+    #expect(presentation.completedFileCount == 1)
+    #expect(presentation.totalFileCount == 100)
+    #expect(presentation.accessibilityLabel ==
+        "Verifying Contents, 42 percent, 1 of 100 files, current item Large.mov")
+    #expect(!presentation.accessibilityLabel.contains("420000"))
+    #expect(!presentation.accessibilityLabel.contains("1000000"))
+}
+
+@Test func transferVerificationZeroByteCompletionRemainsDeterminate() {
+    let presentation = TransferVerificationOperationStatusPresentation(
+        progress: TransferVerificationProgress(
+            phase: .finalValidation,
+            fractionCompleted: 1,
+            completedFileCount: 0,
+            totalFileCount: 0,
+            completedLogicalByteCount: 0,
+            totalLogicalByteCount: 0,
+            currentName: ""
+        )
+    )
+
+    #expect(presentation.percentage == 100)
+    #expect(presentation.completedFileCount == 0)
+    #expect(presentation.totalFileCount == 0)
+    #expect(presentation.accessibilityLabel ==
+        "Finalizing Verification, 100 percent, 0 of 0 files, current item Item")
+}
+
+@Test func transferVerificationAnnouncementsSpeakPhasesAndBoundedPercentageBuckets() {
+    var coordinator = TransferVerificationAnnouncementCoordinator()
+
+    let preparing = verificationProgress(phase: .preparingManifest, fraction: 0)
+    #expect(coordinator.message(for: preparing) ==
+        "Preparing Verification, 0 percent, 0 of 20 files, current item Report.txt")
+    #expect(coordinator.message(for: verificationProgress(
+        phase: .preparingManifest,
+        fraction: 0.09
+    )) == nil)
+    #expect(coordinator.message(for: verificationProgress(
+        phase: .preparingManifest,
+        fraction: 0.10
+    ))?.contains("10 percent") == true)
+    #expect(coordinator.message(for: verificationProgress(
+        phase: .preparingManifest,
+        fraction: 0.19
+    )) == nil)
+    #expect(coordinator.message(for: verificationProgress(
+        phase: .preparingManifest,
+        fraction: 0.20
+    ))?.contains("20 percent") == true)
+
+    #expect(coordinator.message(for: verificationProgress(
+        phase: .hashing,
+        fraction: 0.20
+    ))?.hasPrefix("Verifying Contents") == true)
+    #expect(coordinator.message(for: verificationProgress(
+        phase: .hashing,
+        fraction: 0.21
+    )) == nil)
+    #expect(coordinator.message(for: verificationProgress(
+        phase: .finalValidation,
+        fraction: 1
+    )) ==
+        "Finalizing Verification, 100 percent, 20 of 20 files, current item Report.txt")
+
+    coordinator.reset()
+    #expect(coordinator.message(for: verificationProgress(
+        phase: .finalValidation,
+        fraction: 1
+    )) != nil)
+}
+
+private func verificationProgress(
+    phase: TransferVerificationPhase,
+    fraction: Double
+) -> TransferVerificationProgress {
+    TransferVerificationProgress(
+        phase: phase,
+        fractionCompleted: fraction,
+        completedFileCount: Int((fraction * 20).rounded()),
+        totalFileCount: 20,
+        completedLogicalByteCount: Int64((fraction * 1_000).rounded()),
+        totalLogicalByteCount: 1_000,
+        currentName: "/Users/example/Private/Report.txt"
+    )
+}
+
 @Test func selectionEnclosurePhasesHaveBoundedBasenameOnlyAccessibilityLabels() {
     let expectations: [(SelectionFolderTransactionPhase, String)] = [
         (.creatingFolder, "Creating Folder"),

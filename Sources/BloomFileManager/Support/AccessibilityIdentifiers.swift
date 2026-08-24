@@ -15,6 +15,8 @@ enum AccessibilityIdentifiers {
     static let leftPaneFilterResults = "leftPane.filterResults"
     static let rightPaneFilterResults = "rightPane.filterResults"
     static let operationStatus = "operationStatus"
+    static let fileOperationsSettings = "fileOperationsSettings"
+    static let verifyTransferredContents = "verifyTransferredContents"
     static let workspaceCompressProtectedZIP = "workspace.compressProtectedZIP"
     static let workspaceCreateFile = "workspace.createFile"
     static let workspaceSelectAllVisible = "workspace.selectAllVisible"

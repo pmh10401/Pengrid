@@ -82,6 +82,7 @@ struct BloomFileManagerApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var quickLookController: QuickLookController
     @State private var previewCoordinator: WorkspacePreviewCoordinator
+    @State private var transferVerificationPreference: TransferVerificationPreference
     @State private var operationController: FileOperationController
     @State private var batchRename: BatchRenameModel
     @State private var passwordCoordinator: ArchivePasswordPromptCoordinator
@@ -114,11 +115,16 @@ struct BloomFileManagerApp: App {
         let archiveService = operationService.makeRoutingArchiveOperationService(
             passwordProvider: passwordCoordinator
         )
+        let transferVerificationPreference = TransferVerificationPreference()
+        _transferVerificationPreference = State(
+            initialValue: transferVerificationPreference
+        )
         let operationController = FileOperationController(
             service: operationService,
             materializer: cloudDependencies.materializer,
             archiveService: archiveService,
-            folderSynchronizationService: operationService.makeFolderSynchronizationTransactionService()
+            folderSynchronizationService: operationService.makeFolderSynchronizationTransactionService(),
+            verificationPolicyProvider: { transferVerificationPreference.policy }
         )
         _operationController = State(initialValue: operationController)
         _contextActionRouter = State(initialValue: FileContextActionRouter(
@@ -308,9 +314,19 @@ struct BloomFileManagerApp: App {
 
         Settings {
             TabView {
+                FileOperationsSettingsView(preference: transferVerificationPreference)
+                    .tabItem {
+                        Label(
+                            PengridSettingsTab.fileOperations.title,
+                            systemImage: PengridSettingsTab.fileOperations.systemImage
+                        )
+                    }
                 CloudLocationsSettingsView(cloudLocations: cloudLocations)
                     .tabItem {
-                        Label("Cloud Locations", systemImage: "externaldrive.badge.icloud")
+                        Label(
+                            PengridSettingsTab.cloudLocations.title,
+                            systemImage: PengridSettingsTab.cloudLocations.systemImage
+                        )
                     }
             }
             .navigationTitle("\(AppIdentity.displayName) Settings")

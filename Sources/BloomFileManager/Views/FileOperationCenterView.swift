@@ -58,6 +58,104 @@ struct FileOperationCenterActiveActionPresentation: Equatable, Sendable {
     }
 }
 
+enum FileOperationCenterProgressPresentation {
+    static func determinateFraction(
+        for progress: FileOperationJobProgress
+    ) -> Double? {
+        switch progress.unit {
+        case .fraction:
+            progress.fractionCompleted
+        case .items:
+            progress.totalCount > 0 ? progress.fractionCompleted : nil
+        }
+    }
+}
+
+enum FileOperationHistoryPresentation {
+    static func detail(job: FileOperationJobSnapshot) -> String {
+        let count = job.itemCount == 1 ? "1 item" : "\(job.itemCount) items"
+        let operationDetail: String
+        if job.state == .succeeded {
+            operationDetail = job.canUndo
+                ? "\(count). Undo is available while every item remains unchanged."
+                : "\(count). Undo is unavailable because this operation cannot be safely reversed."
+        } else if job.state == .failed || job.state == .cancelled {
+            operationDetail = job.canRetry
+                ? "\(count). A new identity-checked attempt is available."
+                : "\(count). Retry is unavailable because repeating the whole operation could duplicate or conflict with completed changes."
+        } else {
+            operationDetail = count
+        }
+        guard let verificationDetail = verificationDetail(job: job) else {
+            return operationDetail
+        }
+        return "\(operationDetail) \(verificationDetail)"
+    }
+
+    static func verificationDetail(
+        job: FileOperationJobSnapshot
+    ) -> String? {
+        guard let report = job.verificationReport else { return nil }
+
+        var details: [String] = []
+        if report.failedVerificationItemCount > 0 {
+            let failures = counted(
+                report.failedVerificationItemCount,
+                singular: "item",
+                plural: "items"
+            )
+            details.append("Content verification failed for \(failures).")
+            if report.verifiedFileCount > 0 {
+                details.append(
+                    "Matched before verification ended: "
+                        + "\(verifiedAggregate(report: report))."
+                )
+            }
+        } else if report.verifiedFileCount > 0 {
+            details.append("Verified \(verifiedAggregate(report: report)).")
+        } else if report.noByteTransferItemCount == 0 {
+            details.append("Content verification: enabled; no files were verified.")
+        }
+
+        if report.noByteTransferItemCount > 0 {
+            let noByteTransfer = counted(
+                report.noByteTransferItemCount,
+                singular: "item",
+                plural: "items"
+            )
+            details.append("No byte transfer: \(noByteTransfer).")
+        }
+        return details.joined(separator: " ")
+    }
+
+    private static func verifiedAggregate(
+        report: TransferVerificationReport
+    ) -> String {
+        let files = counted(
+            report.verifiedFileCount,
+            singular: "file",
+            plural: "files"
+        )
+        return "\(files) · \(logicalByteDescription(report.verifiedLogicalByteCount))"
+    }
+
+    private static func logicalByteDescription(_ byteCount: Int64) -> String {
+        guard byteCount > 0 else { return "0 bytes" }
+        return ByteCountFormatter.string(
+            fromByteCount: byteCount,
+            countStyle: .file
+        )
+    }
+
+    private static func counted(
+        _ count: Int,
+        singular: String,
+        plural: String
+    ) -> String {
+        "\(count) \(count == 1 ? singular : plural)"
+    }
+}
+
 struct FileOperationCenterView: View {
     let controller: FileOperationController
 
@@ -304,18 +402,7 @@ struct FileOperationCenterView: View {
     }
 
     private func historyDetail(for job: FileOperationJobSnapshot) -> String {
-        let count = job.itemCount == 1 ? "1 item" : "\(job.itemCount) items"
-        if job.state == .succeeded {
-            return job.canUndo
-                ? "\(count). Undo is available while every item remains unchanged."
-                : "\(count). Undo is unavailable because this operation cannot be safely reversed."
-        }
-        if job.state == .failed || job.state == .cancelled {
-            return job.canRetry
-                ? "\(count). A new identity-checked attempt is available."
-                : "\(count). Retry is unavailable because repeating the whole operation could duplicate or conflict with completed changes."
-        }
-        return count
+        FileOperationHistoryPresentation.detail(job: job)
     }
 
     private func jobCard<Actions: View>(
@@ -341,8 +428,9 @@ struct FileOperationCenterView: View {
 
             if let progress = job.progress {
                 HStack(spacing: 8) {
-                    if progress.totalCount > 0 {
-                        ProgressView(value: progress.fractionCompleted, total: 1)
+                    if let fraction = FileOperationCenterProgressPresentation
+                        .determinateFraction(for: progress) {
+                        ProgressView(value: fraction, total: 1)
                     } else if job.state == .running {
                         ProgressView()
                             .controlSize(.small)

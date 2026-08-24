@@ -868,12 +868,837 @@ struct FileTransferTests {
         #expect(attempts.count == 1)
         #expect(await fileSystem.copiedDestinations.isEmpty)
     }
+
+    @Test func disabledIdentifiedTransferNeverCreatesAVerificationSession() async throws {
+        let source = URL(filePath: "/source/a")
+        let directory = URL(filePath: "/dest", directoryHint: .isDirectory)
+        let fileSystem = RecordingFileSystem(existingURLs: [source, directory])
+        let factory = RecordingTransferVerificationSessionFactory(
+            eventSource: { await fileSystem.events }
+        )
+        let logger = RecordingOperationLogger()
+        let service = FileOperationService(
+            fileSystem: fileSystem,
+            logger: logger,
+            verificationSessionFactory: factory
+        )
+
+        let result = await service.transfer(
+            [source],
+            to: directory,
+            mode: .copy,
+            resolveConflict: { _ in .cancel },
+            verificationPolicy: .disabled,
+            progress: { _ in }
+        )
+
+        #expect(result == FileOperationResult(outcomes: [
+            .succeeded(source: source, destination: directory.appending(path: "a"))
+        ]))
+        #expect(factory.policies.isEmpty)
+        #expect(await factory.recorder.events.isEmpty)
+        #expect(await logger.verificationEvents.isEmpty)
+    }
+
+    @Test func enabledIdentifiedCopyCapturesPolicyAndVerifiesBeforePublication() async throws {
+        let source = URL(filePath: "/source/a")
+        let directory = URL(filePath: "/dest", directoryHint: .isDirectory)
+        let fileSystem = RecordingFileSystem(
+            existingURLs: [source, directory],
+            byteSizes: [source: 12],
+            availableCapacities: [directory: 100]
+        )
+        let factory = RecordingTransferVerificationSessionFactory(
+            eventSource: { await fileSystem.events }
+        )
+        let service = FileOperationService(
+            fileSystem: fileSystem,
+            verificationSessionFactory: factory
+        )
+        let verificationProgress = VerificationProgressRecorder()
+        let sourceIdentity = try #require(await fileSystem.identity(of: source))
+        let directoryIdentity = try #require(await fileSystem.identity(of: directory))
+        let request = IdentifiedTransferRequest(
+            source: source,
+            sourceIdentity: sourceIdentity,
+            destinationRoot: directory,
+            destinationRootIdentity: directoryIdentity,
+            relativeParentComponents: []
+        )
+
+        let result = await service.transfer(
+            [request],
+            mode: .copy,
+            resolveConflict: { _ in .cancel },
+            verificationPolicy: .sha256(maxConcurrentPairs: 2),
+            progress: { _ in },
+            verificationProgress: { value in
+                await verificationProgress.append(value)
+            }
+        )
+
+        #expect(result.outcomes == [
+            .succeeded(source: source, destination: directory.appending(path: "a"))
+        ])
+        #expect(result.verificationReport != nil)
+        #expect(factory.policies == [.sha256(maxConcurrentPairs: 2)])
+        #expect(await verificationProgress.values.count == 1)
+        #expect(await verificationProgress.values.first?.phase == .finalValidation)
+
+        let events = await factory.recorder.events
+        guard events.count == 3 else {
+            Issue.record("Expected capture, verify, and revalidate events")
+            return
+        }
+        guard case let .capture(
+            capturedURL,
+            capturedIdentity,
+            comparisonPolicy,
+            captureFilesystemEvents
+        ) = events[0],
+        case let .verify(_, _, verifyFilesystemEvents) = events[1],
+        case let .revalidate(revalidateFilesystemEvents) = events[2]
+        else {
+            Issue.record("Unexpected verification event order")
+            return
+        }
+
+        #expect(capturedURL == source)
+        #expect(capturedIdentity == sourceIdentity)
+        #expect(comparisonPolicy == .caseSensitiveCanonical)
+        #expect(captureFilesystemEvents.contains("byteSize:/source/a"))
+        #expect(captureFilesystemEvents.contains("availableCapacity:/dest"))
+
+        let copyIndex = verifyFilesystemEvents.firstIndex {
+            $0.hasPrefix("copy:/source/a->/dest/.bloom-staging-")
+        }
+        #expect(copyIndex != nil)
+        #expect(revalidateFilesystemEvents.contains {
+            $0.hasPrefix("copy:/source/a->/dest/.bloom-staging-")
+        })
+        #expect(revalidateFilesystemEvents.contains {
+            $0.hasPrefix("moveChecked:/dest/.bloom-staging-")
+        } == false)
+        #expect(await fileSystem.events.contains {
+            $0.hasPrefix("moveChecked:/dest/.bloom-staging-")
+        })
+    }
+
+    @Test func URLIdentityCaptureFailureKeepsDisabledLegacyPathButEnabledFailsClosed() async throws {
+        let source = URL(filePath: "/source/a")
+        let directory = URL(filePath: "/dest", directoryHint: .isDirectory)
+
+        let disabledFileSystem = RecordingFileSystem(existingURLs: [source])
+        let disabledFactory = RecordingTransferVerificationSessionFactory(
+            eventSource: { await disabledFileSystem.events }
+        )
+        let disabledService = FileOperationService(
+            fileSystem: disabledFileSystem,
+            verificationSessionFactory: disabledFactory
+        )
+        let disabledResult = await disabledService.transfer(
+            [source],
+            to: directory,
+            mode: .copy,
+            resolveConflict: { _ in .cancel },
+            verificationPolicy: .disabled,
+            progress: { _ in }
+        )
+
+        #expect(disabledResult.outcomes == [
+            .succeeded(source: source, destination: directory.appending(path: "a"))
+        ])
+        #expect(await disabledFileSystem.copiedDestinations.isEmpty == false)
+        #expect(disabledFactory.policies.isEmpty)
+
+        let enabledFileSystem = RecordingFileSystem(existingURLs: [source])
+        let enabledFactory = RecordingTransferVerificationSessionFactory(
+            eventSource: { await enabledFileSystem.events }
+        )
+        let enabledService = FileOperationService(
+            fileSystem: enabledFileSystem,
+            verificationSessionFactory: enabledFactory
+        )
+        let enabledResult = await enabledService.transfer(
+            [source],
+            to: directory,
+            mode: .copy,
+            resolveConflict: { _ in .cancel },
+            verificationPolicy: .sha256(maxConcurrentPairs: 2),
+            progress: { _ in }
+        )
+
+        #expect(enabledResult.hasFailures)
+        #expect(enabledResult.verificationReport != nil)
+        #expect(await enabledFileSystem.copiedDestinations.isEmpty)
+        #expect(await enabledFactory.recorder.events.isEmpty)
+    }
+
+    @Test func enabledSameVolumeMoveWithoutReplacementSkipsVerifierAndReportsNoByteTransfer() async throws {
+        let source = URL(filePath: "/source/a")
+        let directory = URL(filePath: "/dest", directoryHint: .isDirectory)
+        let destination = directory.appending(path: "a")
+        let fileSystem = RecordingFileSystem(
+            existingURLs: [source, directory],
+            volumeIdentifiers: [source: "same", directory: "same"]
+        )
+        let factory = RecordingTransferVerificationSessionFactory(
+            eventSource: { await fileSystem.events }
+        )
+        let service = FileOperationService(
+            fileSystem: fileSystem,
+            verificationSessionFactory: factory
+        )
+        let sourceIdentity = try #require(await fileSystem.identity(of: source))
+        let directoryIdentity = try #require(await fileSystem.identity(of: directory))
+        let request = IdentifiedTransferRequest(
+            source: source,
+            sourceIdentity: sourceIdentity,
+            destinationRoot: directory,
+            destinationRootIdentity: directoryIdentity,
+            relativeParentComponents: []
+        )
+
+        let result = await service.transfer(
+            [request],
+            mode: .move,
+            resolveConflict: { _ in .cancel },
+            verificationPolicy: .sha256(maxConcurrentPairs: 2),
+            progress: { _ in }
+        )
+
+        #expect(result.outcomes == [.succeeded(source: source, destination: destination)])
+        #expect(result.verificationReport == TransferVerificationReport(
+            verifiedFileCount: 0,
+            verifiedLogicalByteCount: 0,
+            noByteTransferItemCount: 1,
+            failedVerificationItemCount: 0
+        ))
+        #expect(await factory.recorder.events.isEmpty)
+        #expect(await fileSystem.copiedDestinations.isEmpty)
+        #expect(await fileSystem.events.contains("moveChecked:/source/a->/dest/a"))
+    }
+
+    @Test func enabledReplacementMismatchPreservesTheOldDestinationAndReportsOneFailure() async throws {
+        let source = URL(filePath: "/source/a")
+        let directory = URL(filePath: "/dest", directoryHint: .isDirectory)
+        let destination = directory.appending(path: "a")
+        let fileSystem = RecordingFileSystem(
+            existingURLs: [source, directory, destination]
+        )
+        let logger = RecordingOperationLogger()
+        let factory = RecordingTransferVerificationSessionFactory(
+            eventSource: { await fileSystem.events },
+            configuration: .init(
+                verifyFailuresByCall: [1: .contentMismatch]
+            )
+        )
+        let service = FileOperationService(
+            fileSystem: fileSystem,
+            logger: logger,
+            verificationSessionFactory: factory
+        )
+        let request = IdentifiedTransferRequest(
+            source: source,
+            sourceIdentity: try #require(await fileSystem.identity(of: source)),
+            destinationRoot: directory,
+            destinationRootIdentity: try #require(await fileSystem.identity(of: directory)),
+            relativeParentComponents: []
+        )
+
+        let result = await service.transfer(
+            [request],
+            mode: .copy,
+            resolveConflict: { _ in .replace },
+            verificationPolicy: .sha256(maxConcurrentPairs: 2),
+            progress: { _ in }
+        )
+
+        #expect(result.hasFailures)
+        #expect(await fileSystem.exists(source))
+        #expect(await fileSystem.exists(destination))
+        #expect(await fileSystem.events.contains { $0.hasPrefix("replaceChecked:") } == false)
+        #expect(await fileSystem.existingURLs.contains {
+            $0.lastPathComponent.hasPrefix(".bloom-staging-")
+        } == false)
+        let report = TransferVerificationReport(
+            verifiedFileCount: 0,
+            verifiedLogicalByteCount: 0,
+            noByteTransferItemCount: 0,
+            failedVerificationItemCount: 1
+        )
+        #expect(result.verificationReport == report)
+        #expect(await logger.verificationEvents == [TransferVerificationLogEvent(
+            enabled: true,
+            verifiedFileCount: 0,
+            verifiedLogicalByteCount: 0,
+            noByteTransferItemCount: 0,
+            failedVerificationItemCount: 1,
+            failureCategory: .contentMismatch
+        )])
+    }
+
+    @Test func enabledReceiptFailureCleansStagingBeforeReplacementPublication() async throws {
+        let source = URL(filePath: "/source/a")
+        let directory = URL(filePath: "/dest", directoryHint: .isDirectory)
+        let destination = directory.appending(path: "a")
+        let fileSystem = RecordingFileSystem(
+            existingURLs: [source, directory, destination]
+        )
+        let factory = RecordingTransferVerificationSessionFactory(
+            eventSource: { await fileSystem.events },
+            configuration: .init(
+                revalidateFailuresByCall: [1: .stagedOutputChanged]
+            )
+        )
+        let service = FileOperationService(
+            fileSystem: fileSystem,
+            verificationSessionFactory: factory
+        )
+        let request = IdentifiedTransferRequest(
+            source: source,
+            sourceIdentity: try #require(await fileSystem.identity(of: source)),
+            destinationRoot: directory,
+            destinationRootIdentity: try #require(await fileSystem.identity(of: directory)),
+            relativeParentComponents: []
+        )
+
+        let result = await service.transfer(
+            [request],
+            mode: .copy,
+            resolveConflict: { _ in .replace },
+            verificationPolicy: .sha256(maxConcurrentPairs: 2),
+            progress: { _ in }
+        )
+
+        #expect(result.hasFailures)
+        #expect(result.verificationReport?.failedVerificationItemCount == 1)
+        #expect(await fileSystem.exists(source))
+        #expect(await fileSystem.exists(destination))
+        #expect(await fileSystem.events.contains { $0.hasPrefix("replaceChecked:") } == false)
+        #expect(await fileSystem.existingURLs.contains {
+            $0.lastPathComponent.hasPrefix(".bloom-staging-")
+        } == false)
+    }
+
+    @Test func failedVerificationWithFailedStagingCleanupRequiresRecovery() async throws {
+        let source = URL(filePath: "/source/a")
+        let directory = URL(filePath: "/dest", directoryHint: .isDirectory)
+        let destination = directory.appending(path: "a")
+        let fileSystem = RecordingFileSystem(
+            existingURLs: [source, directory, destination],
+            stagingCleanupError: CocoaError(.fileWriteUnknown)
+        )
+        let factory = RecordingTransferVerificationSessionFactory(
+            eventSource: { await fileSystem.events },
+            configuration: .init(
+                verifyFailuresByCall: [1: .structureMismatch]
+            )
+        )
+        let service = FileOperationService(
+            fileSystem: fileSystem,
+            verificationSessionFactory: factory
+        )
+        let request = IdentifiedTransferRequest(
+            source: source,
+            sourceIdentity: try #require(await fileSystem.identity(of: source)),
+            destinationRoot: directory,
+            destinationRootIdentity: try #require(await fileSystem.identity(of: directory)),
+            relativeParentComponents: []
+        )
+
+        let result = await service.transfer(
+            [request],
+            mode: .copy,
+            resolveConflict: { _ in .replace },
+            verificationPolicy: .sha256(maxConcurrentPairs: 2),
+            progress: { _ in }
+        )
+
+        #expect(result.outcomes == [.recoveryNeeded(source: source)])
+        #expect(result.verificationReport?.failedVerificationItemCount == 1)
+        #expect(await fileSystem.exists(source))
+        #expect(await fileSystem.exists(destination))
+        #expect(await fileSystem.events.contains { $0.hasPrefix("replaceChecked:") } == false)
+    }
+
+    @Test func enabledCrossVolumeMovePublishesVerifiedCopyBeforeRemovingSource() async throws {
+        let source = URL(filePath: "/source/a")
+        let directory = URL(filePath: "/dest", directoryHint: .isDirectory)
+        let destination = directory.appending(path: "a")
+        let fileSystem = RecordingFileSystem(
+            existingURLs: [source, directory],
+            volumeIdentifiers: [source: "source-volume", directory: "destination-volume"]
+        )
+        let factory = RecordingTransferVerificationSessionFactory(
+            eventSource: { await fileSystem.events },
+            configuration: .init(
+                summariesByVerifyCall: [1: .init(
+                    verifiedFileCount: 2,
+                    verifiedLogicalByteCount: 42,
+                    noByteTransferItemCount: 0
+                )]
+            )
+        )
+        let service = FileOperationService(
+            fileSystem: fileSystem,
+            verificationSessionFactory: factory
+        )
+        let request = IdentifiedTransferRequest(
+            source: source,
+            sourceIdentity: try #require(await fileSystem.identity(of: source)),
+            destinationRoot: directory,
+            destinationRootIdentity: try #require(await fileSystem.identity(of: directory)),
+            relativeParentComponents: []
+        )
+
+        let result = await service.transfer(
+            [request],
+            mode: .move,
+            resolveConflict: { _ in .cancel },
+            verificationPolicy: .sha256(maxConcurrentPairs: 2),
+            progress: { _ in }
+        )
+
+        #expect(result.outcomes == [.succeeded(source: source, destination: destination)])
+        #expect(result.verificationReport == TransferVerificationReport(
+            verifiedFileCount: 2,
+            verifiedLogicalByteCount: 42,
+            noByteTransferItemCount: 0,
+            failedVerificationItemCount: 0
+        ))
+        let events = await fileSystem.events
+        let publishIndex = try #require(events.firstIndex {
+            $0.hasPrefix("moveChecked:/dest/.bloom-staging-")
+        })
+        let removeIndex = try #require(events.firstIndex(of: "removeChecked:/source/a"))
+        #expect(publishIndex < removeIndex)
+        #expect(await factory.recorder.events.count == 3)
+        #expect(await fileSystem.exists(source) == false)
+        #expect(await fileSystem.exists(destination))
+    }
+
+    @Test func enabledCrossVolumeReadFailurePreservesSourceAndPublishesNothing() async throws {
+        let source = URL(filePath: "/source/a")
+        let directory = URL(filePath: "/dest", directoryHint: .isDirectory)
+        let destination = directory.appending(path: "a")
+        let fileSystem = RecordingFileSystem(
+            existingURLs: [source, directory],
+            volumeIdentifiers: [source: "source-volume", directory: "destination-volume"]
+        )
+        let factory = RecordingTransferVerificationSessionFactory(
+            eventSource: { await fileSystem.events },
+            configuration: .init(verifyFailuresByCall: [1: .readFailed])
+        )
+        let service = FileOperationService(
+            fileSystem: fileSystem,
+            verificationSessionFactory: factory
+        )
+        let request = IdentifiedTransferRequest(
+            source: source,
+            sourceIdentity: try #require(await fileSystem.identity(of: source)),
+            destinationRoot: directory,
+            destinationRootIdentity: try #require(await fileSystem.identity(of: directory)),
+            relativeParentComponents: []
+        )
+
+        let result = await service.transfer(
+            [request],
+            mode: .move,
+            resolveConflict: { _ in .cancel },
+            verificationPolicy: .sha256(maxConcurrentPairs: 2),
+            progress: { _ in }
+        )
+
+        #expect(result.hasFailures)
+        #expect(result.verificationReport?.failedVerificationItemCount == 1)
+        #expect(await fileSystem.exists(source))
+        #expect(await fileSystem.exists(destination) == false)
+        #expect(await fileSystem.events.contains("removeChecked:/source/a") == false)
+    }
+
+    @Test func enabledSameVolumeReplacementUsesVerifiedStagingInsteadOfDirectRename() async throws {
+        let source = URL(filePath: "/source/a")
+        let directory = URL(filePath: "/dest", directoryHint: .isDirectory)
+        let destination = directory.appending(path: "a")
+        let fileSystem = RecordingFileSystem(
+            existingURLs: [source, directory, destination],
+            volumeIdentifiers: [source: "same", directory: "same"]
+        )
+        let factory = RecordingTransferVerificationSessionFactory(
+            eventSource: { await fileSystem.events }
+        )
+        let service = FileOperationService(
+            fileSystem: fileSystem,
+            verificationSessionFactory: factory
+        )
+        let request = IdentifiedTransferRequest(
+            source: source,
+            sourceIdentity: try #require(await fileSystem.identity(of: source)),
+            destinationRoot: directory,
+            destinationRootIdentity: try #require(await fileSystem.identity(of: directory)),
+            relativeParentComponents: []
+        )
+
+        let result = await service.transfer(
+            [request],
+            mode: .move,
+            resolveConflict: { _ in .replace },
+            verificationPolicy: .sha256(maxConcurrentPairs: 2),
+            progress: { _ in }
+        )
+
+        #expect(result.hasFailures == false)
+        #expect(await factory.recorder.events.count == 3)
+        #expect(await fileSystem.events.contains("moveChecked:/source/a->/dest/a") == false)
+        #expect(await fileSystem.events.contains { $0.hasPrefix("replaceChecked:/dest/a<-") })
+        #expect(await fileSystem.exists(source) == false)
+        #expect(await fileSystem.exists(destination))
+    }
+
+    @Test func enabledSkipAndCapacityFailureNeverCaptureAndReturnAZeroReport() async throws {
+        let first = URL(filePath: "/source/a")
+        let second = URL(filePath: "/source/b")
+        let directory = URL(filePath: "/dest", directoryHint: .isDirectory)
+        let firstDestination = directory.appending(path: "a")
+        let fileSystem = RecordingFileSystem(
+            existingURLs: [first, second, directory, firstDestination],
+            byteSizes: [second: 100],
+            availableCapacities: [directory: 10]
+        )
+        let logger = RecordingOperationLogger()
+        let factory = RecordingTransferVerificationSessionFactory(
+            eventSource: { await fileSystem.events }
+        )
+        let directoryIdentity = try #require(await fileSystem.identity(of: directory))
+        let requests = [
+            IdentifiedTransferRequest(
+                source: first,
+                sourceIdentity: try #require(await fileSystem.identity(of: first)),
+                destinationRoot: directory,
+                destinationRootIdentity: directoryIdentity,
+                relativeParentComponents: []
+            ),
+            IdentifiedTransferRequest(
+                source: second,
+                sourceIdentity: try #require(await fileSystem.identity(of: second)),
+                destinationRoot: directory,
+                destinationRootIdentity: directoryIdentity,
+                relativeParentComponents: []
+            )
+        ]
+        let service = FileOperationService(
+            fileSystem: fileSystem,
+            logger: logger,
+            verificationSessionFactory: factory
+        )
+
+        let result = await service.transfer(
+            requests,
+            mode: .copy,
+            resolveConflict: { _ in .skip },
+            verificationPolicy: .sha256(maxConcurrentPairs: 2),
+            progress: { _ in }
+        )
+
+        #expect(result.outcomes.first == .skipped(source: first))
+        #expect(result.outcomes.count == 2)
+        #expect(result.hasFailures)
+        #expect(result.verificationReport == TransferVerificationReport(
+            verifiedFileCount: 0,
+            verifiedLogicalByteCount: 0,
+            noByteTransferItemCount: 0,
+            failedVerificationItemCount: 0
+        ))
+        #expect(await factory.recorder.events.isEmpty)
+        #expect(await logger.verificationEvents.count == 1)
+    }
+
+    @Test func enabledBatchAggregatesSuccessfulSummaryAndVerificationFailureOnce() async throws {
+        let first = URL(filePath: "/source/a")
+        let second = URL(filePath: "/source/b")
+        let directory = URL(filePath: "/dest", directoryHint: .isDirectory)
+        let fileSystem = RecordingFileSystem(existingURLs: [first, second, directory])
+        let logger = RecordingOperationLogger()
+        let factory = RecordingTransferVerificationSessionFactory(
+            eventSource: { await fileSystem.events },
+            configuration: .init(
+                verifyFailuresByCall: [2: .readFailed],
+                summariesByVerifyCall: [1: .init(
+                    verifiedFileCount: 3,
+                    verifiedLogicalByteCount: 20,
+                    noByteTransferItemCount: 0
+                )]
+            )
+        )
+        let directoryIdentity = try #require(await fileSystem.identity(of: directory))
+        let requests = [
+            IdentifiedTransferRequest(
+                source: first,
+                sourceIdentity: try #require(await fileSystem.identity(of: first)),
+                destinationRoot: directory,
+                destinationRootIdentity: directoryIdentity,
+                relativeParentComponents: []
+            ),
+            IdentifiedTransferRequest(
+                source: second,
+                sourceIdentity: try #require(await fileSystem.identity(of: second)),
+                destinationRoot: directory,
+                destinationRootIdentity: directoryIdentity,
+                relativeParentComponents: []
+            )
+        ]
+        let service = FileOperationService(
+            fileSystem: fileSystem,
+            logger: logger,
+            verificationSessionFactory: factory
+        )
+
+        let result = await service.transfer(
+            requests,
+            mode: .copy,
+            resolveConflict: { _ in .cancel },
+            verificationPolicy: .sha256(maxConcurrentPairs: 2),
+            progress: { _ in }
+        )
+
+        let report = TransferVerificationReport(
+            verifiedFileCount: 3,
+            verifiedLogicalByteCount: 20,
+            noByteTransferItemCount: 0,
+            failedVerificationItemCount: 1
+        )
+        #expect(result.verificationReport == report)
+        #expect(result.outcomes.count == 2)
+        #expect(result.hasFailures)
+        #expect(await logger.verificationEvents == [TransferVerificationLogEvent(
+            enabled: true,
+            verifiedFileCount: 3,
+            verifiedLogicalByteCount: 20,
+            noByteTransferItemCount: 0,
+            failedVerificationItemCount: 1,
+            failureCategory: .readFailed
+        )])
+    }
+
+    @Test func enabledVerificationCancellationCleansPrivateStageAndLogsBoundedCategory() async throws {
+        let source = URL(filePath: "/source/a")
+        let directory = URL(filePath: "/dest", directoryHint: .isDirectory)
+        let fileSystem = RecordingFileSystem(existingURLs: [source, directory])
+        let logger = RecordingOperationLogger()
+        let factory = RecordingTransferVerificationSessionFactory(
+            eventSource: { await fileSystem.events },
+            configuration: .init(
+                verifyFailuresByCall: [1: .cancelled],
+                cancellingVerifyCalls: [1]
+            )
+        )
+        let service = FileOperationService(
+            fileSystem: fileSystem,
+            logger: logger,
+            verificationSessionFactory: factory
+        )
+        let request = IdentifiedTransferRequest(
+            source: source,
+            sourceIdentity: try #require(await fileSystem.identity(of: source)),
+            destinationRoot: directory,
+            destinationRootIdentity: try #require(await fileSystem.identity(of: directory)),
+            relativeParentComponents: []
+        )
+
+        let result = await Task {
+            await service.transfer(
+                [request],
+                mode: .copy,
+                resolveConflict: { _ in .cancel },
+                verificationPolicy: .sha256(maxConcurrentPairs: 2),
+                progress: { _ in }
+            )
+        }.value
+
+        #expect(result.outcomes == [.cancelled(source: source)])
+        #expect(result.verificationReport?.failedVerificationItemCount == 1)
+        #expect(await logger.verificationEvents.first?.failureCategory == .cancelled)
+        #expect(await fileSystem.existingURLs.contains {
+            $0.lastPathComponent.hasPrefix(".bloom-staging-")
+        } == false)
+        #expect(await fileSystem.exists(source))
+    }
+
+    @Test func liveEnabledCopyVerifiesSingleFileContentsBeforePublishing() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let sourceRoot = root.url.appending(path: "Source", directoryHint: .isDirectory)
+        let destinationRoot = root.url.appending(
+            path: "Destination",
+            directoryHint: .isDirectory
+        )
+        try FileManager.default.createDirectory(
+            at: sourceRoot,
+            withIntermediateDirectories: false
+        )
+        try FileManager.default.createDirectory(
+            at: destinationRoot,
+            withIntermediateDirectories: false
+        )
+        let payload = Data("verified-single-file".utf8)
+        let source = sourceRoot.appending(path: "Report.txt")
+        let destination = destinationRoot.appending(path: "Report.txt")
+        try payload.write(to: source)
+        let fileSystem = LiveFileSystemAccess()
+        let service = FileOperationService(fileSystem: fileSystem)
+        let request = IdentifiedTransferRequest(
+            source: source,
+            sourceIdentity: try #require(await fileSystem.identity(of: source)),
+            destinationRoot: destinationRoot,
+            destinationRootIdentity: try #require(
+                await fileSystem.identity(of: destinationRoot)
+            ),
+            relativeParentComponents: []
+        )
+
+        let result = await service.transfer(
+            [request],
+            mode: .copy,
+            resolveConflict: { _ in .cancel },
+            verificationPolicy: .sha256(maxConcurrentPairs: 2),
+            progress: { _ in }
+        )
+
+        #expect(result.outcomes == [.succeeded(source: source, destination: destination)])
+        #expect(result.verificationReport == TransferVerificationReport(
+            verifiedFileCount: 1,
+            verifiedLogicalByteCount: Int64(payload.count),
+            noByteTransferItemCount: 0,
+            failedVerificationItemCount: 0
+        ))
+        #expect(try Data(contentsOf: destination) == payload)
+    }
+
+    @Test func liveEnabledCopyVerifiesRecursiveDirectoryContentsBeforePublishing() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let sourceRoot = root.url.appending(path: "Source", directoryHint: .isDirectory)
+        let destinationRoot = root.url.appending(
+            path: "Destination",
+            directoryHint: .isDirectory
+        )
+        let source = sourceRoot.appending(path: "Folder", directoryHint: .isDirectory)
+        let nested = source.appending(path: "Nested", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(
+            at: nested,
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(
+            at: destinationRoot,
+            withIntermediateDirectories: false
+        )
+        let first = Data("first".utf8)
+        let second = Data("second payload".utf8)
+        try first.write(to: source.appending(path: "First.txt"))
+        try second.write(to: nested.appending(path: "Second.txt"))
+        let destination = destinationRoot.appending(path: "Folder")
+        let fileSystem = LiveFileSystemAccess()
+        let service = FileOperationService(fileSystem: fileSystem)
+        let request = IdentifiedTransferRequest(
+            source: source,
+            sourceIdentity: try #require(await fileSystem.identity(of: source)),
+            destinationRoot: destinationRoot,
+            destinationRootIdentity: try #require(
+                await fileSystem.identity(of: destinationRoot)
+            ),
+            relativeParentComponents: []
+        )
+
+        let result = await service.transfer(
+            [request],
+            mode: .copy,
+            resolveConflict: { _ in .cancel },
+            verificationPolicy: .sha256(maxConcurrentPairs: 2),
+            progress: { _ in }
+        )
+
+        #expect(result.outcomes == [.succeeded(source: source, destination: destination)])
+        #expect(result.verificationReport == TransferVerificationReport(
+            verifiedFileCount: 2,
+            verifiedLogicalByteCount: Int64(first.count + second.count),
+            noByteTransferItemCount: 0,
+            failedVerificationItemCount: 0
+        ))
+        #expect(try Data(contentsOf: destination.appending(path: "First.txt")) == first)
+        #expect(try Data(
+            contentsOf: destination.appending(path: "Nested/Second.txt")
+        ) == second)
+    }
+
+    @Test func liveEnabledCopyVerifiesSymbolicLinkPayloadWithoutFollowingTarget() async throws {
+        let root = try TemporaryDirectory()
+        defer { root.remove() }
+        let sourceRoot = root.url.appending(path: "Source", directoryHint: .isDirectory)
+        let destinationRoot = root.url.appending(
+            path: "Destination",
+            directoryHint: .isDirectory
+        )
+        try FileManager.default.createDirectory(
+            at: sourceRoot,
+            withIntermediateDirectories: false
+        )
+        try FileManager.default.createDirectory(
+            at: destinationRoot,
+            withIntermediateDirectories: false
+        )
+        let target = sourceRoot.appending(path: "Target.txt")
+        try Data("target bytes are not hashed through the link".utf8).write(to: target)
+        let source = sourceRoot.appending(path: "Target Link")
+        try FileManager.default.createSymbolicLink(
+            at: source,
+            withDestinationURL: target
+        )
+        let destination = destinationRoot.appending(path: "Target Link")
+        let fileSystem = LiveFileSystemAccess()
+        let service = FileOperationService(fileSystem: fileSystem)
+        let request = IdentifiedTransferRequest(
+            source: source,
+            sourceIdentity: try #require(await fileSystem.identity(of: source)),
+            destinationRoot: destinationRoot,
+            destinationRootIdentity: try #require(
+                await fileSystem.identity(of: destinationRoot)
+            ),
+            relativeParentComponents: []
+        )
+
+        let result = await service.transfer(
+            [request],
+            mode: .copy,
+            resolveConflict: { _ in .cancel },
+            verificationPolicy: .sha256(maxConcurrentPairs: 2),
+            progress: { _ in }
+        )
+
+        #expect(result.outcomes == [.succeeded(source: source, destination: destination)])
+        #expect(result.verificationReport == TransferVerificationReport(
+            verifiedFileCount: 0,
+            verifiedLogicalByteCount: 0,
+            noByteTransferItemCount: 0,
+            failedVerificationItemCount: 0
+        ))
+        #expect(try FileManager.default.destinationOfSymbolicLink(atPath: destination.path)
+            == FileManager.default.destinationOfSymbolicLink(atPath: source.path))
+    }
 }
 
 private actor ProgressRecorder {
     private(set) var values: [FileOperationProgress] = []
 
     func append(_ value: FileOperationProgress) {
+        values.append(value)
+    }
+}
+
+private actor VerificationProgressRecorder {
+    private(set) var values: [TransferVerificationProgress] = []
+
+    func append(_ value: TransferVerificationProgress) {
         values.append(value)
     }
 }
@@ -887,6 +1712,7 @@ private actor RecordingOperationLogger: OperationLogging {
     }
 
     private(set) var events: [Event] = []
+    private(set) var verificationEvents: [TransferVerificationLogEvent] = []
 
     func record(
         kind: FileOperationKind,
@@ -896,5 +1722,11 @@ private actor RecordingOperationLogger: OperationLogging {
         skipped: Int
     ) async {
         events.append(Event(kind: kind, succeeded: succeeded, failed: failed, skipped: skipped))
+    }
+
+    func recordTransferVerification(
+        _ event: TransferVerificationLogEvent
+    ) async {
+        verificationEvents.append(event)
     }
 }

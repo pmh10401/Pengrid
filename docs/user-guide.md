@@ -415,6 +415,58 @@ only when replaying the whole intent cannot repeat an item that already
 succeeded. Partially successful multi-item work, Storage Inspector cleanup, and
 Undo are not blindly retried.
 
+### Optional transferred-content verification
+
+> This feature is in the current source tree. It is not in the published
+> Developer Preview 7 DMG.
+
+Open **Settings > File Operations** and enable **Verify transferred file
+contents before publishing**. The default is off. Pengrid captures the setting
+when a job enters the queue; changing it later does not change a waiting job,
+and Retry keeps the policy captured by the original attempt.
+
+When enabled, verification covers copy, Duplicate, cross-volume move, and
+copy/replace actions inside reviewed one-way folder synchronization. A
+same-volume move renames an existing entry without copying bytes, so it reports
+**No byte transfer** instead of hashing. Archive creation and extraction are not
+covered.
+
+Pengrid copies into private staging, recursively checks directory and package
+structure, hashes every regular-file data fork with SHA-256, and compares a
+symbolic-link payload without following its target. At most two file pairs are
+hashed concurrently. Each transferred root is limited to 250,000 descendants
+and depth 256; an enabled operation that exceeds either limit fails instead of
+publishing without verification.
+
+The percentage is weighted by logical bytes read from both members of each file
+pair. The adjacent count is weighted by completed files, so a large file can
+move the percentage farther than several small files. A zero-byte-only tree
+falls back to file-count progress.
+
+Verification does not cover resource forks, extended attributes, ACLs,
+ownership, flags, creation dates, hard-link relationships, or sparse-file
+allocation. It also cannot turn the final validation and following filesystem
+publication call into one atomic syscall; a narrow residual race remains and is
+checked as late as the platform permits.
+
+A mismatch, read error, source or staging change, cancellation, or unsupported
+scope prevents publication and preserves the source and any old destination.
+Pengrid removes only identity-confirmed private staging. If it cannot prove safe
+cleanup, the job becomes **Recovery Needed** and blocks automatic queue
+advancement for review.
+
+File Provider sources must expose readable local bytes while verification runs.
+macOS or the installed Google Drive or OneDrive provider may materialize an
+online-only source again. Provider-specific results remain manual release gates
+until they are observed on the installed provider.
+
+History and VoiceOver expose only bounded status, sanitized basenames, verified
+file count, and a human-readable logical-byte total. They do not persist or
+announce a digest, absolute parent path, relative tree list, or raw byte total.
+The diagnostic system log separately records operation-wide counts and the raw
+aggregate `verifiedLogicalBytes` value; it never records a per-file size,
+digest, path, tree entry, or underlying error.
+
 ### Conservative undo
 
 Undo is available only when Pengrid can reverse its own unchanged mutation:
@@ -428,8 +480,9 @@ Undo is available only when Pengrid can reverse its own unchanged mutation:
   or uncertain ownership disables or refuses Undo.
 
 Undo does not overwrite a later item and does not remove a modified output.
-These identity and no-follow fingerprint checks are not byte-level transfer
-verification; byte-level transfer verification remains future work.
+Undo continues to use identity and no-follow fingerprints; it does not rehash
+content. Optional pre-publication transfer verification is a separate policy
+described above.
 
 ## Preview-first batch rename
 
@@ -603,6 +656,10 @@ Operations fall into two groups:
 - Opening, Quick Look, copying, moving, comparing contents, compression, and
   extraction may need bytes. In those cases macOS File Provider can download
   the required source before the local operation continues.
+- Optional transferred-content verification reads every eligible regular-file
+  data fork before publication. Online-only or evicted bytes may therefore be
+  materialized again; unavailable bytes fail the verified operation rather than
+  falling back to unverified publication.
 
 A provider can omit metadata that is not available locally. Pengrid reports an
 unavailable or failed item instead of inventing results. Provider operations
@@ -651,6 +708,11 @@ owned changes or reports Recovery Needed and blocks the queue. Pre-existing
 user data is never permanently deleted. Completed synchronization is not
 Undoable. There is no bidirectional merge, schedule, background watcher, or
 permanent-delete mode.
+
+When the captured transferred-content setting is enabled, every synchronization
+copy or replacement is content-verified in private staging before the first
+destination quarantine. The review remains metadata-only and does not download
+File Provider bytes merely to prepare the plan.
 
 ## Storage Inspector
 

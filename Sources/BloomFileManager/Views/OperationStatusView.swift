@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct OperationStatusSummary: Equatable, Sendable {
@@ -311,8 +312,89 @@ struct FolderSynchronizationOperationStatusPresentation: Equatable, Sendable {
     }
 }
 
+struct TransferVerificationOperationStatusPresentation: Equatable, Sendable {
+    let title: String
+    let percentage: Int
+    let completedFileCount: Int
+    let totalFileCount: Int
+    let currentName: String
+    let accessibilityLabel: String
+
+    init(progress: TransferVerificationProgress) {
+        title = switch progress.phase {
+        case .preparingManifest: "Preparing Verification"
+        case .hashing: "Verifying Contents"
+        case .finalValidation: "Finalizing Verification"
+        }
+        percentage = Int((progress.fractionCompleted * 100).rounded())
+        totalFileCount = max(progress.totalFileCount, 0)
+        completedFileCount = min(
+            max(progress.completedFileCount, 0),
+            totalFileCount
+        )
+        let sanitized = progress.currentName
+            .components(separatedBy: .newlines)
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        currentName = sanitized.isEmpty
+            ? "Item"
+            : URL(filePath: sanitized).lastPathComponent
+        accessibilityLabel = "\(title), \(percentage) percent, "
+            + "\(completedFileCount) of \(totalFileCount) files, "
+            + "current item \(currentName)"
+    }
+}
+
+struct TransferVerificationAnnouncementCoordinator: Sendable {
+    private var lastPhase: TransferVerificationPhase?
+    private var highestPercentageBucket: Int?
+
+    mutating func message(
+        for progress: TransferVerificationProgress
+    ) -> String? {
+        let presentation = TransferVerificationOperationStatusPresentation(
+            progress: progress
+        )
+        let bucket = min(max(presentation.percentage / 10, 0), 10)
+
+        guard progress.phase == lastPhase else {
+            lastPhase = progress.phase
+            highestPercentageBucket = bucket
+            return presentation.accessibilityLabel
+        }
+        guard highestPercentageBucket == nil
+                || bucket > highestPercentageBucket! else {
+            return nil
+        }
+        highestPercentageBucket = bucket
+        return presentation.accessibilityLabel
+    }
+
+    mutating func reset() {
+        lastPhase = nil
+        highestPercentageBucket = nil
+    }
+}
+
+@MainActor
+private enum TransferVerificationAnnouncementPoster {
+    static func post(_ message: String) {
+        let application = NSApplication.shared
+        NSAccessibility.post(
+            element: application.mainWindow ?? application,
+            notification: .announcementRequested,
+            userInfo: [
+                .announcement: message,
+                .priority: NSAccessibilityPriorityLevel.medium.rawValue
+            ]
+        )
+    }
+}
+
 struct OperationStatusView: View {
     let controller: FileOperationController
+    @State private var verificationAnnouncements =
+        TransferVerificationAnnouncementCoordinator()
 
     var body: some View {
         Group {
@@ -321,6 +403,16 @@ struct OperationStatusView: View {
             } else if let result = controller.lastResult {
                 completedStatus(result)
             }
+        }
+        .onChange(of: controller.stage, initial: true) { _, stage in
+            guard case let .verifying(progress)? = stage else {
+                verificationAnnouncements.reset()
+                return
+            }
+            guard let message = verificationAnnouncements.message(
+                for: progress
+            ) else { return }
+            TransferVerificationAnnouncementPoster.post(message)
         }
     }
 
@@ -339,6 +431,8 @@ struct OperationStatusView: View {
                 selectionFolderStatus(progress)
             case let .synchronizing(progress):
                 folderSynchronizationStatus(progress)
+            case let .verifying(progress):
+                transferVerificationStatus(progress)
             }
         }
         .accessibilityIdentifier(AccessibilityIdentifiers.operationStatus)
@@ -408,6 +502,44 @@ struct OperationStatusView: View {
             .controlSize(.small)
         }
         .accessibilityElement(children: .combine)
+        .accessibilityLabel(presentation.accessibilityLabel)
+        .modifier(StatusBarStyle())
+    }
+
+    private func transferVerificationStatus(
+        _ progress: TransferVerificationProgress
+    ) -> some View {
+        let presentation = TransferVerificationOperationStatusPresentation(progress: progress)
+        return HStack(spacing: 10) {
+            Text(presentation.title)
+                .font(.caption.weight(.semibold))
+
+            ProgressView(value: progress.fractionCompleted, total: 1)
+                .frame(maxWidth: 180)
+
+            Text(presentation.currentName)
+                .font(.caption)
+                .lineLimit(1)
+                .truncationMode(.middle)
+
+            Spacer(minLength: 8)
+
+            Text(
+                "\(presentation.percentage)% · "
+                    + "\(presentation.completedFileCount) of "
+                    + "\(presentation.totalFileCount) files"
+            )
+            .font(.caption.monospacedDigit())
+            .foregroundStyle(.secondary)
+
+            Button("Cancel") {
+                controller.cancel()
+            }
+            .controlSize(.small)
+            .accessibilityLabel("Cancel content verification")
+            .help("Cancel after safe cleanup")
+        }
+        .accessibilityElement(children: .contain)
         .accessibilityLabel(presentation.accessibilityLabel)
         .modifier(StatusBarStyle())
     }

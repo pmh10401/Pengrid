@@ -9,7 +9,12 @@ NOTICE_NAME="THIRD_PARTY_NOTICES.md"
 BUNDLE_ID="com.minho.BloomFileManager"
 MIN_SYSTEM_VERSION="15.0"
 APP_VERSION="1.3.0"
-BUILD_VERSION="9"
+BUILD_VERSION="10"
+DEFAULT_XCODE_DEVELOPER_DIR="/Applications/Xcode.app/Contents/Developer"
+
+if [[ -z "${DEVELOPER_DIR:-}" && -d "$DEFAULT_XCODE_DEVELOPER_DIR" ]]; then
+  export DEVELOPER_DIR="$DEFAULT_XCODE_DEVELOPER_DIR"
+fi
 
 die() { echo "$*" >&2; exit 1; }
 

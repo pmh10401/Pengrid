@@ -32,6 +32,75 @@ Operations revalidate them at the last responsible moment and fail closed when
 the referenced item has been replaced. User-visible rows and accessibility
 labels avoid absolute parent paths.
 
+## Transferred-content verification boundary
+
+Transferred-content verification is an opt-in source feature and defaults off.
+`TransferVerificationPreference` persists user intent, while
+`FileOperationController` captures one immutable `TransferVerificationPolicy`
+at enqueue time. The operation closure, queued snapshot, Retry record, terminal
+result, history, and Undo-eligibility projection all retain that captured value
+or its bounded report; execution never rereads the live setting.
+
+```text
+Settings: default-off preference
+        │ immutable policy captured at enqueue
+        ▼
+FileOperationController
+        │
+        ├── copy / Duplicate / cross-volume move
+        └── reviewed synchronization copy / replace
+                    │
+                    ▼
+        capture source manifest
+                    │
+        copy to owned private staging
+                    │
+        verify shape, symlink payloads, and SHA-256 pairs (≤ 2)
+                    │
+        recapture and revalidate source + staging receipt
+                    │
+                    ▼
+        publish by identity-checked move or replacement
+```
+
+`TransferVerificationManifest` retains descriptor-anchored authority over each
+root. Children are opened relative to verified parent descriptors; regular
+files are read through no-follow duplicated descriptors and symbolic-link
+payloads through `readlinkat`. Cross-root comparison uses the destination's
+captured filename policy. Same-root comparison includes identity and stability
+fingerprints, while source-to-staging shape comparison deliberately permits new
+destination inode identities.
+
+The production manifest budget is 250,000 descendants and depth 256 per root.
+`LiveTransferVerificationSessionFactory` creates one operation-scoped session;
+its shared permit pool caps regular-file hashing at two pairs. The session
+publishes manifest preparation, hashing, and final validation progress.
+Presentation interprets the fraction as byte-weighted while displaying an
+independent file-weighted count. Zero-byte-only trees fall back to file-count
+completion.
+
+`FileOperationService` and `FolderSynchronizationTransactionService` publish
+only after successful verification and one final receipt revalidation. They
+preserve the source and any old destination on pre-publication failure and
+remove only identity-confirmed staging. Cleanup uncertainty becomes Recovery
+Needed and blocks queue advancement. A same-volume move bypasses the byte path
+and records No byte transfer because it relocates the existing entry.
+
+The typed verification logger carries aggregate file counts, the operation-wide
+verified logical-byte total, and a bounded failure category. Operation history
+retains the same aggregate logical-byte total in memory and formats it for
+display. Neither boundary carries per-file digests, URLs, relative tree lists,
+per-file sizes, or underlying errors. Accessibility uses sanitized basenames,
+a human-readable aggregate byte total, and bounded progress announcements; it
+does not announce the raw numeric total.
+
+The final receipt check is the last awaited step before the namespace mutation.
+It narrows but cannot eliminate the syscall interval between validation and
+`rename`/replacement; this subsystem does not claim an atomic content lock.
+Resource forks, extended attributes, ACLs, ownership, flags, creation dates,
+hard-link relationships, and sparse allocation are outside the verification
+contract.
+
 ## Safe batch rename flow
 
 `BatchRenameModel` is the single shared main-actor presentation model injected

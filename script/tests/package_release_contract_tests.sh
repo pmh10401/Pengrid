@@ -89,9 +89,21 @@ test_release_tests_run_nonparallel() {
 
 test_version_13_bundle_version_is_declared() {
   assert_file_contains "$SOURCE_SCRIPT" 'APP_VERSION="1.3.0"'
-  assert_file_contains "$SOURCE_SCRIPT" 'BUILD_VERSION="9"'
+  assert_file_contains "$SOURCE_SCRIPT" 'BUILD_VERSION="10"'
   assert_file_contains "$SOURCE_BUILD_SCRIPT" 'APP_VERSION="1.3.0"'
-  assert_file_contains "$SOURCE_BUILD_SCRIPT" 'BUILD_VERSION="9"'
+  assert_file_contains "$SOURCE_BUILD_SCRIPT" 'BUILD_VERSION="10"'
+}
+
+test_full_xcode_fallback_is_declared() {
+  local source
+  for source in "$SOURCE_SCRIPT" "$SOURCE_BUILD_SCRIPT"; do
+    /usr/bin/grep -Fq \
+      'DEFAULT_XCODE_DEVELOPER_DIR="/Applications/Xcode.app/Contents/Developer"' \
+      "$source" \
+      || fail "$source does not declare the default full-Xcode developer directory"
+    /usr/bin/grep -Fq 'export DEVELOPER_DIR="$DEFAULT_XCODE_DEVELOPER_DIR"' "$source" \
+      || fail "$source does not activate the full-Xcode fallback"
+  done
 }
 
 test_notice_and_native_linkage_contract_is_declared() {
@@ -343,7 +355,7 @@ run_fixture() {
   done
   shift
   : >"$fixture/commands.log"
-  env \
+  env -u DEVELOPER_DIR \
     BLOOM_RELEASE_TESTING=1 \
     BLOOM_RELEASE_TEST_TOOL_DIR="$fixture/tools" \
     FAKE_TOOL_DIR="$fixture/tools" \
@@ -355,6 +367,95 @@ run_fixture() {
     NOTARY_PROFILE='BloomNotaryTest' \
     "${extra_environment[@]}" \
     "$fixture/repo/script/package_release.sh" "$@"
+}
+
+new_build_script_probe_fixture() {
+  local fixture="$TEST_ROOT/$1"
+  /bin/mkdir -p "$fixture/repo/script" "$fixture/tools"
+  /bin/cp "$SOURCE_BUILD_SCRIPT" "$fixture/repo/script/build_and_run.sh"
+  /bin/chmod +x "$fixture/repo/script/build_and_run.sh"
+  /bin/cp "$SOURCE_FAKE_TOOL" "$fixture/tools/fake_release_tool.sh"
+  /bin/chmod +x "$fixture/tools/fake_release_tool.sh"
+  local tool
+  for tool in swift uname pkill; do
+    /bin/ln -s "$fixture/tools/fake_release_tool.sh" "$fixture/tools/$tool"
+  done
+  echo "$fixture"
+}
+
+run_build_script_probe() {
+  local fixture="$1"
+  shift
+  local -a extra_environment=(BLOOM_RELEASE_FAKE_UNUSED=1)
+  while [[ "${1:-}" != "--" ]]; do
+    extra_environment+=("$1")
+    shift
+  done
+  shift
+  : >"$fixture/commands.log"
+  env -u DEVELOPER_DIR \
+    PATH="$fixture/tools:/usr/bin:/bin" \
+    FAKE_RELEASE_LOG="$fixture/commands.log" \
+    FAKE_SWIFT_DEVELOPER_DIR_PROBE=1 \
+    FAKE_SWIFT_DEVELOPER_DIR_PROBE_EXIT=79 \
+    "${extra_environment[@]}" \
+    "$fixture/repo/script/build_and_run.sh" "$@"
+}
+
+assert_first_swift_developer_dir() {
+  local log="$1"
+  local expected="$2"
+  local observed
+  observed="$(/usr/bin/grep -m1 '^SWIFT_DEVELOPER_DIR ' "$log" || true)"
+  [[ "$observed" == "SWIFT_DEVELOPER_DIR $expected" ]] \
+    || fail "first Swift invocation used the wrong DEVELOPER_DIR: $observed"
+}
+
+test_full_xcode_fallback_behavior() {
+  local fixture probe_exit custom_developer_dir='/custom/pengrid-developer-dir'
+
+  fixture="$(new_fixture package-xcode-fallback)"
+  probe_exit=0
+  run_fixture "$fixture" \
+    FAKE_SWIFT_DEVELOPER_DIR_PROBE=1 \
+    FAKE_SWIFT_DEVELOPER_DIR_PROBE_EXIT=79 \
+    -- --unsigned >"$fixture/output" 2>&1 \
+    || probe_exit=$?
+  [[ $probe_exit -eq 79 ]] || fail "package fallback probe exited $probe_exit instead of 79"
+  assert_first_swift_developer_dir \
+    "$fixture/commands.log" \
+    '/Applications/Xcode.app/Contents/Developer'
+
+  fixture="$(new_fixture package-xcode-preserve)"
+  probe_exit=0
+  run_fixture "$fixture" \
+    "DEVELOPER_DIR=$custom_developer_dir" \
+    FAKE_SWIFT_DEVELOPER_DIR_PROBE=1 \
+    FAKE_SWIFT_DEVELOPER_DIR_PROBE_EXIT=79 \
+    -- --unsigned >"$fixture/output" 2>&1 \
+    || probe_exit=$?
+  [[ $probe_exit -eq 79 ]] \
+    || fail "package explicit-value probe exited $probe_exit instead of 79"
+  assert_first_swift_developer_dir "$fixture/commands.log" "$custom_developer_dir"
+
+  fixture="$(new_build_script_probe_fixture build-xcode-fallback)"
+  probe_exit=0
+  run_build_script_probe "$fixture" -- --verify \
+    || probe_exit=$?
+  [[ $probe_exit -eq 79 ]] || fail "build fallback probe exited $probe_exit instead of 79"
+  assert_first_swift_developer_dir \
+    "$fixture/commands.log" \
+    '/Applications/Xcode.app/Contents/Developer'
+
+  fixture="$(new_build_script_probe_fixture build-xcode-preserve)"
+  probe_exit=0
+  run_build_script_probe "$fixture" \
+    "DEVELOPER_DIR=$custom_developer_dir" \
+    -- --verify \
+    || probe_exit=$?
+  [[ $probe_exit -eq 79 ]] \
+    || fail "build explicit-value probe exited $probe_exit instead of 79"
+  assert_first_swift_developer_dir "$fixture/commands.log" "$custom_developer_dir"
 }
 
 test_repo_parent_symlink_is_rejected() {
@@ -678,6 +779,8 @@ run_all_contract_tests() {
   test_version_13_release_contract_is_documented
   test_release_tests_run_nonparallel
   test_version_13_bundle_version_is_declared
+  test_full_xcode_fallback_is_declared
+  test_full_xcode_fallback_behavior
   test_notice_and_native_linkage_contract_is_declared
   test_pengrid_release_identity_preserves_legacy_executable_and_icon
   test_icon_source_symlink_is_rejected
@@ -721,6 +824,10 @@ case "${1:-all}" in
     ;;
   real-swift-helper-fallback)
     test_real_swift_helper_fallback_receives_production_arguments
+    ;;
+  xcode-fallback)
+    test_full_xcode_fallback_is_declared
+    test_full_xcode_fallback_behavior
     ;;
   notice-otool)
     test_unsigned_notice_is_byte_identical_and_otool_executes

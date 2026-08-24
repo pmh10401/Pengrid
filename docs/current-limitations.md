@@ -2,7 +2,9 @@
 
 [한국어](current-limitations.ko.md) · **English** · [User guide](user-guide.md)
 
-This list covers the current source tree and the Developer Preview 7 DMG.
+This list distinguishes the current source tree from the Developer Preview 7
+DMG. Transferred-content verification and the other explicitly source-only
+workflows are not shipped in that last published DMG.
 
 ## Platform and distribution
 
@@ -51,10 +53,30 @@ This list covers the current source tree and the Developer Preview 7 DMG.
   unfiltered rows. They are disabled while pane filtering or text editing is
   active. Select Same Extension additionally requires exactly one visible
   regular file with a real extension.
-- Finder tag editing is not shipped; Get Info remains read-only. Byte-level
-  transfer verification is also future work. Identity and fingerprint checks
-  protect operation ownership and conservative Undo but are not per-byte
-  transfer verification.
+- Finder tag editing is not shipped; Get Info remains read-only. Optional
+  transferred-content verification is implemented in current source, but not
+  in the Developer Preview 7 DMG.
+
+## Transferred-content verification in current source
+
+- The global setting is off by default. It covers copy, Duplicate,
+  cross-volume move, and reviewed synchronization copy/replace actions. It
+  does not cover archive creation/extraction or same-volume rename-style moves.
+- SHA-256 covers regular-file data forks. Recursive structure and symbolic-link
+  payloads are checked, but resource forks, extended attributes, ACLs,
+  ownership, flags, creation dates, hard-link relationships, and sparse
+  allocation are excluded.
+- One operation uses at most two file-pair workers. A root over 250,000
+  descendants or depth 256 fails closed while verification is enabled.
+- File Provider content must expose readable local bytes and may be
+  materialized again. Google Drive and OneDrive verification remain manual
+  release gates until observed on installed providers.
+- Receipt revalidation is immediately before publication, but the final
+  validation and namespace syscall cannot be made one atomic content lock. A
+  narrow residual race remains.
+- Failure preserves the source and old destination when cleanup ownership is
+  provable. An uncertain cleanup becomes Recovery Needed rather than deleting
+  an unverified item.
 
 ## Batch rename
 

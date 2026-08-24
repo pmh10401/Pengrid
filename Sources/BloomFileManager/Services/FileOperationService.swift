@@ -1,6 +1,9 @@
 import Darwin
 import Foundation
 
+typealias TransferVerificationProgressHandler =
+    @Sendable (TransferVerificationProgress) async -> Void
+
 struct StorageCleanupMutationGroup: Sendable {
     let keep: StorageEntry
     let trash: [StorageEntry]
@@ -11,18 +14,22 @@ actor FileOperationService {
     private let logger: any OperationLogging
     private let accessCoordinator: CloudLocationScopedAccessCoordinator
     private let storageFingerprints: any StorageEntryFingerprintReading
+    private let verificationSessionFactory: any TransferVerificationSessionFactory
 
     init(
         fileSystem: any FileSystemAccess,
         logger: any OperationLogging = LiveOperationLogger(),
         accessCoordinator: CloudLocationScopedAccessCoordinator = .init(),
         storageFingerprints: any StorageEntryFingerprintReading =
-            LiveStorageEntryFingerprintReader()
+            LiveStorageEntryFingerprintReader(),
+        verificationSessionFactory: any TransferVerificationSessionFactory =
+            LiveTransferVerificationSessionFactory()
     ) {
         self.fileSystem = fileSystem
         self.logger = logger
         self.accessCoordinator = accessCoordinator
         self.storageFingerprints = storageFingerprints
+        self.verificationSessionFactory = verificationSessionFactory
     }
 
     nonisolated func makeArchiveOperationService(
@@ -81,7 +88,9 @@ actor FileOperationService {
     nonisolated func makeFolderSynchronizationTransactionService() -> FolderSynchronizationTransactionService {
         FolderSynchronizationTransactionService(
             fileSystem: fileSystem,
-            accessCoordinator: accessCoordinator
+            accessCoordinator: accessCoordinator,
+            verificationSessionFactory: verificationSessionFactory,
+            logger: logger
         )
     }
 
@@ -577,21 +586,42 @@ actor FileOperationService {
         to directory: URL,
         mode: TransferMode,
         resolveConflict: ConflictResolver,
-        progress: OperationProgressHandler
+        verificationPolicy: TransferVerificationPolicy = .disabled,
+        progress: OperationProgressHandler,
+        verificationProgress: @escaping TransferVerificationProgressHandler = { _ in }
     ) async -> FileOperationResult {
+        let startedAt = Date()
+        let verificationEnabled = verificationPolicy.effectivePairLimit != nil
         let accessLeases: [CloudLocationScopedAccessLease]
         do {
             accessLeases = try accessCoordinator.acquireAccess(for: sources + [directory])
         } catch {
-            return FileOperationResult(outcomes: sources.map {
-                .failed(source: $0, message: error.localizedDescription)
-            })
+            let result = FileOperationResult(
+                outcomes: sources.map {
+                    .failed(source: $0, message: error.localizedDescription)
+                },
+                verificationReport: verificationEnabled ? emptyVerificationReport : nil
+            )
+            if verificationEnabled {
+                await recordTransferVerification(
+                    report: emptyVerificationReport,
+                    failureCategory: nil
+                )
+            }
+            return result
         }
         defer { accessLeases.forEach { $0.finish() } }
         var requests: [IdentifiedTransferRequest] = []
         if let destinationRootIdentity = try? await fileSystem.identity(of: directory) {
             for source in sources {
                 guard let sourceIdentity = try? await fileSystem.identity(of: source) else {
+                    if verificationEnabled {
+                        return await failClosedUnidentifiedTransfer(
+                            sources,
+                            mode: mode,
+                            startedAt: startedAt
+                        )
+                    }
                     return await legacyTransfer(
                         sources,
                         to: directory,
@@ -612,7 +642,16 @@ actor FileOperationService {
                 requests,
                 mode: mode,
                 resolveConflict: resolveConflict,
-                progress: progress
+                verificationPolicy: verificationPolicy,
+                progress: progress,
+                verificationProgress: verificationProgress
+            )
+        }
+        if verificationEnabled {
+            return await failClosedUnidentifiedTransfer(
+                sources,
+                mode: mode,
+                startedAt: startedAt
             )
         }
         return await legacyTransfer(
@@ -720,41 +759,110 @@ actor FileOperationService {
         _ requests: [IdentifiedTransferRequest],
         progress: OperationProgressHandler = { _ in }
     ) async -> FileOperationResult {
+        await duplicate(
+            requests,
+            verificationPolicy: .disabled,
+            progress: progress,
+            verificationProgress: { _ in }
+        )
+    }
+
+    /// Policy-aware duplicate entry point. Keeping the compatibility overload
+    /// above prevents an unlabeled trailing closure from being rebound from
+    /// ordinary item progress to verification progress.
+    func duplicate(
+        _ requests: [IdentifiedTransferRequest],
+        verificationPolicy: TransferVerificationPolicy = .disabled,
+        progress: OperationProgressHandler = { _ in },
+        verificationProgress: @escaping TransferVerificationProgressHandler = { _ in }
+    ) async -> FileOperationResult {
+        let verificationEnabled = verificationPolicy.effectivePairLimit != nil
         let accessLeases: [CloudLocationScopedAccessLease]
         do {
             accessLeases = try accessCoordinator.acquireAccess(
                 for: requests.flatMap { [$0.source, $0.destinationRoot] }
             )
         } catch {
-            return FileOperationResult(outcomes: requests.map {
-                .failed(source: $0.source, message: error.localizedDescription)
-            })
+            let result = FileOperationResult(
+                outcomes: requests.map {
+                    .failed(source: $0.source, message: error.localizedDescription)
+                },
+                verificationReport: verificationEnabled ? emptyVerificationReport : nil
+            )
+            if verificationEnabled {
+                await recordTransferVerification(
+                    report: emptyVerificationReport,
+                    failureCategory: nil
+                )
+            }
+            return result
         }
         defer { accessLeases.forEach { $0.finish() } }
 
         let startedAt = Date()
+        let verificationSession: (any TransferVerificationSession)?
+        if verificationEnabled {
+            guard let session = verificationSessionFactory.makeSession(
+                policy: verificationPolicy
+            ) else {
+                return await failClosedUnavailableVerification(
+                    requests.map(\.source),
+                    kind: .copy,
+                    startedAt: startedAt
+                )
+            }
+            verificationSession = session
+        } else {
+            verificationSession = nil
+        }
         var outcomes: [FileOperationItemOutcome] = []
         var undoIdentities: [URL: FileIdentity] = [:]
         var undoFingerprints: [URL: SourceFingerprint] = [:]
+        var verificationReport = verificationEnabled ? emptyVerificationReport : nil
+        var verificationFailureCategory: TransferVerificationFailureCategory?
         var succeeded = 0
         var failed = 0
 
         for (index, request) in requests.enumerated() {
             do {
                 try Task.checkCancellation()
-                let completion = try await duplicateItem(request)
+                let completion = try await duplicateItem(
+                    request,
+                    verificationSession: verificationSession,
+                    verificationProgress: verificationProgress
+                )
                 outcomes.append(.succeeded(source: request.source, destination: completion.url))
                 undoIdentities[completion.url] = completion.identity
                 undoFingerprints[completion.url] = completion.fingerprint
+                if let summary = completion.verificationSummary {
+                    verificationReport = verificationReport?.merging(
+                        report(for: summary)
+                    )
+                }
                 succeeded += 1
-            } catch is CancellationError {
-                outcomes.append(contentsOf: requests[index...].map { .cancelled(source: $0.source) })
-                break
-            } catch let failure as TransferFailure where failure.cleanup != nil {
-                outcomes.append(.recoveryNeeded(source: request.source))
-                failed += 1
             } catch {
-                outcomes.append(.failed(source: request.source, message: error.localizedDescription))
+                if let category = transferVerificationFailureCategory(in: error) {
+                    verificationReport = verificationReport?.merging(
+                        failedVerificationReport
+                    )
+                    verificationFailureCategory = verificationFailureCategory ?? category
+                }
+                if error is CancellationError
+                    || (Task.isCancelled
+                        && transferVerificationFailureCategory(in: error) == .cancelled) {
+                    outcomes.append(contentsOf: requests[index...].map {
+                        .cancelled(source: $0.source)
+                    })
+                    break
+                }
+                if let failure = error as? TransferFailure, failure.cleanup != nil {
+                    outcomes.append(.recoveryNeeded(source: request.source))
+                } else {
+                    outcomes.append(.failed(
+                        source: request.source,
+                        message: error.localizedDescription
+                    ))
+                }
                 failed += 1
             }
             await reportProgress(
@@ -772,15 +880,24 @@ actor FileOperationService {
             failed: failed,
             skipped: 0
         )
+        if let verificationReport {
+            await recordTransferVerification(
+                report: verificationReport,
+                failureCategory: verificationFailureCategory
+            )
+        }
         return FileOperationResult(
             outcomes: outcomes,
             undoDestinationIdentities: undoIdentities,
-            undoDestinationFingerprints: undoFingerprints
+            undoDestinationFingerprints: undoFingerprints,
+            verificationReport: verificationReport
         )
     }
 
     private func duplicateItem(
-        _ request: IdentifiedTransferRequest
+        _ request: IdentifiedTransferRequest,
+        verificationSession: (any TransferVerificationSession)?,
+        verificationProgress: @escaping TransferVerificationProgressHandler
     ) async throws -> DuplicateItemCompletion {
         guard request.relativeParentComponents.isEmpty,
               request.source.deletingLastPathComponent().standardizedFileURL
@@ -797,6 +914,14 @@ actor FileOperationService {
             sourceIdentity: request.sourceIdentity
         )
         try await ensureCapacity(for: request.source, at: request.destinationRoot)
+        let comparisonPolicy: FilenameComparisonPolicy?
+        if verificationSession != nil {
+            comparisonPolicy = try await fileSystem.filenameComparisonPolicy(
+                in: request.destinationRoot
+            )
+        } else {
+            comparisonPolicy = nil
+        }
         let sourceFingerprint = try await fileSystem.fingerprint(of: request.source)
 
         while true {
@@ -814,6 +939,17 @@ actor FileOperationService {
                 existing: occupied
             )
             let destination = request.destinationRoot.appending(path: name)
+            let sourceManifest: TransferVerificationManifest?
+            if let verificationSession, let comparisonPolicy {
+                sourceManifest = try await verificationSession.captureSource(
+                    at: request.source,
+                    identifiedBy: request.sourceIdentity,
+                    comparisonPolicy: comparisonPolicy
+                )
+            } else {
+                sourceManifest = nil
+            }
+            defer { sourceManifest?.close() }
             let reservation = try await fileSystem.reserveStagingDirectory(
                 beside: destination,
                 parentIdentifiedBy: request.destinationRootIdentity
@@ -839,8 +975,25 @@ actor FileOperationService {
                       try await fileSystem.fingerprint(of: reservation.item) == stagedFingerprint
                 else { throw FileTransferError.sourceChangedDuringTransfer }
 
+                let verificationCompletion: TransferVerificationCompletion?
+                if let verificationSession, let sourceManifest {
+                    verificationCompletion = try await verificationSession.verify(
+                        source: sourceManifest,
+                        stagedURL: reservation.item,
+                        stagedIdentity: stagedIdentity,
+                        progress: verificationProgress
+                    )
+                } else {
+                    verificationCompletion = nil
+                }
+
                 do {
                     try Task.checkCancellation()
+                    if let verificationCompletion, let verificationSession {
+                        try await verificationSession.revalidate(
+                            verificationCompletion.receipt
+                        )
+                    }
                     try await fileSystem.moveExclusively(
                         reservation.item,
                         identifiedBy: stagedIdentity,
@@ -901,7 +1054,8 @@ actor FileOperationService {
                 return DuplicateItemCompletion(
                     url: destination,
                     identity: stagedIdentity,
-                    fingerprint: publishedFingerprint
+                    fingerprint: publishedFingerprint,
+                    verificationSummary: verificationCompletion?.summary
                 )
             } catch let failure as TransferFailure {
                 throw failure
@@ -947,23 +1101,53 @@ actor FileOperationService {
         _ requests: [IdentifiedTransferRequest],
         mode: TransferMode,
         resolveConflict: ConflictResolver,
-        progress: OperationProgressHandler
+        verificationPolicy: TransferVerificationPolicy = .disabled,
+        progress: OperationProgressHandler,
+        verificationProgress: @escaping TransferVerificationProgressHandler = { _ in }
     ) async -> FileOperationResult {
+        let verificationEnabled = verificationPolicy.effectivePairLimit != nil
         let accessLeases: [CloudLocationScopedAccessLease]
         do {
             accessLeases = try accessCoordinator.acquireAccess(
                 for: requests.flatMap { [$0.source, $0.destinationRoot] }
             )
         } catch {
-            return FileOperationResult(outcomes: requests.map {
-                .failed(source: $0.source, message: error.localizedDescription)
-            })
+            let result = FileOperationResult(
+                outcomes: requests.map {
+                    .failed(source: $0.source, message: error.localizedDescription)
+                },
+                verificationReport: verificationEnabled ? emptyVerificationReport : nil
+            )
+            if verificationEnabled {
+                await recordTransferVerification(
+                    report: emptyVerificationReport,
+                    failureCategory: nil
+                )
+            }
+            return result
         }
         defer { accessLeases.forEach { $0.finish() } }
         let startedAt = Date()
+        let verificationSession: (any TransferVerificationSession)?
+        if verificationEnabled {
+            guard let session = verificationSessionFactory.makeSession(
+                policy: verificationPolicy
+            ) else {
+                return await failClosedUnavailableVerification(
+                    requests.map(\.source),
+                    kind: mode == .copy ? .copy : .move,
+                    startedAt: startedAt
+                )
+            }
+            verificationSession = session
+        } else {
+            verificationSession = nil
+        }
         var outcomes: [FileOperationItemOutcome] = []
         var undoIdentities: [URL: FileIdentity] = [:]
         var undoFingerprints: [URL: SourceFingerprint] = [:]
+        var verificationReport = verificationEnabled ? emptyVerificationReport : nil
+        var verificationFailureCategory: TransferVerificationFailureCategory?
         var succeeded = 0
         var failed = 0
         var skipped = 0
@@ -995,7 +1179,10 @@ actor FileOperationService {
                     identifiedBy: request.sourceIdentity,
                     to: prepared.destinationDirectory,
                     mode: mode,
-                    resolveConflict: resolveConflict
+                    resolveConflict: resolveConflict,
+                    verificationSession: verificationSession,
+                    verificationComparisonRoot: request.destinationRoot,
+                    verificationProgress: verificationProgress
                 ) else {
                     if await cleanupOwnedDirectories(
                         prepared.createdDirectories,
@@ -1015,6 +1202,11 @@ actor FileOperationService {
                 }
                 let outcome = completion.outcome
                 outcomes.append(outcome)
+                if let summary = completion.verificationSummary {
+                    verificationReport = verificationReport?.merging(
+                        report(for: summary)
+                    )
+                }
                 switch outcome {
                 case .succeeded:
                     succeeded += 1
@@ -1058,6 +1250,12 @@ actor FileOperationService {
                 }
                 break
             } catch {
+                if let category = transferVerificationFailureCategory(in: error) {
+                    verificationReport = verificationReport?.merging(
+                        failedVerificationReport
+                    )
+                    verificationFailureCategory = verificationFailureCategory ?? category
+                }
                 let cleanupError = await cleanupOwnedDirectories(
                     preparedHierarchy?.createdDirectories ?? [],
                     for: request
@@ -1096,10 +1294,17 @@ actor FileOperationService {
             failed: failed,
             skipped: skipped
         )
+        if let verificationReport {
+            await recordTransferVerification(
+                report: verificationReport,
+                failureCategory: verificationFailureCategory
+            )
+        }
         return FileOperationResult(
             outcomes: outcomes,
             undoDestinationIdentities: undoIdentities,
-            undoDestinationFingerprints: undoFingerprints
+            undoDestinationFingerprints: undoFingerprints,
+            verificationReport: verificationReport
         )
     }
 
@@ -1108,7 +1313,10 @@ actor FileOperationService {
         identifiedBy expectedSourceIdentity: FileIdentity? = nil,
         to directory: URL,
         mode: TransferMode,
-        resolveConflict: ConflictResolver
+        resolveConflict: ConflictResolver,
+        verificationSession: (any TransferVerificationSession)? = nil,
+        verificationComparisonRoot: URL? = nil,
+        verificationProgress: @escaping TransferVerificationProgressHandler = { _ in }
     ) async throws -> TransferItemCompletion? {
         guard let currentSourceIdentity = try await fileSystem.identity(of: source) else {
             throw FileTransferError.missingIdentity
@@ -1136,7 +1344,8 @@ actor FileOperationService {
                     return TransferItemCompletion(
                         outcome: .skipped(source: source),
                         destinationIdentity: nil,
-                        destinationFingerprint: nil
+                        destinationFingerprint: nil,
+                        verificationSummary: nil
                     )
                 }
                 replacedIdentity = destinationIdentity
@@ -1149,7 +1358,8 @@ actor FileOperationService {
                 return TransferItemCompletion(
                     outcome: .skipped(source: source),
                     destinationIdentity: nil,
-                    destinationFingerprint: nil
+                    destinationFingerprint: nil,
+                    verificationSummary: nil
                 )
             case .cancel:
                 return nil
@@ -1165,7 +1375,14 @@ actor FileOperationService {
                 return TransferItemCompletion(
                     outcome: .succeeded(source: source, destination: destination),
                     destinationIdentity: sourceIdentity,
-                    destinationFingerprint: nil
+                    destinationFingerprint: nil,
+                    verificationSummary: verificationSession == nil
+                        ? nil
+                        : TransferVerificationSummary(
+                            verifiedFileCount: 0,
+                            verifiedLogicalByteCount: 0,
+                            noByteTransferItemCount: 1
+                        )
                 )
             }
         }
@@ -1174,11 +1391,30 @@ actor FileOperationService {
         let sourceFingerprint = mode == .move
             ? try await fileSystem.fingerprint(of: source)
             : nil
+        let pendingVerification: PendingTransferVerification?
+        if let verificationSession {
+            let comparisonPolicy = try await fileSystem.filenameComparisonPolicy(
+                in: verificationComparisonRoot ?? directory
+            )
+            let sourceManifest = try await verificationSession.captureSource(
+                at: source,
+                identifiedBy: sourceIdentity,
+                comparisonPolicy: comparisonPolicy
+            )
+            pendingVerification = PendingTransferVerification(
+                session: verificationSession,
+                sourceManifest: sourceManifest,
+                progress: verificationProgress
+            )
+        } else {
+            pendingVerification = nil
+        }
         let prepared = try await prepareStagedCopy(
             of: source,
             sourceIdentity: sourceIdentity,
             sourceFingerprint: sourceFingerprint,
-            beside: destination
+            beside: destination,
+            verification: pendingVerification
         )
         try await commit(
             prepared,
@@ -1211,7 +1447,8 @@ actor FileOperationService {
         return TransferItemCompletion(
             outcome: .succeeded(source: source, destination: destination),
             destinationIdentity: prepared.itemIdentity,
-            destinationFingerprint: destinationFingerprint
+            destinationFingerprint: destinationFingerprint,
+            verificationSummary: prepared.verificationCompletion?.summary
         )
     }
 
@@ -1289,8 +1526,10 @@ actor FileOperationService {
         of source: URL,
         sourceIdentity: FileIdentity,
         sourceFingerprint: SourceFingerprint?,
-        beside destination: URL
+        beside destination: URL,
+        verification: PendingTransferVerification?
     ) async throws -> PreparedStagedCopy {
+        defer { verification?.sourceManifest.close() }
         let reservation = try await fileSystem.reserveStagingDirectory(beside: destination)
         var itemIdentity: FileIdentity?
         do {
@@ -1310,9 +1549,30 @@ actor FileOperationService {
                 throw FileTransferError.sourceChangedDuringTransfer
             }
             try Task.checkCancellation()
+            let verificationCompletion: TransferVerificationCompletion?
+            let revalidateVerification: (@Sendable () async throws -> Void)?
+            if let verification {
+                let completion = try await verification.session.verify(
+                    source: verification.sourceManifest,
+                    stagedURL: reservation.item,
+                    stagedIdentity: copiedItemIdentity,
+                    progress: verification.progress
+                )
+                verificationCompletion = completion
+                let session = verification.session
+                let receipt = completion.receipt
+                revalidateVerification = {
+                    try await session.revalidate(receipt)
+                }
+            } else {
+                verificationCompletion = nil
+                revalidateVerification = nil
+            }
             return PreparedStagedCopy(
                 reservation: reservation,
-                itemIdentity: copiedItemIdentity
+                itemIdentity: copiedItemIdentity,
+                verificationCompletion: verificationCompletion,
+                revalidateVerification: revalidateVerification
             )
         } catch {
             let cleanupError = await cleanupStaging(
@@ -1330,6 +1590,7 @@ actor FileOperationService {
     ) async throws {
         do {
             try Task.checkCancellation()
+            try await prepared.revalidateVerification?()
             if let destinationIdentity {
                 try await fileSystem.replace(
                     destination,
@@ -1490,6 +1751,105 @@ actor FileOperationService {
             && entry.size == 0
     }
 
+    private var emptyVerificationReport: TransferVerificationReport {
+        TransferVerificationReport(
+            verifiedFileCount: 0,
+            verifiedLogicalByteCount: 0,
+            noByteTransferItemCount: 0,
+            failedVerificationItemCount: 0
+        )
+    }
+
+    private var failedVerificationReport: TransferVerificationReport {
+        TransferVerificationReport(
+            verifiedFileCount: 0,
+            verifiedLogicalByteCount: 0,
+            noByteTransferItemCount: 0,
+            failedVerificationItemCount: 1
+        )
+    }
+
+    private func report(
+        for summary: TransferVerificationSummary
+    ) -> TransferVerificationReport {
+        TransferVerificationReport(
+            verifiedFileCount: summary.verifiedFileCount,
+            verifiedLogicalByteCount: summary.verifiedLogicalByteCount,
+            noByteTransferItemCount: summary.noByteTransferItemCount,
+            failedVerificationItemCount: 0
+        )
+    }
+
+    private func transferVerificationFailureCategory(
+        in error: any Error
+    ) -> TransferVerificationFailureCategory? {
+        if let failure = error as? TransferVerificationFailure {
+            return failure.category
+        }
+        if let failure = error as? TransferFailure {
+            return transferVerificationFailureCategory(in: failure.primary)
+        }
+        return nil
+    }
+
+    private func recordTransferVerification(
+        report: TransferVerificationReport,
+        failureCategory: TransferVerificationFailureCategory?
+    ) async {
+        await logger.recordTransferVerification(TransferVerificationLogEvent(
+            enabled: true,
+            verifiedFileCount: report.verifiedFileCount,
+            verifiedLogicalByteCount: report.verifiedLogicalByteCount,
+            noByteTransferItemCount: report.noByteTransferItemCount,
+            failedVerificationItemCount: report.failedVerificationItemCount,
+            failureCategory: failureCategory
+        ))
+    }
+
+    private func failClosedUnidentifiedTransfer(
+        _ sources: [URL],
+        mode: TransferMode,
+        startedAt: Date
+    ) async -> FileOperationResult {
+        await failClosedUnavailableVerification(
+            sources,
+            kind: mode == .copy ? .copy : .move,
+            startedAt: startedAt
+        )
+    }
+
+    private func failClosedUnavailableVerification(
+        _ sources: [URL],
+        kind: FileOperationKind,
+        startedAt: Date
+    ) async -> FileOperationResult {
+        let report = emptyVerificationReport
+        let outcomes = sources.map { source in
+            FileOperationItemOutcome.failed(
+                source: source,
+                message: TransferVerificationFailure(
+                    category: .identityUnavailable,
+                    safeName: source.lastPathComponent
+                ).localizedDescription
+            )
+        }
+        await logger.record(
+            kind: kind,
+            duration: Date().timeIntervalSince(startedAt),
+            succeeded: 0,
+            failed: sources.count,
+            skipped: 0
+        )
+        await recordTransferVerification(
+            report: report,
+            failureCategory: .identityUnavailable
+        )
+        return FileOperationResult(
+            outcomes: outcomes,
+            verificationReport: report
+        )
+    }
+
     private func reportProgress(
         completedCount: Int,
         totalCount: Int,
@@ -1506,15 +1866,24 @@ actor FileOperationService {
     }
 }
 
-private struct PreparedStagedCopy: Sendable {
+private struct PendingTransferVerification: @unchecked Sendable {
+    let session: any TransferVerificationSession
+    let sourceManifest: TransferVerificationManifest
+    let progress: TransferVerificationProgressHandler
+}
+
+private struct PreparedStagedCopy: @unchecked Sendable {
     let reservation: StagingReservation
     let itemIdentity: FileIdentity
+    let verificationCompletion: TransferVerificationCompletion?
+    let revalidateVerification: (@Sendable () async throws -> Void)?
 }
 
 private struct DuplicateItemCompletion: Sendable {
     let url: URL
     let identity: FileIdentity
     let fingerprint: SourceFingerprint
+    let verificationSummary: TransferVerificationSummary?
 }
 
 private struct TransferFailure: LocalizedError {
@@ -1533,6 +1902,7 @@ private struct TransferItemCompletion {
     let outcome: FileOperationItemOutcome
     let destinationIdentity: FileIdentity?
     let destinationFingerprint: SourceFingerprint?
+    let verificationSummary: TransferVerificationSummary?
 }
 
 private enum FileTransferError: Error {
