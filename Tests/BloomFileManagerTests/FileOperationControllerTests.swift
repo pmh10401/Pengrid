@@ -3114,6 +3114,7 @@ struct FileOperationControllerTests {
         #expect(fixture.controller.hasExclusiveOperationActive)
         await fixture.executor.waitUntilStarted()
         #expect(await fixture.executor.executeCount == 1)
+        #expect(await fixture.executor.verificationPolicies == [.disabled])
         await fixture.executor.releaseHeldExecution()
         await waitUntilQueueIsIdle(fixture.controller)
 
@@ -3810,6 +3811,7 @@ private func makeFolderSynchronizationQueuePlan(
 
 actor RecordingFolderSynchronizationExecutor: FolderSynchronizationExecuting {
     private(set) var executeCount = 0
+    private(set) var verificationPolicies: [TransferVerificationPolicy] = []
     private let result: FileOperationResult
     private let holdUntilReleased: Bool
     private let progressToPublish: [FolderSynchronizationProgress]
@@ -3838,9 +3840,12 @@ actor RecordingFolderSynchronizationExecutor: FolderSynchronizationExecuting {
 
     func execute(
         _ plan: PreparedFolderSynchronizationPlan,
-        progress: @escaping @Sendable (FolderSynchronizationProgress) async -> Void
+        verificationPolicy: TransferVerificationPolicy,
+        progress: @escaping @Sendable (FolderSynchronizationProgress) async -> Void,
+        verificationProgress: @escaping TransferVerificationProgressHandler
     ) async -> FileOperationResult {
         executeCount += 1
+        verificationPolicies.append(verificationPolicy)
         hasStarted = true
         let waiters = startWaiters
         startWaiters.removeAll()

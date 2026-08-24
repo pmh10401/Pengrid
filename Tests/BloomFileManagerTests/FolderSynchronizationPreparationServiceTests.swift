@@ -40,6 +40,22 @@ import Testing
         #expect(fixture.scopedAccess.balancedRoots == [fixture.sourceRoot, fixture.destinationRoot])
     }
 
+    @Test func reviewPreparationRemainsMetadataOnlyWithoutTransferVerificationTraversal() async throws {
+        let fixture = try PreparationFixture()
+
+        _ = try await fixture.service.prepare(fixture.copyDraft)
+
+        let source = fixture.sourceRoot.appending(path: fixture.reportPath.string)
+        #expect(await fixture.fileSystem.fingerprintRequests == [source, source])
+        // Every mutating FileSystemAccess method in this fixture is a tripwire that
+        // throws. A successful review therefore proves staging/publication and the
+        // later content-verification pipeline remain lazy until execution.
+        #expect(fixture.scopedAccess.balancedRoots == [
+            fixture.sourceRoot,
+            fixture.destinationRoot
+        ])
+    }
+
     @Test func prepareRejectsAliasMediatedNestedRootsBeforePlanIsConfirmable() async throws {
         let fixture = try PreparationFixture(
             sourceCanonicalPath: "/canonical/source",

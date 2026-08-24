@@ -84,18 +84,54 @@ enum FolderSynchronizationTransactionFailure: LocalizedError, Sendable {
 protocol FolderSynchronizationExecuting: Sendable {
     func execute(
         _ plan: PreparedFolderSynchronizationPlan,
-        progress: @escaping @Sendable (FolderSynchronizationProgress) async -> Void
+        verificationPolicy: TransferVerificationPolicy,
+        progress: @escaping @Sendable (FolderSynchronizationProgress) async -> Void,
+        verificationProgress: @escaping TransferVerificationProgressHandler
     ) async -> FileOperationResult
+}
+
+extension FolderSynchronizationExecuting {
+    func execute(
+        _ plan: PreparedFolderSynchronizationPlan,
+        progress: @escaping @Sendable (FolderSynchronizationProgress) async -> Void = { _ in }
+    ) async -> FileOperationResult {
+        await execute(
+            plan,
+            verificationPolicy: .disabled,
+            progress: progress,
+            verificationProgress: { _ in }
+        )
+    }
 }
 
 actor FolderSynchronizationTransactionService: FolderSynchronizationExecuting {
     typealias ProgressHandler = @Sendable (FolderSynchronizationProgress) async -> Void
 
-    private struct StagedItem: Sendable {
+    private enum StagedVerificationState: @unchecked Sendable {
+        case disabled
+        case sourceManifest(TransferVerificationManifest)
+        case verifying
+        case receipt(TransferVerificationCompletion)
+    }
+
+    private struct StagedItem: @unchecked Sendable {
         let action: FolderSynchronizationAction
         let reservation: StagingReservation
         let identity: FileIdentity
         let stagedFingerprint: SourceFingerprint
+        var verificationState: StagedVerificationState
+
+        func closeVerificationResources() {
+            switch verificationState {
+            case .disabled, .verifying:
+                break
+            case let .sourceManifest(manifest):
+                manifest.close()
+            case let .receipt(completion):
+                completion.receipt.source.close()
+                completion.receipt.staged.close()
+            }
+        }
     }
 
     private struct PublishedItem: Sendable {
@@ -111,49 +147,356 @@ actor FolderSynchronizationTransactionService: FolderSynchronizationExecuting {
         let destinationParentIdentity: FileIdentity
     }
 
+    private final class StagedVerificationClaim: @unchecked Sendable {
+        let index: Int
+        let action: FolderSynchronizationAction
+        let reservation: StagingReservation
+        let identity: FileIdentity
+
+        private let lock = NSLock()
+        private var sourceManifest: TransferVerificationManifest?
+
+        init(
+            index: Int,
+            item: StagedItem,
+            sourceManifest: TransferVerificationManifest
+        ) {
+            self.index = index
+            action = item.action
+            reservation = item.reservation
+            identity = item.identity
+            self.sourceManifest = sourceManifest
+        }
+
+        func takeSourceManifest() -> TransferVerificationManifest? {
+            lock.withLock {
+                defer { sourceManifest = nil }
+                return sourceManifest
+            }
+        }
+
+        deinit {
+            lock.withLock { sourceManifest?.close() }
+        }
+    }
+
+    private actor StagedVerificationQueue {
+        private var staged: [StagedItem]
+        private var nextIndex = 0
+        private var completedCount = 0
+
+        init(staged: [StagedItem]) {
+            self.staged = staged
+        }
+
+        func claimNext() throws -> StagedVerificationClaim? {
+            guard nextIndex < staged.count else { return nil }
+            let index = nextIndex
+            nextIndex += 1
+            guard case let .sourceManifest(sourceManifest) = staged[index].verificationState else {
+                throw TransferVerificationFailure(category: .identityUnavailable)
+            }
+            staged[index].verificationState = .verifying
+            return StagedVerificationClaim(
+                index: index,
+                item: staged[index],
+                sourceManifest: sourceManifest
+            )
+        }
+
+        func install(
+            _ completion: TransferVerificationCompletion,
+            at index: Int
+        ) throws -> Int {
+            guard staged.indices.contains(index),
+                  case .verifying = staged[index].verificationState else {
+                completion.receipt.source.close()
+                completion.receipt.staged.close()
+                throw TransferVerificationFailure(category: .identityUnavailable)
+            }
+            staged[index].verificationState = .receipt(completion)
+            completedCount += 1
+            return completedCount
+        }
+
+        func takeAll() -> [StagedItem] {
+            defer { staged.removeAll(keepingCapacity: false) }
+            return staged
+        }
+    }
+
+    private struct StagedVerificationBatchFailure: Error, @unchecked Sendable {
+        let staged: [StagedItem]
+        let underlying: any Error
+    }
+
+    private struct VerificationWorkerResult: @unchecked Sendable {
+        let error: (any Error)?
+    }
+
+    private actor VerificationProgressDelivery {
+        private let handler: TransferVerificationProgressHandler
+        private var isDelivering = false
+        private var waiters: [CheckedContinuation<Void, Never>] = []
+
+        init(handler: @escaping TransferVerificationProgressHandler) {
+            self.handler = handler
+        }
+
+        func publish(_ value: TransferVerificationProgress) async {
+            if isDelivering {
+                await withCheckedContinuation { waiters.append($0) }
+            } else {
+                isDelivering = true
+            }
+            await handler(value)
+            if waiters.isEmpty {
+                isDelivering = false
+            } else {
+                waiters.removeFirst().resume()
+            }
+        }
+    }
+
+    private actor VerificationProgressAggregator {
+        private struct RootState: Sendable {
+            var phaseRank = 0
+            var phaseFractions = [0.0, 0.0, 0.0]
+            var completedFileCount = 0
+            var completedLogicalByteCount: Int64 = 0
+            var totalFileCount: Int
+            var totalLogicalByteCount: Int64
+        }
+
+        private var roots: [RootState]
+        private let delivery: VerificationProgressDelivery
+        private var lastFractionByPhase = [0.0, 0.0, 0.0]
+
+        init(
+            staged: [StagedItem],
+            handler: @escaping TransferVerificationProgressHandler
+        ) {
+            roots = staged.map { item in
+                guard case let .sourceManifest(manifest) = item.verificationState else {
+                    return RootState(totalFileCount: 0, totalLogicalByteCount: 0)
+                }
+                return RootState(
+                    totalFileCount: manifest.regularFileCount,
+                    totalLogicalByteCount: manifest.logicalByteCount
+                )
+            }
+            delivery = VerificationProgressDelivery(handler: handler)
+        }
+
+        func update(root index: Int, with value: TransferVerificationProgress) async {
+            guard roots.indices.contains(index) else { return }
+            let rank = Self.rank(value.phase)
+            for completedRank in 0..<rank {
+                roots[index].phaseFractions[completedRank] = 1
+            }
+            roots[index].phaseRank = max(roots[index].phaseRank, rank)
+            roots[index].phaseFractions[rank] = max(
+                roots[index].phaseFractions[rank],
+                value.fractionCompleted
+            )
+            roots[index].completedFileCount = max(
+                roots[index].completedFileCount,
+                value.completedFileCount
+            )
+            roots[index].completedLogicalByteCount = max(
+                roots[index].completedLogicalByteCount,
+                value.completedLogicalByteCount
+            )
+            roots[index].totalFileCount = max(
+                roots[index].totalFileCount,
+                value.totalFileCount
+            )
+            roots[index].totalLogicalByteCount = max(
+                roots[index].totalLogicalByteCount,
+                value.totalLogicalByteCount
+            )
+            await delivery.publish(aggregate(currentName: value.currentName))
+        }
+
+        func complete(root index: Int, currentName: String) async {
+            guard roots.indices.contains(index) else { return }
+            roots[index].phaseRank = 2
+            roots[index].phaseFractions = [1, 1, 1]
+            roots[index].completedFileCount = roots[index].totalFileCount
+            roots[index].completedLogicalByteCount = roots[index].totalLogicalByteCount
+            await delivery.publish(aggregate(currentName: currentName))
+        }
+
+        private func aggregate(currentName: String) -> TransferVerificationProgress {
+            let allFinal = !roots.isEmpty && roots.allSatisfy {
+                $0.phaseRank == 2 && $0.phaseFractions[2] == 1
+            }
+            let phaseRank: Int
+            if allFinal {
+                phaseRank = 2
+            } else if roots.contains(where: { $0.phaseRank >= 1 }) {
+                phaseRank = 1
+            } else {
+                phaseRank = 0
+            }
+            let totalFiles = roots.reduce(0) { Self.saturatedAdd($0, $1.totalFileCount) }
+            let totalBytes = roots.reduce(Int64(0)) {
+                Self.saturatedAdd($0, $1.totalLogicalByteCount)
+            }
+            let completedFiles = min(
+                totalFiles,
+                roots.reduce(0) { Self.saturatedAdd($0, $1.completedFileCount) }
+            )
+            let completedBytes = min(
+                totalBytes,
+                roots.reduce(Int64(0)) {
+                    Self.saturatedAdd($0, $1.completedLogicalByteCount)
+                }
+            )
+            let rawFraction: Double
+            if totalBytes > 0 {
+                let weighted = roots.reduce(0.0) { partial, root in
+                    partial + root.phaseFractions[phaseRank]
+                        * Double(root.totalLogicalByteCount)
+                }
+                rawFraction = weighted / Double(totalBytes)
+            } else if totalFiles > 0 {
+                let weighted = roots.reduce(0.0) { partial, root in
+                    partial + root.phaseFractions[phaseRank]
+                        * Double(root.totalFileCount)
+                }
+                rawFraction = weighted / Double(totalFiles)
+            } else if roots.isEmpty {
+                rawFraction = 1
+            } else {
+                rawFraction = roots.reduce(0.0) {
+                    $0 + $1.phaseFractions[phaseRank]
+                } / Double(roots.count)
+            }
+            let fraction = max(lastFractionByPhase[phaseRank], rawFraction)
+            lastFractionByPhase[phaseRank] = fraction
+            return TransferVerificationProgress(
+                phase: Self.phase(phaseRank),
+                fractionCompleted: fraction,
+                completedFileCount: completedFiles,
+                totalFileCount: totalFiles,
+                completedLogicalByteCount: completedBytes,
+                totalLogicalByteCount: totalBytes,
+                currentName: currentName
+            )
+        }
+
+        private nonisolated static func rank(_ phase: TransferVerificationPhase) -> Int {
+            switch phase {
+            case .preparingManifest: 0
+            case .hashing: 1
+            case .finalValidation: 2
+            }
+        }
+
+        private nonisolated static func phase(_ rank: Int) -> TransferVerificationPhase {
+            switch rank {
+            case 0: .preparingManifest
+            case 1: .hashing
+            default: .finalValidation
+            }
+        }
+
+        private nonisolated static func saturatedAdd(_ lhs: Int, _ rhs: Int) -> Int {
+            let (value, overflow) = lhs.addingReportingOverflow(rhs)
+            return overflow ? .max : value
+        }
+
+        private nonisolated static func saturatedAdd(_ lhs: Int64, _ rhs: Int64) -> Int64 {
+            let (value, overflow) = lhs.addingReportingOverflow(rhs)
+            return overflow ? .max : value
+        }
+    }
+
     private let fileSystem: any FileSystemAccess
     private let scopedAccess: any FolderSynchronizationScopedAccessing
     private let availabilityReader: any CloudItemAvailabilityReading
+    private let verificationSessionFactory: any TransferVerificationSessionFactory
+    private let logger: any OperationLogging
 
     init(
         fileSystem: any FileSystemAccess = LiveFileSystemAccess(),
         scopedAccess: any FolderSynchronizationScopedAccessing = TransactionScopedAccess(
             coordinator: .init()
         ),
-        availabilityReader: any CloudItemAvailabilityReading = LiveCloudItemAvailabilityService()
+        availabilityReader: any CloudItemAvailabilityReading = LiveCloudItemAvailabilityService(),
+        verificationSessionFactory: any TransferVerificationSessionFactory =
+            LiveTransferVerificationSessionFactory(),
+        logger: any OperationLogging = LiveOperationLogger()
     ) {
         self.fileSystem = fileSystem
         self.scopedAccess = scopedAccess
         self.availabilityReader = availabilityReader
+        self.verificationSessionFactory = verificationSessionFactory
+        self.logger = logger
     }
 
     init(
         fileSystem: any FileSystemAccess,
         accessCoordinator: CloudLocationScopedAccessCoordinator,
-        availabilityReader: any CloudItemAvailabilityReading = LiveCloudItemAvailabilityService()
+        availabilityReader: any CloudItemAvailabilityReading = LiveCloudItemAvailabilityService(),
+        verificationSessionFactory: any TransferVerificationSessionFactory =
+            LiveTransferVerificationSessionFactory(),
+        logger: any OperationLogging = LiveOperationLogger()
     ) {
         self.init(
             fileSystem: fileSystem,
             scopedAccess: TransactionScopedAccess(coordinator: accessCoordinator),
-            availabilityReader: availabilityReader
+            availabilityReader: availabilityReader,
+            verificationSessionFactory: verificationSessionFactory,
+            logger: logger
         )
     }
 
     func execute(
         _ plan: PreparedFolderSynchronizationPlan,
-        progress: @escaping ProgressHandler = { _ in }
+        verificationPolicy: TransferVerificationPolicy,
+        progress: @escaping ProgressHandler,
+        verificationProgress: @escaping TransferVerificationProgressHandler
     ) async -> FileOperationResult {
+        let verificationEnabled = verificationPolicy.effectivePairLimit != nil
         let leases: [any FolderSynchronizationScopedAccessLease]
         do {
             leases = try scopedAccess.acquireAccess(for: [
                 plan.draft.sourceRoot, plan.draft.destinationRoot
             ])
         } catch {
-            return failure(plan, error: error)
+            let report = verificationEnabled ? emptyVerificationReport : nil
+            let result = failure(plan, error: error, verificationReport: report)
+            if let report {
+                await recordTransferVerification(report: report, failureCategory: nil)
+            }
+            return result
         }
         defer { leases.forEach { $0.finish() } }
 
+        let verificationSession: (any TransferVerificationSession)?
+        if verificationEnabled {
+            guard let session = verificationSessionFactory.makeSession(policy: verificationPolicy) else {
+                let error = TransferVerificationFailure(category: .identityUnavailable)
+                let report = verificationReport(
+                    for: [],
+                    failureCategory: .identityUnavailable
+                )
+                let result = failure(plan, error: error, verificationReport: report)
+                await recordTransferVerification(
+                    report: report,
+                    failureCategory: .identityUnavailable
+                )
+                return result
+            }
+            verificationSession = session
+        } else {
+            verificationSession = nil
+        }
+
         var staged: [StagedItem] = []
+        defer { staged.forEach { $0.closeVerificationResources() } }
         var unfinalizedReservations: [(FolderSynchronizationAction, StagingReservation)] = []
         var quarantines: [QuarantinedItem] = []
         var published: [PublishedItem] = []
@@ -182,6 +525,22 @@ actor FolderSynchronizationTransactionService: FolderSynchronizationExecuting {
                 ), try await fileSystem.identity(of: parent) == expectedParentIdentity else {
                     throw FolderSynchronizationTransactionFailure.destinationChanged(action.relativePath)
                 }
+                let sourceManifest: TransferVerificationManifest?
+                if let verificationSession {
+                    sourceManifest = try await verificationSession.captureSource(
+                        at: source.url,
+                        identifiedBy: source.fingerprint.identity,
+                        comparisonPolicy: plan.destinationFilenameComparisonPolicy
+                    )
+                } else {
+                    sourceManifest = nil
+                }
+                var transferredSourceManifest = false
+                defer {
+                    if !transferredSourceManifest {
+                        sourceManifest?.close()
+                    }
+                }
                 let reservation = try await fileSystem.reserveStagingDirectory(
                     beside: destination,
                     parentIdentifiedBy: expectedParentIdentity
@@ -204,7 +563,10 @@ actor FolderSynchronizationTransactionService: FolderSynchronizationExecuting {
                         throw FolderSynchronizationTransactionFailure.stagedItemChanged(action.relativePath)
                     }
                     staged.append(.init(action: action, reservation: reservation, identity: identity,
-                        stagedFingerprint: stagedFingerprint))
+                        stagedFingerprint: stagedFingerprint,
+                        verificationState: sourceManifest.map(StagedVerificationState.sourceManifest)
+                            ?? .disabled))
+                    transferredSourceManifest = true
                 } catch {
                     // A failed copy has no returned payload identity.  Its implementation
                     // owns any partial payload cleanup; we may only remove the directory
@@ -216,15 +578,57 @@ actor FolderSynchronizationTransactionService: FolderSynchronizationExecuting {
                 try Task.checkCancellation()
             }
 
-            for (index, item) in staged.enumerated() {
-                try Task.checkCancellation()
-                await report(.verifyingStaging, index, staged.count, item.action.relativePath, progress)
-                try Task.checkCancellation()
-                guard try await fileSystem.identity(of: item.reservation.item) == item.identity,
-                      try await fileSystem.fingerprint(of: item.reservation.item)
-                        .matchesAfterRelocation(item.stagedFingerprint),
-                      try await fileSystem.identity(of: item.reservation.item) == item.identity else {
-                    throw FolderSynchronizationTransactionFailure.stagedItemChanged(item.action.relativePath)
+            if let verificationSession {
+                // Complete every metadata/identity staging check before any content
+                // worker can report a root complete. No preexisting destination is
+                // quarantined until the entire verified batch has succeeded.
+                for item in staged {
+                    try Task.checkCancellation()
+                    guard try await fileSystem.identity(of: item.reservation.item) == item.identity,
+                          try await fileSystem.fingerprint(of: item.reservation.item)
+                            .matchesAfterRelocation(item.stagedFingerprint),
+                          try await fileSystem.identity(of: item.reservation.item) == item.identity else {
+                        throw FolderSynchronizationTransactionFailure.stagedItemChanged(
+                            item.action.relativePath
+                        )
+                    }
+                }
+                let verificationQueue = StagedVerificationQueue(staged: staged)
+                let verificationAggregator = VerificationProgressAggregator(
+                    staged: staged,
+                    handler: verificationProgress
+                )
+                let stagedCount = staged.count
+                // Transfer the array's manifest ownership into the queue. Keeping a
+                // second immutable snapshot here would retain every manifest backing
+                // store until the whole batch completed.
+                staged.removeAll(keepingCapacity: false)
+                do {
+                    staged = try await verifyStagedItems(
+                        queue: verificationQueue,
+                        aggregator: verificationAggregator,
+                        total: stagedCount,
+                        session: verificationSession,
+                        progress: progress
+                    )
+                } catch let failure as StagedVerificationBatchFailure {
+                    staged = failure.staged
+                    throw failure.underlying
+                }
+            } else {
+                // Preserve the original disabled event sequence exactly.
+                for (index, item) in staged.enumerated() {
+                    try Task.checkCancellation()
+                    await report(.verifyingStaging, index, staged.count, item.action.relativePath, progress)
+                    try Task.checkCancellation()
+                    guard try await fileSystem.identity(of: item.reservation.item) == item.identity,
+                          try await fileSystem.fingerprint(of: item.reservation.item)
+                            .matchesAfterRelocation(item.stagedFingerprint),
+                          try await fileSystem.identity(of: item.reservation.item) == item.identity else {
+                        throw FolderSynchronizationTransactionFailure.stagedItemChanged(
+                            item.action.relativePath
+                        )
+                    }
                 }
             }
 
@@ -285,9 +689,17 @@ actor FolderSynchronizationTransactionService: FolderSynchronizationExecuting {
                 let parent = destination.deletingLastPathComponent().standardizedFileURL
                 guard await !fileSystem.exists(destination),
                       let expectedParentIdentity = expectedDestinationParentIdentity(
-                        for: item.action, destinationParent: parent, plan: plan
+                          for: item.action, destinationParent: parent, plan: plan
                       ), try await fileSystem.identity(of: parent) == expectedParentIdentity else {
                     throw FolderSynchronizationTransactionFailure.destinationOccupied(item.action.relativePath)
+                }
+                if let verificationSession {
+                    guard case let .receipt(completion) = item.verificationState else {
+                        throw TransferVerificationFailure(category: .identityUnavailable)
+                    }
+                    // Receipt revalidation is deliberately the final awaited safety
+                    // step before the identity-bound publication primitive.
+                    try await verificationSession.revalidate(completion.receipt)
                 }
                 try await fileSystem.moveExclusively(
                     item.reservation.item,
@@ -363,7 +775,17 @@ actor FolderSynchronizationTransactionService: FolderSynchronizationExecuting {
             for item in published {
                 try await fileSystem.commitFinalizedOwnedCopy(identity: item.identity)
             }
-            return success(plan)
+            let verificationReport = verificationEnabled
+                ? verificationReport(for: staged, failureCategory: nil)
+                : nil
+            let result = success(plan, verificationReport: verificationReport)
+            if let verificationReport {
+                await recordTransferVerification(
+                    report: verificationReport,
+                    failureCategory: nil
+                )
+            }
+            return result
         } catch {
             let cancelled = error is CancellationError || Task.isCancelled
             let fileSystem = self.fileSystem
@@ -373,9 +795,16 @@ actor FolderSynchronizationTransactionService: FolderSynchronizationExecuting {
                 !finalizedTrash.contains($0.action.relativePath)
                     && !restoredTrash.contains($0.action.relativePath)
             }
+            let failureCategory = verificationEnabled
+                ? transferVerificationFailureCategory(in: error, cancelled: cancelled)
+                : nil
+            let verificationReport = verificationEnabled
+                ? verificationReport(for: staged, failureCategory: failureCategory)
+                : nil
+            let rollbackStaged = staged
             let recoveryNeeded = await Task.detached {
                 await Self.rollback(
-                    staged: staged,
+                    staged: rollbackStaged,
                     unfinalizedReservations: unfinalizedReservations,
                     quarantines: rollbackQuarantines,
                     published: published,
@@ -385,9 +814,134 @@ actor FolderSynchronizationTransactionService: FolderSynchronizationExecuting {
                     progress: progress
                 )
             }.value
-            return result(plan, error: error, cancelled: cancelled, recoveryNeeded: recoveryNeeded,
-                committedTrash: finalizedTrash)
+            let result = result(
+                plan,
+                error: error,
+                cancelled: cancelled,
+                recoveryNeeded: recoveryNeeded,
+                committedTrash: finalizedTrash,
+                verificationReport: verificationReport
+            )
+            if let verificationReport {
+                await recordTransferVerification(
+                    report: verificationReport,
+                    failureCategory: failureCategory
+                )
+            }
+            return result
         }
+    }
+
+    private func verifyStagedItems(
+        queue: StagedVerificationQueue,
+        aggregator: VerificationProgressAggregator,
+        total: Int,
+        session: any TransferVerificationSession,
+        progress: @escaping ProgressHandler
+    ) async throws -> [StagedItem] {
+        guard total > 0 else { return await queue.takeAll() }
+        do {
+            try Task.checkCancellation()
+            var selectedError: (any Error)?
+            await withTaskGroup(of: VerificationWorkerResult.self) { group in
+                for _ in 0..<min(2, total) {
+                    group.addTask {
+                        do {
+                            while let claim = try await queue.claimNext() {
+                                try Task.checkCancellation()
+                                var sourceManifest = claim.takeSourceManifest()
+                                defer { sourceManifest?.close() }
+                                let rootIndex = claim.index
+                                var pendingCompletion: TransferVerificationCompletion?
+                                defer {
+                                    pendingCompletion?.receipt.source.close()
+                                    pendingCompletion?.receipt.staged.close()
+                                }
+                                do {
+                                    guard let manifest = sourceManifest else {
+                                        throw TransferVerificationFailure(
+                                            category: .identityUnavailable
+                                        )
+                                    }
+                                    pendingCompletion = try await session.verify(
+                                        source: manifest,
+                                        stagedURL: claim.reservation.item,
+                                        stagedIdentity: claim.identity,
+                                        progress: { value in
+                                            await aggregator.update(root: rootIndex, with: value)
+                                        }
+                                    )
+                                }
+                                try Task.checkCancellation()
+
+                                // Drop the earlier manifest before the receipt becomes the
+                                // staged item's sole verification authority.
+                                sourceManifest?.close()
+                                sourceManifest = nil
+                                guard let completion = pendingCompletion else {
+                                    throw TransferVerificationFailure(
+                                        category: .identityUnavailable
+                                    )
+                                }
+                                let completed = try await queue.install(
+                                    completion,
+                                    at: rootIndex
+                                )
+                                pendingCompletion = nil
+                                await aggregator.complete(
+                                    root: rootIndex,
+                                    currentName: claim.action.relativePath.components.last ?? "Item"
+                                )
+                                try Task.checkCancellation()
+                                await progress(.init(
+                                    phase: .verifyingStaging,
+                                    completedCount: completed,
+                                    totalCount: total,
+                                    currentRelativePath: claim.action.relativePath
+                                ))
+                                try Task.checkCancellation()
+                            }
+                            return VerificationWorkerResult(error: nil)
+                        } catch {
+                            return VerificationWorkerResult(error: error)
+                        }
+                    }
+                }
+                for await result in group {
+                    guard let candidate = result.error else { continue }
+                    selectedError = Self.preferredVerificationError(
+                        selectedError,
+                        candidate
+                    )
+                    group.cancelAll()
+                }
+            }
+            if let selectedError { throw selectedError }
+            try Task.checkCancellation()
+            return await queue.takeAll()
+        } catch {
+            let recovered = await queue.takeAll()
+            throw StagedVerificationBatchFailure(staged: recovered, underlying: error)
+        }
+    }
+
+    private nonisolated static func preferredVerificationError(
+        _ current: (any Error)?,
+        _ candidate: any Error
+    ) -> any Error {
+        guard let current else { return candidate }
+        if isVerificationCancellation(current),
+           !isVerificationCancellation(candidate) {
+            return candidate
+        }
+        return current
+    }
+
+    private nonisolated static func isVerificationCancellation(
+        _ error: any Error
+    ) -> Bool {
+        if error is CancellationError { return true }
+        return (error as? TransferVerificationFailure)?.category == .cancelled
     }
 
     private func preflight(_ plan: PreparedFolderSynchronizationPlan) async throws {
@@ -675,15 +1229,36 @@ actor FolderSynchronizationTransactionService: FolderSynchronizationExecuting {
         await progress(.init(phase: phase, completedCount: completed, totalCount: total, currentRelativePath: path))
     }
 
-    private func success(_ plan: PreparedFolderSynchronizationPlan) -> FileOperationResult {
-        FileOperationResult(outcomes: plan.draft.actions.map { action in
-            .succeeded(source: action.source?.url ?? action.destination!.url,
-                       destination: action.kind == .moveDestinationToTrash ? nil : destinationURL(for: action, in: plan))
-        })
+    private func success(
+        _ plan: PreparedFolderSynchronizationPlan,
+        verificationReport: TransferVerificationReport?
+    ) -> FileOperationResult {
+        FileOperationResult(
+            outcomes: plan.draft.actions.map { action in
+                .succeeded(
+                    source: action.source?.url ?? action.destination!.url,
+                    destination: action.kind == .moveDestinationToTrash
+                        ? nil
+                        : destinationURL(for: action, in: plan)
+                )
+            },
+            verificationReport: verificationReport
+        )
     }
 
-    private func failure(_ plan: PreparedFolderSynchronizationPlan, error: any Error) -> FileOperationResult {
-        result(plan, error: error, cancelled: error is CancellationError, recoveryNeeded: [], committedTrash: [])
+    private func failure(
+        _ plan: PreparedFolderSynchronizationPlan,
+        error: any Error,
+        verificationReport: TransferVerificationReport?
+    ) -> FileOperationResult {
+        result(
+            plan,
+            error: error,
+            cancelled: error is CancellationError,
+            recoveryNeeded: [],
+            committedTrash: [],
+            verificationReport: verificationReport
+        )
     }
 
     private func result(
@@ -691,19 +1266,89 @@ actor FolderSynchronizationTransactionService: FolderSynchronizationExecuting {
         error: any Error,
         cancelled: Bool,
         recoveryNeeded: Set<ComparisonRelativePath>,
-        committedTrash: Set<ComparisonRelativePath>
+        committedTrash: Set<ComparisonRelativePath>,
+        verificationReport: TransferVerificationReport?
     ) -> FileOperationResult {
-        FileOperationResult(outcomes: plan.draft.actions.map { action in
-            let source = action.source?.url ?? action.destination!.url
-            if recoveryNeeded.contains(action.relativePath) { return .recoveryNeeded(source: source) }
-            if committedTrash.contains(action.relativePath), action.kind == .replace {
-                return .succeeded(source: source, destination: destinationURL(for: action, in: plan))
-            }
-            if committedTrash.contains(action.relativePath) {
-                return .succeeded(source: source, destination: nil)
-            }
-            if cancelled { return .cancelled(source: source) }
-            return .failed(source: source, message: error.localizedDescription)
-        })
+        FileOperationResult(
+            outcomes: plan.draft.actions.map { action in
+                let source = action.source?.url ?? action.destination!.url
+                if recoveryNeeded.contains(action.relativePath) {
+                    return .recoveryNeeded(source: source)
+                }
+                if committedTrash.contains(action.relativePath), action.kind == .replace {
+                    return .succeeded(
+                        source: source,
+                        destination: destinationURL(for: action, in: plan)
+                    )
+                }
+                if committedTrash.contains(action.relativePath) {
+                    return .succeeded(source: source, destination: nil)
+                }
+                if cancelled { return .cancelled(source: source) }
+                return .failed(source: source, message: error.localizedDescription)
+            },
+            verificationReport: verificationReport
+        )
+    }
+
+    private var emptyVerificationReport: TransferVerificationReport {
+        TransferVerificationReport(
+            verifiedFileCount: 0,
+            verifiedLogicalByteCount: 0,
+            noByteTransferItemCount: 0,
+            failedVerificationItemCount: 0
+        )
+    }
+
+    private func verificationReport(
+        for staged: [StagedItem],
+        failureCategory: TransferVerificationFailureCategory?
+    ) -> TransferVerificationReport {
+        var report = emptyVerificationReport
+        for item in staged {
+            guard case let .receipt(completion) = item.verificationState else { continue }
+            report = report.merging(TransferVerificationReport(
+                verifiedFileCount: completion.summary.verifiedFileCount,
+                verifiedLogicalByteCount: completion.summary.verifiedLogicalByteCount,
+                noByteTransferItemCount: completion.summary.noByteTransferItemCount,
+                failedVerificationItemCount: 0
+            ))
+        }
+        if failureCategory != nil {
+            report = report.merging(TransferVerificationReport(
+                verifiedFileCount: 0,
+                verifiedLogicalByteCount: 0,
+                noByteTransferItemCount: 0,
+                failedVerificationItemCount: 1
+            ))
+        }
+        return report
+    }
+
+    private func transferVerificationFailureCategory(
+        in error: any Error,
+        cancelled: Bool
+    ) -> TransferVerificationFailureCategory? {
+        if let failure = error as? TransferVerificationFailure {
+            return failure.category
+        }
+        if cancelled {
+            return .cancelled
+        }
+        return nil
+    }
+
+    private func recordTransferVerification(
+        report: TransferVerificationReport,
+        failureCategory: TransferVerificationFailureCategory?
+    ) async {
+        await logger.recordTransferVerification(TransferVerificationLogEvent(
+            enabled: true,
+            verifiedFileCount: report.verifiedFileCount,
+            verifiedLogicalByteCount: report.verifiedLogicalByteCount,
+            noByteTransferItemCount: report.noByteTransferItemCount,
+            failedVerificationItemCount: report.failedVerificationItemCount,
+            failureCategory: failureCategory
+        ))
     }
 }

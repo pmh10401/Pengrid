@@ -1252,6 +1252,10 @@ struct TransferVerificationManifest: @unchecked Sendable {
     }
 
     #if DEBUG
+    var backingStorageObjectForTesting: AnyObject {
+        storage
+    }
+
     static func makeSyntheticPairForTesting(
         descendantCount: Int,
         regularFileDepth: Int

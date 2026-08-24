@@ -88,7 +88,9 @@ actor FileOperationService {
     nonisolated func makeFolderSynchronizationTransactionService() -> FolderSynchronizationTransactionService {
         FolderSynchronizationTransactionService(
             fileSystem: fileSystem,
-            accessCoordinator: accessCoordinator
+            accessCoordinator: accessCoordinator,
+            verificationSessionFactory: verificationSessionFactory,
+            logger: logger
         )
     }
 
