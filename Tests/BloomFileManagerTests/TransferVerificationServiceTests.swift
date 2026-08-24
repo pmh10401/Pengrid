@@ -664,7 +664,11 @@ struct TransferVerificationServiceTests {
             Issue.record("terminal cancellation unexpectedly returned a receipt")
             return
         }
-        #expect((error as? TransferVerificationFailure)?.category == .cancelled)
+        guard let failure = error as? TransferVerificationFailure else {
+            Issue.record("terminal cancellation returned a non-verification failure before retry")
+            return
+        }
+        #expect(failure.category == .cancelled)
         #if DEBUG
         // Cancellation after the terminal callback must close every
         // intermediate generation before the retry starts.
@@ -736,7 +740,11 @@ struct TransferVerificationServiceTests {
             Issue.record("hash cancellation unexpectedly returned a receipt")
             return
         }
-        #expect((error as? TransferVerificationFailure)?.category == .cancelled)
+        guard let failure = error as? TransferVerificationFailure else {
+            Issue.record("hash cancellation returned a non-verification failure before retry")
+            return
+        }
+        #expect(failure.category == .cancelled)
 
         let retryTask = Task {
             try await session.verify(
@@ -885,7 +893,11 @@ struct TransferVerificationServiceTests {
             Issue.record("worker failure unexpectedly returned a receipt")
             return
         }
-        #expect((error as? TransferVerificationFailure)?.category == .readFailed)
+        guard let failure = error as? TransferVerificationFailure else {
+            Issue.record("worker failure returned a non-verification failure before retry")
+            return
+        }
+        #expect(failure.category == .readFailed)
 
         let retryTask = Task {
             try await session.verify(
@@ -1481,6 +1493,14 @@ struct TransferVerificationServiceTests {
             await helperReturned.signal()
             return result
         }
+        defer {
+            scheduleLateTaskCleanup(
+                operation,
+                lease: lease,
+                releaseOnLeaseUnavailable: true,
+                onTimeout: { await operationGate.release() }
+            )
+        }
 
         try await waitForTestSignal(operationEntered)
         try await waitForTestSignal(timeoutStarted)
@@ -1535,10 +1555,15 @@ struct TransferVerificationServiceTests {
             return result
         }
         defer {
-            Task.detached {
-                await releasePermission.release()
-                await operationGate.release()
-            }
+            scheduleLateTaskCleanup(
+                operation,
+                lease: lease,
+                releaseOnLeaseUnavailable: true,
+                onTimeout: {
+                    await releasePermission.release()
+                    await operationGate.release()
+                }
+            )
         }
 
         try await waitForTestSignal(operationEntered)
@@ -1758,10 +1783,18 @@ private func awaitBoundedTaskResult<Success: Sendable>(
 private func scheduleLateTaskCleanup<Success: Sendable>(
     _ task: Task<Success, Error>,
     lease: TestResourceLease,
+    releaseOnLeaseUnavailable: Bool = false,
     onTimeout: @escaping @Sendable () async -> Void
 ) {
     task.cancel()
-    guard lease.transferToLateCleanup() else { return }
+    guard lease.transferToLateCleanup() else {
+        guard releaseOnLeaseUnavailable else { return }
+        let gateReleaseTask = Task.detached {
+            await onTimeout()
+        }
+        _ = gateReleaseTask
+        return
+    }
     launchLateTaskCleanup(task, lease: lease, onTimeout: onTimeout)
 }
 
