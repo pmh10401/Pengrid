@@ -3,8 +3,9 @@
 **한국어** · [English](transfer-content-verification.md)
 
 **소스 상태:** 현재 소스 트리에 구현되어 있습니다. 마지막으로 공개한 Developer
-Preview 7 DMG에는 이 기능이 **포함되어 있지 않습니다**. 병합된 소스로 새 후보를
-빌드하고 검증한 뒤 공개해야만 배포 기능으로 간주합니다.
+Preview 7 DMG에는 이 기능이 **포함되어 있지 않습니다**. 병합 전 빌드 10 앱과 DMG
+일회성 후보는 로컬 자동 검증과 패키지 검사를 통과했지만 배포 산출물은 아닙니다.
+병합된 소스로 새 후보를 빌드하고 검증한 뒤 공개해야만 배포 기능으로 간주합니다.
 
 ## 동작 계약
 
@@ -67,20 +68,25 @@ UI와 문서에서 이를 원자적 콘텐츠 잠금이라고 표현하지 않�
 
 ## Automated evidence
 
-아래 근거는 2026년 8월 24일 KST에 커밋 `68c542b`를 기반으로 한 Task 8
-작업 트리에서 기록했습니다. 커밋 전 소스 근거이며 병합된 후보 커밋, 패키징한 DMG,
-공개 자산 및 릴리스 checksum을 완료했다고 주장하지 않습니다.
-이 한·영 provenance 문구를 추가하기 전, 검증한 Task 8 스테이징 스냅샷의 diff
-SHA-256은
-`c58c0417920cacbaa914e517353c7d7111d97f43b8f285a61379bda848610510`입니다.
+아래 근거는 2026년 8월 24~25일 KST에 커밋
+`aeb3ee43070313230466d9b7255dabe8132ed2fe`와 현재 후보 변경분을 기반으로 한 Task 9
+작업 트리에서 기록했습니다. 병합 전 후보 근거이며 병합된 후보 커밋, 설치된 앱,
+공개 자산 및 릴리스 checksum을 완료했다고 주장하지 않습니다. 로컬 DMG는 일회성
+검증 산출물이므로 SHA-256을 의도적으로 기록하지 않습니다.
+이 한·영 provenance 문구를 추가하기 전, 검토를 마친 Task 9 스테이징 스냅샷의
+diff SHA-256은
+`bf94c1874348d6d295cb9767ffc70e4e0644ace03d578b8596c95cd03bb8ca7e`입니다.
 
 | 검사 | 결과 | 근거 |
 | --- | --- | --- |
-| 작업 트리 전체 회귀검증 | PASS | `swift test --enable-swift-testing --no-parallel`로 테스트 1,931개와 스위트 123개를 97.056초에 통과했습니다. 이 실행에서는 마운트한 APFS 테스트 루트를 제공하지 않아 opt-in 테스트 5개를 skipped로 기록했습니다. |
-| 작업 트리 arm64 Release 빌드 | PASS | 현재 병합 전 작업 트리에서 `swift build -c release --arch arm64`가 성공했습니다. 이는 컴파일 근거이며 병합된 후보 DMG 근거가 아닙니다. |
+| 전송 안전성 집중 회귀검증 | PASS | 전송 검증, 파일 전송·변경, 폴더 동기화 트랜잭션, 작업 컨트롤러, 클라우드 scoped access 및 Operation Center 필터의 테스트 383개와 스위트 12개를 4.874초에 통과했습니다. |
+| 작업 트리 전체 회귀검증 | PASS | `swift test --enable-swift-testing --no-parallel`를 두 번 실행해 매번 테스트 1,931개와 스위트 123개를 통과했으며 각각 86.066초와 85.441초가 걸렸습니다. 독립 리뷰 수정 후에도 같은 테스트 1,931개와 스위트 123개를 93.051초에 다시 통과했습니다. 이 작업 트리 실행들에는 마운트한 APFS 테스트 루트를 제공하지 않아 opt-in 테스트 5개를 skipped로 기록했습니다. |
+| 작업 트리 arm64 Release 빌드 | PASS | 두 전체 회귀검증 사이에 `swift build -c release --arch arm64`가 성공했습니다. 병합 전 작업 트리 컴파일 근거이며 이후 병합 커밋으로 만들 DMG 근거가 아닙니다. |
 | 기본 비활성 통합 스위트 | PASS | `PENGRID_TRANSFER_APFS_ROOT`가 없으면 `TransferVerificationAPFSTests` 5개를 skipped로 기록합니다. |
+| 빌드·패키지 계약 | PASS | 빌드 10 기대값을 통과했습니다. 실행형 probe로 두 스크립트가 `DEVELOPER_DIR` 미설정 시 첫 Swift 호출에 설치된 전체 Xcode 경로를 전달하고 사용자가 지정한 값은 보존함을 확인했습니다. `xcode-select`가 Command Line Tools를 가리켜도 릴리스 테스트 단계에서 Swift Testing 지원이 사라지지 않습니다. 전체 unsigned 패키지 명령도 내부 테스트 1,931개와 스위트 123개를 86.978초에 통과한 뒤 앱과 DMG를 빌드했습니다. |
 | 안전한 셸 하네스 계약 | PASS | `/bin/bash script/tests/verify_transfer_content_contract_tests.sh`가 성공, Swift 실패 정리, 잘못된 plist·장치·이미지·마운트, mount point·정리 루트·무작위 attach 캡처 치환, 부분 연결, attach 실행 직전 취소, detach 대상 검증, 실제로 막힌 attach·Swift 자식 신호 처리, detach 정리 중 반복 신호 및 TERM을 무시하는 하위 프로세스를 다루는 20개 테스트를 통과했습니다. |
-| APFS 파일시스템 통합 스위트 | PASS | `/bin/bash script/verify_transfer_content.sh`가 비공개 APFS sparse 이미지를 만들고 마운트한 뒤 테스트 5개와 스위트 1개를 통과했습니다. 정리 후 연결된 이미지와 하네스 임시 루트가 남지 않았습니다. 실제 마운트한 APFS 파일시스템 테스트이며 물리 매체 검증을 뜻하지 않습니다. |
+| APFS 파일시스템 통합 스위트 | PASS | `/bin/bash script/verify_transfer_content.sh`가 비공개 APFS sparse 이미지를 만들고 마운트한 뒤 0.048초에 테스트 5개와 스위트 1개를 통과했습니다. 정리 후 연결된 이미지와 하네스 임시 루트가 남지 않았습니다. 실제 마운트한 APFS 파일시스템 테스트이며 물리 매체 검증을 뜻하지 않습니다. |
+| 일회성 unsigned 앱과 DMG | PASS | 로컬 후보는 버전 1.3.0(빌드 10), 식별자 `com.minho.BloomFileManager`, arm64 전용입니다. 예상한 ad-hoc 서명으로 strict deep 코드 서명 검증을 통과했습니다. 아이콘과 제3자 고지문은 원본 자산과 바이트 단위로 같고, `hdiutil verify`를 통과했으며 읽기 전용으로 마운트한 DMG의 앱 트리가 패키징 앱과 같습니다. Developer ID가 없는 후보를 Gatekeeper가 예상대로 거부했습니다. 로컬 checksum을 공개 checksum으로 사용하지 않습니다. |
 | 중첩 트리 복사 | PASS | 중첩된 일반 파일 두 개를 게시 전에 검증했습니다. |
 | 다른 볼륨으로 이동 | PASS | 결정적 검증 게이트에서 원본이 남아 있었고 검증된 게시가 끝난 뒤에만 제거했습니다. |
 | 심볼릭 링크 루트 | PASS | 대상을 따라가지 않고 링크 payload를 복사하고 비교했습니다. |
@@ -132,8 +138,10 @@ attach plist는 무작위 이름의 파일을 truncate하지 않는 비공개 �
 ## Release gate
 
 - **PASS:** 현재 소스 구현, 셸 계약, APFS 파일시스템 통합 스위트.
-- **PASS:** 현재 소스와 공개 Developer Preview 7 DMG를 문서에서 구분했습니다.
-- **NOT RUN:** 병합 커밋 후보 빌드, 전체 릴리스 회귀검증, unsigned DMG 검사,
-  공개 자산 checksum. 다음 후보 릴리스 절차에서 수행합니다.
+- **PASS:** 집중·전체 회귀검증, arm64 Release 빌드, 일회성 빌드 10 앱·DMG 검사 및
+  로컬 후보와 공개 Developer Preview 7 DMG를 구분한 문서.
+- **NOT RUN:** 정확한 병합 커밋 패키징, 공개 CI, 설치, GitHub 릴리스 공개,
+  공개 자산 재다운로드 및 공개 자산 checksum. 병합 후 릴리스 절차에서 수행하며
+  일회성 병합 전 checksum으로 대신하지 않습니다.
 - **MANUAL NOT RUN:** Google Drive, OneDrive, 실제 VoiceOver 관찰. 실제로
   수행할 때까지 이 상태를 유지하며 자동 APFS 결과로 대신하지 않습니다.

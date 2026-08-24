@@ -61,8 +61,14 @@ NOTICE_NAME="THIRD_PARTY_NOTICES.md"
 BUNDLE_ID="com.minho.BloomFileManager"
 MIN_SYSTEM_VERSION="15.0"
 APP_VERSION="1.3.0"
-BUILD_VERSION="9"
+BUILD_VERSION="10"
+DEFAULT_XCODE_DEVELOPER_DIR="/Applications/Xcode.app/Contents/Developer"
 DMG_FORMAT="UDBZ"
+
+if [[ -z "${DEVELOPER_DIR:-}" && -d "$DEFAULT_XCODE_DEVELOPER_DIR" ]]; then
+  export DEVELOPER_DIR="$DEFAULT_XCODE_DEVELOPER_DIR"
+fi
+
 SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 ROOT_DIR="$(cd -P "$SCRIPT_DIR/.." && pwd -P)"
 ICON_SOURCE="$ROOT_DIR/Assets/Pengrid/$ICON_NAME"
