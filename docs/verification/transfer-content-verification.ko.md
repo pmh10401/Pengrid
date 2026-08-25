@@ -2,10 +2,11 @@
 
 **한국어** · [English](transfer-content-verification.md)
 
-**소스 상태:** 현재 소스 트리에 구현되어 있습니다. 마지막으로 공개한 Developer
-Preview 7 DMG에는 이 기능이 **포함되어 있지 않습니다**. 병합 전 빌드 10 앱과 DMG
-일회성 후보는 로컬 자동 검증과 패키지 검사를 통과했지만 배포 산출물은 아닙니다.
-병합된 소스로 새 후보를 빌드하고 검증한 뒤 공개해야만 배포 기능으로 간주합니다.
+**소스 및 릴리스 상태:** 현재 소스 트리에 구현되어 있으며
+[Developer Preview 8](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.8)에
+공개했습니다. 공개 빌드 10 DMG는 병합 커밋
+`8866bd0d080d1e11f47f85f7b42f4e4fb14109b3`에서 만들었습니다. SHA-256은
+`fa5b27b9cede4d053af37ff3a1f672c42083ea59652fe518675ed4f28730b5c5`입니다.
 
 ## 동작 계약
 
@@ -68,7 +69,7 @@ UI와 문서에서 이를 원자적 콘텐츠 잠금이라고 표현하지 않�
 
 ## Automated evidence
 
-아래 근거는 2026년 8월 24~25일 KST에 커밋
+아래 병합 전 근거는 2026년 8월 24~25일 KST에 커밋
 `aeb3ee43070313230466d9b7255dabe8132ed2fe`와 현재 후보 변경분을 기반으로 한 Task 9
 작업 트리에서 기록했습니다. 병합 전 후보 근거이며 병합된 후보 커밋, 설치된 앱,
 공개 자산 및 릴리스 checksum을 완료했다고 주장하지 않습니다. 로컬 DMG는 일회성
@@ -92,6 +93,20 @@ diff SHA-256은
 | 심볼릭 링크 루트 | PASS | 대상을 따라가지 않고 링크 payload를 복사하고 비교했습니다. |
 | 검증 중 취소 | PASS | 원본을 보존하고 대상 게시를 막고 소유한 스테이징을 제거했습니다. |
 | 영수증 변조 | PASS | 영수증 재검증 전 스테이징을 제자리에서 바꾸자 원본과 기존 대상을 보존하고 소유한 스테이징만 제거했습니다. |
+
+## 공개 릴리스 근거
+
+아래 병합 후 근거는 2026년 8월 25일 KST에 정확한 공개 산출물을 대상으로
+기록했습니다. 별도로 표시한 수동 게이트를 대신하지 않습니다.
+
+| 검사 | 결과 | 근거 |
+| --- | --- | --- |
+| 병합 커밋과 공개 CI | PASS | Pull request [#15](https://github.com/pmh10401/Pengrid/pull/15)를 `8866bd0d080d1e11f47f85f7b42f4e4fb14109b3`으로 병합했고 `main` GitHub Actions 실행이 통과했습니다. |
+| 정확한 커밋 패키징 | PASS | 병합 커밋에서 `./script/package_release.sh --unsigned`를 한 번 실행해 86.644초에 테스트 1,931개와 스위트 123개를 통과하고 arm64 Release 앱과 DMG를 만들었습니다. 검증 후 산출물을 다시 패키징하지 않았습니다. |
+| APFS 통합 | PASS | 별도로 마운트한 APFS 하네스가 0.047초에 테스트 5개와 스위트 1개를 통과했으며 마운트가 남지 않았습니다. |
+| 번들과 DMG 검사 | PASS | 버전 1.3.0 빌드 10, 식별자 `com.minho.BloomFileManager`, arm64 전용, 팀이 없는 ad-hoc 서명, 원본 아이콘과 고지문, `libssl`·`libcrypto` 연결 없음, DMG 체크섬 및 읽기 전용 마운트 앱 트리 일치 검사가 모두 통과했습니다. Developer ID 서명과 공증이 없으므로 Gatekeeper 거부는 예상된 결과입니다. |
+| 설치와 실행 | PASS | 정확한 패키징 앱을 `/Applications/Pengrid.app`에 설치해 패키징 트리와 비교했고 `/Applications/Pengrid.app/Contents/MacOS/BloomFileManager`에서 실행되는 것을 확인했습니다. |
+| GitHub 공개 | PASS | 태그 `v1.3.0-developer-preview.8`은 병합 커밋을 가리킵니다. 업로드 자산 digest와 인증 없는 공개 재다운로드가 모두 SHA-256 `fa5b27b9cede4d053af37ff3a1f672c42083ea59652fe518675ed4f28730b5c5`와 일치했으며 재다운로드 파일은 검증한 로컬 DMG와 바이트 단위로 같았습니다. |
 
 하네스는 `mktemp -d`, `hdiutil attach -plist`, 보조 검증용 허용 목록
 `/dev/disk[0-9]+(s[0-9]+)*`, 정확한 canonical 이미지 경로, 임시 루트의 엄격한
@@ -138,10 +153,8 @@ attach plist는 무작위 이름의 파일을 truncate하지 않는 비공개 �
 ## Release gate
 
 - **PASS:** 현재 소스 구현, 셸 계약, APFS 파일시스템 통합 스위트.
-- **PASS:** 집중·전체 회귀검증, arm64 Release 빌드, 일회성 빌드 10 앱·DMG 검사 및
-  로컬 후보와 공개 Developer Preview 7 DMG를 구분한 문서.
-- **NOT RUN:** 정확한 병합 커밋 패키징, 공개 CI, 설치, GitHub 릴리스 공개,
-  공개 자산 재다운로드 및 공개 자산 checksum. 병합 후 릴리스 절차에서 수행하며
-  일회성 병합 전 checksum으로 대신하지 않습니다.
+- **PASS:** 집중·전체 회귀검증, arm64 Release 빌드, 정확한 병합 커밋 패키징,
+  공개 CI, 빌드 10 앱·DMG 검사, 설치와 실행, GitHub 사전 릴리스 공개, 자산
+  digest, 인증 없는 공개 재다운로드 및 공개 SHA-256 검증.
 - **MANUAL NOT RUN:** Google Drive, OneDrive, 실제 VoiceOver 관찰. 실제로
   수행할 때까지 이 상태를 유지하며 자동 APFS 결과로 대신하지 않습니다.

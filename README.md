@@ -16,14 +16,14 @@ free, open-source macOS app.
 ## Download
 
 The current release is
-[Pengrid 1.3.0 Developer Preview 7](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.7).
+[Pengrid 1.3.0 Developer Preview 8](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.8).
 
-- [Download Pengrid.dmg](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.7/Pengrid.dmg)
-- Version: **1.3.0 (build 9)**
+- [Download Pengrid.dmg](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.8/Pengrid.dmg)
+- Version: **1.3.0 (build 10)**
 - Requirements: **Apple Silicon Mac, macOS 15 or later**
-- Verification: **1,645 automated tests in 110 suites**
+- Verification: **1,931 automated tests in 123 suites**
 - DMG SHA-256:
-  `d7060401f05bbaac7f1d64b76d5bce6b93708c75644c8c3737698e8a3144fd73`
+  `fa5b27b9cede4d053af37ff3a1f672c42083ea59652fe518675ed4f28730b5c5`
 
 Open the DMG, then copy `Pengrid.app` to `Applications`.
 
@@ -57,9 +57,8 @@ destination captured when the command starts.
 
 ### Jump, create, and select with focused commands
 
-> The productivity workflows in this section describe the current source tree.
-> They are not a claim that these additions are available in the existing
-> Developer Preview 7 DMG.
+> The productivity workflows in this section are included in Developer Preview
+> 8 and in the current source tree.
 
 Press **Command-P** for **Quick Go…**, a scene-local typed palette. Its fixed
 candidate set contains safe commands (**Create Folder**, **Create File**,
@@ -121,7 +120,7 @@ Duplicate, New Folder with Selection, rename, archives, and Trash.
 
 Pengrid captures the visible selection before dispatch, so later navigation
 or selection changes cannot silently redirect an action. Read the
-[release notes](docs/release-notes-v1.3.0-developer-preview.7.md) for the exact
+[release notes](docs/release-notes-v1.3.0-developer-preview.8.md) for the exact
 selection and capability rules.
 
 Press **Command-I**, or choose **Get Info** from a row's context menu, to open a
@@ -140,11 +139,12 @@ Folder with Selection, and one-way folder synchronization use staged
 publication and conservative rollback checks. Synchronization is
 non-retryable and is not exposed as Undo after it finishes.
 
-> Transferred-content verification is implemented in the current source tree,
-> but it is not included in the published Developer Preview 7 DMG.
+> Transferred-content verification is included in Developer Preview 8. It is
+> optional and remains off by default.
 
-Source builds add a default-off **File Operations** setting named **Verify
-transferred file contents before publishing**. When enabled, copy, Duplicate,
+Developer Preview 8 and source builds provide a default-off **File Operations**
+setting named **Verify transferred file contents before publishing**. When
+enabled, copy, Duplicate,
 cross-volume move, and reviewed synchronization copy/replace actions compare
 regular-file data with SHA-256 in private staging before publication. Recursive
 tree structure and symbolic-link payloads are also checked without following
@@ -200,8 +200,8 @@ Operations menu or a row's context menu.
 - 7z, RAR, password-protected TAR, Developer ID signing, and notarization are
   not included in this Developer Preview.
 - Finder tag editing remains future work. Optional transferred-content
-  verification is present in current source but not in the Developer Preview 7
-  DMG. It excludes resource forks, extended attributes, ACLs, ownership, flags,
+  verification is included in Developer Preview 8. It excludes resource forks,
+  extended attributes, ACLs, ownership, flags,
   creation dates, hard-link relationships, and sparse allocation.
 - Manual checks that have not been run remain explicitly marked `NOT RUN` in
   the verification documents.
@@ -230,7 +230,7 @@ retain the internal name `BloomFileManager` for compatibility.
 ## Documentation
 
 - [Detailed feature guide](docs/user-guide.md)
-- [Developer Preview 7 release notes](docs/release-notes-v1.3.0-developer-preview.7.md)
+- [Developer Preview 8 release notes](docs/release-notes-v1.3.0-developer-preview.8.md)
 - [Release and packaging guide](docs/release.md)
 - [Architecture notes](docs/architecture.md)
 - [Current limitations](docs/current-limitations.md)

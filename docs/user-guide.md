@@ -2,14 +2,14 @@
 
 [한국어](user-guide.ko.md) · **English** · [README](../README.md)
 
-This guide describes Pengrid 1.3.0 Developer Preview 7 and the current source
+This guide describes Pengrid 1.3.0 Developer Preview 8 and the current source
 tree, including safety boundaries and deliberately omitted behavior.
 
 ## Requirements and installation
 
 Pengrid currently supports Apple Silicon Macs running macOS 15 or later.
 Download the DMG from the
-[Developer Preview 7 release](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.7),
+[Developer Preview 8 release](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.8),
 open it, and copy `Pengrid.app` to `Applications`.
 
 The free DMG is ad-hoc signed, not Developer ID signed, and not notarized.
@@ -92,9 +92,8 @@ queries, or actions across a larger result set.
 
 ## Quick Go, new files, and visible-row selection
 
-> The productivity workflows in this section describe the current source tree.
-> They are not a claim that these additions are available in the existing
-> Developer Preview 7 DMG.
+> The productivity workflows in this section are included in Developer Preview
+> 8 and in the current source tree.
 
 ### Quick Go… palette
 
@@ -417,8 +416,8 @@ Undo are not blindly retried.
 
 ### Optional transferred-content verification
 
-> This feature is in the current source tree. It is not in the published
-> Developer Preview 7 DMG.
+> This feature is included in Developer Preview 8 and in the current source
+> tree. It remains off by default.
 
 Open **Settings > File Operations** and enable **Verify transferred file
 contents before publishing**. The default is off. Pengrid captures the setting
@@ -751,7 +750,7 @@ documents.
 
 ## Current limitations
 
-Developer Preview 7 and the current source tree deliberately do not provide:
+Developer Preview 8 and the current source tree deliberately do not provide:
 
 - Intel Mac or macOS 14-and-earlier support;
 - Developer ID signing or Apple notarization;

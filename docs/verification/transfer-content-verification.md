@@ -2,11 +2,11 @@
 
 [한국어](transfer-content-verification.ko.md) · **English**
 
-**Source status:** implemented in the current source tree. The last published
-Developer Preview 7 DMG does **not** contain this feature. A disposable,
-pre-merge build 10 app and DMG candidate has passed local automated and package
-inspection, but it is not a shipped artifact. The feature becomes shipped only
-after a candidate is built from the merged source, verified, and published.
+**Source and release status:** implemented in the current source tree and
+published in [Developer Preview 8](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.8).
+The published build 10 DMG was created from merged commit
+`8866bd0d080d1e11f47f85f7b42f4e4fb14109b3`. Its SHA-256 is
+`fa5b27b9cede4d053af37ff3a1f672c42083ea59652fe518675ed4f28730b5c5`.
 
 ## Behavior contract
 
@@ -76,7 +76,7 @@ not describe that interval as an atomic content lock.
 
 ## Automated evidence
 
-The evidence below was recorded on 2026-08-24–25 KST in the Task 9 worktree based
+The pre-merge evidence below was recorded on 2026-08-24–25 KST in the Task 9 worktree based
 on commit `aeb3ee43070313230466d9b7255dabe8132ed2fe` plus the current candidate
 changes. It is pre-merge candidate evidence and does not claim a merged
 candidate commit, installed app, public asset, or release checksum. The local
@@ -100,6 +100,20 @@ lines had diff SHA-256
 | Symbolic-link root | PASS | The link payload was copied and compared without following the target. |
 | Verification cancellation | PASS | Cancellation preserved the source, prevented destination publication, and removed owned staging. |
 | Receipt mutation | PASS | In-place staging mutation before receipt revalidation preserved the source and old destination and removed only owned staging. |
+
+## Published release evidence
+
+The following post-merge evidence was recorded on 2026-08-25 KST for the exact
+published artifact. It does not replace the separately labelled manual gates.
+
+| Check | Result | Evidence |
+| --- | --- | --- |
+| Merged commit and public CI | PASS | Pull request [#15](https://github.com/pmh10401/Pengrid/pull/15) merged as `8866bd0d080d1e11f47f85f7b42f4e4fb14109b3`; the `main` GitHub Actions run passed. |
+| Exact-commit package | PASS | One `./script/package_release.sh --unsigned` run at the merged commit passed 1,931 tests in 123 suites in 86.644 seconds, built an arm64 Release product, and produced the app and DMG. The artifact was not repackaged after validation. |
+| APFS integration | PASS | The separate mounted-APFS harness passed 5 tests in 1 suite in 0.047 seconds with no residual mount. |
+| Bundle and DMG inspection | PASS | Version 1.3.0 build 10, identifier `com.minho.BloomFileManager`, exact arm64 architecture, ad-hoc signature without a team, canonical icon and notices, no `libssl` or `libcrypto` linkage, DMG checksum, and read-only mounted app-tree identity all passed. Gatekeeper rejection was expected because the app is not Developer ID signed or notarized. |
+| Installation and launch | PASS | The exact packaged app was installed at `/Applications/Pengrid.app`, compared with the packaged tree, and observed running from `/Applications/Pengrid.app/Contents/MacOS/BloomFileManager`. |
+| GitHub publication | PASS | Tag `v1.3.0-developer-preview.8` targets the merged commit. The uploaded asset digest and an unauthenticated public redownload both matched SHA-256 `fa5b27b9cede4d053af37ff3a1f672c42083ea59652fe518675ed4f28730b5c5`; the redownload was byte-for-byte identical to the validated local DMG. |
 
 The harness uses `mktemp -d`, `hdiutil attach -plist`, an allowlisted
 `/dev/disk[0-9]+(s[0-9]+)*` corroborating device, exact canonical image and
@@ -149,13 +163,10 @@ ignored so they cannot interrupt detach or identity-bound deletion.
 
 - **PASS:** current source implementation, shell contracts, and APFS filesystem
   integration suite.
-- **PASS:** focused and complete regressions, arm64 Release build, disposable
-  build 10 app/DMG inspection, and documentation that distinguishes the local
-  candidate from the published Developer Preview 7 DMG.
-- **NOT RUN:** exact merged-commit packaging, public CI, installation, GitHub
-  release publication, public asset redownload, and public asset checksum.
-  These belong to the post-merge release workflow; the disposable pre-merge
-  checksum must not substitute for them.
+- **PASS:** focused and complete regressions, arm64 Release build, exact merged-
+  commit packaging, public CI, build 10 app/DMG inspection, installation and
+  launch, GitHub prerelease publication, asset digest, unauthenticated public
+  redownload, and public SHA-256 verification.
 - **MANUAL NOT RUN:** Google Drive, OneDrive, and live VoiceOver observations.
   They must remain labeled this way until actually performed; automated APFS
   evidence does not substitute for them.

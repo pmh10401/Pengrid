@@ -9,35 +9,37 @@ App Sandbox entitlement를 사용하지 않습니다. 실행 파일명과 호환
 ## 현재 게시된 Developer Preview
 
 현재 무료 바이너리 릴리스는
-[Pengrid 1.3.0 Developer Preview 7](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.7)입니다.
+[Pengrid 1.3.0 Developer Preview 8](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.8)입니다.
 
-- DMG: [Pengrid.dmg](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.7/Pengrid.dmg)
-- 태그: `v1.3.0-developer-preview.7`
-- 패키징한 소스 커밋: `c0fd61b4af8a42749d6870747eb6de4fc7ec5026`
-- 앱 버전: `1.3.0`, 빌드 `9`
+- DMG: [Pengrid.dmg](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.8/Pengrid.dmg)
+- 태그: `v1.3.0-developer-preview.8`
+- 패키징한 소스 커밋: `8866bd0d080d1e11f47f85f7b42f4e4fb14109b3`
+- 앱 버전: `1.3.0`, 빌드 `10`
 - 플랫폼: Apple Silicon, macOS 15 이상
-- 자동 검증: 110개 스위트의 테스트 1,645개 통과
+- 자동 검증: 정확한 커밋 패키징 중 86.644초에 테스트 1,931개와 스위트 123개
+  통과, 별도 APFS 전송 스위트는 0.047초에 테스트 5개와 스위트 1개 통과
 - 패키징: 릴리스 계약 테스트와 arm64 프로덕션 빌드 통과
 - 로컬 파일 검사: 앱 서명, DMG 체크섬, 마운트된 앱의 빌드 번호, 설치 및 실행
   검증 통과
 - GitHub 게시 검사: 업로드 자산 digest 일치 및 인증 없는 공개 재다운로드 파일의
   로컬 DMG 바이트 단위 일치 확인
 - DMG SHA-256:
-  `d7060401f05bbaac7f1d64b76d5bce6b93708c75644c8c3737698e8a3144fd73`
+  `fa5b27b9cede4d053af37ff3a1f672c42083ea59652fe518675ed4f28730b5c5`
 
-Preview 7은 작업 공간 탭과 프로필, 읽기 전용 Get Info, 선택 가능한 색인 내용
-검색, 강화된 Undo/Redo 스택 및 검토 우선 단방향 폴더 동기화를 추가합니다.
-같은 패키징 앱을 `/Applications/Pengrid.app`에 설치하고 빌드 9를 확인한 뒤
-정상적으로 실행했습니다.
+Preview 8은 복사, Duplicate, 다른 볼륨 이동 및 검토된 동기화 결과를 게시하기
+전에 선택적으로 SHA-256 내용 검증을 수행합니다. 이전 프리뷰에서 제공한 작업
+공간 탭과 프로필, 읽기 전용 Get Info, 선택 가능한 색인 내용 검색, 강화된
+Undo/Redo, 검토 우선 단방향 폴더 동기화, Quick Go, 새 파일 및 고급 선택 기능도
+포함합니다. 같은 패키징 앱을 `/Applications/Pengrid.app`에 설치하고 빌드 10을
+확인한 뒤 정상적으로 실행했습니다.
 
 이 파일은 ad-hoc 방식으로 서명되었으며 Developer ID 서명과 Apple 공증을
 받지 않았습니다. 따라서 `spctl --assess --type execute`의 Developer ID
 배포 심사에서 예상대로 거부됩니다. 서명된 공개 릴리스가 아니라 unsigned
 Developer Preview임을 명확히 표시해 배포합니다. 아직 `NOT RUN`인 실제 File
 Provider, 이동식 볼륨, 대소문자 구분 볼륨, 키보드 및 접근성 검사는 저장소의
-검증 문서에 그대로 기록되어 있습니다. 로컬 폴더 동기화 검토, 취소, 롤백,
-탭 차단 및 검토 시트 VoiceOver에는 부분 수동 증거가 있지만 완료 동기화와
-로그인된 provider 실행은 아직 `NOT RUN`입니다.
+검증 문서에 그대로 기록되어 있습니다. 특히 전송 내용 검증의 로그인된 Google
+Drive, OneDrive 및 실제 VoiceOver 검사는 **MANUAL NOT RUN**입니다.
 
 ## 버전 1.3 릴리스 게이트
 
@@ -94,8 +96,11 @@ Preview임을 명확히 표시한 무료 패키지 배포를 막지 않습니다
 
 ## 로컬 unsigned 패키지와 Developer Preview
 
-Apple Silicon Mac에서는 Command Line Tools만으로 로컬 패키징을 수행할 수
-있습니다.
+릴리스 테스트와 패키징을 실행하기 전에 전체 Xcode를 설치해야 합니다. Command
+Line Tools만으로는 이 릴리스 게이트가 사용하는 Swift Testing을 제공하지
+않습니다. 전체 Xcode가 설치되어 있고 `DEVELOPER_DIR`가 없으면 스크립트가
+`/Applications/Xcode.app/Contents/Developer`를 사용하며, 사용자가 명시한 값은
+그대로 보존합니다.
 
 ```bash
 ./script/package_release.sh --unsigned

@@ -3,9 +3,9 @@
 **한국어** · [English](current-limitations.md) ·
 [사용자 안내](user-guide.ko.md)
 
-이 목록은 현재 소스 트리와 Developer Preview 7 DMG를 구분해 설명합니다. 전송
-내용 검증과 명시한 다른 소스 전용 작업 흐름은 마지막 공개 DMG에 포함되어 있지
-않습니다.
+이 목록은 Developer Preview 8과 현재 소스 트리가 공유하는 기능 경계를
+설명합니다. 전송 내용 검증과 아래 생산성 작업 흐름은 Developer Preview 8에
+포함되어 있습니다.
 
 ## 플랫폼과 배포
 
@@ -30,8 +30,8 @@
 
 ## 생산성 작업 흐름
 
-> 이 절의 생산성 작업 흐름은 현재 소스 트리를 설명합니다. 이 기능이 기존
-> Developer Preview 7 DMG에 포함되어 있다는 뜻은 아닙니다.
+> 이 절의 생산성 작업 흐름은 Developer Preview 8과 현재 소스 트리에 포함되어
+> 있습니다.
 
 - **Quick Go…**는 현재 scene에만 연결된 열거형 기반의 타입 안전 팔레트입니다. 후보는 안전한 고정
   명령(**Create Folder**, **Create File**, **Show Filter**, **Smart Search**),
@@ -51,10 +51,9 @@
   대상으로 합니다. 패널 필터나 텍스트 편집 중에는 비활성화됩니다. Select Same
   Extension은 실제 확장자가 있는 표시된 일반 파일 하나만 선택해야 합니다.
 - Finder 태그 편집은 제공하지 않으며 Get Info는 읽기 전용입니다. 선택 가능한
-  전송 내용 검증은 현재 소스에 구현되어 있지만 Developer Preview 7 DMG에는
-  없습니다.
+  전송 내용 검증은 Developer Preview 8에 포함되어 있으며 기본값은 꺼짐입니다.
 
-## 현재 소스의 전송 내용 검증
+## 전송 내용 검증
 
 - 전역 설정의 기본값은 꺼짐입니다. 복사, Duplicate, 다른 볼륨으로 이동, 검토된
   동기화의 복사·교체를 지원합니다. 압축 생성·해제와 같은 볼륨의 이름 변경 방식
