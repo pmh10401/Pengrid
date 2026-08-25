@@ -6,37 +6,41 @@ Pengrid is distributed directly for Apple Silicon Macs running macOS 15 or newer
 
 ## Current published Developer Preview
 
-[Pengrid 1.3.0 Developer Preview 7](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.7)
+[Pengrid 1.3.0 Developer Preview 8](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.8)
 is the current free binary release:
 
-- DMG: [Pengrid.dmg](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.7/Pengrid.dmg)
-- Tag: `v1.3.0-developer-preview.7`
-- Packaged source commit: `c0fd61b4af8a42749d6870747eb6de4fc7ec5026`
-- App version: `1.3.0`, build `9`
+- DMG: [Pengrid.dmg](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.8/Pengrid.dmg)
+- Tag: `v1.3.0-developer-preview.8`
+- Packaged source commit: `8866bd0d080d1e11f47f85f7b42f4e4fb14109b3`
+- App version: `1.3.0`, build `10`
 - Platform: Apple Silicon, macOS 15 or later
-- Automated result: 1,645 tests in 110 suites
+- Automated result: 1,931 tests in 123 suites passed in 86.644 seconds during
+  exact-commit packaging; the APFS transfer suite separately passed 5 tests in
+  1 suite in 0.047 seconds
 - Packaging: release contract tests and arm64 production build passed
 - Local artifact checks: app signature, DMG checksum, mounted app build,
   installation, and launch passed
 - GitHub publication checks: the uploaded asset digest matched, and an
   unauthenticated public redownload was byte-for-byte identical to the local DMG
 - DMG SHA-256:
-  `d7060401f05bbaac7f1d64b76d5bce6b93708c75644c8c3737698e8a3144fd73`
+  `fa5b27b9cede4d053af37ff3a1f672c42083ea59652fe518675ed4f28730b5c5`
 
-Preview 7 adds workspace tabs and profiles, read-only Get Info, opt-in indexed
-content search, stronger Undo/Redo stacks, and review-first one-way folder
-synchronization. The exact packaged app was installed locally as
-`/Applications/Pengrid.app`, verified as build 9, and launched successfully.
+Preview 8 adds optional SHA-256 content verification before copy, Duplicate,
+cross-volume move, and reviewed synchronization results are published. It also
+contains the workspace tabs and profiles, read-only Get Info, opt-in indexed
+content search, stronger Undo/Redo stacks, review-first one-way folder
+synchronization, Quick Go, new-file, and advanced-selection workflows delivered
+in the preceding previews. The exact packaged app was installed locally as
+`/Applications/Pengrid.app`, verified as build 10, and launched successfully.
 
 This artifact is ad-hoc signed, not Developer ID signed, and not notarized.
 `spctl --assess --type execute` therefore rejects it as a Developer ID
 distribution, as expected. This is a correctly labelled unsigned Developer
 Preview, not a signed public release. Physical File Provider, removable-volume,
 case-sensitive-volume, keyboard, and accessibility checks that remain
-`NOT RUN` are recorded in the repository verification documents. Local
-folder-sync review, cancellation, rollback, tab gating, and review-sheet
-VoiceOver checks have partial manual evidence; completed sync and signed-in
-provider execution remain `NOT RUN`.
+`NOT RUN` are recorded in the repository verification documents. In particular,
+signed-in Google Drive, OneDrive, and live VoiceOver checks for
+transferred-content verification remain **MANUAL NOT RUN**.
 
 ## Version 1.3 release gates
 
@@ -96,7 +100,11 @@ Preview. Such a package must never be described as a signed public release.
 
 ## Local unsigned package and Developer Preview
 
-Command Line Tools are sufficient for local packaging on an Apple Silicon Mac:
+Install full Xcode before running the release test and packaging workflow.
+Command Line Tools alone do not provide the Swift Testing support used by this
+release gate. The scripts use `/Applications/Xcode.app/Contents/Developer` when
+full Xcode is installed and `DEVELOPER_DIR` is unset, or preserve an explicit
+caller-provided value:
 
 ```bash
 ./script/package_release.sh --unsigned

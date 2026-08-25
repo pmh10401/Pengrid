@@ -2,9 +2,9 @@
 
 [한국어](current-limitations.ko.md) · **English** · [User guide](user-guide.md)
 
-This list distinguishes the current source tree from the Developer Preview 7
-DMG. Transferred-content verification and the other explicitly source-only
-workflows are not shipped in that last published DMG.
+This list describes the boundaries shared by Developer Preview 8 and the
+current source tree. Transferred-content verification and the productivity
+workflows below are included in Developer Preview 8.
 
 ## Platform and distribution
 
@@ -29,9 +29,8 @@ workflows are not shipped in that last published DMG.
 
 ## Productivity workflows
 
-> The productivity workflows in this section describe the current source tree.
-> They are not a claim that these additions are available in the existing
-> Developer Preview 7 DMG.
+> The productivity workflows in this section are included in Developer Preview
+> 8 and in the current source tree.
 
 - **Quick Go…** is a scene-local typed palette. Its candidates are limited to
   fixed safe commands (**Create Folder**, **Create File**, **Show Filter**, and
@@ -54,10 +53,10 @@ workflows are not shipped in that last published DMG.
   active. Select Same Extension additionally requires exactly one visible
   regular file with a real extension.
 - Finder tag editing is not shipped; Get Info remains read-only. Optional
-  transferred-content verification is implemented in current source, but not
-  in the Developer Preview 7 DMG.
+  transferred-content verification is included in Developer Preview 8 and is
+  off by default.
 
-## Transferred-content verification in current source
+## Transferred-content verification
 
 - The global setting is off by default. It covers copy, Duplicate,
   cross-volume move, and reviewed synchronization copy/replace actions. It

@@ -1,12 +1,12 @@
-# Pengrid 1.3.0 Developer Preview 8 — Pre-merge candidate notes
+# Pengrid 1.3.0 Developer Preview 8 — Release notes
 
 [한국어](#한국어) · [English](#english)
 
-> **Candidate status:** These notes describe a locally verified, disposable
-> build 10 candidate from an unmerged worktree. Developer Preview 8 has not been
-> published. The public commit, asset, download verification, and DMG SHA-256
-> remain intentionally pending until one DMG is built from the exact merged
-> commit.
+> **Published status:** Developer Preview 8 is available from the
+> [GitHub release](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.8).
+> The app was packaged from merged commit
+> `8866bd0d080d1e11f47f85f7b42f4e4fb14109b3`. The public DMG SHA-256 is
+> `fa5b27b9cede4d053af37ff3a1f672c42083ea59652fe518675ed4f28730b5c5`.
 
 ## English
 
@@ -71,7 +71,7 @@ from local APFS tests.
 
 ### Build and package reliability
 
-- Candidate version: 1.3.0 (build 10).
+- Release version: 1.3.0 (build 10).
 - Architecture: Apple Silicon arm64.
 - If `DEVELOPER_DIR` is unset while `xcode-select` still points to Command Line
   Tools, the local build and package scripts select the installed full Xcode at
@@ -80,7 +80,7 @@ from local APFS tests.
 
 ### Install and trust notice
 
-When a merged-commit DMG is published:
+To install the published DMG:
 
 1. Download `Pengrid.dmg` only from the Pengrid GitHub release.
 2. Compare it with the SHA-256 value published for that exact asset.
@@ -88,36 +88,40 @@ When a merged-commit DMG is published:
 
 Requirements: Apple Silicon Mac, macOS 15 or later.
 
-The planned free DMG is ad-hoc signed, not Developer ID signed, and not
+The free DMG is ad-hoc signed, not Developer ID signed, and not
 notarized. Gatekeeper may block it. Use Finder's contextual **Open** action only
 if you understand and accept the warning. Pengrid does not ask you to disable
 macOS security controls.
 
-### Pre-merge verification evidence
+### Release verification evidence
 
-- Focused safety regression: 383 tests in 12 suites passed in 4.874 seconds.
-- Complete nonparallel regression: 1,931 tests in 123 suites passed twice, in
-  86.066 and 85.441 seconds, around a successful arm64 Release build.
-- After strengthening the full-Xcode fallback contract in response to
-  independent review, another complete run passed 1,931 tests in 123 suites in
-  93.051 seconds.
-- The complete unsigned packaging run passed its own nonparallel 1,931-test,
-  123-suite gate in 86.978 seconds before building and validating the app and
-  DMG.
-- Private APFS integration: five tests in one suite passed in 0.048 seconds,
-  with no residual image attachment or harness temporary root.
-- The disposable app reports identifier `com.minho.BloomFileManager`, version
-  1.3.0, build 10, and arm64-only architecture.
-- Strict deep code-sign verification passed with the expected ad-hoc signature.
-  The source icon and third-party notice match the packaged resources, the DMG
-  passed `hdiutil verify`, and its read-only mounted app tree matches the local
-  packaged app. Gatekeeper rejection was expected and observed.
-- Google Drive, OneDrive, and live VoiceOver checks are **MANUAL NOT RUN**.
-- Exact merged-commit packaging, public CI, installation, GitHub publication,
-  unauthenticated redownload comparison, and the public DMG SHA-256 are **NOT
-  RUN**. No checksum from this disposable candidate is a release checksum.
+- Pull request [#15](https://github.com/pmh10401/Pengrid/pull/15) merged as
+  `8866bd0d080d1e11f47f85f7b42f4e4fb14109b3`; the public `main` CI run passed.
+- One exact-commit unsigned packaging run passed 1,931 tests in 123 suites in
+  86.644 seconds, built the arm64 Release product, and produced the app and DMG.
+  The artifact was not repackaged after validation.
+- Private APFS integration passed five tests in one suite in 0.047 seconds with
+  no residual image attachment or mount.
+- The published app reports identifier `com.minho.BloomFileManager`, version
+  1.3.0, build 10, and arm64-only architecture. Strict deep ad-hoc signature,
+  canonical icon and notices, native linkage, DMG verification, and mounted app
+  tree checks passed. Gatekeeper rejection was expected and observed.
+- The exact packaged app was installed and launched from
+  `/Applications/Pengrid.app`.
+- The uploaded GitHub asset digest and an unauthenticated public redownload
+  matched SHA-256
+  `fa5b27b9cede4d053af37ff3a1f672c42083ea59652fe518675ed4f28730b5c5`.
+  The redownload was byte-for-byte identical to the validated local DMG.
+- Google Drive, OneDrive, and live VoiceOver checks remain **MANUAL NOT RUN**.
 
 ## 한국어
+
+> **공개 상태:** Developer Preview 8은
+> [GitHub 릴리스](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.8)에서
+> 받을 수 있습니다. 병합 커밋
+> `8866bd0d080d1e11f47f85f7b42f4e4fb14109b3`에서 패키징했으며, 공개 DMG의
+> SHA-256은
+> `fa5b27b9cede4d053af37ff3a1f672c42083ea59652fe518675ed4f28730b5c5`입니다.
 
 Developer Preview 8은 Pengrid가 전송한 파일을 게시하기 전에 선택적으로 SHA-256
 내용 검증을 수행하는 기능을 추가합니다. 원본 변경·읽기 실패, 복사 불일치,
@@ -176,7 +180,7 @@ OneDrive 동작은 수동 릴리스 게이트로 남아 있으며 로컬 APFS �
 
 ### 빌드·패키지 안정성
 
-- 후보 버전: 1.3.0(빌드 10).
+- 릴리스 버전: 1.3.0(빌드 10).
 - 아키텍처: Apple Silicon arm64.
 - `DEVELOPER_DIR`가 없고 `xcode-select`가 Command Line Tools를 가리키더라도 로컬
   빌드·패키지 스크립트는 설치된 전체 Xcode인
@@ -185,7 +189,7 @@ OneDrive 동작은 수동 릴리스 게이트로 남아 있으며 로컬 APFS �
 
 ### 설치 및 신뢰 안내
 
-병합 커밋으로 만든 DMG가 공개되면 다음 순서로 설치합니다.
+공개된 DMG는 다음 순서로 설치합니다.
 
 1. Pengrid GitHub 릴리스에서만 `Pengrid.dmg`를 다운로드합니다.
 2. 해당 자산에 공개된 SHA-256과 다운로드 파일을 비교합니다.
@@ -193,29 +197,27 @@ OneDrive 동작은 수동 릴리스 게이트로 남아 있으며 로컬 APFS �
 
 요구 사항: Apple Silicon Mac, macOS 15 이상.
 
-무료로 제공할 예정인 DMG는 ad-hoc 방식으로 서명하며 Developer ID 서명과 Apple
+무료 DMG는 ad-hoc 방식으로 서명했으며 Developer ID 서명과 Apple
 공증을 받지 않습니다. Gatekeeper가 차단할 수 있습니다. 경고를 이해하고 동의하는
 경우에만 Finder의 컨텍스트 **열기**를 사용하세요. Pengrid는 macOS 보안 기능을
 끄도록 요구하지 않습니다.
 
-### 병합 전 검증 근거
+### 릴리스 검증 근거
 
-- 전송 안전성 집중 회귀검증: 테스트 383개와 스위트 12개를 4.874초에 통과.
-- 전체 비병렬 회귀검증: arm64 Release 빌드 전후로 테스트 1,931개와 스위트
-  123개를 두 번 통과했으며 각각 86.066초와 85.441초가 걸림.
-- 독립 리뷰에 따라 전체 Xcode fallback 계약을 강화한 뒤에도 전체 테스트
-  1,931개와 스위트 123개를 93.051초에 다시 통과함.
-- 전체 unsigned 패키징 실행도 앱과 DMG를 빌드·검증하기 전에 자체 비병렬
-  테스트 1,931개와 스위트 123개를 86.978초에 통과함.
-- 비공개 APFS 통합: 0.048초에 테스트 5개와 스위트 1개를 통과했으며 연결된
-  이미지나 하네스 임시 루트가 남지 않음.
-- 일회성 앱의 식별자는 `com.minho.BloomFileManager`, 버전은 1.3.0, 빌드는 10,
-  아키텍처는 arm64 전용임.
-- 예상한 ad-hoc 서명으로 strict deep 코드 서명 검증을 통과함. 원본 아이콘과
-  제3자 고지문이 패키징 리소스와 같고, DMG가 `hdiutil verify`를 통과했으며 읽기
-  전용으로 마운트한 앱 트리가 로컬 패키징 앱과 같음. Gatekeeper 거부를 예상했고
-  실제로 확인함.
-- Google Drive, OneDrive 및 실제 VoiceOver 검사는 **MANUAL NOT RUN**.
-- 정확한 병합 커밋 패키징, 공개 CI, 설치, GitHub 공개, 인증 없는 재다운로드 비교
-  및 공개 DMG SHA-256은 **NOT RUN**. 이 일회성 후보의 checksum은 릴리스
-  checksum이 아님.
+- Pull request [#15](https://github.com/pmh10401/Pengrid/pull/15)를
+  `8866bd0d080d1e11f47f85f7b42f4e4fb14109b3`으로 병합했고 공개 `main` CI가
+  통과했습니다.
+- 정확한 병합 커밋에서 unsigned 패키징을 한 번 실행해 86.644초에 테스트
+  1,931개와 스위트 123개를 통과하고 arm64 Release 앱과 DMG를 만들었습니다.
+  검증 후 산출물을 다시 패키징하지 않았습니다.
+- 비공개 APFS 통합은 0.047초에 테스트 5개와 스위트 1개를 통과했으며 연결된
+  이미지나 마운트가 남지 않았습니다.
+- 공개 앱의 식별자는 `com.minho.BloomFileManager`, 버전은 1.3.0, 빌드는 10,
+  아키텍처는 arm64 전용입니다. strict deep ad-hoc 서명, 원본 아이콘과 고지문,
+  네이티브 연결, DMG 및 마운트 앱 트리 검사가 통과했습니다. Gatekeeper 거부는
+  예상했고 실제로 확인했습니다.
+- 정확한 패키징 앱을 `/Applications/Pengrid.app`에 설치하고 실행했습니다.
+- GitHub 업로드 자산 digest와 인증 없는 공개 재다운로드가 SHA-256
+  `fa5b27b9cede4d053af37ff3a1f672c42083ea59652fe518675ed4f28730b5c5`와
+  일치했습니다. 재다운로드 파일은 검증한 로컬 DMG와 바이트 단위로 같았습니다.
+- Google Drive, OneDrive 및 실제 VoiceOver 검사는 **MANUAL NOT RUN**입니다.

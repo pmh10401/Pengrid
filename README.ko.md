@@ -15,14 +15,14 @@ Pengrid는 두 패널 탐색, 재귀 검색, 미리보기, 대기열 기반 파�
 ## 다운로드
 
 현재 릴리스는
-[Pengrid 1.3.0 Developer Preview 7](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.7)입니다.
+[Pengrid 1.3.0 Developer Preview 8](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.8)입니다.
 
-- [Pengrid.dmg 다운로드](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.7/Pengrid.dmg)
-- 버전: **1.3.0 (빌드 9)**
+- [Pengrid.dmg 다운로드](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.8/Pengrid.dmg)
+- 버전: **1.3.0 (빌드 10)**
 - 요구 사항: **Apple Silicon Mac, macOS 15 이상**
-- 검증: **110개 스위트의 자동 테스트 1,645개 통과**
+- 검증: **123개 스위트의 자동 테스트 1,931개 통과**
 - DMG SHA-256:
-  `d7060401f05bbaac7f1d64b76d5bce6b93708c75644c8c3737698e8a3144fd73`
+  `fa5b27b9cede4d053af37ff3a1f672c42083ea59652fe518675ed4f28730b5c5`
 
 DMG를 연 다음 `Pengrid.app`을 `Applications` 폴더로 복사하세요.
 
@@ -57,8 +57,8 @@ DMG를 연 다음 `Pengrid.app`을 `Applications` 폴더로 복사하세요.
 
 ### 집중 명령으로 이동하고 파일을 만들고 선택하기
 
-> 이 절의 생산성 작업 흐름은 현재 소스 트리를 설명합니다. 이 기능이 기존
-> Developer Preview 7 DMG에 포함되어 있다는 뜻은 아닙니다.
+> 이 절의 생산성 작업 흐름은 Developer Preview 8과 현재 소스 트리에 포함되어
+> 있습니다.
 
 **Command-P**를 누르면 현재 scene에만 연결된 열거형 기반의 타입 안전 **Quick Go…** 팔레트가
 열립니다. 후보는 안전한 고정 명령(**Create Folder**, **Create File**, **Show
@@ -118,7 +118,7 @@ New Folder with Selection, 이름 변경, 압축 및 Trash가 포함됩니다.
 
 Pengrid는 실행 전에 화면에 보이는 선택을 캡처하므로 이후 탐색이나 선택
 변경이 작업 목적지를 몰래 바꾸지 못합니다. 정확한 선택 및 기능 판정 규칙은
-[릴리스 노트](docs/release-notes-v1.3.0-developer-preview.7.md)를 참고하세요.
+[릴리스 노트](docs/release-notes-v1.3.0-developer-preview.8.md)를 참고하세요.
 
 **Command-I** 또는 행 컨텍스트 메뉴의 **Get Info**는 캡처한 선택 항목의
 읽기 전용 비모달 검사기를 엽니다. 하나의 항목 메타데이터나 여러 항목 요약을
@@ -134,11 +134,12 @@ Pengrid는 실행 전에 화면에 보이는 선택을 캡처하므로 이후 �
 동기화 같은 독점 트랜잭션은 단계적 게시와 보수적인 롤백 검사를 사용합니다.
 동기화는 다시 시도할 수 없고, 완료 후 Undo로 되돌리지 않습니다.
 
-> 전송 내용 검증은 현재 소스 트리에 구현되어 있지만, 공개된 Developer Preview
-> 7 DMG에는 포함되어 있지 않습니다.
+> 전송 내용 검증은 Developer Preview 8에 포함되어 있습니다. 선택 기능이며
+> 기본값은 꺼짐입니다.
 
-소스 빌드에는 기본값이 꺼진 **File Operations** 설정 **Verify transferred file
-contents before publishing**이 있습니다. 이 설정을 켜면 복사, Duplicate, 다른
+Developer Preview 8과 소스 빌드에는 기본값이 꺼진 **File Operations** 설정
+**Verify transferred file contents before publishing**이 있습니다. 이 설정을
+켜면 복사, Duplicate, 다른
 볼륨으로 이동, 검토된 동기화의 복사·교체 작업에서 비공개 스테이징 결과를 게시하기
 전에 일반 파일 데이터를 SHA-256으로 비교합니다. 링크를 따라가지 않고 재귀 트리
 구조와 심볼릭 링크 payload도 확인합니다. 진행률은 바이트 가중 백분율과 파일
@@ -191,8 +192,8 @@ Batch Rename과 나머지 컨텍스트 작업은 File Operations 메뉴 또는 �
   암호는 저장하지 않으며 복구할 수 없습니다.
 - 7z, RAR, 암호 보호 TAR, Developer ID 서명 및 공증은 이 Developer
   Preview에 포함되지 않습니다.
-- Finder 태그 편집은 향후 작업입니다. 선택 가능한 전송 내용 검증은 현재 소스에
-  있지만 Developer Preview 7 DMG에는 없습니다. 리소스 포크, 확장 속성, ACL,
+- Finder 태그 편집은 향후 작업입니다. 선택 가능한 전송 내용 검증은 Developer
+  Preview 8에 포함되어 있습니다. 리소스 포크, 확장 속성, ACL,
   소유권, 플래그, 생성일, 하드 링크 관계 및 sparse allocation은 검증 범위에서
   제외합니다.
 - 실행하지 않은 수동 검증은 검증 문서에 `NOT RUN`으로 명시합니다.
@@ -221,7 +222,7 @@ open dist/Pengrid.app
 ## 문서
 
 - [상세 기능 가이드](docs/user-guide.ko.md)
-- [Developer Preview 7 릴리스 노트](docs/release-notes-v1.3.0-developer-preview.7.md)
+- [Developer Preview 8 릴리스 노트](docs/release-notes-v1.3.0-developer-preview.8.md)
 - [릴리스 및 패키징 가이드](docs/release.ko.md)
 - [아키텍처 설명](docs/architecture.md)
 - [현재 제한 사항](docs/current-limitations.ko.md)
