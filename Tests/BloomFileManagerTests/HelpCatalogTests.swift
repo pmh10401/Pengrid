@@ -70,4 +70,36 @@ import Testing
         #expect(try #require(topics.first { $0.id == .troubleshooting }).externalDestination == .releases)
         #expect(topics.filter { ![.gettingStarted, .troubleshooting].contains($0.id) }.allSatisfy { $0.externalDestination == nil })
     }
+
+    @Test func blankSearchReturnsEveryTopicInStableOrder() {
+        #expect(HelpCatalog.search("  \n", displaying: .english).map(\.id) == HelpTopicID.allCases)
+    }
+
+    @Test func searchIndexesBothLanguagesAndReturnsDisplayLanguageCopy() throws {
+        let englishUI = HelpCatalog.search("암호 보호", displaying: .english)
+        #expect(englishUI.map(\.id) == [.archives])
+        #expect(try #require(englishUI.first).title == HelpCatalog.topic(id: .archives, language: .english)?.title)
+        let koreanUI = HelpCatalog.search("privacy", displaying: .korean)
+        #expect(koreanUI.map(\.id) == [.troubleshooting])
+        #expect(try #require(koreanUI.first).title == HelpCatalog.topic(id: .troubleshooting, language: .korean)?.title)
+    }
+
+    @Test func koreanInitialAndMixedQueriesReuseSmartSearchSemantics() {
+        #expect(HelpCatalog.search("ㅇㅎ", displaying: .korean).map(\.id).contains(.archives))
+        #expect(HelpCatalog.search("ㅇㄷ operation", displaying: .english).map(\.id) == [.fileOperations])
+    }
+
+    @Test func literalSearchUsesCaseAndDiacriticFolding() {
+        #expect(HelpCatalog.search("CLOUD", displaying: .english).map(\.id).contains(.cloudLocations))
+        #expect(HelpCatalog.search("prívacy", displaying: .english).map(\.id) == [.troubleshooting])
+    }
+
+    @Test func noMatchAndSelectionReconcileDeterministically() {
+        #expect(HelpCatalog.search("definitely-no-such-help-topic", displaying: .english).isEmpty)
+        let results = HelpCatalog.search("cloud", displaying: .english)
+        #expect(HelpCatalog.reconciledSelection(current: .cloudLocations, results: results) == .cloudLocations)
+        #expect(HelpCatalog.reconciledSelection(current: .archives, results: results) == results.first?.id)
+        #expect(HelpCatalog.reconciledSelection(current: .archives, results: []) == nil)
+    }
+
 }
