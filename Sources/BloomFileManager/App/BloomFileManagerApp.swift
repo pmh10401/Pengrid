@@ -310,7 +310,11 @@ struct BloomFileManagerApp: App {
                 batchRename: batchRename,
                 cloudLocations: cloudLocations
             )
+            PengridHelpCommands()
         }
+
+        Window("Pengrid Help", id: PengridHelpScene.id) { HelpView() }
+            .defaultSize(width: 860, height: 620)
 
         Settings {
             TabView {

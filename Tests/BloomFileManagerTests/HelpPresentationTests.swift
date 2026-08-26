@@ -32,6 +32,25 @@ import Testing
         #expect(source.contains("externalErrorMessage"))
         #expect(!source.contains("ExternalOpenResult"))
     }
+
+    @Test func helpCommandUsesStandardMenuShortcutAndSingletonSceneID() throws {
+        let commands = try source(named: "Support/PengridHelpCommands.swift")
+        #expect(commands.contains("CommandGroup(replacing: .help)"))
+        #expect(commands.contains("Button(\"Pengrid Help\")"))
+        #expect(commands.contains(".keyboardShortcut(\"?\", modifiers: .command)"))
+        #expect(commands.components(separatedBy: ".keyboardShortcut(\"?\"").count - 1 == 1)
+        #expect(commands.contains("openWindow(id: PengridHelpScene.id)"))
+        #expect(commands.contains("static let id = \"pengrid-help\""))
+    }
+
+    @Test func appRegistersOneHelpWindowAndInstallsCommands() throws {
+        let app = try source(named: "App/BloomFileManagerApp.swift")
+        #expect(app.contains("Window(\"Pengrid Help\", id: PengridHelpScene.id)"))
+        #expect(app.contains("HelpView()"))
+        #expect(app.contains(".defaultSize(width: 860, height: 620)"))
+        #expect(app.contains("PengridHelpCommands()"))
+        #expect(!app.contains("WindowGroup(\"Pengrid Help\""))
+    }
 }
 
 private func source(named relativePath: String) throws -> String {
