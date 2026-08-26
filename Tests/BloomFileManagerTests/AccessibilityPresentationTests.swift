@@ -52,6 +52,14 @@ import Testing
     #expect(GetInfoAccessibilityIdentifiers.contextMenu == "fileTable.getInfo")
     #expect(SpotlightSearchAccessibilityIdentifiers.indexedContents == "smartSearch.indexedContents")
     #expect(SpotlightSearchAccessibilityIdentifiers.coverage == "smartSearch.coverage")
+    #expect(AccessibilityIdentifiers.helpWindow == "help.window")
+    #expect(AccessibilityIdentifiers.helpSearch == "help.search")
+    #expect(AccessibilityIdentifiers.helpTopicList == "help.topicList")
+    #expect(AccessibilityIdentifiers.helpDetail == "help.detail")
+    #expect(AccessibilityIdentifiers.helpLanguage == "help.language")
+    #expect(AccessibilityIdentifiers.helpNoResults == "help.noResults")
+    #expect(AccessibilityIdentifiers.helpExternalError == "help.externalError")
+    #expect(AccessibilityIdentifiers.helpTopic(.cloudLocations) == "help.topic.cloudLocations")
 }
 
 @Test func workspaceSessionAccessibilityIdentifiersAreStableAndDoNotUsePaths() {

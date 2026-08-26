@@ -174,6 +174,17 @@ enum AccessibilityIdentifiers {
     static let storageInspectorProgress = "storageInspector.progress"
     static let storageInspectorGroupNavigation = "storageInspector.groupNavigation"
     static let storageInspectorGroupMembers = "storageInspector.groupMembers"
+    static let helpWindow = "help.window"
+    static let helpSearch = "help.search"
+    static let helpTopicList = "help.topicList"
+    static let helpDetail = "help.detail"
+    static let helpLanguage = "help.language"
+    static let helpNoResults = "help.noResults"
+    static let helpExternalError = "help.externalError"
+
+    static func helpTopic(_ id: HelpTopicID) -> String {
+        "help.topic.\(id.rawValue)"
+    }
 
     static func storageInspectorSection(_ section: StorageAnalysisSection) -> String {
         "storageInspector.section.\(section.rawValue)"
