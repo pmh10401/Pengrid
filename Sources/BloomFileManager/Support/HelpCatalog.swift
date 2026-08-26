@@ -393,7 +393,7 @@ enum HelpCatalog {
                     heading: "Active pane and history",
                     paragraphs: [
                         "Each pane keeps its current folder, Back/Forward history, sort order, selection, session-local remembered selection and scroll position, and filename filter.",
-                        "Copy, move, and Open in Other Pane capture their source and destination pane when invoked, so later navigation or selection changes cannot redirect the action."
+                        "Copy, move, and Open in Other Pane capture their source and destination pane when invoked, so later navigation or selection changes cannot redirect the operation."
                     ],
                     bulletItems: [
                         "Command-[ and Command-] go Back and Forward; Command-Up Arrow goes to the parent folder; Command-L edits the location."
@@ -406,7 +406,7 @@ enum HelpCatalog {
                         "Control-Tab and Control-Shift-Tab move between tabs. A profile is a named reusable layout; opening one creates a new tab without changing the existing tab."
                     ],
                     bulletItems: [
-                        "On restart, layout state is restored, but selection, filters, history, previews, searches, and file-work state are not."
+                        "On restart, layout state is restored, but selection, filters, history, previews, searches, and file-operation state are not."
                     ]
                 ),
                 HelpSection(
@@ -544,7 +544,7 @@ enum HelpCatalog {
                         "Progress has preparation, encoding or extraction, and publishing phases. Native tools may provide indeterminate byte totals during encoding; cancellation remains available throughout, and uncertain cleanup becomes Recovery Needed for review."
                     ],
                     bulletItems: [
-                        "The archive progress view shows the current phase and item progress."
+                        "The Operation Center shows the current phase and item progress."
                     ]
                 ),
                 HelpSection(
@@ -580,7 +580,7 @@ enum HelpCatalog {
                     heading: "Local availability and materialization",
                     paragraphs: [
                         "Name/path metadata search and folder preview use information already exposed locally and do not intentionally materialize online-only children.",
-                        "Opening, Quick Look, copy or move, content comparison, archive work, and transfer verification may ask macOS or the installed provider to materialize an online-only item. A location without readable local bytes or writable capability is reported as read-only or unavailable and disables mutation."
+                        "Opening, Quick Look, copy or move, content comparison, archive operations, and transfer verification may ask macOS or the installed provider to materialize an online-only item. A location without readable local bytes or writable capability is reported as read-only or unavailable and disables mutation."
                     ],
                     bulletItems: [
                         "When a provider cannot expose enough metadata, Pengrid reports unavailable or failed instead of inventing results."
@@ -589,7 +589,7 @@ enum HelpCatalog {
                 HelpSection(
                     heading: "Scoped access",
                     paragraphs: [
-                        "Scoped access is held only for work that needs it, with the same identity checks used for local files. A byte-dependent task can wait for a macOS access prompt or provider state, or fail when local materialization is unavailable."
+                        "Scoped access is held only for work that needs it, with the same identity checks used for local files. A byte-dependent operation can wait for a macOS access prompt or provider state, or fail when local materialization is unavailable."
                     ],
                     bulletItems: [
                         "Pengrid does not replace the provider's account UI or implement a direct OAuth flow."
@@ -667,7 +667,7 @@ enum HelpCatalog {
                 HelpSection(
                     heading: "Recovery and provider availability",
                     paragraphs: [
-                        "When the Work Center reports Recovery Needed, review the uncertain temporary item rather than deleting it yourself, then choose Continue Queue. Conflicts, identity changes, and read-only locations can fail a task.",
+                        "When the Operation Center reports Recovery Needed, review the uncertain temporary item rather than deleting it yourself, then choose Continue Queue. Conflicts, identity changes, and read-only locations can fail an operation.",
                         "File Provider online-only items may materialize only when a byte-dependent action begins. A retry cannot make a provider with no available local bytes or write capability writable."
                     ],
                     bulletItems: [
@@ -677,7 +677,7 @@ enum HelpCatalog {
                 HelpSection(
                     heading: "Privacy and online links",
                     paragraphs: [
-                        "Work Center and VoiceOver status use safe item names and summaries; Pengrid does not persist or announce absolute parent paths, search queries, file contents, or passwords. Help content is offline and does not inspect workspace or File Provider state or make network requests.",
+                        "Operation Center and VoiceOver status use safe item names and summaries; Pengrid does not persist or announce absolute parent paths, search queries, file contents, or passwords. Help content is offline and does not inspect workspace or File Provider state or make network requests.",
                         "The user guide and releases page require an internet connection. If macOS rejects opening the browser, Pengrid shows a bounded error and does not retry automatically. Follow the releases guidance to report a reproducible issue."
                     ],
                     bulletItems: [

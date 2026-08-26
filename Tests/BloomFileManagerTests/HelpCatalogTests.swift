@@ -86,7 +86,9 @@ import Testing
 
     @Test func koreanInitialAndMixedQueriesReuseSmartSearchSemantics() {
         #expect(HelpCatalog.search("ㅇㅎ", displaying: .korean).map(\.id).contains(.archives))
-        #expect(HelpCatalog.search("ㅇㄷ operation", displaying: .english).map(\.id) == [.fileOperations])
+        let mixedResults = HelpCatalog.search("ㅇㄷ operation", displaying: .english).map(\.id)
+        #expect(mixedResults.contains(.fileOperations))
+        #expect(!mixedResults.contains(.search))
     }
 
     @Test func literalSearchUsesCaseAndDiacriticFolding() {
