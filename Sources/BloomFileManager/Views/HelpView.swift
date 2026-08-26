@@ -28,8 +28,7 @@ struct HelpView: View {
                 results: results,
                 selectedTopicID: $selectedTopicID,
                 language: language,
-                copy: copy,
-                languageSelection: languageSelection
+                copy: copy
             )
             .navigationSplitViewColumnWidth(min: 220, ideal: 280, max: 360)
         } detail: {
@@ -44,6 +43,15 @@ struct HelpView: View {
             )
         }
         .navigationTitle(copy.windowTitle)
+        .toolbar {
+            ToolbarItem(placement: .automatic) {
+                HelpLanguagePicker(
+                    selection: languageSelection,
+                    language: language,
+                    copy: copy
+                )
+            }
+        }
         .accessibilityIdentifier(AccessibilityIdentifiers.helpWindow)
         .accessibilityLabel(copy.windowTitle)
         .frame(minWidth: 720, minHeight: 520)
@@ -98,15 +106,20 @@ private struct HelpSidebarView: View {
     @Binding var selectedTopicID: HelpTopicID?
     let language: HelpLanguage
     let copy: HelpPresentationCopy
-    let languageSelection: Binding<HelpLanguage>
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HelpLanguagePicker(
-                selection: languageSelection,
-                language: language,
-                copy: copy
-            )
+            TextField(copy.searchPrompt, text: $query)
+                .textFieldStyle(.roundedBorder)
+                .accessibilityIdentifier(AccessibilityIdentifiers.helpSearch)
+                .accessibilityLabel(copy.searchPrompt)
+                .accessibilityHint(searchHint)
+
+            Text(copy.resultCount(results.count))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .accessibilityIdentifier(AccessibilityIdentifiers.helpResultCount)
+                .accessibilityLabel(copy.resultCount(results.count))
 
             List(results, selection: $selectedTopicID) { topic in
                 HelpTopicRow(topic: topic)
@@ -120,10 +133,6 @@ private struct HelpSidebarView: View {
             .accessibilityHint(topicListHint)
         }
         .padding(.vertical, 8)
-        .searchable(text: $query, placement: .sidebar, prompt: copy.searchPrompt)
-        .accessibilityIdentifier(AccessibilityIdentifiers.helpSearch)
-        .accessibilityLabel(copy.searchPrompt)
-        .accessibilityHint(searchHint)
     }
 
     private var topicListLabel: String {
@@ -154,7 +163,6 @@ private struct HelpLanguagePicker: View {
             Text(languageName(for: .english)).tag(HelpLanguage.english)
         }
         .pickerStyle(.segmented)
-        .padding(.horizontal, 12)
         .accessibilityIdentifier(AccessibilityIdentifiers.helpLanguage)
         .accessibilityLabel(copy.languageLabel)
         .accessibilityHint(languageHint)
@@ -244,6 +252,7 @@ private struct HelpNoResultsView: View {
             Button(copy.clearSearch) {
                 query = ""
             }
+            .accessibilityIdentifier(AccessibilityIdentifiers.helpClearSearch)
             .accessibilityHint(clearSearchHint)
         }
         .accessibilityIdentifier(AccessibilityIdentifiers.helpNoResults)
@@ -289,12 +298,14 @@ private struct HelpTopicDetailView: View {
                     Text(topic.title)
                         .font(.title)
                         .foregroundStyle(.primary)
+                        .accessibilityIdentifier(AccessibilityIdentifiers.helpDetailTitle)
+                        .accessibilityAddTraits(.isHeader)
                     Text(topic.summary)
                         .font(.body)
                         .foregroundStyle(.secondary)
                 }
 
-                ForEach(Array(topic.sections.enumerated()), id: \.offset) { _, section in
+                ForEach(topic.sections, id: \.heading) { section in
                     HelpSectionView(section: section)
                 }
 
@@ -327,15 +338,16 @@ private struct HelpSectionView: View {
             Text(section.heading)
                 .font(.headline)
                 .foregroundStyle(.primary)
+                .accessibilityAddTraits(.isHeader)
 
-            ForEach(Array(section.paragraphs.enumerated()), id: \.offset) { _, paragraph in
+            ForEach(section.paragraphs, id: \.self) { paragraph in
                 Text(paragraph)
                     .font(.body)
                     .foregroundStyle(.primary)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            ForEach(Array(section.bulletItems.enumerated()), id: \.offset) { _, bullet in
+            ForEach(section.bulletItems, id: \.self) { bullet in
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text("•")
                         .font(.body)
@@ -360,8 +372,9 @@ private struct HelpShortcutsView: View {
             Text(language == .korean ? "단축키" : "Shortcuts")
                 .font(.headline)
                 .foregroundStyle(.primary)
+                .accessibilityAddTraits(.isHeader)
 
-            ForEach(Array(shortcuts.enumerated()), id: \.offset) { _, shortcut in
+            ForEach(shortcuts, id: \.keys) { shortcut in
                 HStack(alignment: .firstTextBaseline, spacing: 16) {
                     Text(shortcut.keys)
                         .font(.body.monospaced())
@@ -392,6 +405,7 @@ private struct HelpExternalLinkView: View {
                 openExternal(destination, language)
             }
             .buttonStyle(.borderedProminent)
+            .accessibilityIdentifier(externalActionIdentifier)
             .accessibilityHint(copy.internetRequired)
 
             Text(copy.internetRequired)
@@ -408,6 +422,15 @@ private struct HelpExternalLinkView: View {
                     .accessibilityLabel(copy.externalOpenFailedTitle)
                     .accessibilityValue(externalErrorMessage)
             }
+        }
+    }
+
+    private var externalActionIdentifier: String {
+        switch destination {
+        case .userGuide:
+            AccessibilityIdentifiers.helpUserGuideAction
+        case .releases:
+            AccessibilityIdentifiers.helpReleasesAction
         }
     }
 }

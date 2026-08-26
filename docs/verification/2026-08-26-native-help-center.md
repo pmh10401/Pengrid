@@ -30,6 +30,28 @@ Observed result:
   it did not fail the run.
 - This is a focused result; the complete-suite results are recorded below.
 
+Final-review focused command:
+
+```text
+env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --enable-swift-testing --no-parallel --filter 'HelpCatalogTests|HelpPresentationTests|AccessibilityPresentationTests'
+```
+
+Observed result: `41` tests in `2` suites, `0` failures, in `0.230` seconds.
+This covers the final-review result-count copy, explicit Help search field,
+toolbar language picker, header traits, stable identities, external-action IDs,
+typed keywords, and privacy wording contracts. The existing warning about `11`
+unhandled Protected ZIP fixture resources appeared and did not fail the run.
+
+Final-review combined command:
+
+```text
+env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --enable-swift-testing --no-parallel --filter 'WorkspaceCommandTests|HelpCatalogTests|HelpPresentationTests|AccessibilityPresentationTests'
+```
+
+Observed result: `73` tests in `3` suites, `0` failures, in `0.430` seconds.
+It includes the source contract that installs the single Help command in the
+workspace, Help Window, and Settings scenes.
+
 Complete nonparallel suite (first run):
 
 ```text
@@ -73,6 +95,22 @@ Observed result: `1,948` tests in `125` suites passed after `155.803` seconds
 (`real 159.86`, `user 125.36`, `sys 43.58`). The Help suites and all other
 tests passed on this retry. The same `11` unhandled-fixture warning appeared.
 
+Final-review complete nonparallel suite (one run):
+
+```text
+env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --enable-swift-testing --no-parallel
+```
+
+Observed result: `1,952` tests in `125` suites failed after `181.442` seconds
+with `2` issues. The HelpCatalog and HelpPresentation suites passed in this run.
+The only failing test was
+`ProtectedZIPEngineReaderTests.extractionSecretIsInvalidatedOnSuccessFailureAndCancellation()`:
+its five-second `started.wait` timed out, then it observed `CancellationError()`
+where it expected `ProtectedZIPError.cancelled`. This is an unrelated
+Protected ZIP cancellation/timing condition; the complete suite was not rerun.
+The existing warning about `11` unhandled Protected ZIP fixture resources also
+appeared and did not itself fail the run.
+
 Documentation checks run for this record:
 
 - `32` local Markdown links in `README.md`, `README.ko.md`,
@@ -96,6 +134,11 @@ Observed result: `PASS`. The release build completed in `89.12` seconds
 (`real 89.59`, `user 115.26`, `sys 2.08`). It emitted the existing `11`
 unhandled-fixture warning. No distribution/release signing, packaging,
 installation, notarization, or DMG claim was made.
+
+Final-review release build: `PASS`. The same command completed in `168.79`
+seconds and emitted only the existing warning about `11` unhandled Protected
+ZIP fixture resources. No distribution, signing, packaging, installation,
+notarization, or DMG claim was made.
 
 ## Bundle and Process Evidence
 

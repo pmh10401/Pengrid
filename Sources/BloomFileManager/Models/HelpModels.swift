@@ -45,6 +45,7 @@ struct HelpTopic: Identifiable, Equatable, Sendable {
     let id: HelpTopicID
     let title: String
     let summary: String
+    let keywords: [String]
     let sections: [HelpSection]
     let shortcuts: [HelpShortcut]
     let externalDestination: HelpExternalDestination?
@@ -95,6 +96,8 @@ enum HelpExternalDestination: String, CaseIterable, Sendable {
 struct HelpPresentationCopy: Equatable, Sendable {
     let windowTitle: String
     let searchPrompt: String
+    let resultCountSingular: String
+    let resultCountPlural: String
     let languageLabel: String
     let noResultsTitle: String
     let noResultsMessage: String
@@ -104,12 +107,18 @@ struct HelpPresentationCopy: Equatable, Sendable {
     let externalOpenFailedTitle: String
     let externalOpenFailedMessage: String
 
+    func resultCount(_ count: Int) -> String {
+        String(format: count == 1 ? resultCountSingular : resultCountPlural, count)
+    }
+
     static func value(for language: HelpLanguage) -> Self {
         switch language {
         case .korean:
             Self(
                 windowTitle: "Pengrid 도움말",
                 searchPrompt: "도움말 검색",
+                resultCountSingular: "도움말 항목 %d개",
+                resultCountPlural: "도움말 항목 %d개",
                 languageLabel: "언어",
                 noResultsTitle: "일치하는 도움말 없음",
                 noResultsMessage: "검색어와 일치하는 도움말 항목이 없습니다.",
@@ -123,6 +132,8 @@ struct HelpPresentationCopy: Equatable, Sendable {
             Self(
                 windowTitle: "Pengrid Help",
                 searchPrompt: "Search Help",
+                resultCountSingular: "%d Help Topic",
+                resultCountPlural: "%d Help Topics",
                 languageLabel: "Language",
                 noResultsTitle: "No Matching Help Topics",
                 noResultsMessage: "No help topics match your search.",

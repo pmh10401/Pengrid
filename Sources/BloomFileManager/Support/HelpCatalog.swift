@@ -19,6 +19,7 @@ enum HelpCatalog {
             id: .gettingStarted,
             title: "시작하기",
             summary: "Pengrid를 안전하게 설치하고 듀얼 패널과 미리보기로 첫 작업을 시작합니다.",
+            keywords: ["온보딩", "설치", "미리보기"],
             sections: [
                 HelpSection(
                     heading: "설치와 첫 실행",
@@ -50,6 +51,7 @@ enum HelpCatalog {
             id: .dualPaneNavigation,
             title: "듀얼 패널 탐색",
             summary: "패널별 기록과 필터를 유지하면서 탭, 프로필, 비교 및 검토 우선 동기화를 사용합니다.",
+            keywords: ["작업 공간", "탭", "프로필"],
             sections: [
                 HelpSection(
                     heading: "활성 패널과 탐색 기록",
@@ -97,6 +99,7 @@ enum HelpCatalog {
             id: .search,
             title: "검색과 초성",
             summary: "패널 필터, 재귀 Smart Search, 선택적 Spotlight 내용 검색과 한글 초성 검색을 구분합니다.",
+            keywords: ["초성", "재귀", "스포트라이트"],
             sections: [
                 HelpSection(
                     heading: "패널 필터",
@@ -110,7 +113,7 @@ enum HelpCatalog {
                 HelpSection(
                     heading: "Smart Search",
                     paragraphs: [
-                        "Command-Shift-F는 활성 폴더를 시작점으로 파일명과 상대 경로를 재귀 검색합니다. 파일·폴더 유형, 확장자, 크기, 수정 날짜 필터를 조합하고 검색을 저장하거나 다시 열 수 있습니다.",
+                        "Command-Shift-F는 활성 폴더를 시작점으로 파일명과 상대 경로를 재귀 검색합니다. 파일·폴더 유형, 확장자, 크기, 수정 날짜 필터를 조합하고, Smart Search는 사용자가 명시적으로 저장할 때만 검색어·필터·루트 구성을 저장합니다.",
                         "일반 문자열은 대소문자와 악센트를 구분하지 않습니다. 혼합 검색은 모든 절이 일치해야 하며, 잘못된 필터 조합으로 무제한 변경 작업을 시작하지 않습니다."
                     ],
                     bulletItems: [
@@ -139,6 +142,7 @@ enum HelpCatalog {
             id: .fileOperations,
             title: "파일 작업과 작업 센터",
             summary: "작업 센터의 순서·진행·충돌·취소와 전송 검증, 보수적인 Undo를 이해합니다.",
+            keywords: ["대기열", "복구", "되돌리기"],
             sections: [
                 HelpSection(
                     heading: "작업 센터와 충돌",
@@ -189,6 +193,7 @@ enum HelpCatalog {
             id: .archives,
             title: "압축 파일",
             summary: "지원되는 ZIP·TAR 계열 형식, 제한된 병렬 준비, 진행 단계와 암호 ZIP 경계를 설명합니다.",
+            keywords: ["패키징", "압축", "보관"],
             sections: [
                 HelpSection(
                     heading: "지원 형식",
@@ -227,6 +232,7 @@ enum HelpCatalog {
             id: .cloudLocations,
             title: "클라우드 위치",
             summary: "macOS File Provider를 통해 Google Drive와 OneDrive를 사용하고 수동 위치의 가용성을 확인합니다.",
+            keywords: ["공급자", "드라이브", "북마크"],
             sections: [
                 HelpSection(
                     heading: "File Provider 위치",
@@ -267,6 +273,7 @@ enum HelpCatalog {
             id: .shortcuts,
             title: "키보드 단축키",
             summary: "현재 소스와 사용자 안내서에 정의된 주요 탐색·검색·파일 작업 단축키입니다.",
+            keywords: ["키보드", "명령", "키 조합"],
             sections: [
                 HelpSection(
                     heading: "탐색과 보기",
@@ -315,6 +322,7 @@ enum HelpCatalog {
             id: .troubleshooting,
             title: "문제 해결과 개인정보",
             summary: "Gatekeeper, 권한·provider 가용성, 복구 검토와 개인정보를 확인하고 재현 가능한 문제를 보고합니다.",
+            keywords: ["개인정보", "문제 해결", "게이트키퍼"],
             sections: [
                 HelpSection(
                     heading: "실행·접근 문제",
@@ -339,7 +347,7 @@ enum HelpCatalog {
                 HelpSection(
                     heading: "개인정보와 온라인 링크",
                     paragraphs: [
-                        "작업 센터·VoiceOver 상태에는 안전한 항목 이름과 요약만 표시하고 절대 부모 경로, 검색어, 파일 내용이나 암호를 저장·발표하지 않습니다. 도움말 본문은 오프라인으로 제공되며 파일 시스템, File Provider 상태를 읽거나 네트워크 요청을 하지 않습니다.",
+                        "도움말 창의 현재 검색어와 선택만은 창을 닫은 뒤 저장하지 않습니다. Smart Search는 사용자가 명시적으로 저장할 때만 검색어·필터·루트 구성을 저장합니다. 작업 센터와 VoiceOver 상태에는 안전한 기본 이름·개수·상태만 사용하며 절대 부모 경로, 파일 내용이나 암호를 표시하거나 알리지 않습니다. 도움말 본문은 오프라인으로 제공되며 파일 시스템, File Provider 상태를 읽거나 네트워크 요청을 하지 않습니다.",
                         "사용자 안내서와 릴리스 페이지 링크를 열 때 인터넷 연결이 필요합니다. macOS가 브라우저 열기를 거부하면 Pengrid는 제한된 오류를 표시하고 자동 재시도하지 않습니다. 재현 가능한 문제는 릴리스 페이지의 안내에 따라 보고하세요."
                     ],
                     bulletItems: [
@@ -357,6 +365,7 @@ enum HelpCatalog {
             id: .gettingStarted,
             title: "Getting Started",
             summary: "Install Pengrid safely, then begin with its dual panes and read-only previews.",
+            keywords: ["onboarding", "installation", "preview"],
             sections: [
                 HelpSection(
                     heading: "Install and launch",
@@ -388,6 +397,7 @@ enum HelpCatalog {
             id: .dualPaneNavigation,
             title: "Dual-Pane Navigation",
             summary: "Keep pane-local history and filters while using tabs, profiles, comparison, and reviewed synchronization.",
+            keywords: ["workspace", "tabs", "profiles"],
             sections: [
                 HelpSection(
                     heading: "Active pane and history",
@@ -435,6 +445,7 @@ enum HelpCatalog {
             id: .search,
             title: "Search and Korean Initials",
             summary: "Use pane filtering, recursive Smart Search, optional Spotlight content search, and Hangul-initial matching for the right scope.",
+            keywords: ["recursive", "Spotlight", "initials"],
             sections: [
                 HelpSection(
                     heading: "Pane filter",
@@ -448,7 +459,7 @@ enum HelpCatalog {
                 HelpSection(
                     heading: "Smart Search",
                     paragraphs: [
-                        "Command-Shift-F recursively searches filenames and relative paths from the active folder. Combine file/folder type, extension, size, and modified-date filters, and save or reopen a query.",
+                        "Command-Shift-F recursively searches filenames and relative paths from the active folder. Combine file/folder type, extension, size, and modified-date filters. A Smart Search persists its query, filters, and root configuration only when you explicitly save it.",
                         "Ordinary text is case- and diacritic-insensitive. Mixed queries require every clause to match, and invalid filter combinations do not start an unrestricted mutation."
                     ],
                     bulletItems: [
@@ -477,6 +488,7 @@ enum HelpCatalog {
             id: .fileOperations,
             title: "File Operations and Operation Center",
             summary: "Understand queue order, progress, conflicts, cancellation, transfer verification, and conservative Undo.",
+            keywords: ["queue", "recovery", "undo"],
             sections: [
                 HelpSection(
                     heading: "Operation Center and conflicts",
@@ -527,6 +539,7 @@ enum HelpCatalog {
             id: .archives,
             title: "Archives",
             summary: "Learn the supported ZIP/TAR formats, bounded parallel preparation, progress phases, and protected ZIP limits.",
+            keywords: ["packaging", "compression", "archive"],
             sections: [
                 HelpSection(
                     heading: "Supported formats",
@@ -565,6 +578,7 @@ enum HelpCatalog {
             id: .cloudLocations,
             title: "Cloud Locations",
             summary: "Use Google Drive and OneDrive through macOS File Provider, and understand manual locations and local availability.",
+            keywords: ["provider", "drive", "bookmark"],
             sections: [
                 HelpSection(
                     heading: "File Provider locations",
@@ -605,6 +619,7 @@ enum HelpCatalog {
             id: .shortcuts,
             title: "Keyboard Shortcuts",
             summary: "Primary navigation, search, and file-operation shortcuts verified in the current source and guide.",
+            keywords: ["keyboard", "commands", "key bindings"],
             sections: [
                 HelpSection(
                     heading: "Navigation and view",
@@ -653,6 +668,7 @@ enum HelpCatalog {
             id: .troubleshooting,
             title: "Troubleshooting and Privacy",
             summary: "Check Gatekeeper, permissions, provider availability, recovery review, and privacy before reporting a reproducible issue.",
+            keywords: ["privacy", "troubleshooting", "gatekeeper"],
             sections: [
                 HelpSection(
                     heading: "Launch and access problems",
@@ -677,7 +693,7 @@ enum HelpCatalog {
                 HelpSection(
                     heading: "Privacy and online links",
                     paragraphs: [
-                        "Operation Center and VoiceOver status use safe item names and summaries; Pengrid does not persist or announce absolute parent paths, search queries, file contents, or passwords. Help content is offline and does not inspect workspace or File Provider state or make network requests.",
+                        "Only the Help window's current query and selection are not persisted after the window closes. A Smart Search persists its query, filters, and root configuration only when you explicitly save it. Operation Center and VoiceOver status use only safe basenames, counts, and status; they do not expose absolute parent paths, file contents, or passwords. Help content is offline and does not inspect workspace or File Provider state or make network requests.",
                         "The user guide and releases page require an internet connection. If macOS rejects opening the browser, Pengrid shows a bounded error and does not retry automatically. Follow the releases guidance to report a reproducible issue."
                     ],
                     bulletItems: [
@@ -722,6 +738,7 @@ extension HelpCatalog {
         HelpLanguage.allCases.flatMap { language -> [String] in
             guard let topic = topic(id: id, language: language) else { return [] }
             var fields = [topic.title, topic.summary]
+            fields.append(contentsOf: topic.keywords)
             for section in topic.sections {
                 fields.append(section.heading)
                 fields.append(contentsOf: section.paragraphs)

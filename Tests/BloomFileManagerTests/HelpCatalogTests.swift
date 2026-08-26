@@ -30,6 +30,8 @@ import Testing
             let copy = HelpPresentationCopy.value(for: language)
             #expect(!copy.windowTitle.isEmpty)
             #expect(!copy.searchPrompt.isEmpty)
+            #expect(!copy.resultCount(8).isEmpty)
+            #expect(!copy.resultCount(1).isEmpty)
             #expect(!copy.externalOpenFailedMessage.isEmpty)
         }
     }
@@ -43,6 +45,10 @@ import Testing
             for topic in topics {
                 #expect(!topic.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 #expect(!topic.summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                #expect(!topic.keywords.isEmpty)
+                #expect(topic.keywords.allSatisfy {
+                    !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                })
                 #expect(!topic.sections.isEmpty)
                 #expect(topic.sections.allSatisfy { !$0.heading.isEmpty && (!$0.paragraphs.isEmpty || !$0.bulletItems.isEmpty) })
                 #expect(HelpCatalog.topic(id: topic.id, language: language) == topic)
@@ -94,6 +100,39 @@ import Testing
     @Test func literalSearchUsesCaseAndDiacriticFolding() {
         #expect(HelpCatalog.search("CLOUD", displaying: .english).map(\.id).contains(.cloudLocations))
         #expect(HelpCatalog.search("prívacy", displaying: .english).map(\.id) == [.troubleshooting])
+    }
+
+    @Test func keywordOnlyQueriesFindTheirTopicsAcrossDisplayLanguages() {
+        for displayLanguage in HelpLanguage.allCases {
+            #expect(HelpCatalog.search("onboarding", displaying: displayLanguage).map(\.id) == [.gettingStarted])
+            #expect(HelpCatalog.search("보관", displaying: displayLanguage).map(\.id) == [.archives])
+        }
+    }
+
+    @Test func privacyCopyScopesHelpAndSmartSearchPersistenceTruthfully() throws {
+        for language in HelpLanguage.allCases {
+            let search = try #require(HelpCatalog.topic(id: .search, language: language))
+            let privacy = try #require(HelpCatalog.topic(id: .troubleshooting, language: language))
+            let text = [search, privacy]
+                .flatMap { topic in
+                    [topic.title, topic.summary] + topic.sections.flatMap { section in
+                        [section.heading] + section.paragraphs + section.bulletItems
+                    }
+                }
+                .joined(separator: " ")
+            switch language {
+            case .korean:
+                #expect(text.contains("도움말 창의 현재 검색어와 선택만"))
+                #expect(text.contains("명시적으로 저장할 때만"))
+                #expect(text.contains("검색어·필터·루트 구성"))
+                #expect(text.contains("안전한 기본 이름·개수·상태"))
+            case .english:
+                #expect(text.contains("Only the Help window's current query and selection"))
+                #expect(text.contains("only when you explicitly save it"))
+                #expect(text.contains("query, filters, and root configuration"))
+                #expect(text.contains("safe basenames, counts, and status"))
+            }
+        }
     }
 
     @Test func noMatchAndSelectionReconcileDeterministically() {

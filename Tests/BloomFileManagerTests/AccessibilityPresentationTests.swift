@@ -59,6 +59,11 @@ import Testing
     #expect(AccessibilityIdentifiers.helpLanguage == "help.language")
     #expect(AccessibilityIdentifiers.helpNoResults == "help.noResults")
     #expect(AccessibilityIdentifiers.helpExternalError == "help.externalError")
+    #expect(AccessibilityIdentifiers.helpResultCount == "help.resultCount")
+    #expect(AccessibilityIdentifiers.helpDetailTitle == "help.detailTitle")
+    #expect(AccessibilityIdentifiers.helpClearSearch == "help.clearSearch")
+    #expect(AccessibilityIdentifiers.helpUserGuideAction == "help.external.userGuide")
+    #expect(AccessibilityIdentifiers.helpReleasesAction == "help.external.releases")
     #expect(AccessibilityIdentifiers.helpTopic(.cloudLocations) == "help.topic.cloudLocations")
 }
 

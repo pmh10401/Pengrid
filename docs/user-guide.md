@@ -247,10 +247,12 @@ name/path results and reports that indexed content was unavailable.
 
 ### Saved searches
 
-A query and its filters can be saved, reopened, renamed, or deleted. Saved
-searches use a separate persistence record from the two-pane workspace, so a
+A Smart Search persists its query, filters, and root configuration only when
+you explicitly save it. Saved searches can be reopened, renamed, or deleted.
+They use a separate persistence record from the two-pane workspace, so a
 malformed saved-search record falls back safely without changing the pane
-layout.
+layout. The Help window's current query and selection are local to that window
+and are not persisted after it closes.
 
 ### Result actions and stale-item refusal
 

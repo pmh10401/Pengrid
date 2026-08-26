@@ -315,6 +315,9 @@ struct BloomFileManagerApp: App {
 
         Window("Pengrid Help", id: PengridHelpScene.id) { HelpView() }
             .defaultSize(width: 860, height: 620)
+            .commands {
+                PengridHelpCommands()
+            }
 
         Settings {
             TabView {
@@ -334,6 +337,9 @@ struct BloomFileManagerApp: App {
                     }
             }
             .navigationTitle("\(AppIdentity.displayName) Settings")
+        }
+        .commands {
+            PengridHelpCommands()
         }
     }
 }

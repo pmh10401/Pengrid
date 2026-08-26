@@ -181,6 +181,11 @@ enum AccessibilityIdentifiers {
     static let helpLanguage = "help.language"
     static let helpNoResults = "help.noResults"
     static let helpExternalError = "help.externalError"
+    static let helpResultCount = "help.resultCount"
+    static let helpDetailTitle = "help.detailTitle"
+    static let helpClearSearch = "help.clearSearch"
+    static let helpUserGuideAction = "help.external.userGuide"
+    static let helpReleasesAction = "help.external.releases"
 
     static func helpTopic(_ id: HelpTopicID) -> String {
         "help.topic.\(id.rawValue)"
