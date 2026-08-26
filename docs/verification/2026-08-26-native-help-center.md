@@ -40,12 +40,15 @@ Observed result:
 
 - The run reported `1,948` tests in `125` suites and failed after `207.405`
   seconds (`real 213.14`, `user 140.57`, `sys 48.96`) with `5` issues.
-- The observed Help suites passed. The visible unrelated timing failure was
+- The retained output identifies one visible timing failure,
   `ComparisonPerformanceTests.fiftyThousandEntriesPublishProgressivelyCompleteAndStopPromptly()`:
   its completion expectation timed out after `10.133` seconds with `48,640`
   rows instead of `50,000`, leaving the phase `.comparing`; the test recorded
   `3` expectation issues. The run's final summary reported `5` issues total;
-  no Help test failure was reported.
+  the other `2` issues are uncharacterized because the retained output does
+  not identify them. The passing Help output retained from this run does not
+  classify those two issues or establish that every first-run failure was
+  unrelated to Help.
 - The existing warning about `11` unhandled Protected ZIP fixture resources was
   emitted and did not itself fail the run.
 
@@ -91,8 +94,8 @@ env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swif
 
 Observed result: `PASS`. The release build completed in `89.12` seconds
 (`real 89.59`, `user 115.26`, `sys 2.08`). It emitted the existing `11`
-unhandled-fixture warning. No release packaging, installation, signing,
-notarization, or DMG claim was made.
+unhandled-fixture warning. No distribution/release signing, packaging,
+installation, notarization, or DMG claim was made.
 
 ## Bundle and Process Evidence
 
@@ -151,10 +154,12 @@ source tests or the running process:
   GitHub HTTPS destinations and require an internet connection. If the browser
   open is rejected, the view reports bounded local feedback; the bundled topics
   remain available.
-- The first full-suite run and the required focused timing rerun exposed a
-  pre-existing host-load-sensitive comparison timing failure; the one allowed
-  clean full retry passed all `1,948` tests. This record preserves both facts
-  rather than collapsing them into an unconditional first-run PASS.
+- The retained first-run output identifies the three ComparisonPerformance
+  expectation issues and leaves the other two first-run issues
+  uncharacterized. The required focused rerun reproduced the identified timing
+  issue; the one allowed clean full retry passed all `1,948` tests. This record
+  preserves the unknowns rather than classifying every first-run failure as
+  unrelated to Help.
 - The staged GUI process was observed, but Computer Use/node_repl was not
   available in this session. Therefore all menu, keyboard, sizing, search,
   language-persistence, accessibility-label, appearance, offline, and external
