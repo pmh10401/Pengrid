@@ -57,6 +57,13 @@ import Testing
         for term in ["dual", "initial", "operation center", "undo", "password", "google drive", "onedrive", "privacy"] { #expect(en.contains(term)) }
     }
 
+    @Test func conservativeUndoRequiresAnEmptyOriginalPathInBothLanguages() throws {
+        let korean = try #require(HelpCatalog.topic(id: .fileOperations, language: .korean))
+        let english = try #require(HelpCatalog.topic(id: .fileOperations, language: .english))
+        #expect(String(describing: korean).contains("원래 경로가 비어 있을 때"))
+        #expect(String(describing: english).contains("original path is empty (unoccupied)"))
+    }
+
     @Test func onlyRelevantTopicsExposeAllowlistedOnlineDestinations() throws {
         let topics = HelpCatalog.topics(for: .english)
         #expect(try #require(topics.first { $0.id == .gettingStarted }).externalDestination == .userGuide)

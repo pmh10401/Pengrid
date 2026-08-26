@@ -511,7 +511,7 @@ enum HelpCatalog {
                 HelpSection(
                     heading: "Conservative Undo",
                     paragraphs: [
-                        "Undo is enabled only while Pengrid's exact mutation identity and no-follow fingerprint remain unchanged and the original path is safe. A replacement, content change, missing item, or uncertain ownership never overwrites a later item or removes modified output.",
+                        "Undo is enabled only while Pengrid's exact mutation identity and no-follow fingerprint remain unchanged and the original path is empty (unoccupied). A replacement, content change, missing item, or uncertain ownership never overwrites a later item or removes modified output.",
                         "Completed reviewed folder synchronization is non-retryable and is not exposed as Undo."
                     ],
                     bulletItems: []
