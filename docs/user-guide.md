@@ -17,6 +17,71 @@ Gatekeeper may therefore block it. Pengrid does not instruct users to disable
 macOS security controls. The [release guide](release.md) explains how to verify
 the artifact and build it locally.
 
+## Native Help center
+
+Choose **Help > Pengrid Help** or press **Command-?** to open Pengrid's native
+Help window. The command uses one window, so choosing it again focuses the same
+Help window instead of creating a duplicate. The window has a searchable topic
+list on the left and the selected topic's detail on the right.
+
+### Browse, search, and change language
+
+Select a topic in the sidebar to read its summary, sections, bullets, and any
+verified shortcuts. Type in the **Search Help** field to filter the list. Help
+search indexes the Korean and English copy together, then displays matching
+topics in the language selected in the picker. Literal text is
+case- and diacritic-insensitive, and a query can use Korean initial consonants
+and ordinary text in the same search.
+
+For example:
+
+- `ㅇㅎ` finds the **Archives** topic (the Korean title **압축 파일**).
+- `ㅇㄷ operation` includes **File Operations and Operation Center** because
+  both the Korean-initial and literal clauses must match. A literal query such
+  as `암호 보호` can find the same Archives topic even when English is the
+  display language.
+
+Choose **Korean** or **English** in the language picker to change the displayed
+copy. An explicit choice is remembered in Pengrid and is still selected when
+the Help window is reopened. Before a choice is made, Help follows the first
+preferred macOS language when it is Korean and otherwise falls back to English;
+the automatic fallback is not stored as an explicit choice.
+
+### Bundled topics
+
+The native Help catalog contains these eight topics in a stable order:
+
+| Topic | Coverage |
+| --- | --- |
+| **Getting Started** | Installation, first launch, dual panes, and previews. |
+| **Dual-Pane Navigation** | Pane history, tabs, profiles, comparison, and reviewed one-way synchronization. |
+| **Search and Korean Initials** | Pane filters, Smart Search, optional indexed-content search, and Hangul-initial queries. |
+| **File Operations and Operation Center** | Queue order, conflicts, cancellation, transfer verification, and conservative Undo. |
+| **Archives** | Supported ZIP/TAR formats, progress, cancellation, and protected ZIP boundaries. |
+| **Cloud Locations** | Google Drive and OneDrive through macOS File Provider, manual locations, and local availability. |
+| **Keyboard Shortcuts** | Source-verified navigation, search, selection, and file-operation shortcuts. |
+| **Troubleshooting and Privacy** | Gatekeeper, access and provider availability, recovery review, privacy, and rejected browser opens. |
+
+All eight topics, their summaries, and their search text are bundled with the
+application. Reading, selecting, and searching them works without a network
+connection. The catalog does not fetch runtime Help content, inspect workspace
+or File Provider state, or add an OAuth flow.
+
+### Online buttons and no-result recovery
+
+The **Getting Started** topic can open the English or Korean repository guide at
+`https://github.com/pmh10401/Pengrid/blob/main/docs/user-guide.md` or
+`https://github.com/pmh10401/Pengrid/blob/main/docs/user-guide.ko.md`. The
+**Troubleshooting and Privacy** topic can open
+`https://github.com/pmh10401/Pengrid/releases`. These buttons leave Pengrid and
+open the exact allowlisted GitHub destination in the system browser; an internet
+connection is required. If macOS rejects the browser request, Help shows a
+bounded local error and keeps the bundled topics available.
+
+If a search has no matches, the detail column shows **No Matching Help Topics**
+and a **Clear Search** button. Choose it (or clear the search field) to remove
+the query, restore all eight topics, and remove any stale detail selection.
+
 ## Dual-pane workspace
 
 Pengrid shows two file panes at the same time. Clicking or navigating in a pane

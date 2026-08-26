@@ -46,6 +46,11 @@ packaging instructions.
 - **Prefer recoverable operations:** queued mutations revalidate file identity,
   report progress, clean up cancellation, and offer Retry or Undo only when the
   captured state still makes them safe.
+- **Keep help close at hand:** choose **Help > Pengrid Help** or press
+  **Command-?** to browse eight bundled offline topics, switch between Korean
+  and English, and search both localized copies with literal, case/diacritic-
+  folded, Korean-initial, and mixed queries. The optional GitHub guide and
+  release buttons are the only Help actions that require internet access.
 
 ## What You Can Do
 
