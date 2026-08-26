@@ -33,4 +33,34 @@ import Testing
             #expect(!copy.externalOpenFailedMessage.isEmpty)
         }
     }
+
+    @Test func catalogHasTheSameCompleteStableTopicSetInBothLanguages() throws {
+        let expected = HelpTopicID.allCases
+        for language in HelpLanguage.allCases {
+            let topics = HelpCatalog.topics(for: language)
+            #expect(topics.map(\.id) == expected)
+            #expect(Set(topics.map(\.id)).count == expected.count)
+            for topic in topics {
+                #expect(!topic.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                #expect(!topic.summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                #expect(!topic.sections.isEmpty)
+                #expect(topic.sections.allSatisfy { !$0.heading.isEmpty && (!$0.paragraphs.isEmpty || !$0.bulletItems.isEmpty) })
+                #expect(HelpCatalog.topic(id: topic.id, language: language) == topic)
+            }
+        }
+    }
+
+    @Test func catalogCoversApprovedProductCapabilities() {
+        let ko = String(describing: HelpCatalog.topics(for: .korean))
+        let en = String(describing: HelpCatalog.topics(for: .english)).lowercased()
+        for term in ["듀얼", "초성", "작업 센터", "Undo", "암호", "Google Drive", "OneDrive", "개인정보"] { #expect(ko.contains(term)) }
+        for term in ["dual", "initial", "operation center", "undo", "password", "google drive", "onedrive", "privacy"] { #expect(en.contains(term)) }
+    }
+
+    @Test func onlyRelevantTopicsExposeAllowlistedOnlineDestinations() throws {
+        let topics = HelpCatalog.topics(for: .english)
+        #expect(try #require(topics.first { $0.id == .gettingStarted }).externalDestination == .userGuide)
+        #expect(try #require(topics.first { $0.id == .troubleshooting }).externalDestination == .releases)
+        #expect(topics.filter { ![.gettingStarted, .troubleshooting].contains($0.id) }.allSatisfy { $0.externalDestination == nil })
+    }
 }
