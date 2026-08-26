@@ -82,29 +82,14 @@ struct HelpView: View {
         language: HelpLanguage
     ) {
         openURL(destination.url(for: language)) { accepted in
-            let result: ExternalOpenResult = accepted ? .systemAction : .discarded
-            handleExternalOpen(result, language: language)
+            if accepted {
+                externalErrorMessage = nil
+            } else {
+                externalErrorMessage = HelpPresentationCopy.value(for: language)
+                    .externalOpenFailedMessage
+            }
         }
     }
-
-    private func handleExternalOpen(
-        _ result: ExternalOpenResult,
-        language: HelpLanguage
-    ) {
-        switch result {
-        case .discarded:
-            externalErrorMessage = HelpPresentationCopy.value(for: language)
-                .externalOpenFailedMessage
-        case .handled, .systemAction:
-            externalErrorMessage = nil
-        }
-    }
-}
-
-private enum ExternalOpenResult {
-    case handled
-    case discarded
-    case systemAction
 }
 
 private struct HelpSidebarView: View {

@@ -25,9 +25,12 @@ import Testing
 
     @Test func rejectedExternalOpenProducesBoundedLocalFeedback() throws {
         let source = try source(named: "Views/HelpView.swift")
-        #expect(source.contains("case .discarded"))
+        #expect(source.contains("openURL(destination.url(for: language)) { accepted in"))
+        #expect(source.contains("if accepted"))
+        #expect(source.contains("externalErrorMessage = nil"))
         #expect(source.contains("externalOpenFailedMessage"))
         #expect(source.contains("externalErrorMessage"))
+        #expect(!source.contains("ExternalOpenResult"))
     }
 }
 
