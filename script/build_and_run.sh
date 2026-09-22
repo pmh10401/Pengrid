@@ -9,7 +9,7 @@ NOTICE_NAME="THIRD_PARTY_NOTICES.md"
 BUNDLE_ID="com.minho.BloomFileManager"
 MIN_SYSTEM_VERSION="15.0"
 APP_VERSION="1.3.0"
-BUILD_VERSION="10"
+BUILD_VERSION="11"
 DEFAULT_XCODE_DEVELOPER_DIR="/Applications/Xcode.app/Contents/Developer"
 
 if [[ -z "${DEVELOPER_DIR:-}" && -d "$DEFAULT_XCODE_DEVELOPER_DIR" ]]; then

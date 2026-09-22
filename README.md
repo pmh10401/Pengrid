@@ -16,14 +16,13 @@ free, open-source macOS app.
 ## Download
 
 The current release is
-[Pengrid 1.3.0 Developer Preview 8](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.8).
+[Pengrid 1.3.0 Developer Preview 9](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.9).
 
-- [Download Pengrid.dmg](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.8/Pengrid.dmg)
-- Version: **1.3.0 (build 10)**
+- [Download Pengrid.dmg](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.9/Pengrid.dmg)
+- Version: **1.3.0 (build 11)**
 - Requirements: **Apple Silicon Mac, macOS 15 or later**
-- Verification: **1,931 automated tests in 123 suites**
-- DMG SHA-256:
-  `fa5b27b9cede4d053af37ff3a1f672c42083ea59652fe518675ed4f28730b5c5`
+- Verification: **1,971 automated tests in 126 suites (7 environment-dependent tests skipped)**
+- DMG SHA-256: [SHA256SUMS.txt](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.9/SHA256SUMS.txt)
 
 Open the DMG, then copy `Pengrid.app` to `Applications`.
 
@@ -62,8 +61,8 @@ destination captured when the command starts.
 
 ### Jump, create, and select with focused commands
 
-> The productivity workflows in this section are included in Developer Preview
-> 8 and in the current source tree.
+> These productivity workflows, including **Select by Name…**, are included
+> in Developer Preview 9.
 
 Press **Command-P** for **Quick Go…**, a scene-local typed palette. Its fixed
 candidate set contains safe commands (**Create Folder**, **Create File**,
@@ -87,6 +86,24 @@ The active pane's currently visible, unfiltered rows are the scope for
 These commands are disabled while pane filtering or text editing is active.
 Select Same Extension additionally requires exactly one visible regular file
 with a real extension.
+
+**Select by Name…** (**Edit > Select by Name…**, **Option-Command-S**) is
+included in Developer Preview 9.
+It matches the active pane's visible, unfiltered rows—including folders,
+packages, and symbolic links—by their full displayed basenames. `*` matches
+zero or more characters and `?` matches one grapheme, so `*.pdf` and
+`보고서_?.xlsx` are examples; `*` includes every visible item type. Matching is
+case-insensitive with canonical Korean composed/decomposed equivalence, while
+accents and whitespace remain significant. The sheet shows a live match count,
+and **Select** replaces the selection (clearing it when there are no matches).
+Empty input disables **Select**, while **Cancel** or **Escape** preserves the
+selection. Filtering, loading, text editing, another workspace sheet, or a
+folder comparison or Storage Inspector overlay hiding the ordinary pane
+disables the command. Only one wildcard pattern is supported: regexes,
+brackets, escapes, multiple patterns, recursion, and file reads or writes are
+not supported. If the folder listing changes while the sheet is open, applying
+is rejected; cancel and reopen it. Focus returns to the table when the same
+pane and tab remain.
 
 The interaction ideas for new-file and advanced-selection commands were studied
 from [Nimble Commander](https://github.com/mikekazakov/nimble-commander), and
@@ -125,7 +142,7 @@ Duplicate, New Folder with Selection, rename, archives, and Trash.
 
 Pengrid captures the visible selection before dispatch, so later navigation
 or selection changes cannot silently redirect an action. Read the
-[release notes](docs/release-notes-v1.3.0-developer-preview.8.md) for the exact
+[release notes](docs/release-notes-v1.3.0-developer-preview.9.md) for the exact
 selection and capability rules.
 
 Press **Command-I**, or choose **Get Info** from a row's context menu, to open a
@@ -144,10 +161,10 @@ Folder with Selection, and one-way folder synchronization use staged
 publication and conservative rollback checks. Synchronization is
 non-retryable and is not exposed as Undo after it finishes.
 
-> Transferred-content verification is included in Developer Preview 8. It is
+> Transferred-content verification is included in Developer Preview 9. It is
 > optional and remains off by default.
 
-Developer Preview 8 and source builds provide a default-off **File Operations**
+Developer Preview 9 and source builds provide a default-off **File Operations**
 setting named **Verify transferred file contents before publishing**. When
 enabled, copy, Duplicate,
 cross-volume move, and reviewed synchronization copy/replace actions compare
@@ -189,6 +206,7 @@ support, and privacy-preserving status text.
 | **Option-Command-A** | Select all visible rows in the active pane |
 | **Option-Command-I** | Invert the active pane's visible selection |
 | **Option-Command-E** | Select visible rows with the same extension |
+| **Option-Command-S** | Select visible rows by one filename wildcard pattern |
 | **Option-Command-C** | Copy full paths in visible order |
 
 Batch Rename and the remaining context actions are available from the File
@@ -205,7 +223,7 @@ Operations menu or a row's context menu.
 - 7z, RAR, password-protected TAR, Developer ID signing, and notarization are
   not included in this Developer Preview.
 - Finder tag editing remains future work. Optional transferred-content
-  verification is included in Developer Preview 8. It excludes resource forks,
+  verification is included in Developer Preview 9. It excludes resource forks,
   extended attributes, ACLs, ownership, flags,
   creation dates, hard-link relationships, and sparse allocation.
 - Manual checks that have not been run remain explicitly marked `NOT RUN` in
@@ -235,7 +253,7 @@ retain the internal name `BloomFileManager` for compatibility.
 ## Documentation
 
 - [Detailed feature guide](docs/user-guide.md)
-- [Developer Preview 8 release notes](docs/release-notes-v1.3.0-developer-preview.8.md)
+- [Developer Preview 9 release notes](docs/release-notes-v1.3.0-developer-preview.9.md)
 - [Release and packaging guide](docs/release.md)
 - [Architecture notes](docs/architecture.md)
 - [Current limitations](docs/current-limitations.md)

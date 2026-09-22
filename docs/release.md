@@ -6,8 +6,22 @@ Pengrid is distributed directly for Apple Silicon Macs running macOS 15 or newer
 
 ## Current published Developer Preview
 
+[Pengrid 1.3.0 Developer Preview 9](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.9)
+is the current release: version **1.3.0, build 11**, Apple Silicon, macOS 15+.
+It adds native bilingual Help, filename-pattern selection, text Select All,
+and SwiftPM isolated-test compatibility fixes.
+
+- [Download Pengrid.dmg](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.9/Pengrid.dmg)
+- [SHA256SUMS.txt](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.9/SHA256SUMS.txt)
+- [Changes, verification, and limitations](release-notes-v1.3.0-developer-preview.9.md)
+
+This is an ad-hoc signed, non-notarized prerelease. Physical cloud-provider and
+accessibility checks not run for this candidate remain manual gates.
+
+## Previous release: Developer Preview 8
+
 [Pengrid 1.3.0 Developer Preview 8](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.8)
-is the current free binary release:
+is the previous free binary release:
 
 - DMG: [Pengrid.dmg](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.8/Pengrid.dmg)
 - Tag: `v1.3.0-developer-preview.8`

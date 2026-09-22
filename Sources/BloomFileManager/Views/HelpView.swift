@@ -101,6 +101,7 @@ struct HelpView: View {
 }
 
 private struct HelpSidebarView: View {
+    @FocusState private var searchFocused: Bool
     @Binding var query: String
     let results: [HelpTopic]
     @Binding var selectedTopicID: HelpTopicID?
@@ -110,6 +111,7 @@ private struct HelpSidebarView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             TextField(copy.searchPrompt, text: $query)
+                .focused($searchFocused)
                 .textFieldStyle(.roundedBorder)
                 .accessibilityIdentifier(AccessibilityIdentifiers.helpSearch)
                 .accessibilityLabel(copy.searchPrompt)
@@ -133,6 +135,7 @@ private struct HelpSidebarView: View {
             .accessibilityHint(topicListHint)
         }
         .padding(.vertical, 8)
+        .focusedSceneValue(\.standaloneTextInputFocused, searchFocused)
     }
 
     private var topicListLabel: String {

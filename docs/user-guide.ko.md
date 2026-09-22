@@ -2,13 +2,13 @@
 
 **한국어** · [English](user-guide.md) · [README](../README.ko.md)
 
-이 문서는 Pengrid 1.3.0 Developer Preview 8과 현재 소스 트리의 사용자 관점
+이 문서는 Pengrid 1.3.0 Developer Preview 9와 현재 소스 트리의 사용자 관점
 동작, 안전 경계와 의도적으로 제공하지 않는 기능을 설명합니다.
 
 ## 요구 사항과 설치
 
 현재 Pengrid는 macOS 15 이상이 설치된 Apple Silicon Mac을 지원합니다.
-[Developer Preview 8 릴리스](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.8)에서
+[Developer Preview 9 릴리스](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.9)에서
 DMG를 다운로드해 열고 `Pengrid.app`을 `Applications` 폴더로 복사하세요.
 
 무료 DMG는 ad-hoc 방식으로 서명되었으며 Developer ID 서명과 Apple 공증을
@@ -22,6 +22,8 @@ macOS 보안 기능을 비활성화하라고 안내하지 않습니다. 파일 �
 도움말 창을 엽니다. 이 명령은 하나의 창만 사용하므로 다시 실행해도 중복 창을
 만들지 않고 같은 도움말 창을 엽니다. 창 왼쪽에는 검색 가능한 항목 목록이,
 오른쪽에는 선택한 항목의 상세 내용이 표시됩니다.
+
+Command-?가 macOS 도움말 메뉴 검색을 먼저 열면 **Pengrid Help**를 선택하세요.
 
 ### 항목을 보고 검색하고 언어 바꾸기
 
@@ -107,6 +109,7 @@ Pengrid는 두 파일 패널을 동시에 표시합니다. 패널을 클릭하�
 | Select All Visible | **Option-Command-A** |
 | Invert Selection | **Option-Command-I** |
 | Select Same Extension | **Option-Command-E** |
+| Select by Name… | **Option-Command-S** |
 | 복사 및 붙여넣기 | **Command-C**, **Command-V** |
 | 뒤로 및 앞으로 | **Command-[**, **Command-]** |
 | 상위 폴더 | **Command-Up Arrow** |
@@ -154,8 +157,8 @@ Pengrid는 재시작할 때 작업 공간 폴더, 정렬, 분할 위치, 활성 
 
 ## Quick Go, 새 파일 및 표시 행 선택
 
-> 이 절의 생산성 작업 흐름은 Developer Preview 8과 현재 소스 트리에 포함되어
-> 있습니다.
+> **Select by Name…**를 포함한 이 절의 생산성 기능은 Developer Preview 9에
+> 포함되어 있습니다.
 
 ### Quick Go… 팔레트
 
@@ -198,6 +201,36 @@ Undo는 보수적으로 제공합니다. 새 파일의 정확한 동일성과 �
 모두 비활성화됩니다. Select Same Extension은 실제 확장자가 있는 표시된 일반
 파일 하나를 정확히 선택해야 활성화됩니다. 폴더, 패키지, 확장자가 없는 파일 및
 표시 범위 밖의 기준 항목으로는 사용할 수 없습니다.
+
+### Select by Name…
+
+**Edit > Select by Name…** 명령(**Option-Command-S**)은
+Developer Preview 9에 포함되어 있습니다. 활성 패널의
+현재 표시된 필터링되지 않은 행을 폴더·패키지·심볼릭 링크까지 포함해 화면에
+표시된 기본 이름 전체와 비교합니다.
+
+시트는 하나의 와일드카드 패턴만 받습니다.
+
+- `*`는 0개 이상의 문자, `?`는 한 개의 grapheme(한글 음절 등)과 일치합니다.
+  예를 들어 `*.pdf`는 `.pdf`로 끝나는 표시 이름을, `보고서_?.xlsx`는 해당
+  위치의 한 grapheme을 찾습니다. `*`는 표시된 모든 항목 종류를 포함합니다.
+- 매칭은 대소문자를 구분하지 않으며 한글의 정규 조합·분해 표기를 같은 것으로
+  봅니다. 악센트는 구분하고 공백은 리터럴로 처리합니다.
+- 정규식, 대괄호, 이스케이프, 여러 패턴, 재귀 및 파일 읽기·쓰기는 지원하지
+  않습니다.
+
+입력창에서 **Command-A**는 패턴 텍스트 전체를 선택합니다. 파일 행 전체를
+선택하는 **Option-Command-A**와는 별개입니다.
+
+시트에는 실시간 일치 개수가 표시됩니다. 입력이 비어 있으면 **Select**가
+비활성화되고, **Select**는 현재 선택을 대체하며 일치 항목이 0개면 선택을
+비웁니다. **Cancel** 또는 **Escape**는 선택을 유지합니다. 패널이 필터링
+중이거나 로딩 중, 텍스트를 편집 중이거나 다른 작업 공간 시트가 표시된 동안에는
+명령이 비활성화됩니다. 폴더 비교 또는 Storage Inspector 오버레이가 일반
+패널을 가리고 있을 때에도 비활성화됩니다. 시트를 연 동안 폴더 목록이 바뀌면
+적용이 거부되므로
+취소 후 시트를 다시 여세요. 같은 패널과 탭이 계속 활성 상태이면 표 포커스를
+복원합니다.
 
 ### 동작 참고 출처
 
@@ -466,7 +499,7 @@ Duplicate, New Folder with Selection은 명령을 표시할 때 로컬 파일 �
 
 ### 선택 가능한 전송 내용 검증
 
-> 이 기능은 Developer Preview 8과 현재 소스 트리에 포함되어 있으며 기본값은
+> 이 기능은 Developer Preview 9와 현재 소스 트리에 포함되어 있으며 기본값은
 > 꺼짐입니다.
 
 **Settings > File Operations**에서 **Verify transferred file contents before
@@ -775,7 +808,7 @@ Pengrid는 패널, 검색 컨트롤, 미리보기 상태, 압축 단계, 작업 
 
 ## 현재 제한 사항
 
-Developer Preview 8과 현재 소스 트리는 다음 기능을 의도적으로 제공하지 않습니다.
+Developer Preview 9와 현재 소스 트리는 다음 기능을 의도적으로 제공하지 않습니다.
 
 - Intel Mac 또는 macOS 14 이하 지원
 - Developer ID 서명 또는 Apple notarization

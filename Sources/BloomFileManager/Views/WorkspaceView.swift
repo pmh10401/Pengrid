@@ -14,11 +14,24 @@ struct WorkspaceModalPresentationState: Equatable {
     private(set) var isSynchronizationReviewPresented = false
     private(set) var isCommandPalettePresented = false
 
+    private(set) var isNamePatternPresented = false
+
+    mutating func beginNamePatternPresentation() -> Bool {
+        guard allowsOtherModalPresentation else { return false }
+        isNamePatternPresented = true
+        return true
+    }
+
+    mutating func endNamePatternPresentation() {
+        isNamePatternPresented = false
+    }
+
     var allowsOtherModalPresentation: Bool {
         presentedPasswordRequestID == nil
             && !isSelectionFolderPresented
             && !isSynchronizationReviewPresented
             && !isCommandPalettePresented
+            && !isNamePatternPresented
     }
 
     mutating func beginCommandPalettePresentation() -> Bool {
@@ -51,6 +64,7 @@ struct WorkspaceModalPresentationState: Equatable {
             && !conflictPresented
             && !searchPresented
             && !isCommandPalettePresented
+            && !isNamePatternPresented
             && !batchRenamePresented
             && !passwordPresented
             && !synchronizationReviewPresented
@@ -78,6 +92,7 @@ struct WorkspaceModalPresentationState: Equatable {
             && !conflictPresented
             && !searchPresented
             && !isCommandPalettePresented
+            && !isNamePatternPresented
             && !batchRenamePresented
             && !passwordPresented
             && !selectionFolderPresented
@@ -110,6 +125,7 @@ struct WorkspaceModalPresentationState: Equatable {
         guard !conflictPresented,
               !searchPresented,
               !isCommandPalettePresented,
+              !isNamePatternPresented,
               !batchRenamePresented,
               !selectionFolderPresented,
               !synchronizationReviewPresented
@@ -180,6 +196,8 @@ struct WorkspaceView: View {
     @State private var profilesPresented = false
     @State private var commandPalette = CommandPaletteStore()
     @State private var commandPaletteOrigin: CommandPaletteOrigin?
+    @State private var namePatternRequest: NamePatternSelectionRequest?
+    @State private var namePatternPresented = false
     @State private var smartSearchOwner = UUID()
 
     private var workspace: WorkspaceState {
@@ -202,6 +220,7 @@ struct WorkspaceView: View {
         .focusedSceneValue(\.workspaceTabTeardown, teardownActiveWorkspace)
         .focusedSceneValue(\.workspaceProfilesPresentation, { profilesPresented = true })
         .focusedSceneValue(\.workspaceCommandPalettePresentation, presentCommandPalette)
+        .focusedSceneValue(\.workspaceNamePatternPresentation, presentNamePattern)
         .focusedSceneValue(\.workspaceSmartSearchPresentation, presentSmartSearch)
         .focusedSceneValue(\.comparisonCoordinator, comparison)
         .focusedSceneValue(\.storageAnalysisStore, storage)
@@ -223,6 +242,7 @@ struct WorkspaceView: View {
         .onDisappear {
             workspaceSession.flushPersistence()
             smartSearch.dismiss(owner: smartSearchOwner)
+            namePatternDidDismiss()
         }
         .onChange(of: scenePhase) { _, phase in
             guard phase != .active else { return }
@@ -259,6 +279,15 @@ struct WorkspaceView: View {
         }
         .sheet(isPresented: commandPalettePresentation, onDismiss: commandPaletteDidDismiss) {
             CommandPaletteView(store: commandPalette)
+        }
+        .sheet(isPresented: $namePatternPresented, onDismiss: namePatternDidDismiss) {
+            if let request = namePatternRequest {
+                NamePatternSelectionView(
+                    request: request,
+                    workspace: workspace,
+                    tabID: workspaceSession.activeTabID
+                )
+            }
         }
         .sheet(isPresented: batchRenamePresentation) {
             BatchRenameSheet(model: batchRename) { plan in
@@ -483,11 +512,13 @@ struct WorkspaceView: View {
             batchRenamePresented: batchRename.isPresented,
             pendingTrashPresented: workspace.pendingTrashRequest != nil,
             synchronizationReviewPresented: comparison.folderSynchronizationReview != .idle,
-            commandPalettePresented: modalPresentationState.isCommandPalettePresented
+            commandPalettePresented: modalPresentationState.isCommandPalettePresented,
+            namePatternPresented: modalPresentationState.isNamePatternPresented
         ).isPresented
     }
 
     private func teardownActiveWorkspace() {
+        namePatternDidDismiss()
         WorkspaceTabTeardownActions.perform(
             stopComparison: comparison.stop,
             exitStorage: storage.exit,
@@ -604,9 +635,11 @@ struct WorkspaceView: View {
 
     private var trashConfirmationIsPresented: Binding<Bool> {
         Binding {
-            !modalPresentationState.isCommandPalettePresented && workspace.pendingTrashRequest != nil
+            !modalPresentationState.isCommandPalettePresented
+                && !modalPresentationState.isNamePatternPresented
+                && workspace.pendingTrashRequest != nil
         } set: { isPresented in
-            if !isPresented {
+            if !isPresented, !modalPresentationState.isNamePatternPresented {
                 workspace.dismissTrashConfirmation()
             }
         }
@@ -621,10 +654,12 @@ struct WorkspaceView: View {
 
     private var profilesPresentation: Binding<Bool> {
         Binding {
-            !modalPresentationState.isCommandPalettePresented && profilesPresented
+            !modalPresentationState.isCommandPalettePresented
+                && !modalPresentationState.isNamePatternPresented && profilesPresented
         } set: { isPresented in
             if isPresented {
-                guard !modalPresentationState.isCommandPalettePresented else { return }
+                guard !modalPresentationState.isCommandPalettePresented,
+                      !modalPresentationState.isNamePatternPresented else { return }
                 profilesPresented = true
             } else {
                 profilesPresented = false
@@ -640,6 +675,31 @@ struct WorkspaceView: View {
                 commandPalette.dismiss()
             }
         }
+    }
+
+    private func presentNamePattern() {
+        guard workspace.activeTextEditingSession == nil,
+              !comparison.isActive,
+              !storage.isActive,
+              !workspace.activePane.isFilterPresented,
+              !workspace.activePane.isLoading,
+              !workspaceModalIsPresented,
+              !selectionFolder.isPresented,
+              passwordCoordinator.pendingRequest == nil,
+              modalPresentationState.beginNamePatternPresentation()
+        else { return }
+        let request = NamePatternSelectionRequest(workspace: workspace, tabID: workspaceSession.activeTabID)
+        workspace.beginTextEditing(request.editingSession)
+        namePatternRequest = request
+        namePatternPresented = true
+    }
+
+    private func namePatternDidDismiss() {
+        guard let request = namePatternRequest else { return }
+        namePatternRequest = nil
+        namePatternPresented = false
+        modalPresentationState.endNamePatternPresentation()
+        request.finish(in: workspace, tabID: workspaceSession.activeTabID)
     }
 
     private func presentCommandPalette() {

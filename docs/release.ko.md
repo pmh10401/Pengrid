@@ -8,7 +8,21 @@ App Sandbox entitlement를 사용하지 않습니다. 실행 파일명과 호환
 
 ## 현재 게시된 Developer Preview
 
-현재 무료 바이너리 릴리스는
+[Pengrid 1.3.0 Developer Preview 9](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.9)이
+현재 릴리스입니다. **1.3.0, 빌드 11**, Apple Silicon, macOS 15 이상을
+지원하며 한·영 도움말, 이름 패턴 선택, 텍스트 전체 선택 및 SwiftPM 격리
+테스트 호환성 수정을 포함합니다.
+
+- [Pengrid.dmg 다운로드](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.9/Pengrid.dmg)
+- [SHA256SUMS.txt](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.9/SHA256SUMS.txt)
+- [변경 사항·검증·제한](release-notes-v1.3.0-developer-preview.9.md)
+
+ad-hoc 서명이며 공증되지 않은 프리릴리스입니다. 이번 후보에서 수행하지 않은
+실제 클라우드 및 접근성 검사는 수동 검증 항목으로 남아 있습니다.
+
+## 이전 릴리스: Developer Preview 8
+
+이전 무료 바이너리 릴리스는
 [Pengrid 1.3.0 Developer Preview 8](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.8)입니다.
 
 - DMG: [Pengrid.dmg](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.8/Pengrid.dmg)

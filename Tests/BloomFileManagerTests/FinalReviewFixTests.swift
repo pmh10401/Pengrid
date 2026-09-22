@@ -173,24 +173,19 @@ struct FinalReviewFixTests {
 
     @Test func lowFileDescriptorLimitCopiesLargeNestedTreeWithBoundedHighWater() async throws {
         if ProcessInfo.processInfo.environment["BLOOM_LOW_FD_WORKER"] != "1" {
-            let buildDirectory = URL(filePath: FileManager.default.currentDirectoryPath)
-                .appending(path: ".build/debug", directoryHint: .isDirectory)
-            let testBundle = buildDirectory.appending(
-                path: "BloomFileManagerPackageTests.xctest",
-                directoryHint: .isDirectory
-            )
-            let testExecutable = testBundle.appending(path: "Contents/MacOS/BloomFileManagerPackageTests")
+            let testExecutable = try isolatedTestBundleExecutableURL()
             let process = Process()
             process.executableURL = URL(filePath: "/bin/zsh")
             process.arguments = [
                 "-c",
-                "ulimit -n 256; export DYLD_FRAMEWORK_PATH=\"$BLOOM_TEST_FRAMEWORKS\"; exec \"$BLOOM_TEST_HELPER\" --test-bundle-path \"$BLOOM_TEST_BUNDLE\" --filter 'FinalReviewFixTests.lowFileDescriptorLimitCopiesLargeNestedTreeWithBoundedHighWater' \"$BLOOM_TEST_EXECUTABLE\" --testing-library swift-testing"
+                "ulimit -n 256; export DYLD_FRAMEWORK_PATH=\"$BLOOM_TEST_FRAMEWORKS\"; if [ -n \"$BLOOM_TEST_LIBRARY_PATH\" ]; then export DYLD_LIBRARY_PATH=\"$BLOOM_TEST_LIBRARY_PATH\"; fi; exec \"$BLOOM_TEST_HELPER\" --test-bundle-path \"$BLOOM_TEST_BUNDLE\" --filter 'FinalReviewFixTests.lowFileDescriptorLimitCopiesLargeNestedTreeWithBoundedHighWater' \"$BLOOM_TEST_EXECUTABLE\" --testing-library swift-testing"
             ]
             process.currentDirectoryURL = URL(filePath: FileManager.default.currentDirectoryPath)
             var environment = ProcessInfo.processInfo.environment
             environment["BLOOM_LOW_FD_WORKER"] = "1"
             environment["BLOOM_TEST_HELPER"] = try swiftPMTestingHelperPath()
             environment["BLOOM_TEST_FRAMEWORKS"] = try swiftTestingFrameworkSearchPath()
+            environment["BLOOM_TEST_LIBRARY_PATH"] = environment["DYLD_LIBRARY_PATH"]
             environment["BLOOM_TEST_BUNDLE"] = testExecutable.path
             environment["BLOOM_TEST_EXECUTABLE"] = testExecutable.path
             process.environment = environment
@@ -1092,11 +1087,7 @@ private func runIsolatedTestIfNeeded(
     timeout: TimeInterval = 4
 ) throws -> Bool {
     guard ProcessInfo.processInfo.environment[environmentKey] != "1" else { return false }
-    let buildDirectory = URL(filePath: FileManager.default.currentDirectoryPath)
-        .appending(path: ".build/debug", directoryHint: .isDirectory)
-    let testExecutable = buildDirectory.appending(
-        path: "BloomFileManagerPackageTests.xctest/Contents/MacOS/BloomFileManagerPackageTests"
-    )
+    let testExecutable = try isolatedTestBundleExecutableURL()
     let process = Process()
     process.executableURL = URL(filePath: try swiftPMTestingHelperPath())
     process.arguments = [

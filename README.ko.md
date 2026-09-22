@@ -15,14 +15,13 @@ Pengrid는 두 패널 탐색, 재귀 검색, 미리보기, 대기열 기반 파�
 ## 다운로드
 
 현재 릴리스는
-[Pengrid 1.3.0 Developer Preview 8](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.8)입니다.
+[Pengrid 1.3.0 Developer Preview 9](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.9)입니다.
 
-- [Pengrid.dmg 다운로드](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.8/Pengrid.dmg)
-- 버전: **1.3.0 (빌드 10)**
+- [Pengrid.dmg 다운로드](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.9/Pengrid.dmg)
+- 버전: **1.3.0 (빌드 11)**
 - 요구 사항: **Apple Silicon Mac, macOS 15 이상**
-- 검증: **123개 스위트의 자동 테스트 1,931개 통과**
-- DMG SHA-256:
-  `fa5b27b9cede4d053af37ff3a1f672c42083ea59652fe518675ed4f28730b5c5`
+- 검증: **126개 스위트의 자동 테스트 1,971개 통과 (환경 의존 테스트 7개 건너뜀)**
+- DMG SHA-256: [SHA256SUMS.txt](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.9/SHA256SUMS.txt)
 
 DMG를 연 다음 `Pengrid.app`을 `Applications` 폴더로 복사하세요.
 
@@ -62,8 +61,8 @@ DMG를 연 다음 `Pengrid.app`을 `Applications` 폴더로 복사하세요.
 
 ### 집중 명령으로 이동하고 파일을 만들고 선택하기
 
-> 이 절의 생산성 작업 흐름은 Developer Preview 8과 현재 소스 트리에 포함되어
-> 있습니다.
+> **Select by Name…**를 포함한 이 절의 생산성 기능은 Developer Preview 9에
+> 포함되어 있습니다.
 
 **Command-P**를 누르면 현재 scene에만 연결된 열거형 기반의 타입 안전 **Quick Go…** 팔레트가
 열립니다. 후보는 안전한 고정 명령(**Create Folder**, **Create File**, **Show
@@ -85,6 +84,23 @@ Pengrid의 기존 한글 초성(Hangul-initial) 지원을 함께 사용합니다
 대상입니다. 패널 필터나 텍스트 편집이 활성화된 동안에는 이 명령들이
 비활성화됩니다. Select Same Extension은 표시된 일반 파일 하나를 정확히
 선택하고 실제 확장자가 있어야 사용할 수 있습니다.
+
+**Select by Name…** (**Edit > Select by Name…**, **Option-Command-S**)은 현재
+Developer Preview 9에 포함된 기능입니다.
+활성 패널의 현재 표시된 필터링되지 않은 행을 폴더·패키지·심볼릭 링크까지
+포함해 화면에 표시된 기본 이름 전체로 매칭합니다. `*`는 0개 이상의 문자,
+`?`는 한 개의 grapheme(한글 음절 등)을 뜻하므로 `*.pdf`와
+`보고서_?.xlsx`처럼 입력할 수 있으며, `*`는 표시된 모든 항목 종류를
+포함합니다. 매칭은 대소문자를 구분하지 않고 한글의 조합/분해 표기 동등성을
+적용하지만 악센트와 공백은 구분합니다. 시트에는 실시간 일치 개수가 표시되고
+**Select**는 선택을 대체하며 일치 항목이 없으면 선택을 비웁니다. 입력이
+비어 있으면 **Select**가 비활성화되고 **Cancel** 또는 **Escape**는 기존
+선택을 유지합니다. 필터링·로딩·텍스트 편집 중이거나 다른 작업 공간 시트가
+열려 있거나 폴더 비교 또는 Storage Inspector 오버레이가 일반 패널을 가리고
+있으면 사용할 수 없습니다. 하나의 와일드카드 패턴만 지원하며 정규식,
+대괄호, 이스케이프, 여러 패턴, 재귀 및 파일 읽기·쓰기는 지원하지 않습니다.
+시트를 연 동안 폴더 목록이 바뀌면 적용이 거부되므로 취소 후 다시 여세요.
+같은 패널과 탭에 남아 있으면 표 포커스를 복원합니다.
 
 새 파일 및 고급 선택 명령의 상호작용 아이디어는
 [Nimble Commander](https://github.com/mikekazakov/nimble-commander)에서,
@@ -123,7 +139,7 @@ New Folder with Selection, 이름 변경, 압축 및 Trash가 포함됩니다.
 
 Pengrid는 실행 전에 화면에 보이는 선택을 캡처하므로 이후 탐색이나 선택
 변경이 작업 목적지를 몰래 바꾸지 못합니다. 정확한 선택 및 기능 판정 규칙은
-[릴리스 노트](docs/release-notes-v1.3.0-developer-preview.8.md)를 참고하세요.
+[릴리스 노트](docs/release-notes-v1.3.0-developer-preview.9.md)를 참고하세요.
 
 **Command-I** 또는 행 컨텍스트 메뉴의 **Get Info**는 캡처한 선택 항목의
 읽기 전용 비모달 검사기를 엽니다. 하나의 항목 메타데이터나 여러 항목 요약을
@@ -139,10 +155,10 @@ Pengrid는 실행 전에 화면에 보이는 선택을 캡처하므로 이후 �
 동기화 같은 독점 트랜잭션은 단계적 게시와 보수적인 롤백 검사를 사용합니다.
 동기화는 다시 시도할 수 없고, 완료 후 Undo로 되돌리지 않습니다.
 
-> 전송 내용 검증은 Developer Preview 8에 포함되어 있습니다. 선택 기능이며
+> 전송 내용 검증은 Developer Preview 9에 포함되어 있습니다. 선택 기능이며
 > 기본값은 꺼짐입니다.
 
-Developer Preview 8과 소스 빌드에는 기본값이 꺼진 **File Operations** 설정
+Developer Preview 9와 소스 빌드에는 기본값이 꺼진 **File Operations** 설정
 **Verify transferred file contents before publishing**이 있습니다. 이 설정을
 켜면 복사, Duplicate, 다른
 볼륨으로 이동, 검토된 동기화의 복사·교체 작업에서 비공개 스테이징 결과를 게시하기
@@ -184,6 +200,7 @@ VoiceOver 레이블, Reduce Motion 및 개인정보를 노출하지 않는 상�
 | **Option-Command-A** | 활성 패널의 표시 행 모두 선택 |
 | **Option-Command-I** | 활성 패널의 표시 선택 반전 |
 | **Option-Command-E** | 같은 확장자의 표시 행 선택 |
+| **Option-Command-S** | 하나의 파일명 와일드카드 패턴으로 표시 행 선택 |
 | **Option-Command-C** | 화면 순서대로 전체 경로 복사 |
 
 Batch Rename과 나머지 컨텍스트 작업은 File Operations 메뉴 또는 행의
@@ -198,7 +215,7 @@ Batch Rename과 나머지 컨텍스트 작업은 File Operations 메뉴 또는 �
 - 7z, RAR, 암호 보호 TAR, Developer ID 서명 및 공증은 이 Developer
   Preview에 포함되지 않습니다.
 - Finder 태그 편집은 향후 작업입니다. 선택 가능한 전송 내용 검증은 Developer
-  Preview 8에 포함되어 있습니다. 리소스 포크, 확장 속성, ACL,
+  Preview 9에 포함되어 있습니다. 리소스 포크, 확장 속성, ACL,
   소유권, 플래그, 생성일, 하드 링크 관계 및 sparse allocation은 검증 범위에서
   제외합니다.
 - 실행하지 않은 수동 검증은 검증 문서에 `NOT RUN`으로 명시합니다.
@@ -227,7 +244,7 @@ open dist/Pengrid.app
 ## 문서
 
 - [상세 기능 가이드](docs/user-guide.ko.md)
-- [Developer Preview 8 릴리스 노트](docs/release-notes-v1.3.0-developer-preview.8.md)
+- [Developer Preview 9 릴리스 노트](docs/release-notes-v1.3.0-developer-preview.9.md)
 - [릴리스 및 패키징 가이드](docs/release.ko.md)
 - [아키텍처 설명](docs/architecture.md)
 - [현재 제한 사항](docs/current-limitations.ko.md)

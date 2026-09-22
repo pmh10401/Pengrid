@@ -2,14 +2,14 @@
 
 [한국어](user-guide.ko.md) · **English** · [README](../README.md)
 
-This guide describes Pengrid 1.3.0 Developer Preview 8 and the current source
+This guide describes Pengrid 1.3.0 Developer Preview 9 and the current source
 tree, including safety boundaries and deliberately omitted behavior.
 
 ## Requirements and installation
 
 Pengrid currently supports Apple Silicon Macs running macOS 15 or later.
 Download the DMG from the
-[Developer Preview 8 release](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.8),
+[Developer Preview 9 release](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.9),
 open it, and copy `Pengrid.app` to `Applications`.
 
 The free DMG is ad-hoc signed, not Developer ID signed, and not notarized.
@@ -23,6 +23,8 @@ Choose **Help > Pengrid Help** or press **Command-?** to open Pengrid's native
 Help window. The command uses one window, so choosing it again focuses the same
 Help window instead of creating a duplicate. The window has a searchable topic
 list on the left and the selected topic's detail on the right.
+
+If Command-? opens the macOS Help menu search first, choose **Pengrid Help**.
 
 ### Browse, search, and change language
 
@@ -110,6 +112,7 @@ Useful navigation and file commands include:
 | Select All Visible | **Option-Command-A** |
 | Invert Selection | **Option-Command-I** |
 | Select Same Extension | **Option-Command-E** |
+| Select by Name… | **Option-Command-S** |
 | Copy and paste | **Command-C**, **Command-V** |
 | Back and Forward | **Command-[**, **Command-]** |
 | Parent folder | **Command-Up Arrow** |
@@ -157,8 +160,8 @@ queries, or actions across a larger result set.
 
 ## Quick Go, new files, and visible-row selection
 
-> The productivity workflows in this section are included in Developer Preview
-> 8 and in the current source tree.
+> These productivity workflows, including **Select by Name…**, are included
+> in Developer Preview 9.
 
 ### Quick Go… palette
 
@@ -202,6 +205,36 @@ All three commands are disabled while the active pane is filtering or any pane
 text editor is active. Select Same Extension also requires exactly one visible
 regular-file selection with a real extension; folders, packages, extensionless
 files, and anchors outside the visible rows do not enable it.
+
+### Select by Name…
+
+The **Edit > Select by Name…** command (**Option-Command-S**) is included
+in Developer Preview 9. It operates on the active pane's currently visible, unfiltered rows,
+including folders, packages, and symbolic links, and matches each full
+displayed basename.
+
+The sheet accepts one wildcard pattern:
+
+- `*` matches zero or more characters, and `?` matches one grapheme, including
+  a Korean syllable. For example, `*.pdf` matches visible basenames ending in
+  `.pdf`, and `보고서_?.xlsx` matches one grapheme in that position. `*` includes
+  every visible item type.
+- Matching is case-insensitive and treats canonically composed and decomposed
+  Korean forms as equal. Accents remain significant, and whitespace is literal.
+- Regular expressions, brackets, escapes, multiple patterns, recursion, and file
+  reads or writes are not supported.
+
+In the input field, **Command-A** selects all pattern text. This is separate
+from **Option-Command-A**, which selects visible file rows.
+
+The sheet reports a live match count. Empty input leaves **Select** disabled;
+**Select** replaces the current selection, including clearing it for zero
+matches. **Cancel** or **Escape** preserves the selection. The command is
+disabled while the pane is filtering or loading, text editing is active, another
+workspace sheet is presented, or a folder comparison or Storage Inspector
+overlay hides the ordinary pane. If the folder listing changes while the
+sheet is open, applying is rejected; cancel and reopen the sheet. When the same
+pane and tab remain active, table focus is restored.
 
 ### Behavior inspiration
 
@@ -483,7 +516,7 @@ Undo are not blindly retried.
 
 ### Optional transferred-content verification
 
-> This feature is included in Developer Preview 8 and in the current source
+> This feature is included in Developer Preview 9 and in the current source
 > tree. It remains off by default.
 
 Open **Settings > File Operations** and enable **Verify transferred file
@@ -817,7 +850,7 @@ documents.
 
 ## Current limitations
 
-Developer Preview 8 and the current source tree deliberately do not provide:
+Developer Preview 9 and the current source tree deliberately do not provide:
 
 - Intel Mac or macOS 14-and-earlier support;
 - Developer ID signing or Apple notarization;

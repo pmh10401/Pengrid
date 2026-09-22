@@ -233,6 +233,200 @@ struct PaneSelectionActionsTests {
             ) == nil
         )
     }
+
+    @Test func matchingNamePatternReturnsNilOnlyForAnEmptyPattern() {
+        let directory = URL(filePath: "/selection")
+        let blank = makeSelectionItem(named: " ", in: directory)
+
+        #expect(
+            PaneSelectionActions.matchingNamePattern("", visibleItems: [blank]) == nil
+        )
+        #expect(
+            PaneSelectionActions.matchingNamePattern(" ", visibleItems: [blank])
+                == Set([blank.url])
+        )
+    }
+
+    @Test func matchingNamePatternMatchesTheWholeDisplayedNameWithWildcards() {
+        let directory = URL(filePath: "/selection")
+        let exact = makeSelectionItem(named: "report.txt", in: directory)
+        let longer = makeSelectionItem(named: "report.txt.bak", in: directory)
+        let unrelated = makeSelectionItem(named: "my-report.txt", in: directory)
+
+        #expect(
+            PaneSelectionActions.matchingNamePattern(
+                "report.???",
+                visibleItems: [exact, longer, unrelated]
+            ) == Set([exact.url])
+        )
+    }
+
+    @Test func matchingNamePatternTreatsRepeatedStarsAsAZeroOrMoreWildcard() {
+        let directory = URL(filePath: "/selection")
+        let exact = makeSelectionItem(named: "abc", in: directory)
+        let separated = makeSelectionItem(named: "a---b---c", in: directory)
+        let missingComponent = makeSelectionItem(named: "ac", in: directory)
+
+        #expect(
+            PaneSelectionActions.matchingNamePattern(
+                "a**b***c",
+                visibleItems: [exact, separated, missingComponent]
+            ) == Set([exact.url, separated.url])
+        )
+    }
+
+    @Test func matchingNamePatternTreatsPunctuationAsLiteral() {
+        let directory = URL(filePath: "/selection")
+        let literal = FileItem(
+            url: directory.appending(path: "opaque-literal"),
+            name: "../[draft].txt",
+            isDirectory: false,
+            isPackage: false,
+            modifiedAt: nil,
+            byteSize: 1,
+            typeDescription: "Text"
+        )
+        let bracketCandidate = FileItem(
+            url: directory.appending(path: "opaque-candidate"),
+            name: "../d.txt",
+            isDirectory: false,
+            isPackage: false,
+            modifiedAt: nil,
+            byteSize: 1,
+            typeDescription: "Text"
+        )
+
+        #expect(
+            PaneSelectionActions.matchingNamePattern(
+                "../[draft].txt",
+                visibleItems: [literal, bracketCandidate]
+            ) == Set([literal.url])
+        )
+    }
+
+    @Test func matchingNamePatternIgnoresCaseButPreservesDiacritics() {
+        let directory = URL(filePath: "/selection")
+        let upper = makeSelectionItem(named: "RÉSUMÉ.txt", in: directory)
+        let lower = makeSelectionItem(named: "résumé.txt", in: directory)
+        let unaccented = makeSelectionItem(named: "resume.txt", in: directory)
+
+        #expect(
+            PaneSelectionActions.matchingNamePattern(
+                "résumé.TXT",
+                visibleItems: [upper, lower, unaccented]
+            ) == Set([upper.url, lower.url])
+        )
+    }
+
+    @Test func matchingNamePatternNormalizesDecomposedHangulAndCountsQuestionMarksAsCharacters() {
+        let directory = URL(filePath: "/selection")
+        let decomposedSingle = makeSelectionItem(
+            named: "한.txt".decomposedStringWithCanonicalMapping,
+            in: directory
+        )
+        let composedSingle = makeSelectionItem(named: "한.txt", in: directory)
+        let composedDouble = makeSelectionItem(named: "한글.txt", in: directory)
+
+        #expect(
+            PaneSelectionActions.matchingNamePattern(
+                "?.txt",
+                visibleItems: [decomposedSingle, composedSingle, composedDouble]
+            ) == Set([decomposedSingle.url, composedSingle.url])
+        )
+    }
+
+    @Test func matchingNamePatternCountsCaseFoldExpansionsAsOneQuestionMarkCharacter() {
+        let directory = URL(filePath: "/selection")
+        let sharpS = makeSelectionItem(named: "ß.txt", in: directory)
+        let uppercaseSharpS = makeSelectionItem(named: "ẞ.txt", in: directory)
+        let ligature = makeSelectionItem(named: "ﬃ.txt", in: directory)
+        let emoji = makeSelectionItem(named: "😀.txt", in: directory)
+
+        #expect(
+            PaneSelectionActions.matchingNamePattern(
+                "?.txt",
+                visibleItems: [sharpS, uppercaseSharpS, ligature, emoji]
+            ) == Set([sharpS.url, uppercaseSharpS.url, ligature.url, emoji.url])
+        )
+    }
+
+    @Test func matchingNamePatternTreatsComposedAndDecomposedHangulAsEqualForLiteralNames() {
+        let directory = URL(filePath: "/selection")
+        let composed = makeSelectionItem(named: "한글.txt", in: directory)
+        let decomposed = makeSelectionItem(
+            named: "한글.txt".decomposedStringWithCanonicalMapping,
+            in: directory
+        )
+
+        #expect(
+            PaneSelectionActions.matchingNamePattern(
+                "한글.txt",
+                visibleItems: [composed, decomposed]
+            ) == Set([composed.url, decomposed.url])
+        )
+    }
+
+    @Test func matchingNamePatternUsesCaseFoldingForGreekSigmaVariants() {
+        let directory = URL(filePath: "/selection")
+        let finalSigma = makeSelectionItem(named: "ς.txt", in: directory)
+        let uppercaseSigma = makeSelectionItem(named: "Σ.txt", in: directory)
+
+        #expect(
+            PaneSelectionActions.matchingNamePattern(
+                "σ.txt",
+                visibleItems: [finalSigma, uppercaseSigma]
+            ) == Set([finalSigma.url, uppercaseSigma.url])
+        )
+    }
+
+    @Test func matchingNamePatternIncludesAllMatchingVisibleItemKinds() {
+        let directory = URL(filePath: "/selection")
+        let file = makeSelectionItem(named: "file.entry", in: directory)
+        let folder = makeSelectionItem(
+            named: "folder.entry",
+            in: directory,
+            isDirectory: true
+        )
+        let symlink = makeSelectionItem(
+            named: "link.entry",
+            in: directory,
+            isSymbolicLink: true,
+            isRegularFile: false
+        )
+
+        #expect(
+            PaneSelectionActions.matchingNamePattern(
+                "*.entry",
+                visibleItems: [file, folder, symlink]
+            ) == Set([file.url, folder.url, symlink.url])
+        )
+    }
+
+    @Test func matchingNamePatternReturnsOnlyURLsFromTheSuppliedVisibleItems() {
+        let directory = URL(filePath: "/selection")
+        let visible = makeSelectionItem(named: "visible.txt", in: directory)
+        let omitted = makeSelectionItem(named: "omitted.txt", in: directory)
+
+        #expect(
+            PaneSelectionActions.matchingNamePattern(
+                "*.txt",
+                visibleItems: [visible]
+            ) == Set([visible.url])
+        )
+        #expect(omitted.url != visible.url)
+    }
+
+    @Test func matchingNamePatternReturnsAnEmptySetWhenNothingMatches() {
+        let directory = URL(filePath: "/selection")
+        let visible = makeSelectionItem(named: "visible.txt", in: directory)
+
+        #expect(
+            PaneSelectionActions.matchingNamePattern(
+                "*.pdf",
+                visibleItems: [visible]
+            ) == Set<URL>()
+        )
+    }
 }
 
 private func makeSelectionItem(

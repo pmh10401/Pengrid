@@ -89,9 +89,9 @@ test_release_tests_run_nonparallel() {
 
 test_version_13_bundle_version_is_declared() {
   assert_file_contains "$SOURCE_SCRIPT" 'APP_VERSION="1.3.0"'
-  assert_file_contains "$SOURCE_SCRIPT" 'BUILD_VERSION="10"'
+  assert_file_contains "$SOURCE_SCRIPT" 'BUILD_VERSION="11"'
   assert_file_contains "$SOURCE_BUILD_SCRIPT" 'APP_VERSION="1.3.0"'
-  assert_file_contains "$SOURCE_BUILD_SCRIPT" 'BUILD_VERSION="10"'
+  assert_file_contains "$SOURCE_BUILD_SCRIPT" 'BUILD_VERSION="11"'
 }
 
 test_full_xcode_fallback_is_declared() {

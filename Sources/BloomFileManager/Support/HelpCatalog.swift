@@ -298,7 +298,8 @@ enum HelpCatalog {
                         "Command-P — Quick Go… 팔레트",
                         "Option-Command-A — 표시 행 모두 선택",
                         "Option-Command-I — 표시 선택 반전",
-                        "Option-Command-E — 같은 확장자의 표시 행 선택"
+                        "Option-Command-E — 같은 확장자의 표시 행 선택",
+                        "Option-Command-S — 파일명 패턴으로 선택 (예: *.pdf, 보고서_?.xlsx). 일치 개수를 확인한 뒤 선택을 바꾸며, 취소하면 기존 선택을 유지합니다."
                     ]
                 ),
                 HelpSection(
@@ -644,7 +645,8 @@ enum HelpCatalog {
                         "Command-P — Quick Go… palette",
                         "Option-Command-A — Select all visible rows",
                         "Option-Command-I — Invert the visible selection",
-                        "Option-Command-E — Select visible rows with the same extension"
+                        "Option-Command-E — Select visible rows with the same extension",
+                        "Option-Command-S — Select by Name… (for example, *.pdf or 보고서_?.xlsx). Review the match count before replacing selection; Cancel preserves it."
                     ]
                 ),
                 HelpSection(

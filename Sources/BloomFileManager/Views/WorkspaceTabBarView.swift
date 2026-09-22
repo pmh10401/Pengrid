@@ -64,6 +64,7 @@ struct WorkspaceTabModalPolicy: Equatable {
     var pendingTrashPresented = false
     var synchronizationReviewPresented = false
     var commandPalettePresented = false
+    var namePatternPresented = false
 
     var isPresented: Bool {
         profilesPresented
@@ -75,6 +76,7 @@ struct WorkspaceTabModalPolicy: Equatable {
             || pendingTrashPresented
             || synchronizationReviewPresented
             || commandPalettePresented
+            || namePatternPresented
     }
 }
 

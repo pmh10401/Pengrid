@@ -1611,11 +1611,7 @@ private func runIsolatedManifestTestIfNeeded(
         return false
     }
 
-    let buildDirectory = URL(filePath: FileManager.default.currentDirectoryPath)
-        .appending(path: ".build/debug", directoryHint: .isDirectory)
-    let testExecutable = buildDirectory.appending(
-        path: "BloomFileManagerPackageTests.xctest/Contents/MacOS/BloomFileManagerPackageTests"
-    )
+    let testExecutable = try isolatedTestBundleExecutableURL()
     let process = Process()
     process.executableURL = URL(filePath: try manifestSwiftPMTestingHelperPath())
     process.arguments = [

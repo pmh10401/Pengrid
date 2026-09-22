@@ -62,9 +62,9 @@ import Testing
     #expect(InlineRenameSelection.range(for: "Folder.name", isDirectory: true) == NSRange(location: 0, length: 11))
 }
 
-@Test func textEditingYieldsConflictingFileCommandsToTheTextResponder() {
+@Test(arguments: [0, 1]) func textEditingYieldsConflictingFileCommandsToTheTextResponder(selectionCount: Int) {
     let policy = WorkspaceCommandPolicy(
-        selectionCount: 1,
+        selectionCount: selectionCount,
         isOperationRunning: false,
         pasteboardHasFileURLs: true,
         isTextEditing: true
@@ -136,6 +136,20 @@ import Testing
     #expect(textView.string.isEmpty)
     textView.insertText(" ", replacementRange: NSRange(location: 0, length: 0))
     #expect(textView.string == " ")
+}
+
+@MainActor
+@Test func selectAllReplacesTheWholeTextOnlyDuringTextEditing() {
+    let textView = NSTextView()
+    textView.string = "보고서_🐧?.txt"
+    textView.setSelectedRange(NSRange(location: 2, length: 0))
+
+    #expect(!TextResponderCommand.selectAll(isTextEditing: false, to: textView))
+    #expect(textView.selectedRange() == NSRange(location: 2, length: 0))
+    #expect(TextResponderCommand.selectAll(isTextEditing: true, to: textView))
+    #expect(textView.selectedRange() == NSRange(location: 0, length: 11))
+    textView.insertText("*.md", replacementRange: textView.selectedRange())
+    #expect(textView.string == "*.md")
 }
 
 private func makeDropItem(path: String, isDirectory: Bool, isPackage: Bool) -> FileItem {

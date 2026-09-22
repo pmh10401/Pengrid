@@ -86,6 +86,10 @@ struct WorkspaceSelectionCommandPolicy: Equatable {
     var canSelectSameExtension: Bool {
         canRun && selectionCount == 1 && hasValidSameExtensionSelection
     }
+
+    func canSelectByName(isLoading: Bool, isModalPresented: Bool, isOverlayActive: Bool) -> Bool {
+        canRun && !isLoading && !isModalPresented && !isOverlayActive
+    }
 }
 
 /// Focused values are scene-local UI context. Their absence must not authorize
@@ -523,6 +527,12 @@ enum WorkspacePreviewCommandActions {
 @MainActor
 enum TextResponderCommand {
     @discardableResult
+    static func selectAll(isTextEditing: Bool, to target: Any? = nil) -> Bool {
+        guard isTextEditing else { return false }
+        return NSApplication.shared.sendAction(#selector(NSText.selectAll(_:)), to: target, from: nil)
+    }
+
+    @discardableResult
     static func copy(to target: Any? = nil) -> Bool {
         NSApplication.shared.sendAction(#selector(NSText.copy(_:)), to: target, from: nil)
     }
@@ -576,6 +586,12 @@ private struct WorkspaceProfilesPresentationFocusedValueKey: FocusedValueKey {
 private struct WorkspaceCommandPalettePresentationFocusedValueKey: FocusedValueKey {
     typealias Value = @MainActor () -> Void
 }
+private struct WorkspaceNamePatternPresentationFocusedValueKey: FocusedValueKey {
+    typealias Value = @MainActor () -> Void
+}
+private struct StandaloneTextInputFocusedValueKey: FocusedValueKey {
+    typealias Value = Bool
+}
 private struct WorkspaceSmartSearchPresentationFocusedValueKey: FocusedValueKey {
     typealias Value = @MainActor () -> Void
 }
@@ -589,6 +605,10 @@ private struct StorageAnalysisFocusedValueKey: FocusedValueKey {
 }
 
 extension FocusedValues {
+    var standaloneTextInputFocused: Bool? {
+        get { self[StandaloneTextInputFocusedValueKey.self] }
+        set { self[StandaloneTextInputFocusedValueKey.self] = newValue }
+    }
     var workspaceState: WorkspaceState? {
         get { self[WorkspaceFocusedValueKey.self] }
         set { self[WorkspaceFocusedValueKey.self] = newValue }
@@ -617,6 +637,10 @@ extension FocusedValues {
     var workspaceCommandPalettePresentation: (@MainActor () -> Void)? {
         get { self[WorkspaceCommandPalettePresentationFocusedValueKey.self] }
         set { self[WorkspaceCommandPalettePresentationFocusedValueKey.self] = newValue }
+    }
+    var workspaceNamePatternPresentation: (@MainActor () -> Void)? {
+        get { self[WorkspaceNamePatternPresentationFocusedValueKey.self] }
+        set { self[WorkspaceNamePatternPresentationFocusedValueKey.self] = newValue }
     }
     var workspaceSmartSearchPresentation: (@MainActor () -> Void)? {
         get { self[WorkspaceSmartSearchPresentationFocusedValueKey.self] }
@@ -762,12 +786,14 @@ enum StorageInspectorCommandActions {
 }
 
 struct WorkspaceCommands: Commands {
+    @FocusedValue(\.standaloneTextInputFocused) private var standaloneTextInputFocused
     @FocusedValue(\.workspaceState) private var workspace
     @FocusedValue(\.workspaceSessionState) private var workspaceSession
     @FocusedValue(\.workspaceTabModalPresented) private var workspaceTabModalPresented
     @FocusedValue(\.workspaceTabTeardown) private var workspaceTabTeardown
     @FocusedValue(\.workspaceProfilesPresentation) private var workspaceProfilesPresentation
     @FocusedValue(\.workspaceCommandPalettePresentation) private var workspaceCommandPalettePresentation
+    @FocusedValue(\.workspaceNamePatternPresentation) private var workspaceNamePatternPresentation
     @FocusedValue(\.workspaceSmartSearchPresentation) private var workspaceSmartSearchPresentation
     @FocusedValue(\.comparisonCoordinator) private var comparison
     @FocusedValue(\.storageAnalysisStore) private var focusedStorage
@@ -942,7 +968,13 @@ struct WorkspaceCommands: Commands {
                 paste()
             }
             .keyboardShortcut("v", modifiers: .command)
-            .disabled(workspace == nil || policy.pasteRoute == .unavailable)
+            .disabled(policy.pasteRoute == .unavailable)
+
+            Button("Select All") {
+                TextResponderCommand.selectAll(isTextEditing: policy.isTextEditing)
+            }
+            .keyboardShortcut("a", modifiers: .command)
+            .disabled(!policy.isTextEditing)
         }
 
         CommandGroup(after: .pasteboard) {
@@ -978,6 +1010,20 @@ struct WorkspaceCommands: Commands {
             .keyboardShortcut("e", modifiers: [.command, .option])
             .disabled(!selectionPolicy.canSelectSameExtension)
             .accessibilityIdentifier(AccessibilityIdentifiers.workspaceSelectSameExtension)
+
+            Button("Select by Name…") {
+                workspaceNamePatternPresentation?()
+            }
+            .keyboardShortcut("s", modifiers: [.command, .option])
+            .disabled(
+                workspaceNamePatternPresentation == nil
+                    || !selectionPolicy.canSelectByName(
+                        isLoading: workspace?.activePane.isLoading ?? true,
+                        isModalPresented: workspaceTabModalPresented ?? true,
+                        isOverlayActive: comparison?.isActive == true || activeStorage?.isActive == true
+                    )
+            )
+            .accessibilityIdentifier(AccessibilityIdentifiers.workspaceSelectByName)
 
             Divider()
 
@@ -1460,9 +1506,9 @@ struct WorkspaceCommands: Commands {
         WorkspaceCommandPolicy(
             selectionCount: workspace?.selectedURLsForCommands.count ?? 0,
             isOperationRunning: operationController.isRunning,
-            pasteboardHasFileURLs: FileURLPasteboard.containsFileURLs(in: .general),
+            pasteboardHasFileURLs: workspace != nil && FileURLPasteboard.containsFileURLs(in: .general),
             selectedItems: selectedItemsForCommands,
-            isTextEditing: workspace?.activeTextEditingSession != nil
+            isTextEditing: standaloneTextInputFocused == true || workspace?.activeTextEditingSession != nil
         )
     }
 
