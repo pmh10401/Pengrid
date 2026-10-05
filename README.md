@@ -158,12 +158,21 @@ Plain text and static PNG/TIFF images are supported. There is no automatic
 clipboard sampling, OCR, or global hotkey.
 
 The compact black notch shows separate file, text, and image counts beneath
-colored-ring icons. Hover to unfold the rounded detail card without taking
-keyboard focus; leaving it folds the card after a 0.45-second grace period.
+colored-ring icons. Hover to unfold a wide black notch gallery without taking
+keyboard focus; leaving it folds the gallery after a 0.45-second grace period.
 Returning before it folds cancels the pending fold. Click or use **Show Shelf**
-to keep the card open for search, clipboard actions, and file-operation
+to keep the shelf open for search, clipboard actions, and file-operation
 progress; **Collapse Shelf** returns it to compact mode. The numbers are item
 counts, not percentages.
+
+The expanded shelf uses a search-first header, **All / Files / Text / Images**
+capsules with actual item counts, and horizontally scrolling preview cards.
+Image cards show bounded thumbnails; text cards show a short excerpt, and
+file cards show references rather than opening the originals. Select a card
+or use **← / →** outside the search field, then **Copy** (⌘C). The card's arrow
+handle drags a copy; its minus button removes only the shelf entry. **Keep
+Shelf Open** pins a hover preview. Progress appears only when a job, queue,
+recovery issue, or latest failure needs attention.
 
 Shelf search covers filenames, text, and image display names and reuses
 Pengrid's Hangul-initial search behavior. **Copy** writes a fresh native value

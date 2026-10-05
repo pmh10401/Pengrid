@@ -149,6 +149,20 @@ struct ShelfPanelTests {
         #expect(clamped.width <= 300)
     }
 
+    @Test func expandedShelfFitsFourPreviewCardsWithoutCoveringTheMenuBar() {
+        let screen = CGRect(x: 0, y: 0, width: 1440, height: 900)
+        let visible = CGRect(x: 0, y: 25, width: 1440, height: 850)
+        let expanded = ShelfPanelPlacement.frame(visibleFrame: visible, screenFrame: screen, safeTop: 25, expanded: true)
+        // Four 210-point cards, their spacing, and the notch shoulders must fit.
+        #expect(expanded.width >= 4 * 210 + 3 * 16 + 104)
+        #expect(expanded.height < expanded.width / 2)
+        #expect(expanded.maxY == visible.maxY)
+        #expect(visible.contains(expanded))
+        let compact = ShelfPanelPlacement.frame(visibleFrame: visible, screenFrame: screen, safeTop: 25, expanded: false)
+        #expect(compact.width < expanded.width)
+        #expect(compact.midX == expanded.midX)
+    }
+
     @Test func shelfWindowCannotAuthorizeWorkspaceCommands() {
         let panel = ShelfPanel(contentRect: .zero, styleMask: [.borderless], backing: .buffered, defer: false)
         let window = NSWindow(contentRect: .zero, styleMask: [.titled], backing: .buffered, defer: false)
@@ -157,6 +171,35 @@ struct ShelfPanelTests {
         defer { panel.close(); window.close() }
         #expect(!ShelfPanel.allowsWorkspaceCommands(keyWindow: panel))
         #expect(ShelfPanel.allowsWorkspaceCommands(keyWindow: window))
+    }
+
+    @Test func galleryArrowNavigationUsesVisibleItemsAndPreservesSearchEditing() async throws {
+        try await withHoverShelf { controller in
+            let text = ShelfItem(content: .text("visible text"))
+            let second = ShelfItem(content: .text("second text"))
+            await controller.store.add([text, second])
+            controller.store.selectedID = nil
+            let right = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                                                     windowNumber: controller.panel.windowNumber, context: nil,
+                                                     characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: 124))
+            #expect(controller.panel.handleKey(right))
+            #expect(controller.store.selectedID == text.id)
+            #expect(controller.panel.handleKey(right))
+            #expect(controller.store.selectedID == second.id)
+            #expect(controller.panel.handleKey(right))
+            #expect(controller.store.selectedID == second.id)
+            controller.store.kind = .image
+            #expect(controller.panel.handleKey(right))
+            #expect(controller.store.selectedID == nil)
+            let editor = NSTextView(frame: CGRect(x: 0, y: 0, width: 100, height: 30))
+            controller.panel.contentView?.addSubview(editor)
+            try #require(controller.panel.makeFirstResponder(editor))
+            #expect(!controller.panel.handleKey(right))
+            controller.store.kind = nil
+            controller.selectItem(text.id)
+            #expect(controller.panel.handleKey(right))
+            #expect(controller.store.selectedID == second.id)
+        }
     }
 
     @Test func destructiveAndPasteShortcutsStayInsideTheShelf() throws {

@@ -11,13 +11,37 @@ struct ShelfView: View {
                 ShelfCollapsedView(controller: controller)
             }
         }
-        .padding(controller.isExpanded ? 18 : 10)
+        .padding(.horizontal, controller.isExpanded ? 52 : 10)
+        .padding(.vertical, controller.isExpanded ? 18 : 10)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(.black)
         .compositingGroup()
-        .clipShape(.rect(topLeadingRadius: 8, bottomLeadingRadius: 26,
-                         bottomTrailingRadius: 26, topTrailingRadius: 8))
+        .clipShape(ShelfNotchShape(shoulder: controller.isExpanded ? 32 : 8))
         .preferredColorScheme(.dark)
+    }
+}
+
+private struct ShelfNotchShape: Shape {
+    var shoulder: CGFloat
+    func path(in rect: CGRect) -> Path {
+        let inset = min(shoulder, rect.width / 4, rect.height / 4)
+        let bottom = min(26, rect.height / 4)
+        var path = Path()
+        path.move(to: CGPoint(x: rect.minX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+        path.addQuadCurve(to: CGPoint(x: rect.maxX - inset, y: rect.minY + inset),
+                          control: CGPoint(x: rect.maxX - inset, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX - inset, y: rect.maxY - bottom))
+        path.addQuadCurve(to: CGPoint(x: rect.maxX - inset - bottom, y: rect.maxY),
+                          control: CGPoint(x: rect.maxX - inset, y: rect.maxY))
+        path.addLine(to: CGPoint(x: rect.minX + inset + bottom, y: rect.maxY))
+        path.addQuadCurve(to: CGPoint(x: rect.minX + inset, y: rect.maxY - bottom),
+                          control: CGPoint(x: rect.minX + inset, y: rect.maxY))
+        path.addLine(to: CGPoint(x: rect.minX + inset, y: rect.minY + inset))
+        path.addQuadCurve(to: CGPoint(x: rect.minX, y: rect.minY),
+                          control: CGPoint(x: rect.minX + inset, y: rect.minY))
+        path.closeSubpath()
+        return path
     }
 }
 
@@ -68,132 +92,207 @@ private struct ShelfContentsView: View {
     }
 
     var body: some View {
-        VStack(spacing: 10) {
-            HStack {
-                Image(systemName: "tray.full")
-                    .foregroundStyle(.mint)
-                    .font(.system(size: 18, weight: .medium))
-                Text("Top Shelf").font(.headline)
-                Text("\(store.entries.count)/\(ShelfItem.maximumItemCount)")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 8).padding(.vertical, 4)
-                    .background(.white.opacity(0.08), in: Capsule())
-                Spacer()
-                Button("Open Pengrid", systemImage: "rectangle.on.rectangle") {
-                    if controller.interactionAllowed { controller.openMain() }
-                }
-                .labelStyle(.iconOnly)
-                .help("Open Pengrid")
-                Button("Collapse Shelf", systemImage: "chevron.up") { controller.show(expanded: false) }
-                    .labelStyle(.iconOnly)
-                    .help("Collapse Shelf")
-                Button("Hide Shelf", systemImage: "xmark") { controller.hide() }
-                    .labelStyle(.iconOnly)
-                    .help("Hide Shelf; reopen from the Shelf menu")
-            }
-            .buttonStyle(.borderless)
-            HStack {
-                TextField("Search shelf (including Korean initials)", text: $store.query)
-                    .textFieldStyle(.roundedBorder)
-                    .accessibilityIdentifier("topShelf.search")
-                Picker("Kind", selection: $store.kind) {
-                    Text("All").tag(Optional<ShelfContentKind>.none)
-                    Text("Files").tag(Optional(ShelfContentKind.file))
-                    Text("Text").tag(Optional(ShelfContentKind.text))
-                    Text("Images").tag(Optional(ShelfContentKind.image))
-                }
-                .labelsHidden()
-                .frame(width: 90)
-            }
-            List(selection: $store.selectedID) {
-                ForEach(store.filteredEntries) { item in
-                    ShelfItemRow(item: item, controller: controller)
-                        .tag(item.id)
-                        .listRowBackground(Color.clear)
-                }
-            }
-            .listStyle(.plain)
-            .scrollContentBackground(.hidden)
-            .overlay {
-                if store.filteredEntries.isEmpty {
-                    VStack(spacing: 6) {
-                        Image(systemName: "tray.and.arrow.down")
-                            .font(.system(size: 24, weight: .light))
-                            .foregroundStyle(.mint)
-                        Text(store.isRestoring ? "Restoring shelf…" : store.query.isEmpty ? "Drop files, text, or images here" : "No matching items")
-                            .font(.callout)
-                        Text("Clipboard is read only when you choose Import.")
-                            .font(.caption).foregroundStyle(.secondary)
+        ScrollView(.vertical) {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(spacing: 12) {
+                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary).accessibilityHidden(true)
+                    TextField("Search…", text: $store.query,
+                              prompt: Text("Search…").foregroundStyle(.white.opacity(0.5)))
+                        .textFieldStyle(.plain)
+                        .font(.title3)
+                        .accessibilityLabel("Search shelf (including Korean initials)")
+                        .help("Search filenames and text, including Korean initials")
+                        .accessibilityIdentifier("topShelf.search")
+                    shelfAction("Keep Shelf Open", symbol: controller.isPinned ? "pin.fill" : "pin") { controller.show() }
+                        .help(controller.isPinned ? "Shelf stays open until you collapse or hide it" : "Keep the hover preview open")
+                    shelfAction("Open Pengrid", symbol: "rectangle.on.rectangle") {
+                        if controller.interactionAllowed { controller.openMain() }
                     }
-                    .allowsHitTesting(false)
+                    shelfAction("Collapse Shelf", symbol: "chevron.up") { controller.show(expanded: false) }
+                    shelfAction("Hide Shelf", symbol: "xmark") { controller.hide() }
                 }
-            }
-            if let error = store.errorMessage {
-                Text(error).font(.caption).foregroundStyle(.orange).lineLimit(2)
-            }
-            if let error = store.persistenceError {
+                ScrollView(.horizontal) {
+                    HStack(spacing: 10) {
+                        category("All", kind: nil)
+                        category("Files", kind: .file)
+                        category("Text", kind: .text)
+                        category("Images", kind: .image)
+                    }
+                }
+                .scrollIndicators(.hidden)
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel("Shelf categories")
+                ScrollViewReader { proxy in
+                    ScrollView(.horizontal) {
+                        LazyHStack(spacing: 16) {
+                            ForEach(store.filteredEntries) { item in
+                                ShelfItemCard(item: item, controller: controller).id(item.id)
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    }
+                    .frame(height: 190)
+                    .onChange(of: store.selectedID) { _, id in
+                        if let id { proxy.scrollTo(id, anchor: .center) }
+                    }
+                    .overlay {
+                        if store.filteredEntries.isEmpty {
+                            VStack(spacing: 8) {
+                                Image(systemName: "tray.and.arrow.down").font(.title).foregroundStyle(.mint)
+                                Text(store.isRestoring ? "Restoring shelf…" : store.query.isEmpty && store.kind == nil ? "Drop files, text, or images here" : "No matching items")
+                                    .font(.callout)
+                                Text("Clipboard is read only when you choose Import.")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                            .allowsHitTesting(false)
+                        }
+                    }
+                }
+                if let error = store.errorMessage {
+                    Text(error).font(.caption).foregroundStyle(.orange).lineLimit(2)
+                }
+                if let error = store.persistenceError {
+                    HStack {
+                        Text(error).font(.caption).foregroundStyle(.orange).lineLimit(3)
+                        Button("Retry") { store.retryPersistence() }
+                    }
+                }
                 HStack {
-                    Text(error).font(.caption).foregroundStyle(.orange).lineLimit(3)
-                    Button("Retry") { store.retryPersistence() }
+                    Button("Import Clipboard", systemImage: "clipboard") { controller.importClipboard() }
+                        .disabled(store.isImporting || store.isRestoring || store.isPreparingTermination)
+                        .accessibilityIdentifier("topShelf.import")
+                    Button("Copy", systemImage: "doc.on.doc") { controller.copySelection() }
+                        .disabled(store.selectedID == nil)
+                    Spacer()
+                    Text("\(store.entries.count)/\(ShelfItem.maximumItemCount)")
+                        .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                    Button("Clear…") { confirmingClear = true }
+                        .disabled(store.entries.isEmpty || store.isPreparingTermination)
                 }
-            }
-            HStack {
-                Button("Import Clipboard", systemImage: "clipboard") { controller.importClipboard() }
-                    .disabled(store.isImporting || store.isRestoring || store.isPreparingTermination)
-                    .accessibilityIdentifier("topShelf.import")
-                Button("Copy", systemImage: "doc.on.doc") { controller.copySelection() }
-                    .disabled(store.selectedID == nil)
-                Spacer()
-                Button("Clear…") { confirmingClear = true }
-                    .disabled(store.entries.isEmpty || store.isPreparingTermination)
-            }
-            HStack {
-                Text(store.retention == .clearOnQuit ? "Cleared on quit · originals stay untouched" : "Kept on this Mac · originals stay untouched")
-                    .font(.caption2).foregroundStyle(.secondary)
-                Spacer()
-                if store.isImporting || store.isSearching || store.isSaving {
-                    ProgressView().controlSize(.mini).accessibilityLabel("Updating shelf")
+                .buttonStyle(.borderless)
+                HStack {
+                    Text(store.retention == .clearOnQuit ? "Cleared on quit · originals stay untouched" : "Kept on this Mac · originals stay untouched")
+                        .font(.caption2).foregroundStyle(.secondary)
+                    Spacer()
+                    if store.isImporting || store.isSearching || store.isSaving {
+                        ProgressView().controlSize(.mini).accessibilityLabel("Updating shelf")
+                    }
                 }
-            }
-            if let operations = controller.operationController {
-                ShelfProgressView(controller: operations)
+                if let operations = controller.operationController,
+                   operations.activeJob != nil || !operations.queuedJobs.isEmpty || operations.isQueueBlockedByRecovery || operations.operationHistory.first?.state == .failed {
+                    ShelfProgressView(controller: operations)
+                }
             }
         }
         .confirmationDialog("Clear all shelf items? Original files and the system clipboard will not be changed.", isPresented: $confirmingClear, titleVisibility: .visible) {
             Button("Clear Shelf", role: .destructive) { store.clear() }
         }
     }
+
+    private func shelfAction(_ title: String, symbol: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol).font(.system(size: 15, weight: .medium))
+                .frame(width: 34, height: 34)
+                .background(.white.opacity(0.12), in: Circle())
+        }
+        .buttonStyle(.plain).accessibilityLabel(title).help(title)
+    }
+
+    private func category(_ title: String, kind: ShelfContentKind?) -> some View {
+        let selected = store.kind == kind
+        let count = kind.map { value in store.entries.filter { $0.kind == value }.count } ?? store.entries.count
+        return Button { store.kind = kind } label: {
+            HStack(spacing: 8) {
+                Text(title)
+                Text(count.formatted()).monospacedDigit().opacity(selected ? 0.6 : 0.5)
+            }
+            .font(.callout)
+            .padding(.horizontal, 18).padding(.vertical, 11)
+            .foregroundStyle(selected ? .black : .white.opacity(0.8))
+            .background(selected ? .white : .white.opacity(0.1), in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(title), \(count) items")
+        .accessibilityAddTraits(selected ? [.isSelected] : [])
+        .accessibilityIdentifier("topShelf.category.\(kind?.rawValue ?? "all")")
+    }
 }
 
-private struct ShelfItemRow: View {
+private struct ShelfItemCard: View {
     let item: ShelfItem
     let controller: ShelfPanelController
     @State private var thumbnail: CGImage?
     var body: some View {
-        HStack(spacing: 10) {
-            if let thumbnail {
-                Image(decorative: thumbnail, scale: 1).resizable().scaledToFit().frame(width: 36, height: 36)
-            } else {
-                Image(systemName: item.kind == .file ? "doc" : item.kind == .text ? "text.alignleft" : "photo")
-                    .font(.title2).frame(width: 36, height: 36).accessibilityHidden(true)
+        Button {
+            controller.selectItem(item.id)
+        } label: {
+            ZStack(alignment: .bottomLeading) {
+                preview
+                LinearGradient(colors: [.clear, .black.opacity(0.9)], startPoint: .center, endPoint: .bottom)
+                VStack(alignment: .leading, spacing: 5) {
+                    if item.kind != .text { Text(item.displayName).font(.callout).lineLimit(1) }
+                    HStack(spacing: 6) {
+                        Image(systemName: symbol)
+                        Text(item.createdAt, format: .relative(presentation: .numeric, unitsStyle: .abbreviated)).lineLimit(1)
+                        Spacer(minLength: 0)
+                        if item.kind != .file {
+                            Text(ByteCountFormatter.string(fromByteCount: Int64(item.byteCount), countStyle: .file)).lineLimit(1)
+                        }
+                    }
+                    .font(.caption2).foregroundStyle(.white.opacity(0.75))
+                }
+                .padding(14).padding(.trailing, 24)
             }
-            VStack(alignment: .leading, spacing: 3) {
-                Text(item.displayName.isEmpty ? "Empty text" : item.displayName).lineLimit(1)
-                Text(item.kind == .file ? "File reference · copy only" : "\(item.byteCount.formatted()) bytes")
-                    .font(.caption).foregroundStyle(.secondary)
+            .frame(width: 210, height: 180)
+            .background(.white.opacity(0.12))
+            .clipShape(.rect(cornerRadius: 20))
+            .overlay {
+                RoundedRectangle(cornerRadius: 20).strokeBorder(controller.store.selectedID == item.id ? .mint : .white.opacity(0.15), lineWidth: controller.store.selectedID == item.id ? 2 : 1)
             }
-            Spacer()
-            ShelfDragHandle(item: item, controller: controller).frame(width: 26, height: 30)
+            .contentShape(.rect(cornerRadius: 20))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(item.displayName.isEmpty ? "Empty text" : item.displayName)
+        .accessibilityValue(item.kind.rawValue)
+        .accessibilityAddTraits(controller.store.selectedID == item.id ? [.isSelected] : [])
+        .help("Select this item, then Copy (⌘C). Use the arrow handle to drag a copy.")
+        .overlay(alignment: .bottomTrailing) {
+            ShelfDragHandle(item: item, controller: controller).frame(width: 28, height: 30).padding(8)
+        }
+        .overlay(alignment: .topTrailing) {
             Button("Remove from Shelf", systemImage: "minus.circle") {
                 if controller.interactionAllowed { controller.store.remove(item.id) }
             }
-            .labelStyle(.iconOnly).buttonStyle(.borderless).help("Remove from shelf (keep original)")
+            .labelStyle(.iconOnly).buttonStyle(.plain)
+            .padding(8).background(.black.opacity(0.65), in: Circle()).padding(8)
+            .help("Remove from shelf (keep original)")
         }
         .task(id: item.id) {
             guard item.kind == .image else { return }
             let value = await ShelfThumbnailRenderer.shared.image(for: item)
             if !Task.isCancelled { thumbnail = value }
+        }
+    }
+
+    private var symbol: String { item.kind == .file ? "doc" : item.kind == .text ? "text.alignleft" : "photo" }
+
+    @ViewBuilder private var preview: some View {
+        switch item.content {
+        case .image:
+            if let thumbnail {
+                Image(decorative: thumbnail, scale: 1).resizable().scaledToFit()
+                    .frame(width: 210, height: 180).clipped()
+            } else { Image(systemName: "photo").font(.largeTitle).frame(maxWidth: .infinity, maxHeight: .infinity) }
+        case let .text(value):
+            Text(String(value.prefix(512))).font(.body).lineLimit(6)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .padding(16).padding(.top, 20).padding(.bottom, 28)
+        case .file:
+            VStack(spacing: 10) {
+                Image(systemName: "doc.fill").font(.system(size: 42)).foregroundStyle(.mint)
+                Text("File reference · copy only").font(.caption2).foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity).padding(.bottom, 30)
         }
     }
 }
@@ -283,7 +382,9 @@ private final class ShelfDragView: NSImageView, NSDraggingSource {
         setAccessibilityLabel("Drag a copy; use Copy for keyboard access")
     }
     required init?(coder: NSCoder) { nil }
-    override func mouseDown(with event: NSEvent) { controller?.store.selectedID = item?.id }
+    override func mouseDown(with event: NSEvent) {
+        if let item { controller?.selectItem(item.id) }
+    }
     override func mouseDragged(with event: NSEvent) {
         guard let item, let controller, controller.interactionAllowed, !controller.store.isPreparingTermination else { return }
         do {

@@ -177,7 +177,9 @@ queries, or actions across a larger result set.
 
 Top Shelf is an optional, manual holding area for files, text, and images. In
 Settings, turn on **Enable Top Shelf**. It is off by default. A collapsed pill
-shows **Top Shelf · N**; click it to open the panel. The panel also provides
+shows separate file, text, and image counts. Hover to preview the wide black
+gallery without taking keyboard focus; leaving folds it after 0.45 seconds.
+Click or choose **Keep Shelf Open** to keep it open. The panel also provides
 **Open Pengrid**, **Collapse Shelf**, and **Hide Shelf**. Hiding or collapsing
 the panel keeps its entries.
 
@@ -186,18 +188,22 @@ The panel contains the following controls:
 - **Import Clipboard** reads the current clipboard only when you explicitly
   press the button. Opening, hovering, searching, and showing progress do not
   read the clipboard.
-- **Search shelf (including Korean initials)** searches shelf names and text.
-  The **All**, **Files**, **Text**, and **Images** filters narrow the results.
+- **Search…** searches shelf names and text, including Korean initials.
+  The **All**, **Files**, **Text**, and **Images** capsule tabs narrow the results
+  and show the total saved count for each category (not just search matches).
+  Cards scroll horizontally. Select a card, or use **← / →** outside the search
+  field; the selected card is outlined. Image cards show a thumbnail, text
+  cards show an excerpt, and file cards identify references without opening them.
 - **Copy** writes the selected shelf item to the system clipboard. **Remove
   from Shelf** removes only that shelf entry. **Clear…** opens a confirmation;
   **Clear Shelf** removes all shelf entries.
-- A row's **Drag a copy** handle is copy-only. File entries drag as file URL
+- A card's **Drag a copy** handle is copy-only. File entries drag as file URL
   references. Text and image drags require a destination that accepts the
   corresponding native type; image drags work only with native image
   consumers. Use **Copy** when the destination does not accept that type.
 
-The bottom of the panel shows the existing operation center's active job,
-progress, queued count, and recovery or latest-failure notice. Unknown progress
+When there is an operation or issue, the bottom shows the existing operation
+center's active job, progress, queued count, and recovery or latest-failure notice. Unknown progress
 uses an activity indicator. Choose **Open Pengrid** for passwords, conflicts,
 recovery, or cancellation; closing the shelf does not cancel the file operation.
 

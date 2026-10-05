@@ -5,8 +5,8 @@ import Observation
 enum ShelfPanelPlacement {
     static func frame(visibleFrame: CGRect, screenFrame: CGRect, safeTop: CGFloat, expanded: Bool) -> CGRect {
         let top = max(visibleFrame.minY, min(visibleFrame.maxY, screenFrame.maxY - safeTop))
-        let width = min(expanded ? 560 : 240, visibleFrame.width)
-        let height = min(expanded ? 440 : 82, top - visibleFrame.minY)
+        let width = min(expanded ? 1200 : 240, visibleFrame.width)
+        let height = min(expanded ? 400 : 82, top - visibleFrame.minY)
         return CGRect(x: visibleFrame.midX - width / 2, y: top - height, width: width, height: height)
     }
 }
@@ -18,6 +18,7 @@ final class ShelfPanel: NSPanel {
     var onCopyShelf: (() -> Void)?
     var onImportShelf: (() -> Void)?
     var onRemoveShelf: (() -> Void)?
+    var onNavigateShelf: ((Int) -> Void)?
     var interactionAllowed: () -> Bool = { true }
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
@@ -64,6 +65,11 @@ final class ShelfPanel: NSPanel {
                 return true
             }
         } else {
+            if [123, 124].contains(event.keyCode),
+               event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty {
+                onNavigateShelf?(event.keyCode == 123 ? -1 : 1)
+                return onNavigateShelf != nil
+            }
             if event.keyCode == 51 || event.keyCode == 117 { onRemoveShelf?(); return true }
             if command && text == "v" { onImportShelf?(); return true }
             if command && text == "c" { onCopyShelf?(); return true }
@@ -94,7 +100,7 @@ final class ShelfPanelController {
     @ObservationIgnored private var keyMonitor: Any?
     @ObservationIgnored private var foldTask: Task<Void, Never>?
     @ObservationIgnored private var isHovering = false
-    @ObservationIgnored private var isPinned = false
+    private(set) var isPinned = false
     @ObservationIgnored private var isTornDown = false
     init(store: ShelfStore, operationController: FileOperationController? = nil, openMain: @escaping () -> Void = {}) {
         self.store = store
@@ -116,6 +122,7 @@ final class ShelfPanelController {
         panel.onImportShelf = { [weak self] in self?.importClipboard() }
         panel.onCopyShelf = { [weak self] in self?.copySelection() }
         panel.onRemoveShelf = { [weak self] in self?.removeSelection() }
+        panel.onNavigateShelf = { [weak self] direction in self?.navigateSelection(direction: direction) }
         panel.interactionAllowed = { [weak self] in self?.interactionAllowed == true }
         let host = ShelfHostingView(rootView: ShelfView(controller: self))
         host.controller = self
@@ -224,6 +231,23 @@ final class ShelfPanelController {
     func removeSelection() {
         guard interactionAllowed, let id = store.selectedID else { return }
         store.remove(id)
+    }
+
+    func selectItem(_ id: UUID) {
+        guard interactionAllowed, !store.isPreparingTermination,
+              store.filteredEntries.contains(where: { $0.id == id }) else { return }
+        panel.makeFirstResponder(nil)
+        store.selectedID = id
+    }
+
+    private func navigateSelection(direction: Int) {
+        guard interactionAllowed, !store.isPreparingTermination else { return }
+        let items = store.filteredEntries
+        guard !items.isEmpty else { store.selectedID = nil; return }
+        let index = items.firstIndex { $0.id == store.selectedID }
+        let next = index.map { min(max($0 + direction, 0), items.count - 1) }
+            ?? (direction < 0 ? items.count - 1 : 0)
+        store.selectedID = items[next].id
     }
 
     private func reposition() {
