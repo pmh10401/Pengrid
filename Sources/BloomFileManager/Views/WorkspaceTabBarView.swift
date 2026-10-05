@@ -123,6 +123,20 @@ enum WorkspaceTabTeardownActions {
 
 @MainActor
 enum WorkspaceTabCommandActions {
+    static func reopenClosedTab(
+        in session: WorkspaceSessionState,
+        isModalPresented: Bool,
+        isTextEditing: Bool,
+        teardown: () -> Void
+    ) -> Bool {
+        guard WorkspaceTabInteractionPolicy(
+            isModalPresented: isModalPresented,
+            isTextEditing: isTextEditing
+        ).permitsTabChange, session.canReopenClosedTab else { return false }
+        teardown()
+        return session.reopenClosedTab() != nil
+    }
+
     @discardableResult
     static func newTab(
         in session: WorkspaceSessionState,

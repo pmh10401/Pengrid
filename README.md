@@ -123,6 +123,19 @@ to create a new tab without changing the existing one. The session restores tab
 folders, sort orders, split position, active pane, and profiles; selections, filters,
 history, previews, searches, and operation state are intentionally not restored.
 
+> **Upcoming source-only feature on `main` (unreleased; not in the downloadable
+> Developer Preview 9):** Choose **Window > Reopen Closed Workspace Tab** or press
+> **Command-Shift-T** to reopen the most recently closed workspace tab. A successful
+> close records the tab's two committed folder paths, sort orders, split ratio, and
+> active pane; pending navigation is not restored. Reopening creates a fresh runtime,
+> so selections, filters, history, searches, previews, file-operation state, and Undo
+> state are not revived. Up to 10 successful closes are retained for the current app
+> session only. The command is unavailable while a modal or text editor is active. If a
+> recorded path is inaccessible, normal path/error handling applies. The restore does
+> not materialize files or replay user-file operations. Its behavior is inspired by
+> [Nimble Commander's official guide](https://github.com/mikekazakov/nimble-commander/blob/main/Docs/Help.md);
+> no code was copied.
+
 ### Find files quickly
 
 Smart Search scans filenames and relative paths recursively. It supports
@@ -199,6 +212,7 @@ support, and privacy-preserving status text.
 | **Command-I** | Get Info for the captured selection |
 | **Command-T** | New workspace tab |
 | **Command-W** | Close active workspace tab when safe |
+| **Command-Shift-T** | Reopen the last closed workspace tab *(unreleased source-only feature on `main`; not in downloadable Developer Preview 9)* |
 | **Control-Tab** | Next workspace tab |
 | **Control-Shift-Tab** | Previous workspace tab |
 | **Command-D** | Duplicate the captured selection |

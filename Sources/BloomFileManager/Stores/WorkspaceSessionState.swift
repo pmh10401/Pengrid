@@ -10,6 +10,7 @@ final class WorkspaceSessionState {
     private(set) var tabs: [WorkspaceTabRuntime]
     private(set) var activeTabID: WorkspaceTabID
     private(set) var profiles: [WorkspaceProfileRecord]
+    private var closedTabDescriptors: [WorkspaceDescriptor] = []
 
     @ObservationIgnored private let persistence: WorkspaceSessionPersistence
     @ObservationIgnored private let runtimeFactory: any WorkspaceRuntimeCreating
@@ -49,6 +50,13 @@ final class WorkspaceSessionState {
         return appendTab(with: descriptor)
     }
 
+    var canReopenClosedTab: Bool { !closedTabDescriptors.isEmpty }
+
+    func reopenClosedTab() -> WorkspaceTabID? {
+        guard let descriptor = closedTabDescriptors.popLast() else { return nil }
+        return appendTab(with: descriptor)
+    }
+
     func openProfile(_ id: WorkspaceProfileID) -> WorkspaceTabID? {
         guard let profile = profiles.first(where: { $0.id == id }) else { return nil }
         return appendTab(with: profile.descriptor)
@@ -61,6 +69,12 @@ final class WorkspaceSessionState {
         else { return false }
 
         let index = tabs.firstIndex(where: { $0.id == id })!
+        let workspace = tabs[index].workspace
+        workspace.flushPendingPersistence()
+        closedTabDescriptors.append(currentDescriptor(for: workspace) ?? descriptors[id]!)
+        if closedTabDescriptors.count > 10 {
+            closedTabDescriptors.removeFirst()
+        }
         tabs.remove(at: index)
         descriptors[id] = nil
         if activeTabID == id {

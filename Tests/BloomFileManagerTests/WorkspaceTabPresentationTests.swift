@@ -5,6 +5,40 @@ import Testing
 @MainActor
 @Suite("WorkspaceTabPresentationTests")
 struct WorkspaceTabPresentationTests {
+    @Test func reopenRejectsModalTextEditingAndEmptyHistoryWithoutTearingDown() throws {
+        let fixture = WorkspaceTabPresentationFixture()
+        let first = try fixture.tab(left: "/One", right: "/Right")
+        let second = try fixture.tab(left: "/Two", right: "/Right")
+        let session = fixture.session(tabs: [first, second], active: first.id)
+        var teardownCount = 0
+        #expect(!WorkspaceTabCommandActions.reopenClosedTab(
+            in: session, isModalPresented: false, isTextEditing: false,
+            teardown: { teardownCount += 1 }
+        ))
+        #expect(session.closeTab(second.id, canClose: { _ in true }))
+        for ownership in [(true, false), (false, true)] {
+            #expect(!WorkspaceTabCommandActions.reopenClosedTab(
+                in: session, isModalPresented: ownership.0, isTextEditing: ownership.1,
+                teardown: { teardownCount += 1 }
+            ))
+        }
+        #expect(session.tabs.map(\.id) == [first.id])
+        #expect(session.canReopenClosedTab)
+        #expect(teardownCount == 0)
+        var activeIDAtTeardown: WorkspaceTabID?
+        #expect(WorkspaceTabCommandActions.reopenClosedTab(
+            in: session, isModalPresented: false, isTextEditing: false,
+            teardown: {
+                activeIDAtTeardown = session.activeTabID
+                teardownCount += 1
+            }
+        ))
+        #expect(session.activeWorkspace.left.currentDirectory.path == "/Two")
+        #expect(teardownCount == 1)
+        #expect(activeIDAtTeardown == first.id)
+        #expect(!session.canReopenClosedTab)
+    }
+
     @Test func tabTitlesAndAccessibilityLabelsExposeOnlyTheFolderBasename() {
         let left = URL(filePath: "/private/users/example/Projects/Release", directoryHint: .isDirectory)
         let right = URL(filePath: "/private/users/example/Builds/Artifacts", directoryHint: .isDirectory)

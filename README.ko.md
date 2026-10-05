@@ -121,6 +121,19 @@ Command-P 실행기의 아이디어는 [Shuffle](https://github.com/WizenPainter
 패널 및 프로필만 복원하며, 선택, 필터, 기록, 미리보기, 검색과 작업 상태는
 의도적으로 복원하지 않습니다.
 
+> **현재 `main` 소스의 미출시 기능(다운로드 가능한 Developer
+> Preview 9에는 포함되지 않음):** **Window > Reopen Closed Workspace Tab**을
+> 선택하거나 **Command-Shift-T**를 누르면 가장 최근에 닫은 작업 공간 탭을 다시
+> 엽니다. 성공적으로 닫힌 탭에서는 확정된 두 폴더 경로, 정렬, 분할 비율 및
+> 활성 패널만 기록하며 대기 중인 탐색은 복원하지 않습니다. 다시 열 때는 새로운
+> 런타임으로 시작합니다. 따라서 선택, 필터, 기록, 검색, 미리보기, 파일 작업
+> 상태와 Undo 상태는 되살리지 않습니다. 현재 앱 세션에서만 성공적으로 닫힌
+> 항목을 최대 10개 보존합니다. 모달 또는 텍스트
+> 편집 중에는 명령을 사용할 수 없습니다. 기록된 경로에 접근할 수 없으면 일반적인
+> 경로/오류 처리를 적용합니다. 복원 자체가 클라우드 파일을 다운로드하거나 사용자
+> 파일 작업을 재실행하지 않습니다. 동작은 [Nimble Commander 공식 안내서](https://github.com/mikekazakov/nimble-commander/blob/main/Docs/Help.md)에서
+> 영감을 받았으며 코드를 복사하지 않았습니다.
+
 ### 파일을 빠르게 찾기
 
 Smart Search는 파일명과 상대 경로를 재귀적으로 검색합니다. 일반 텍스트,
@@ -193,6 +206,7 @@ VoiceOver 레이블, Reduce Motion 및 개인정보를 노출하지 않는 상�
 | **Command-I** | 캡처한 선택 항목의 Get Info |
 | **Command-T** | 새 작업 공간 탭 |
 | **Command-W** | 안전할 때 활성 작업 공간 탭 닫기 |
+| **Command-Shift-T** | 마지막으로 닫은 작업 공간 탭 다시 열기 *(현재 `main`의 미출시 소스 전용 기능이며 다운로드 가능한 Developer Preview 9에는 포함되지 않음)* |
 | **Control-Tab** | 다음 작업 공간 탭 |
 | **Control-Shift-Tab** | 이전 작업 공간 탭 |
 | **Command-D** | 캡처한 선택 항목 복제 |

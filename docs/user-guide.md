@@ -148,6 +148,19 @@ active pane, tab order, active tab, and profiles. It does not restore selections
 filters, navigation history, scroll position, previews, comparison/storage views,
 Smart Search, editing, pending Trash confirmation, or file-operation state.
 
+> **Upcoming source-only feature on `main` (unreleased; not in the downloadable
+> Developer Preview 9):** Choose **Window > Reopen Closed Workspace Tab** or press
+> **Command-Shift-T** to reopen the most recently closed workspace tab. Each successful
+> close keeps the tab's two committed folder paths, sort orders, split ratio, and
+> active pane; pending navigation is not restored. Reopening starts a fresh runtime:
+> selections, filters, history, searches, previews, file-operation state, and Undo
+> state are not revived. Up to 10 successful closes are retained for the current app
+> session only. The command is unavailable while a modal or text editor is active.
+> Inaccessible paths use ordinary path/error handling. The restore does not materialize
+> files or replay user-file operations. Behavior is inspired by [Nimble Commander's
+> official guide](https://github.com/mikekazakov/nimble-commander/blob/main/Docs/Help.md);
+> no code was copied.
+
 ### Pane-local filtering
 
 Press **Command-F** to filter the active pane. This searches only filenames that
