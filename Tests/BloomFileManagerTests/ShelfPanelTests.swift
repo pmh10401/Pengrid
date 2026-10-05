@@ -87,6 +87,24 @@ struct ShelfPanelTests {
         }
     }
 
+    @Test func clickingPreviewKeepsItOpenWhenShelfAlreadyHasFocus() async throws {
+        try await withHoverShelf { controller in
+            controller.show()
+            try #require(controller.panel.isKeyWindow)
+            controller.show(expanded: false)
+            let host = try #require(controller.panel.contentView)
+            host.mouseEntered(with: try hoverEvent(.mouseEntered, controller))
+            host.mouseExited(with: try hoverEvent(.mouseExited, controller))
+            let click = try #require(NSEvent.mouseEvent(with: .leftMouseDown, location: NSPoint(x: 20, y: 180),
+                                                       modifierFlags: [], timestamp: 0,
+                                                       windowNumber: controller.panel.windowNumber, context: nil,
+                                                       eventNumber: 0, clickCount: 1, pressure: 1))
+            controller.panel.sendEvent(click)
+            try await Task.sleep(for: .milliseconds(550))
+            #expect(controller.isExpanded)
+        }
+    }
+
     @Test func sheetAndTerminationPreventHoverPresentationChanges() async throws {
         try await withHoverShelf { controller in
             controller.show(expanded: false)

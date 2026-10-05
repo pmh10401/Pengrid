@@ -13,7 +13,7 @@ enum ShelfPanelPlacement {
 
 @MainActor
 final class ShelfPanel: NSPanel {
-    var onBecomeKey: (() -> Void)?
+    var onInteraction: (() -> Void)?
     var onCloseShelf: (() -> Void)?
     var onCopyShelf: (() -> Void)?
     var onImportShelf: (() -> Void)?
@@ -24,7 +24,14 @@ final class ShelfPanel: NSPanel {
 
     override func becomeKey() {
         super.becomeKey()
-        onBecomeKey?()
+        onInteraction?()
+    }
+
+    override func sendEvent(_ event: NSEvent) {
+        if interactionAllowed(), [.leftMouseDown, .rightMouseDown, .keyDown].contains(event.type) {
+            onInteraction?()
+        }
+        super.sendEvent(event)
     }
 
     func handleKey(_ event: NSEvent) -> Bool {
@@ -105,7 +112,7 @@ final class ShelfPanelController {
         panel.title = "Pengrid Top Shelf"
         panel.identifier = NSUserInterfaceItemIdentifier("pengrid.topShelf")
         panel.onCloseShelf = { [weak self] in self?.hide() }
-        panel.onBecomeKey = { [weak self] in self?.pinOpen() }
+        panel.onInteraction = { [weak self] in self?.pinOpen() }
         panel.onImportShelf = { [weak self] in self?.importClipboard() }
         panel.onCopyShelf = { [weak self] in self?.copySelection() }
         panel.onRemoveShelf = { [weak self] in self?.removeSelection() }
