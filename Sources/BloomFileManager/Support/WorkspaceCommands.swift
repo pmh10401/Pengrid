@@ -873,6 +873,20 @@ struct WorkspaceCommands: Commands {
                     || (workspace.map { operationController.hasActiveOrQueuedWork(boundTo: $0) } ?? true)
             )
 
+            Button("Reopen Closed Workspace Tab") {
+                guard tabCommandFocusPolicy.permitsTabMutation,
+                      let workspaceSession
+                else { return }
+                _ = WorkspaceTabCommandActions.reopenClosedTab(
+                    in: workspaceSession,
+                    isModalPresented: tabInteractionPolicy.isModalPresented,
+                    isTextEditing: tabInteractionPolicy.isTextEditing,
+                    teardown: { workspaceTabTeardown?() }
+                )
+            }
+            .keyboardShortcut("t", modifiers: [.command, .shift])
+            .disabled(!tabCommandFocusPolicy.permitsTabMutation || workspaceSession?.canReopenClosedTab != true)
+
             Button("Next Workspace Tab") {
                 guard tabCommandFocusPolicy.permitsTabMutation,
                       let workspaceSession

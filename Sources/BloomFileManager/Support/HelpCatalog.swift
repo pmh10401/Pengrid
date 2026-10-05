@@ -67,6 +67,7 @@ enum HelpCatalog {
                     heading: "탭과 작업 공간 프로필",
                     paragraphs: [
                         "Command-T는 현재 탭의 폴더 쌍, 정렬, 분할 위치와 활성 패널을 복제한 새 작업 공간 탭을 엽니다. Command-W는 마지막 탭이 아니고 연결된 파일 작업이 없을 때만 탭을 닫습니다.",
+                        "Window > Reopen Closed Workspace Tab 또는 Command-Shift-T는 마지막으로 닫은 탭의 폴더 쌍과 배치를 새 탭으로 복구합니다. 최근 10개의 닫기 기록은 앱이 실행 중일 때만 유지합니다. 선택, 필터, 탐색 기록, 미리보기, 파일 작업과 Undo 기록은 복구하지 않습니다. 모달이나 텍스트 편집 중에는 사용할 수 없습니다.",
                         "Control-Tab과 Control-Shift-Tab으로 탭을 이동합니다. 프로필은 이름 있는 재사용 배치이며, 프로필을 열면 기존 탭을 바꾸지 않고 새 탭을 만듭니다."
                     ],
                     bulletItems: [
@@ -87,6 +88,7 @@ enum HelpCatalog {
             shortcuts: [
                 HelpShortcut(keys: "Command-T", action: "새 작업 공간 탭"),
                 HelpShortcut(keys: "Command-W", action: "안전할 때 활성 작업 공간 탭 닫기"),
+                HelpShortcut(keys: "Command-Shift-T", action: "마지막으로 닫은 작업 공간 탭 다시 열기"),
                 HelpShortcut(keys: "Control-Tab", action: "다음 작업 공간 탭"),
                 HelpShortcut(keys: "Control-Shift-Tab", action: "이전 작업 공간 탭"),
                 HelpShortcut(keys: "Command-[ / Command-]", action: "뒤로 / 앞으로"),
@@ -283,6 +285,7 @@ enum HelpCatalog {
                         "Space — 폴더 미리보기 또는 Quick Look",
                         "Command-I — 캡처한 선택 항목 Get Info",
                         "Command-T / Command-W — 새 탭 / 안전할 때 탭 닫기",
+                        "Command-Shift-T — 마지막으로 닫은 작업 공간 탭 다시 열기",
                         "Control-Tab / Control-Shift-Tab — 다음 / 이전 탭",
                         "Command-[ / Command-] — 뒤로 / 앞으로",
                         "Command-Up Arrow — 상위 폴더",
@@ -414,6 +417,7 @@ enum HelpCatalog {
                     heading: "Tabs and workspace profiles",
                     paragraphs: [
                         "Command-T opens a new workspace tab with the active tab's folder pair, sort order, split position, and active pane. Command-W closes a tab only when it is not the last and has no bound file work.",
+                        "Window > Reopen Closed Workspace Tab or Command-Shift-T restores the last closed tab's folder pair and layout in a fresh tab. The last 10 successful closes are retained only during the current app session. Selections, filters, navigation history, previews, file operations, and Undo history are not restored. The command is unavailable while a modal or text editor is active.",
                         "Control-Tab and Control-Shift-Tab move between tabs. A profile is a named reusable layout; opening one creates a new tab without changing the existing tab."
                     ],
                     bulletItems: [
@@ -434,6 +438,7 @@ enum HelpCatalog {
             shortcuts: [
                 HelpShortcut(keys: "Command-T", action: "New workspace tab"),
                 HelpShortcut(keys: "Command-W", action: "Close the active workspace tab when safe"),
+                HelpShortcut(keys: "Command-Shift-T", action: "Reopen the last closed workspace tab"),
                 HelpShortcut(keys: "Control-Tab", action: "Next workspace tab"),
                 HelpShortcut(keys: "Control-Shift-Tab", action: "Previous workspace tab"),
                 HelpShortcut(keys: "Command-[ / Command-]", action: "Back / Forward"),
@@ -630,6 +635,7 @@ enum HelpCatalog {
                         "Space — Folder preview or Quick Look",
                         "Command-I — Get Info for the captured selection",
                         "Command-T / Command-W — New tab / close tab when safe",
+                        "Command-Shift-T — Reopen the last closed workspace tab",
                         "Control-Tab / Control-Shift-Tab — Next / previous tab",
                         "Command-[ / Command-] — Back / Forward",
                         "Command-Up Arrow — Parent folder",

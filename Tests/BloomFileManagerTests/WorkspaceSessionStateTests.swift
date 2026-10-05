@@ -5,6 +5,86 @@ import Testing
 @MainActor
 @Suite("WorkspaceSessionStateTests")
 struct WorkspaceSessionStateTests {
+    @Test func reopenRestoresLatestLayoutWithFreshRuntimeAndPersistsOnlyOpenTabs() throws {
+        let fixture = SessionStateFixture()
+        let first = try fixture.makeTab(left: "/One/Left", right: "/One/Right")
+        let second = try fixture.makeTab(left: "/Two/Left", right: "/Two/Right")
+        let state = fixture.makeState(tabs: [first, second], active: second.id)
+        let closedWorkspace = state.activeWorkspace
+        closedWorkspace.splitRatio = 0.64
+        closedWorkspace.activate(.right)
+        closedWorkspace.left.sort = FileSort(key: .size, direction: .descending)
+        closedWorkspace.left.selection = [URL(filePath: "/Two/Left/report.txt")]
+        closedWorkspace.left.updateFilterQuery("report")
+
+        #expect(state.closeTab(second.id, canClose: { _ in true }))
+        #expect(fixture.persistence.load()?.tabs.map(\.id) == [first.id])
+        let reopenedID = try #require(state.reopenClosedTab())
+        #expect(reopenedID != second.id)
+        #expect(state.activeTabID == reopenedID)
+        #expect(state.activeWorkspace !== closedWorkspace)
+        #expect(state.activeWorkspace.left.currentDirectory.path == "/Two/Left")
+        #expect(state.activeWorkspace.right.currentDirectory.path == "/Two/Right")
+        #expect(state.activeWorkspace.activePaneID == .right)
+        #expect(state.activeWorkspace.splitRatio == 0.64)
+        #expect(state.activeWorkspace.left.sort == FileSort(key: .size, direction: .descending))
+        #expect(state.activeWorkspace.left.selection.isEmpty)
+        #expect(state.activeWorkspace.left.filterQuery.isEmpty)
+        #expect(!state.canReopenClosedTab)
+        #expect(fixture.persistence.load()?.tabs.map(\.id) == [first.id, reopenedID])
+
+        // A retained old runtime cannot update the replacement tab through its callback.
+        closedWorkspace.activate(.left)
+        #expect(fixture.persistence.load()?.tabs.last?.descriptor.activePane == .right)
+    }
+
+    @Test func reopenUsesLastInFirstOutAndRetainsOnlyTenSuccessfulCloses() throws {
+        let fixture = SessionStateFixture()
+        let records = try (0...12).map { try fixture.makeTab(left: "/Tab\($0)", right: "/Right") }
+        let state = fixture.makeState(tabs: records, active: records[0].id)
+        for record in records.dropFirst() {
+            #expect(state.closeTab(record.id, canClose: { _ in true }))
+        }
+        for expected in stride(from: 12, through: 3, by: -1) {
+            #expect(state.canReopenClosedTab)
+            _ = try #require(state.reopenClosedTab())
+            #expect(state.activeWorkspace.left.currentDirectory.path == "/Tab\(expected)")
+        }
+        #expect(!state.canReopenClosedTab)
+        #expect(state.reopenClosedTab() == nil)
+        #expect(state.tabs.count == 11)
+    }
+
+    @Test func refusedClosesDoNotCreateHistoryAndHistoryDoesNotSurviveSessionRestore() throws {
+        let fixture = SessionStateFixture()
+        let first = try fixture.makeTab(left: "/One", right: "/Right")
+        let second = try fixture.makeTab(left: "/Two", right: "/Right")
+        let state = fixture.makeState(tabs: [first, second], active: first.id)
+        #expect(!state.closeTab(first.id, canClose: { _ in false }))
+        #expect(!state.closeTab(WorkspaceTabID(), canClose: { _ in true }))
+        #expect(!state.canReopenClosedTab)
+        #expect(state.closeTab(second.id, canClose: { _ in true }))
+        #expect(!state.closeTab(first.id, canClose: { _ in true }))
+        let saved = try #require(fixture.persistence.load())
+        let restored = fixture.makeState(tabs: saved.tabs, active: saved.activeTabID)
+        #expect(!restored.canReopenClosedTab)
+        #expect(restored.reopenClosedTab() == nil)
+        _ = try #require(state.reopenClosedTab())
+        #expect(state.activeWorkspace.left.currentDirectory.path == "/Two")
+        #expect(!state.canReopenClosedTab)
+    }
+
+    @Test func closedHistoryDoesNotRetainTheOldWorkspaceRuntime() throws {
+        let fixture = SessionStateFixture()
+        let first = try fixture.makeTab(left: "/One", right: "/Right")
+        let second = try fixture.makeTab(left: "/Two", right: "/Right")
+        let state = fixture.makeState(tabs: [first, second], active: second.id)
+        weak var closed = state.activeWorkspace
+        #expect(state.closeTab(second.id, canClose: { _ in true }))
+        #expect(closed == nil)
+        #expect(state.canReopenClosedTab)
+    }
+
     @Test func runtimeFactoryCreatesFreshListingAndMonitorDependenciesForEachRuntime() throws {
         var listingFactoryCalls = 0
         var monitorFactoryCalls = 0
