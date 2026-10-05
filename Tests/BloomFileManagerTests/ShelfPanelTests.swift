@@ -5,6 +5,118 @@ import Testing
 @Suite("Shelf window boundary", .serialized)
 @MainActor
 struct ShelfPanelTests {
+    @Test func nativeHoverOpensWithoutTakingFocusAndFoldsAfterLeaving() async throws {
+        try await withHoverShelf { controller in
+            controller.show(expanded: false)
+            let previousKeyWindow = NSApp.keyWindow
+            let host = try #require(controller.panel.contentView)
+            host.mouseEntered(with: try hoverEvent(.mouseEntered, controller))
+            #expect(controller.isExpanded)
+            #expect(NSApp.keyWindow === previousKeyWindow)
+            #expect(!controller.panel.isKeyWindow)
+            host.mouseExited(with: try hoverEvent(.mouseExited, controller))
+            #expect(controller.isExpanded)
+            let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+            while controller.isExpanded && ContinuousClock.now < deadline {
+                try await Task.sleep(for: .milliseconds(5))
+            }
+            #expect(!controller.isExpanded)
+            #expect(controller.panel.isVisible)
+        }
+    }
+
+    @Test func hoverReentryCancelsFoldAndExplicitOpenStaysOpen() async throws {
+        try await withHoverShelf { controller in
+            controller.show(expanded: false)
+            let host = try #require(controller.panel.contentView)
+            host.mouseEntered(with: try hoverEvent(.mouseEntered, controller))
+            host.mouseExited(with: try hoverEvent(.mouseExited, controller))
+            try await Task.sleep(for: .milliseconds(300))
+            host.mouseEntered(with: try hoverEvent(.mouseEntered, controller))
+            try await Task.sleep(for: .milliseconds(300))
+            #expect(controller.isExpanded)
+
+            controller.show()
+            host.mouseExited(with: try hoverEvent(.mouseExited, controller))
+            try await Task.sleep(for: .milliseconds(550))
+            #expect(controller.isExpanded)
+            controller.show(expanded: false)
+            #expect(!controller.isExpanded)
+        }
+    }
+
+    @Test func hiddenDisabledAndDisposedShelfIgnoreStaleHoverEvents() async throws {
+        try await withHoverShelf { controller in
+            controller.show(expanded: false)
+            let host = try #require(controller.panel.contentView)
+            host.mouseEntered(with: try hoverEvent(.mouseEntered, controller))
+            host.mouseExited(with: try hoverEvent(.mouseExited, controller))
+            controller.hide()
+            host.mouseEntered(with: try hoverEvent(.mouseEntered, controller))
+            #expect(!controller.panel.isVisible)
+            #expect(!controller.isExpanded)
+
+            controller.setEnabled(true)
+            host.mouseEntered(with: try hoverEvent(.mouseEntered, controller))
+            host.mouseExited(with: try hoverEvent(.mouseExited, controller))
+            controller.setEnabled(false)
+            host.mouseEntered(with: try hoverEvent(.mouseEntered, controller))
+            #expect(!controller.panel.isVisible)
+            controller.setEnabled(true)
+            try await Task.sleep(for: .milliseconds(550))
+            #expect(controller.panel.isVisible)
+            #expect(!controller.isExpanded)
+
+            controller.tearDown()
+            controller.show()
+            host.mouseEntered(with: try hoverEvent(.mouseEntered, controller))
+            #expect(!controller.panel.isVisible)
+        }
+    }
+
+    @Test func takingKeyboardFocusKeepsHoverPreviewOpen() async throws {
+        try await withHoverShelf { controller in
+            controller.show(expanded: false)
+            let host = try #require(controller.panel.contentView)
+            host.mouseEntered(with: try hoverEvent(.mouseEntered, controller))
+            host.mouseExited(with: try hoverEvent(.mouseExited, controller))
+            controller.panel.makeKey()
+            #expect(controller.panel.isKeyWindow)
+            try await Task.sleep(for: .milliseconds(550))
+            #expect(controller.isExpanded)
+        }
+    }
+
+    @Test func sheetAndTerminationPreventHoverPresentationChanges() async throws {
+        try await withHoverShelf { controller in
+            controller.show(expanded: false)
+            let host = try #require(controller.panel.contentView)
+            let sheet = NSWindow(contentRect: .zero, styleMask: [.titled], backing: .buffered, defer: false)
+            sheet.isReleasedWhenClosed = false
+            defer { sheet.close() }
+            controller.panel.beginSheet(sheet, completionHandler: nil)
+            #expect(!controller.interactionAllowed)
+            host.mouseEntered(with: try hoverEvent(.mouseEntered, controller))
+            #expect(!controller.isExpanded)
+            controller.panel.endSheet(sheet)
+            let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+            while !controller.interactionAllowed && ContinuousClock.now < deadline {
+                try await Task.sleep(for: .milliseconds(5))
+            }
+            try #require(controller.interactionAllowed)
+            host.mouseEntered(with: try hoverEvent(.mouseEntered, controller))
+            #expect(controller.isExpanded)
+            host.mouseExited(with: try hoverEvent(.mouseExited, controller))
+            #expect(await controller.store.prepareForTermination())
+            try await Task.sleep(for: .milliseconds(550))
+            #expect(controller.isExpanded)
+            controller.hide()
+            controller.show()
+            host.mouseEntered(with: try hoverEvent(.mouseEntered, controller))
+            #expect(!controller.panel.isVisible)
+        }
+    }
+
     @Test func placementRespectsMenuBarNotchAndNegativeDisplayOrigin() {
         let screen = CGRect(x: -1512, y: 300, width: 1512, height: 982)
         let visible = CGRect(x: -1512, y: 300, width: 1512, height: 944)
@@ -92,6 +204,7 @@ struct ShelfPanelTests {
 
         await store.start()
         store.setEnabled(true)
+        controller.show(expanded: false)
 
         let pasteboardItem = NSPasteboardItem()
         #expect(pasteboardItem.setString(fixture.absoluteString, forType: .fileURL))
@@ -103,10 +216,13 @@ struct ShelfPanelTests {
         #expect(target.draggingEntered(moveOnlyDrop).isEmpty)
         #expect(target.performDragOperation(moveOnlyDrop) == false)
         #expect(store.entries.isEmpty)
+        #expect(!controller.isExpanded)
 
         let copyDrop = ShelfPanelDraggingInfoStub(pasteboard: pasteboard, sourceMask: .copy)
         #expect(target.draggingEntered(copyDrop) == .copy)
+        #expect(controller.isExpanded)
         #expect(target.performDragOperation(copyDrop))
+        target.concludeDragOperation(copyDrop)
         let importDeadline = ContinuousClock.now.advanced(by: .seconds(2))
         while store.isImporting && ContinuousClock.now < importDeadline {
             try await Task.sleep(for: .milliseconds(5))
@@ -114,6 +230,8 @@ struct ShelfPanelTests {
         #expect(store.isImporting == false)
         #expect(store.entries.map(\.content) == [.file(fixture)])
         #expect(try Data(contentsOf: fixture) == original)
+        try await Task.sleep(for: .milliseconds(550))
+        #expect(controller.isExpanded)
 
         #expect(target.performDragOperation(copyDrop))
         store.clear()
@@ -125,6 +243,31 @@ struct ShelfPanelTests {
         #expect(try Data(contentsOf: fixture) == original)
         #expect(await store.flushPersistence())
     }
+}
+
+@MainActor
+private func hoverEvent(_ type: NSEvent.EventType, _ controller: ShelfPanelController) throws -> NSEvent {
+    try #require(NSEvent.enterExitEvent(with: type, location: .zero, modifierFlags: [], timestamp: 0,
+                                      windowNumber: controller.panel.windowNumber, context: nil,
+                                      eventNumber: 0, trackingNumber: 0, userData: nil))
+}
+
+@MainActor
+private func withHoverShelf(_ test: (ShelfPanelController) async throws -> Void) async throws {
+    let suite = "shelf-panel-hover-\(UUID())"
+    let defaults = UserDefaults(suiteName: suite)!
+    defaults.set(true, forKey: ShelfStore.enabledKey)
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("shelf-panel-hover-\(UUID())")
+    let store = ShelfStore(defaults: defaults, persistence: ShelfPersistence(root: root))
+    let controller = ShelfPanelController(store: store)
+    defer {
+        controller.tearDown()
+        defaults.removePersistentDomain(forName: suite)
+        try? FileManager.default.removeItem(at: root)
+    }
+    do { try await test(controller) }
+    catch { _ = await store.flushPersistence(); throw error }
+    #expect(await store.flushPersistence())
 }
 
 @MainActor

@@ -158,9 +158,12 @@ Plain text and static PNG/TIFF images are supported. There is no automatic
 clipboard sampling, OCR, or global hotkey.
 
 The compact black notch shows separate file, text, and image counts beneath
-colored-ring icons. Click it to open the rounded detail card with search,
-clipboard actions, and file-operation progress. The numbers are item counts,
-not percentages.
+colored-ring icons. Hover to unfold the rounded detail card without taking
+keyboard focus; leaving it folds the card after a 0.45-second grace period.
+Returning before it folds cancels the pending fold. Click or use **Show Shelf**
+to keep the card open for search, clipboard actions, and file-operation
+progress; **Collapse Shelf** returns it to compact mode. The numbers are item
+counts, not percentages.
 
 Shelf search covers filenames, text, and image display names and reuses
 Pengrid's Hangul-initial search behavior. **Copy** writes a fresh native value

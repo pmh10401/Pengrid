@@ -13,6 +13,7 @@ enum ShelfPanelPlacement {
 
 @MainActor
 final class ShelfPanel: NSPanel {
+    var onBecomeKey: (() -> Void)?
     var onCloseShelf: (() -> Void)?
     var onCopyShelf: (() -> Void)?
     var onImportShelf: (() -> Void)?
@@ -20,6 +21,11 @@ final class ShelfPanel: NSPanel {
     var interactionAllowed: () -> Bool = { true }
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+
+    override func becomeKey() {
+        super.becomeKey()
+        onBecomeKey?()
+    }
 
     func handleKey(_ event: NSEvent) -> Bool {
         guard interactionAllowed() else { return true }
@@ -79,6 +85,10 @@ final class ShelfPanelController {
     private(set) var isExpanded = false
     @ObservationIgnored private var screenObserver: (any NSObjectProtocol)?
     @ObservationIgnored private var keyMonitor: Any?
+    @ObservationIgnored private var foldTask: Task<Void, Never>?
+    @ObservationIgnored private var isHovering = false
+    @ObservationIgnored private var isPinned = false
+    @ObservationIgnored private var isTornDown = false
     init(store: ShelfStore, operationController: FileOperationController? = nil, openMain: @escaping () -> Void = {}) {
         self.store = store
         self.operationController = operationController
@@ -95,6 +105,7 @@ final class ShelfPanelController {
         panel.title = "Pengrid Top Shelf"
         panel.identifier = NSUserInterfaceItemIdentifier("pengrid.topShelf")
         panel.onCloseShelf = { [weak self] in self?.hide() }
+        panel.onBecomeKey = { [weak self] in self?.pinOpen() }
         panel.onImportShelf = { [weak self] in self?.importClipboard() }
         panel.onCopyShelf = { [weak self] in self?.copySelection() }
         panel.onRemoveShelf = { [weak self] in self?.removeSelection() }
@@ -116,17 +127,58 @@ final class ShelfPanelController {
     }
 
     func show(expanded: Bool = true) {
-        guard store.isEnabled, interactionAllowed else { return }
+        guard !isTornDown, store.isEnabled, !store.isPreparingTermination, interactionAllowed else { return }
+        cancelFold()
+        isPinned = expanded
         isExpanded = expanded
         reposition()
         panel.orderFront(nil)
         if expanded { panel.makeKey() }
     }
 
-    func hide() { panel.orderOut(nil) }
+    func hide() {
+        cancelFold()
+        isHovering = false
+        isPinned = false
+        isExpanded = false
+        panel.orderOut(nil)
+    }
+
+    func setHovering(_ hovering: Bool) {
+        guard !isTornDown, panel.isVisible, store.isEnabled, !store.isPreparingTermination, interactionAllowed else { return }
+        isHovering = hovering
+        cancelFold()
+        if hovering {
+            guard !isExpanded else { return }
+            isExpanded = true
+            reposition() // Hover previews never make the panel key.
+        } else if isExpanded && !isPinned {
+            foldTask = Task { [weak self] in
+                do { try await Task.sleep(for: .milliseconds(450)) }
+                catch { return }
+                guard let self else { return }
+                self.foldTask = nil
+                guard !self.isTornDown, !self.isHovering, !self.isPinned, self.panel.isVisible,
+                      self.store.isEnabled, !self.store.isPreparingTermination, self.interactionAllowed else { return }
+                self.isExpanded = false
+                self.reposition()
+            }
+        }
+    }
+
+    private func cancelFold() {
+        foldTask?.cancel()
+        foldTask = nil
+    }
+
+    private func pinOpen() {
+        guard isExpanded, panel.isVisible else { return }
+        isPinned = true
+        cancelFold()
+    }
 
     func setEnabled(_ value: Bool) {
-        guard interactionAllowed else { return }
+        guard !isTornDown, !store.isPreparingTermination, interactionAllowed else { return }
         store.setEnabled(value)
         if value { show(expanded: false) } else { hide() }
     }
@@ -145,6 +197,7 @@ final class ShelfPanelController {
     @discardableResult
     func importContents(from board: NSPasteboard) -> Bool {
         guard interactionAllowed, let token = store.beginImport() else { return false }
+        pinOpen()
         let count = board.changeCount
         Task {
             do {
@@ -173,6 +226,8 @@ final class ShelfPanelController {
     }
 
     func tearDown() {
+        isTornDown = true
+        hide()
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
         if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
         keyMonitor = nil
@@ -185,13 +240,39 @@ final class ShelfPanelController {
 @MainActor
 private final class ShelfHostingView: NSHostingView<ShelfView> {
     weak var controller: ShelfPanelController?
+    private var hoverArea: NSTrackingArea?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverArea { removeTrackingArea(hoverArea) }
+        let area = NSTrackingArea(rect: .zero,
+                                  options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect, .enabledDuringMouseDrag],
+                                  owner: self, userInfo: nil)
+        addTrackingArea(area)
+        hoverArea = area
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        super.mouseEntered(with: event)
+        controller?.setHovering(true)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        controller?.setHovering(false)
+    }
+
     override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
         guard controller?.interactionAllowed == true, controller?.store.isEnabled == true,
+              controller?.store.isPreparingTermination == false,
               !sender.draggingSourceOperationMask.intersection(.copy).isEmpty,
               sender.draggingPasteboard.availableType(from: [.fileURL, .png, .tiff, .string]) != nil else { return [] }
+        controller?.setHovering(true)
         return .copy
     }
     override func draggingUpdated(_ sender: any NSDraggingInfo) -> NSDragOperation { draggingEntered(sender) }
+    override func draggingExited(_ sender: (any NSDraggingInfo)?) { controller?.setHovering(false) }
+    override func concludeDragOperation(_ sender: (any NSDraggingInfo)?) { controller?.setHovering(false) }
     override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
         guard draggingEntered(sender) == .copy else { return false }
         return controller?.importContents(from: sender.draggingPasteboard) == true
