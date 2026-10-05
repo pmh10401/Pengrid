@@ -66,7 +66,8 @@
 - [x] Package contract checks PASS. After correcting the old two-tab expectation and adding the native drop regression, the final full run passed: 2,019 tests in 131 suites, 154.538 seconds.
 - [x] Documented retention/privacy, manual **Import Clipboard**, search limitations, copy-only drag, progress scope, and unavailable image file-export destinations in the README, user guides, and Help catalog. Released DMG claims remain separate from this source work.
 - [x] Independent whole-branch correctness review and follow-up review passed after fixes for restore/quit ordering, failed-restore retry, symlink traversal, off-main decoding, and command isolation.
-- [ ] Ponytail review, commit/push, CI, PR attachment, and merge are not complete.
+- [x] Ponytail review passed; the feature was committed, pushed, and attached as PR #18.
+- [ ] CI and merge are not complete. The first CI run exposed an Xcode 16.4 test-stub isolation mismatch; the existing compatibility-conformance pattern was restored for verification.
 - [ ] Merge ancestry verification and recoverable cleanup of this feature's managed worktree/generated build files are not complete.
 
 ## Execution ledger
@@ -76,5 +77,7 @@
 - 2026-10-05: Package contract checks PASS. The first full Swift Testing run covered 2,018 tests; one existing-tab expectation (three actual tabs versus two expected) failed. The expectation was fixed; the focused 50-test run and final 2,019-test full regression run passed.
 - Verification commands: `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcrun swift test --enable-swift-testing --no-parallel --disable-sandbox`; `/bin/bash script/tests/package_release_contract_tests.sh`. Final suite logs remain outside the worktree at `/tmp/pengrid-shelf-final-full-tests.log` and `/tmp/pengrid-shelf-package-contracts.log` for this local run.
 - 2026-10-05: Isolated UI bundle checks confirmed retention-option switching, Korean search input, Escape, and Command-W while leaving the installed Pengrid app running.
-- 2026-10-05: Actual cross-app drag, save-failure alert presentation, and multi-monitor hardware behavior remain unverified. Commit, push, CI, merge, and archive/cleanup remain incomplete.
+- 2026-10-05: PR #18 contains the reviewed feature commit `d35d879`. CI run `37253728849` failed at compilation because the macOS 15 SDK needs `@preconcurrency NSDraggingInfo` on the main-actor-only test stub. The annotation matches the existing FavoriteDrop test pattern; production code is unchanged.
+- 2026-10-05: After restoring the SDK compatibility annotation, all five `ShelfPanelTests` passed locally (0.673 seconds). The newer local SDK reports the annotation as redundant; it is retained for the supported CI SDK.
+- 2026-10-05: Actual cross-app drag, save-failure alert presentation, and multi-monitor hardware behavior remain unverified. CI, merge, and archive/cleanup remain pending at this commit.
 - Ruling: user already specified root + simple Luna execution and no per-step reapproval; proceed through approved tasks without another procedural approval loop.

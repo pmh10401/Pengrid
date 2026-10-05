@@ -128,7 +128,9 @@ struct ShelfPanelTests {
 }
 
 @MainActor
-private final class ShelfPanelDraggingInfoStub: NSObject, NSDraggingInfo {
+// The macOS 15 SDK exposes nonisolated NSDraggingInfo requirements. This
+// main-actor-only fixture needs the compatibility conformance on Xcode 16.4.
+private final class ShelfPanelDraggingInfoStub: NSObject, @preconcurrency NSDraggingInfo {
     let draggingPasteboard: NSPasteboard
     let draggingDestinationWindow: NSWindow? = nil
     let draggingSourceOperationMask: NSDragOperation
