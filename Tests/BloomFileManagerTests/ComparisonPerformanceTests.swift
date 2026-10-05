@@ -145,7 +145,9 @@ private final class ComparisonPerformanceFixture {
                coordinator.phase == .upToDate {
                 return true
             }
-            await Task.yield()
+            // Yield can immediately reschedule this MainActor waiter, competing
+            // with the batch consumers and final projection it is observing.
+            try? await Task.sleep(for: .milliseconds(5))
         }
         return await listing.generatedCount == expectedCount
             && coordinator.rows.count == expectedCount
