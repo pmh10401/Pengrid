@@ -2,13 +2,13 @@
 
 **한국어** · [English](user-guide.md) · [README](../README.ko.md)
 
-이 문서는 Pengrid 1.3.0 Developer Preview 9와 현재 소스 트리의 사용자 관점
+이 문서는 Pengrid 1.3.0 Developer Preview 10과 현재 소스 트리의 사용자 관점
 동작, 안전 경계와 의도적으로 제공하지 않는 기능을 설명합니다.
 
 ## 요구 사항과 설치
 
 현재 Pengrid는 macOS 15 이상이 설치된 Apple Silicon Mac을 지원합니다.
-[Developer Preview 9 릴리스](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.9)에서
+[Developer Preview 10 릴리스](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.10)에서
 DMG를 다운로드해 열고 `Pengrid.app`을 `Applications` 폴더로 복사하세요.
 
 무료 DMG는 ad-hoc 방식으로 서명되었으며 Developer ID 서명과 Apple 공증을
@@ -145,8 +145,7 @@ Pengrid는 재시작할 때 작업 공간 폴더, 정렬, 분할 위치, 활성 
 비교/Storage 화면, Smart Search, 편집, 대기 중인 휴지통 확인과 파일 작업
 상태는 복원하지 않습니다.
 
-> **`main` 소스의 미출시 기능(다운로드 가능한 Developer Preview 9에는
-> 포함되지 않음):** **Window > Reopen Closed Workspace Tab**을 선택하거나
+> **Developer Preview 10에 포함된 기능:** **Window > Reopen Closed Workspace Tab**을 선택하거나
 > **Command-Shift-T**를 누르면 가장 최근에 닫은 작업 공간 탭을 다시 엽니다.
 > 성공적으로 닫힌 탭의 확정된 두 폴더 경로, 정렬, 분할 비율 및 활성 패널만
 > 기록하며 대기 중인 탐색은 복원하지 않습니다. 다시 열 때는 새로운 런타임으로
@@ -170,11 +169,12 @@ Pengrid는 재시작할 때 작업 공간 폴더, 정렬, 분할 위치, 활성 
 
 ## Top Shelf 보관함
 
-> 현재 소스에 추가된 기능이며, 기존에 배포한 DMG에는 포함되어 있지 않습니다.
+> Developer Preview 10에 포함된 기능이며, Preview 9 및 그 이전 DMG에는 없습니다.
 
 Top Shelf는 파일·텍스트·이미지를 사용자가 직접 보관하는 선택 기능입니다.
 설정에서 **Enable Top Shelf**를 켜면 사용할 수 있으며 기본값은 꺼짐입니다.
-접힌 손잡이에는 파일·텍스트·이미지 개수가 각각 표시됩니다. 포인터를 올리면
+접힌 상태에서는 호버 위치를 알려 주는 얇은 검은 손잡이와 밝은 짧은 선만
+남고 큰 원 아이콘 3개는 표시하지 않습니다. 포인터를 올리면
 키보드 포커스를 가져오지 않고 넓은 검은 갤러리가 펼쳐지고, 벗어나면 0.45초 뒤
 접힙니다. 클릭하거나 **Keep Shelf Open**을 누르면 열린 상태를 유지합니다.
 패널에는 **Open Pengrid**, **Collapse Shelf**, **Hide Shelf**가 있습니다.
@@ -893,7 +893,7 @@ Pengrid는 패널, 검색 컨트롤, 미리보기 상태, 압축 단계, 작업 
 
 ## 현재 제한 사항
 
-Developer Preview 9와 현재 소스 트리는 다음 기능을 의도적으로 제공하지 않습니다.
+Developer Preview 10과 현재 소스 트리는 다음 기능을 의도적으로 제공하지 않습니다.
 
 - Intel Mac 또는 macOS 14 이하 지원
 - Developer ID 서명 또는 Apple notarization

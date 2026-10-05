@@ -6,19 +6,25 @@ Pengrid is distributed directly for Apple Silicon Macs running macOS 15 or newer
 
 ## Current published Developer Preview
 
-[Pengrid 1.3.0 Developer Preview 9](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.9)
-is the current release: version **1.3.0, build 11**, Apple Silicon, macOS 15+.
-It adds native bilingual Help, filename-pattern selection, text Select All,
-and SwiftPM isolated-test compatibility fixes.
+[Pengrid 1.3.0 Developer Preview 10](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.10)
+is the current release: version **1.3.0, build 12**, Apple Silicon, macOS 15+.
+It adds the optional manual Top Shelf with a hover notch gallery, search,
+clipboard import, category counts, and progress, plus reopening closed tabs.
 
-- [Download Pengrid.dmg](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.9/Pengrid.dmg)
-- [SHA256SUMS.txt](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.9/SHA256SUMS.txt)
-- [Changes, verification, and limitations](release-notes-v1.3.0-developer-preview.9.md)
+- [Download Pengrid.dmg](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.10/Pengrid.dmg)
+- [SHA256SUMS.txt](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.10/SHA256SUMS.txt)
+- [Changes, verification, and limitations](release-notes-v1.3.0-developer-preview.10.md)
 
 This is an ad-hoc signed, non-notarized prerelease. Physical cloud-provider and
 accessibility checks not run for this candidate remain manual gates.
 
-## Previous release: Developer Preview 8
+## Previous releases
+
+[Developer Preview 9](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.9)
+provided native bilingual Help, filename-pattern selection, and text Select All
+in build 11. See its [release notes](release-notes-v1.3.0-developer-preview.9.md).
+
+### Developer Preview 8
 
 [Pengrid 1.3.0 Developer Preview 8](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.8)
 is the previous free binary release:

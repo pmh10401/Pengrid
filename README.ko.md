@@ -15,13 +15,13 @@ Pengrid는 두 패널 탐색, 재귀 검색, 미리보기, 대기열 기반 파�
 ## 다운로드
 
 현재 릴리스는
-[Pengrid 1.3.0 Developer Preview 9](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.9)입니다.
+[Pengrid 1.3.0 Developer Preview 10](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.10)입니다.
 
-- [Pengrid.dmg 다운로드](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.9/Pengrid.dmg)
-- 버전: **1.3.0 (빌드 11)**
+- [Pengrid.dmg 다운로드](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.10/Pengrid.dmg)
+- 버전: **1.3.0 (빌드 12)**
 - 요구 사항: **Apple Silicon Mac, macOS 15 이상**
-- 검증: **126개 스위트의 자동 테스트 1,971개 통과 (환경 의존 테스트 7개 건너뜀)**
-- DMG SHA-256: [SHA256SUMS.txt](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.9/SHA256SUMS.txt)
+- 검증: **131개 스위트의 자동 테스트 2,029개 통과 (환경 의존 검사는 별도)**
+- DMG SHA-256: [SHA256SUMS.txt](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.10/SHA256SUMS.txt)
 
 DMG를 연 다음 `Pengrid.app`을 `Applications` 폴더로 복사하세요.
 
@@ -121,8 +121,7 @@ Command-P 실행기의 아이디어는 [Shuffle](https://github.com/WizenPainter
 패널 및 프로필만 복원하며, 선택, 필터, 기록, 미리보기, 검색과 작업 상태는
 의도적으로 복원하지 않습니다.
 
-> **현재 `main` 소스의 미출시 기능(다운로드 가능한 Developer
-> Preview 9에는 포함되지 않음):** **Window > Reopen Closed Workspace Tab**을
+> **Developer Preview 10에 포함된 기능:** **Window > Reopen Closed Workspace Tab**을
 > 선택하거나 **Command-Shift-T**를 누르면 가장 최근에 닫은 작업 공간 탭을 다시
 > 엽니다. 성공적으로 닫힌 탭에서는 확정된 두 폴더 경로, 정렬, 분할 비율 및
 > 활성 패널만 기록하며 대기 중인 탐색은 복원하지 않습니다. 다시 열 때는 새로운
@@ -145,7 +144,7 @@ contents** 필터는 Spotlight가 이미 색인한 내용만 사용하며 온라
 
 ### 수동 Top Shelf 보관함
 
-> 현재 소스에 추가된 기능입니다. 기존에 배포한 DMG에는 포함되어 있지 않습니다.
+> Developer Preview 10에 포함된 기능입니다. Preview 9 및 그 이전 DMG에는 없습니다.
 
 **Top Shelf**는 기본값이 OFF입니다. **Settings > Top Shelf**에서 켜거나 앱의
 Top Shelf 표시/숨기기 명령을 사용하세요. 보관함은 수동으로만 채워집니다.
@@ -154,12 +153,13 @@ Top Shelf 표시/숨기기 명령을 사용하세요. 보관함은 수동으로�
 않습니다. 일반 텍스트와 정적 PNG/TIFF 이미지를 지원합니다. 클립보드 자동
 수집(sampling), OCR, 전역 단축키는 제공하지 않습니다.
 
-접힌 검은 노치는 색상 링 아이콘으로 파일·텍스트·이미지의 개수를 각각 표시합니다.
+접힌 보관함은 호버 위치를 알려 주는 얇은 검은 손잡이와 밝은 짧은 선만 남깁니다.
+큰 원 아이콘 3개는 표시하지 않습니다.
 포인터를 올리면 키보드 포커스를 가져오지 않고 가로로 넓은 검은 노치 보관함이 펼쳐집니다.
 포인터를 벗어나면 0.45초 뒤 접히며, 그 전에 다시 진입하면 접힘을 취소합니다.
 클릭하거나 **Show Shelf**로 직접 열면 검색, 클립보드 작업, 파일 작업 진행률을
 확인하는 동안 열린 상태를 유지합니다. **Collapse Shelf**로 다시 접을 수 있습니다.
-아이콘 아래 숫자는 백분율이 아니라 보관 항목의 개수입니다.
+항목 개수는 손잡이가 아닌 펼친 보관함의 유형별 탭에서 확인합니다.
 
 펼친 보관함에는 상단 검색창, 실제 개수가 붙은 **All / Files / Text / Images**
 캡슐 탭, 가로로 스크롤하는 미리보기 카드가 있습니다. 이미지는 크기를 제한한
@@ -249,7 +249,7 @@ VoiceOver 레이블, Reduce Motion 및 개인정보를 노출하지 않는 상�
 | **Command-I** | 캡처한 선택 항목의 Get Info |
 | **Command-T** | 새 작업 공간 탭 |
 | **Command-W** | 안전할 때 활성 작업 공간 탭 닫기 |
-| **Command-Shift-T** | 마지막으로 닫은 작업 공간 탭 다시 열기 *(현재 `main`의 미출시 소스 전용 기능이며 다운로드 가능한 Developer Preview 9에는 포함되지 않음)* |
+| **Command-Shift-T** | 마지막으로 닫은 작업 공간 탭 다시 열기 *(Developer Preview 10 이상)* |
 | **Control-Tab** | 다음 작업 공간 탭 |
 | **Control-Shift-Tab** | 이전 작업 공간 탭 |
 | **Command-D** | 캡처한 선택 항목 복제 |
@@ -301,7 +301,7 @@ open dist/Pengrid.app
 ## 문서
 
 - [상세 기능 가이드](docs/user-guide.ko.md)
-- [Developer Preview 9 릴리스 노트](docs/release-notes-v1.3.0-developer-preview.9.md)
+- [Developer Preview 10 릴리스 노트](docs/release-notes-v1.3.0-developer-preview.10.md)
 - [릴리스 및 패키징 가이드](docs/release.ko.md)
 - [아키텍처 설명](docs/architecture.md)
 - [현재 제한 사항](docs/current-limitations.ko.md)

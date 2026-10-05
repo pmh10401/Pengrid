@@ -5,6 +5,30 @@ import Testing
 @Suite("Shelf window boundary", .serialized)
 @MainActor
 struct ShelfPanelTests {
+    @Test func leavingHoverReturnsToASmallHandleWithoutLosingShelfItems() async throws {
+        try await withHoverShelf { controller in
+            let item = ShelfItem(content: .text("keep this item when folded"))
+            await controller.store.add([item])
+            controller.show(expanded: false)
+            #expect(controller.panel.frame.width <= 160)
+            #expect(controller.panel.frame.height <= 24)
+            let host = try #require(controller.panel.contentView)
+            host.mouseEntered(with: try hoverEvent(.mouseEntered, controller))
+            #expect(controller.isExpanded)
+            #expect(controller.panel.frame.height > 100)
+            host.mouseExited(with: try hoverEvent(.mouseExited, controller))
+            let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+            while controller.isExpanded && ContinuousClock.now < deadline {
+                try await Task.sleep(for: .milliseconds(5))
+            }
+            #expect(!controller.isExpanded)
+            #expect(controller.panel.isVisible)
+            #expect(controller.panel.frame.width <= 160)
+            #expect(controller.panel.frame.height <= 24)
+            #expect(controller.store.entries == [item])
+        }
+    }
+
     @Test func nativeHoverOpensWithoutTakingFocusAndFoldsAfterLeaving() async throws {
         try await withHoverShelf { controller in
             controller.show(expanded: false)

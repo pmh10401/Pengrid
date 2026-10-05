@@ -2,14 +2,14 @@
 
 [한국어](user-guide.ko.md) · **English** · [README](../README.md)
 
-This guide describes Pengrid 1.3.0 Developer Preview 9 and the current source
+This guide describes Pengrid 1.3.0 Developer Preview 10 and the current source
 tree, including safety boundaries and deliberately omitted behavior.
 
 ## Requirements and installation
 
 Pengrid currently supports Apple Silicon Macs running macOS 15 or later.
 Download the DMG from the
-[Developer Preview 9 release](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.9),
+[Developer Preview 10 release](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.10),
 open it, and copy `Pengrid.app` to `Applications`.
 
 The free DMG is ad-hoc signed, not Developer ID signed, and not notarized.
@@ -148,8 +148,7 @@ active pane, tab order, active tab, and profiles. It does not restore selections
 filters, navigation history, scroll position, previews, comparison/storage views,
 Smart Search, editing, pending Trash confirmation, or file-operation state.
 
-> **Upcoming source-only feature on `main` (unreleased; not in the downloadable
-> Developer Preview 9):** Choose **Window > Reopen Closed Workspace Tab** or press
+> **Included in Developer Preview 10:** Choose **Window > Reopen Closed Workspace Tab** or press
 > **Command-Shift-T** to reopen the most recently closed workspace tab. Each successful
 > close keeps the tab's two committed folder paths, sort orders, split ratio, and
 > active pane; pending navigation is not restored. Reopening starts a fresh runtime:
@@ -173,11 +172,12 @@ queries, or actions across a larger result set.
 
 ## Top Shelf
 
-> Available in the current source, not in previously published DMGs.
+> Included in Developer Preview 10; unavailable in Preview 9 and earlier DMGs.
 
 Top Shelf is an optional, manual holding area for files, text, and images. In
-Settings, turn on **Enable Top Shelf**. It is off by default. A collapsed pill
-shows separate file, text, and image counts. Hover to preview the wide black
+Settings, turn on **Enable Top Shelf**. It is off by default. When collapsed,
+only a slim black handle and a short bright line mark the hover target; the
+three large circular icons are not shown. Hover to preview the wide black
 gallery without taking keyboard focus; leaving folds it after 0.45 seconds.
 Click or choose **Keep Shelf Open** to keep it open. The panel also provides
 **Open Pengrid**, **Collapse Shelf**, and **Hide Shelf**. Hiding or collapsing
@@ -936,7 +936,7 @@ documents.
 
 ## Current limitations
 
-Developer Preview 9 and the current source tree deliberately do not provide:
+Developer Preview 10 and the current source tree deliberately do not provide:
 
 - Intel Mac or macOS 14-and-earlier support;
 - Developer ID signing or Apple notarization;

@@ -16,13 +16,13 @@ free, open-source macOS app.
 ## Download
 
 The current release is
-[Pengrid 1.3.0 Developer Preview 9](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.9).
+[Pengrid 1.3.0 Developer Preview 10](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.10).
 
-- [Download Pengrid.dmg](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.9/Pengrid.dmg)
-- Version: **1.3.0 (build 11)**
+- [Download Pengrid.dmg](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.10/Pengrid.dmg)
+- Version: **1.3.0 (build 12)**
 - Requirements: **Apple Silicon Mac, macOS 15 or later**
-- Verification: **1,971 automated tests in 126 suites (7 environment-dependent tests skipped)**
-- DMG SHA-256: [SHA256SUMS.txt](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.9/SHA256SUMS.txt)
+- Verification: **2,029 automated tests in 131 suites (environment-dependent checks remain separate)**
+- DMG SHA-256: [SHA256SUMS.txt](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.10/SHA256SUMS.txt)
 
 Open the DMG, then copy `Pengrid.app` to `Applications`.
 
@@ -123,8 +123,7 @@ to create a new tab without changing the existing one. The session restores tab
 folders, sort orders, split position, active pane, and profiles; selections, filters,
 history, previews, searches, and operation state are intentionally not restored.
 
-> **Upcoming source-only feature on `main` (unreleased; not in the downloadable
-> Developer Preview 9):** Choose **Window > Reopen Closed Workspace Tab** or press
+> **Included in Developer Preview 10:** Choose **Window > Reopen Closed Workspace Tab** or press
 > **Command-Shift-T** to reopen the most recently closed workspace tab. A successful
 > close records the tab's two committed folder paths, sort orders, split ratio, and
 > active pane; pending navigation is not restored. Reopening creates a fresh runtime,
@@ -148,7 +147,7 @@ query.
 
 ### Keep a manual Top Shelf
 
-> Available in the current source. Previously published DMGs do not include this feature.
+> Included in Developer Preview 10; unavailable in Preview 9 and earlier DMGs.
 
 **Top Shelf** is off by default. Turn it on in **Settings > Top Shelf**, or use
 the app's Top Shelf show/hide command. The shelf is manual: open it and choose
@@ -157,13 +156,14 @@ references and never moves, deletes, downloads, or edits the original files.
 Plain text and static PNG/TIFF images are supported. There is no automatic
 clipboard sampling, OCR, or global hotkey.
 
-The compact black notch shows separate file, text, and image counts beneath
-colored-ring icons. Hover to unfold a wide black notch gallery without taking
+The collapsed shelf leaves only a slim black handle with a short bright line
+to show where to hover. The three large circle icons are no longer shown.
+Hover to unfold a wide black notch gallery without taking
 keyboard focus; leaving it folds the gallery after a 0.45-second grace period.
 Returning before it folds cancels the pending fold. Click or use **Show Shelf**
 to keep the shelf open for search, clipboard actions, and file-operation
-progress; **Collapse Shelf** returns it to compact mode. The numbers are item
-counts, not percentages.
+progress; **Collapse Shelf** returns it to the small handle. Counts are shown
+in the expanded gallery's category tabs, not on the handle.
 
 The expanded shelf uses a search-first header, **All / Files / Text / Images**
 capsules with actual item counts, and horizontally scrolling preview cards.
@@ -259,7 +259,7 @@ support, and privacy-preserving status text.
 | **Command-I** | Get Info for the captured selection |
 | **Command-T** | New workspace tab |
 | **Command-W** | Close active workspace tab when safe |
-| **Command-Shift-T** | Reopen the last closed workspace tab *(unreleased source-only feature on `main`; not in downloadable Developer Preview 9)* |
+| **Command-Shift-T** | Reopen the last closed workspace tab *(Developer Preview 10 or later)* |
 | **Control-Tab** | Next workspace tab |
 | **Control-Shift-Tab** | Previous workspace tab |
 | **Command-D** | Duplicate the captured selection |
@@ -314,7 +314,7 @@ retain the internal name `BloomFileManager` for compatibility.
 ## Documentation
 
 - [Detailed feature guide](docs/user-guide.md)
-- [Developer Preview 9 release notes](docs/release-notes-v1.3.0-developer-preview.9.md)
+- [Developer Preview 10 release notes](docs/release-notes-v1.3.0-developer-preview.10.md)
 - [Release and packaging guide](docs/release.md)
 - [Architecture notes](docs/architecture.md)
 - [Current limitations](docs/current-limitations.md)

@@ -12,11 +12,11 @@ struct ShelfView: View {
             }
         }
         .padding(.horizontal, controller.isExpanded ? 52 : 10)
-        .padding(.vertical, controller.isExpanded ? 18 : 10)
+        .padding(.vertical, controller.isExpanded ? 18 : 3)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(.black)
         .compositingGroup()
-        .clipShape(ShelfNotchShape(shoulder: controller.isExpanded ? 32 : 8))
+        .clipShape(ShelfNotchShape(shoulder: controller.isExpanded ? 32 : 4))
         .preferredColorScheme(.dark)
     }
 }
@@ -48,36 +48,19 @@ private struct ShelfNotchShape: Shape {
 private struct ShelfCollapsedView: View {
     let controller: ShelfPanelController
 
-    private func count(_ kind: ShelfContentKind) -> Int {
-        controller.store.entries.filter { $0.kind == kind }.count
-    }
-
     var body: some View {
         Button { controller.show() } label: {
-            HStack(spacing: 22) {
-                category("doc", count: count(.file), color: .mint)
-                category("text.alignleft", count: count(.text), color: .cyan)
-                category("photo", count: count(.image), color: .orange)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .contentShape(.rect)
+            Capsule()
+                .fill(.white.opacity(0.65))
+                .frame(width: 32, height: 3)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .contentShape(.rect)
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Open Top Shelf: \(count(.file)) files, \(count(.text)) text items, \(count(.image)) images")
+        .accessibilityLabel("Open Top Shelf: \(controller.store.entries.count) items")
         .accessibilityIdentifier("topShelf.open")
-        .help("Open Top Shelf. Drop files, text, or images here to keep them.")
-    }
-
-    private func category(_ symbol: String, count: Int, color: Color) -> some View {
-        VStack(spacing: 4) {
-            Image(systemName: symbol)
-                .font(.system(size: 16, weight: .medium))
-                .frame(width: 36, height: 36)
-                .background { Circle().stroke(color, lineWidth: 2) }
-            Text(count.formatted()).font(.caption.monospacedDigit())
-        }
-        .foregroundStyle(.white)
-        .accessibilityHidden(true)
+        .accessibilityHint("Hover or click this handle to open the shelf.")
+        .help("Hover or click to open Top Shelf. Drop files, text, or images here to keep them.")
     }
 }
 
