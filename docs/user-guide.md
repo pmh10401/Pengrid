@@ -171,6 +171,73 @@ its own filter and result count.
 Use Smart Search when you need a recursive search, metadata filters, saved
 queries, or actions across a larger result set.
 
+## Top Shelf
+
+> Available in the current source, not in previously published DMGs.
+
+Top Shelf is an optional, manual holding area for files, text, and images. In
+Settings, turn on **Enable Top Shelf**. It is off by default. A collapsed pill
+shows **Top Shelf · N**; click it to open the panel. The panel also provides
+**Open Pengrid**, **Collapse Shelf**, and **Hide Shelf**. Hiding or collapsing
+the panel keeps its entries.
+
+The panel contains the following controls:
+
+- **Import Clipboard** reads the current clipboard only when you explicitly
+  press the button. Opening, hovering, searching, and showing progress do not
+  read the clipboard.
+- **Search shelf (including Korean initials)** searches shelf names and text.
+  The **All**, **Files**, **Text**, and **Images** filters narrow the results.
+- **Copy** writes the selected shelf item to the system clipboard. **Remove
+  from Shelf** removes only that shelf entry. **Clear…** opens a confirmation;
+  **Clear Shelf** removes all shelf entries.
+- A row's **Drag a copy** handle is copy-only. File entries drag as file URL
+  references. Text and image drags require a destination that accepts the
+  corresponding native type; image drags work only with native image
+  consumers. Use **Copy** when the destination does not accept that type.
+
+The bottom of the panel shows the existing operation center's active job,
+progress, queued count, and recovery or latest-failure notice. Unknown progress
+uses an activity indicator. Choose **Open Pengrid** for passwords, conflicts,
+recovery, or cancellation; closing the shelf does not cancel the file operation.
+
+The shelf accepts at most 50 entries. Text is limited to 256 KiB of UTF-8 per
+entry. Images must be a single-frame PNG or TIFF, no larger than 16 MiB of
+encoded data and 40 megapixels. Text and encoded image payloads together are
+limited to 64 MiB. File entries store references only; they do not copy file
+contents into the shelf. A file must still exist when you copy or drag its
+reference, so moving or deleting the original can make that shelf action fail.
+
+Top Shelf never records clipboard history automatically, sends shelf data over
+the network, or deletes original files. **Remove from Shelf**, **Clear Shelf**,
+turning the shelf off, and quitting do not delete or move the originals. They
+also do not clear the system clipboard or a copy already exported to another
+app.
+
+### Retention and local privacy
+
+In **Settings > Top Shelf**, choose **When Pengrid quits**:
+
+- **Clear on Quit** is the default. Entries remain in memory until Pengrid
+  quits, and Pengrid requests removal of any saved shelf snapshot. Changing to
+  this option requests snapshot removal but keeps current entries until quit.
+- **Keep Between Launches** saves manually added text, images, and file
+  references locally on this Mac when persistence succeeds, so they can be
+  restored after a relaunch.
+
+The local snapshot is not encrypted by Pengrid and is not synchronized to the
+cloud. Anyone with access to this Mac or its backups may be able to access it.
+Turning Top Shelf off clears its entries and requests removal of the shelf
+snapshot. **Clear Shelf** has the same shelf-only scope; it does not touch
+originals or the system clipboard.
+
+If restoring, saving, or removing the local snapshot fails, the panel shows a
+bounded error and does not promise that the requested disk change succeeded.
+Check disk space and permissions, then choose **Retry** in the panel or
+**Retry Storage** in Settings. Confirm the resulting status before assuming a
+snapshot was saved or deleted. The current shelf and any existing snapshot are
+not treated as safely replaced merely because a save was attempted.
+
 ## Quick Go, new files, and visible-row selection
 
 > These productivity workflows, including **Select by Name…**, are included

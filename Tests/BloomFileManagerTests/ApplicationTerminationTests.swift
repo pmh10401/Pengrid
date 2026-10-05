@@ -7,6 +7,26 @@ import Testing
 @Suite("Application termination safety", .serialized)
 struct ApplicationTerminationTests {
     @MainActor
+    @Test func additionalPreparationCanPreventQuitAndRetry() async {
+        let replies = TerminationReplyRecorder()
+        let permits = TerminationReplyRecorder()
+        let coordinator = ApplicationTerminationCoordinator(
+            operationController: nil, passwordCoordinator: nil,
+            additionalPreparation: { permits.values.last == true }, reply: { replies.append($0) }
+        )
+        #expect(coordinator.applicationShouldTerminate() == .terminateLater)
+        // A bounded wait also makes the missing-hook implementation fail rather than hang.
+        let deadline = ContinuousClock.now.advanced(by: .milliseconds(200))
+        while replies.values.isEmpty && ContinuousClock.now < deadline { await Task.yield() }
+        #expect(replies.values == [false])
+        permits.append(true)
+        #expect(coordinator.applicationShouldTerminate() == .terminateLater)
+        let retryDeadline = ContinuousClock.now.advanced(by: .milliseconds(200))
+        while replies.values.count < 2 && ContinuousClock.now < retryDeadline { await Task.yield() }
+        #expect(replies.values == [false, true])
+    }
+
+    @MainActor
     @Test func idleTerminationIsImmediateAndDoesNotReply() {
         let replies = TerminationReplyRecorder()
         let coordinator = ApplicationTerminationCoordinator(

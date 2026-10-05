@@ -3,11 +3,13 @@ import SwiftUI
 enum PengridSettingsTab: CaseIterable, Equatable, Sendable {
     case fileOperations
     case cloudLocations
+    case topShelf
 
     var title: String {
         switch self {
         case .fileOperations: "File Operations"
         case .cloudLocations: "Cloud Locations"
+        case .topShelf: "Top Shelf"
         }
     }
 
@@ -15,6 +17,7 @@ enum PengridSettingsTab: CaseIterable, Equatable, Sendable {
         switch self {
         case .fileOperations: "arrow.left.arrow.right"
         case .cloudLocations: "externaldrive.badge.icloud"
+        case .topShelf: "tray.full"
         }
     }
 }
