@@ -157,6 +157,11 @@ references and never moves, deletes, downloads, or edits the original files.
 Plain text and static PNG/TIFF images are supported. There is no automatic
 clipboard sampling, OCR, or global hotkey.
 
+The compact black notch shows separate file, text, and image counts beneath
+colored-ring icons. Click it to open the rounded detail card with search,
+clipboard actions, and file-operation progress. The numbers are item counts,
+not percentages.
+
 Shelf search covers filenames, text, and image display names and reuses
 Pengrid's Hangul-initial search behavior. **Copy** writes a fresh native value
 to the system clipboard. Drag-out is copy-only and provides a native file URL,

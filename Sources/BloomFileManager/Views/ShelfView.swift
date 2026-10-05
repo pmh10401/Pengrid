@@ -8,23 +8,52 @@ struct ShelfView: View {
             if controller.isExpanded {
                 ShelfContentsView(controller: controller)
             } else {
-                Button {
-                    controller.show()
-                } label: {
-                    Label("Top Shelf · \(controller.store.entries.count)", systemImage: "tray.full")
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .contentShape(.rect)
-                }
-                .buttonStyle(.plain)
-                .help("Open Top Shelf. Drop files, text, or images here to keep them.")
+                ShelfCollapsedView(controller: controller)
             }
         }
-        .padding(controller.isExpanded ? 16 : 4)
+        .padding(controller.isExpanded ? 18 : 10)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(.black)
         .compositingGroup()
-        .clipShape(.rect(cornerRadius: controller.isExpanded ? 24 : 16))
+        .clipShape(.rect(topLeadingRadius: 8, bottomLeadingRadius: 26,
+                         bottomTrailingRadius: 26, topTrailingRadius: 8))
         .preferredColorScheme(.dark)
+    }
+}
+
+private struct ShelfCollapsedView: View {
+    let controller: ShelfPanelController
+
+    private func count(_ kind: ShelfContentKind) -> Int {
+        controller.store.entries.filter { $0.kind == kind }.count
+    }
+
+    var body: some View {
+        Button { controller.show() } label: {
+            HStack(spacing: 22) {
+                category("doc", count: count(.file), color: .mint)
+                category("text.alignleft", count: count(.text), color: .cyan)
+                category("photo", count: count(.image), color: .orange)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Open Top Shelf: \(count(.file)) files, \(count(.text)) text items, \(count(.image)) images")
+        .accessibilityIdentifier("topShelf.open")
+        .help("Open Top Shelf. Drop files, text, or images here to keep them.")
+    }
+
+    private func category(_ symbol: String, count: Int, color: Color) -> some View {
+        VStack(spacing: 4) {
+            Image(systemName: symbol)
+                .font(.system(size: 16, weight: .medium))
+                .frame(width: 36, height: 36)
+                .background { Circle().stroke(color, lineWidth: 2) }
+            Text(count.formatted()).font(.caption.monospacedDigit())
+        }
+        .foregroundStyle(.white)
+        .accessibilityHidden(true)
     }
 }
 
@@ -41,8 +70,15 @@ private struct ShelfContentsView: View {
     var body: some View {
         VStack(spacing: 10) {
             HStack {
-                Label("Top Shelf", systemImage: "tray.full").font(.headline)
-                Text("\(store.entries.count)/50").foregroundStyle(.secondary)
+                Image(systemName: "tray.full")
+                    .foregroundStyle(.mint)
+                    .font(.system(size: 18, weight: .medium))
+                Text("Top Shelf").font(.headline)
+                Text("\(store.entries.count)/\(ShelfItem.maximumItemCount)")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 8).padding(.vertical, 4)
+                    .background(.white.opacity(0.08), in: Capsule())
                 Spacer()
                 Button("Open Pengrid", systemImage: "rectangle.on.rectangle") {
                     if controller.interactionAllowed { controller.openMain() }
@@ -56,6 +92,7 @@ private struct ShelfContentsView: View {
                     .labelStyle(.iconOnly)
                     .help("Hide Shelf; reopen from the Shelf menu")
             }
+            .buttonStyle(.borderless)
             HStack {
                 TextField("Search shelf (including Korean initials)", text: $store.query)
                     .textFieldStyle(.roundedBorder)
@@ -73,6 +110,7 @@ private struct ShelfContentsView: View {
                 ForEach(store.filteredEntries) { item in
                     ShelfItemRow(item: item, controller: controller)
                         .tag(item.id)
+                        .listRowBackground(Color.clear)
                 }
             }
             .listStyle(.plain)
@@ -80,8 +118,11 @@ private struct ShelfContentsView: View {
             .overlay {
                 if store.filteredEntries.isEmpty {
                     VStack(spacing: 6) {
-                        Image(systemName: "tray.and.arrow.down").font(.title)
+                        Image(systemName: "tray.and.arrow.down")
+                            .font(.system(size: 24, weight: .light))
+                            .foregroundStyle(.mint)
                         Text(store.isRestoring ? "Restoring shelf…" : store.query.isEmpty ? "Drop files, text, or images here" : "No matching items")
+                            .font(.callout)
                         Text("Clipboard is read only when you choose Import.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
@@ -168,7 +209,7 @@ private struct ShelfProgressView: View {
                 Text("\(job.title) · \(job.state.label)").lineLimit(1)
                 if let progress = job.progress,
                    let fraction = FileOperationCenterProgressPresentation.determinateFraction(for: progress) {
-                    ProgressView(value: fraction).accessibilityLabel("Operation progress")
+                    ProgressView(value: fraction).tint(.mint).accessibilityLabel("Operation progress")
                     Text(progress.detail).foregroundStyle(.secondary)
                 } else {
                     ProgressView().controlSize(.mini).accessibilityLabel("Operation in progress")
@@ -183,7 +224,8 @@ private struct ShelfProgressView: View {
         }
         .font(.caption)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.top, 5)
+        .padding(10)
+        .background(.white.opacity(0.06), in: .rect(cornerRadius: 12))
     }
 }
 

@@ -6,7 +6,7 @@ enum ShelfPanelPlacement {
     static func frame(visibleFrame: CGRect, screenFrame: CGRect, safeTop: CGFloat, expanded: Bool) -> CGRect {
         let top = max(visibleFrame.minY, min(visibleFrame.maxY, screenFrame.maxY - safeTop))
         let width = min(expanded ? 560 : 240, visibleFrame.width)
-        let height = min(expanded ? 440 : 38, top - visibleFrame.minY)
+        let height = min(expanded ? 440 : 82, top - visibleFrame.minY)
         return CGRect(x: visibleFrame.midX - width / 2, y: top - height, width: width, height: height)
     }
 }
