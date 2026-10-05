@@ -146,6 +146,36 @@ only already-indexed Spotlight content, never downloads cloud-only files, and
 reports when content coverage is unavailable or skipped for an initial-consonant
 query.
 
+### Keep a manual Top Shelf
+
+> Available in the current source. Previously published DMGs do not include this feature.
+
+**Top Shelf** is off by default. Turn it on in **Settings > Top Shelf**, or use
+the app's Top Shelf show/hide command. The shelf is manual: open it and choose
+**Import Clipboard** or drag a supported item in. It stores file URLs as
+references and never moves, deletes, downloads, or edits the original files.
+Plain text and static PNG/TIFF images are supported. There is no automatic
+clipboard sampling, OCR, or global hotkey.
+
+Shelf search covers filenames, text, and image display names and reuses
+Pengrid's Hangul-initial search behavior. **Copy** writes a fresh native value
+to the system clipboard. Drag-out is copy-only and provides a native file URL,
+string, or image representation when the destination supports that type; it
+does not promise file export for unsupported destinations. Clear, turning the
+shelf off, and quitting do not clear the system clipboard or change original
+files.
+
+The shelf accepts up to 50 items, UTF-8 text up to 256 KiB per item, encoded
+PNG/TIFF images up to 16 MiB and 40 megapixels (single-frame only), and 64 MiB
+of total encoded payload. The default retention choice is **Clear on Quit**:
+items remain in memory for the current session only. **Keep Between Launches**
+is an explicit opt-in that writes an unencrypted local snapshot at
+`~/Library/Application Support/Pengrid/TopShelf/snapshot.plist`; it is not
+cloud-synced. Switching back to **Clear on Quit** removes only that disk
+snapshot and keeps the current in-memory session. Turning the shelf off or
+using **Clear** removes shelf entries and its snapshot, never the system
+clipboard or original files.
+
 ### Preview and act without losing context
 
 Press **Space** to preview one folder's immediate contents or open system Quick

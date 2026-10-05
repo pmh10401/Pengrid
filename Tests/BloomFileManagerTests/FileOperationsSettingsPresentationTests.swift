@@ -6,10 +6,12 @@ struct FileOperationsSettingsPresentationTests {
     @Test func settingsTabsKeepFileOperationsBeforeCloudLocations() {
         #expect(PengridSettingsTab.allCases.map(\.title) == [
             "File Operations",
-            "Cloud Locations"
+            "Cloud Locations",
+            "Top Shelf"
         ])
         #expect(PengridSettingsTab.fileOperations.systemImage == "arrow.left.arrow.right")
         #expect(PengridSettingsTab.cloudLocations.systemImage == "externaldrive.badge.icloud")
+        #expect(PengridSettingsTab.topShelf.systemImage == "tray.full")
     }
 
     @Test func verificationToggleUsesStableLabelValuesAndIdentifier() {

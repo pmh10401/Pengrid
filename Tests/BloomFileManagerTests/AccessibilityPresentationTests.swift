@@ -510,7 +510,7 @@ func stalePasswordDismissalCannotCancelNewCoordinatorRequest() async throws {
     #expect(app.contains(
         "FileOperationsSettingsView(preference: transferVerificationPreference)"
     ))
-    #expect(app.occurrences(of: ".tabItem") == 2)
+    #expect(app.occurrences(of: ".tabItem") == 3)
     let fileOperationsTab = try #require(app.range(
         of: "PengridSettingsTab.fileOperations.title"
     ))
@@ -518,6 +518,8 @@ func stalePasswordDismissalCannotCancelNewCoordinatorRequest() async throws {
         of: "PengridSettingsTab.cloudLocations.title"
     ))
     #expect(fileOperationsTab.lowerBound < cloudLocationsTab.lowerBound)
+    let topShelfTab = try #require(app.range(of: "PengridSettingsTab.topShelf.title"))
+    #expect(cloudLocationsTab.lowerBound < topShelfTab.lowerBound)
 
     let storageWorkspace = try source(
         named: "Views/StorageInspector/StorageInspectorView.swift"

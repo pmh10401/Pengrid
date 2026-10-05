@@ -787,7 +787,10 @@ enum StorageInspectorCommandActions {
 
 struct WorkspaceCommands: Commands {
     @FocusedValue(\.standaloneTextInputFocused) private var standaloneTextInputFocused
-    @FocusedValue(\.workspaceState) private var workspace
+    @FocusedValue(\.workspaceState) private var focusedWorkspace
+    private var workspace: WorkspaceState? {
+        ShelfPanel.allowsWorkspaceCommands(keyWindow: NSApp.keyWindow) ? focusedWorkspace : nil
+    }
     @FocusedValue(\.workspaceSessionState) private var workspaceSession
     @FocusedValue(\.workspaceTabModalPresented) private var workspaceTabModalPresented
     @FocusedValue(\.workspaceTabTeardown) private var workspaceTabTeardown

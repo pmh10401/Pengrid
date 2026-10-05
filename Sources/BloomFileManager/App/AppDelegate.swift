@@ -27,6 +27,7 @@ private final class TerminationPreparationContext {
     private let sleep: Sleep
     private let terminationPreparationToken: TerminationPreparationToken?
     private let completion: Completion
+    private let additionalPreparation: (@MainActor @Sendable () async -> Bool)?
     private let invalidation: TerminationPreparationInvalidation
     private var didComplete = false
 
@@ -38,6 +39,7 @@ private final class TerminationPreparationContext {
         sleep: @escaping Sleep,
         terminationPreparationToken: TerminationPreparationToken?,
         invalidation: TerminationPreparationInvalidation,
+        additionalPreparation: (@MainActor @Sendable () async -> Bool)?,
         completion: @escaping Completion
     ) {
         self.operationController = operationController
@@ -48,6 +50,7 @@ private final class TerminationPreparationContext {
         self.terminationPreparationToken = terminationPreparationToken
         self.invalidation = invalidation
         self.completion = completion
+        self.additionalPreparation = additionalPreparation
     }
 
     func run() async {
@@ -87,7 +90,9 @@ private final class TerminationPreparationContext {
                 continue
             }
 
-            complete(replying: true)
+            let prepared = await additionalPreparation?() ?? true
+            guard !invalidation.isInvalidated, !Task.isCancelled else { return }
+            complete(replying: prepared)
             return
         }
     }
@@ -118,6 +123,7 @@ final class ApplicationTerminationCoordinator {
     private let pollInterval: Duration
     private let sleep: Sleep
     private let reply: Reply
+    private let additionalPreparation: (@MainActor @Sendable () async -> Bool)?
     private var state: State = .idle
     private var terminationPreparationToken: TerminationPreparationToken?
     private var preparationInvalidation: TerminationPreparationInvalidation?
@@ -132,6 +138,7 @@ final class ApplicationTerminationCoordinator {
         sleep: @escaping Sleep = { duration in
             try? await Task.sleep(for: duration)
         },
+        additionalPreparation: (@MainActor @Sendable () async -> Bool)? = nil,
         reply: @escaping Reply
     ) {
         self.operationController = operationController
@@ -140,6 +147,7 @@ final class ApplicationTerminationCoordinator {
         self.pollInterval = pollInterval
         self.sleep = sleep
         self.reply = reply
+        self.additionalPreparation = additionalPreparation
     }
 
     deinit {
@@ -208,6 +216,7 @@ final class ApplicationTerminationCoordinator {
             sleep: sleep,
             terminationPreparationToken: terminationPreparationToken,
             invalidation: invalidation,
+            additionalPreparation: additionalPreparation,
             completion: { [weak self] shouldTerminate in
                 self?.finish(replying: shouldTerminate)
             }
@@ -224,6 +233,7 @@ final class ApplicationTerminationCoordinator {
         operationController?.requiresTerminationPreparation == true
             || operationController?.hasRecoveryRequiredResultForTermination == true
             || passwordCoordinator?.pendingRequest != nil
+            || additionalPreparation != nil
     }
 
     private func finish(replying shouldTerminate: Bool) {
@@ -256,6 +266,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func configureTermination(
         operationController: FileOperationController,
         passwordCoordinator: ArchivePasswordPromptCoordinator,
+        additionalPreparation: (@MainActor @Sendable () async -> Bool)? = nil,
         reply: @escaping ApplicationTerminationCoordinator.Reply = { shouldTerminate in
             NSApp.reply(toApplicationShouldTerminate: shouldTerminate)
         }
@@ -264,6 +275,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         terminationCoordinator = ApplicationTerminationCoordinator(
             operationController: operationController,
             passwordCoordinator: passwordCoordinator,
+            additionalPreparation: additionalPreparation,
             reply: reply
         )
     }

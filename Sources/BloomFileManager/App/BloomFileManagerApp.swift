@@ -98,6 +98,7 @@ struct BloomFileManagerApp: App {
     @State private var contextActionRouter: FileContextActionRouter
     @State private var openWithProvider: OpenWithApplicationProvider
     @State private var selectionFolder: SelectionFolderModel
+    @State private var shelfController: ShelfPanelController
     private let cloudDependencies: CloudRuntimeDependencies
     private let storageDependencies: StorageInspectorRuntimeDependencies
     private let cloudWorkspaceActions: LiveCloudLocationWorkspaceActions
@@ -127,6 +128,8 @@ struct BloomFileManagerApp: App {
             verificationPolicyProvider: { transferVerificationPreference.policy }
         )
         _operationController = State(initialValue: operationController)
+        let shelfStore = ShelfStore(persistence: ShelfPersistence(root: ShelfPersistence.defaultRoot))
+        _shelfController = State(initialValue: ShelfPanelController(store: shelfStore, operationController: operationController))
         _contextActionRouter = State(initialValue: FileContextActionRouter(
             fileSystem: cloudDependencies.fileSystem,
             accessCoordinator: cloudDependencies.accessCoordinator,
@@ -255,12 +258,24 @@ struct BloomFileManagerApp: App {
         // SwiftUI scene can dispatch any user work or AppKit Quit requests.
         appDelegate.configureTermination(
             operationController: operationController,
-            passwordCoordinator: passwordCoordinator
+            passwordCoordinator: passwordCoordinator,
+            additionalPreparation: {
+                guard await shelfStore.prepareForTermination() else {
+                    let alert = NSAlert()
+                    alert.alertStyle = .warning
+                    alert.messageText = "Pengrid could not save or clear Top Shelf"
+                    alert.informativeText = "Quit was cancelled to protect your shelf. Open Settings > Top Shelf and choose Retry Storage, or select Clear on Quit to discard the saved snapshot. Original files are unchanged."
+                    alert.addButton(withTitle: "OK")
+                    alert.runModal()
+                    return false
+                }
+                return true
+            }
         )
     }
 
     var body: some Scene {
-        WindowGroup(AppIdentity.displayName) {
+        WindowGroup(AppIdentity.displayName, id: "pengrid-main") {
             WorkspaceView(
                 workspaceSession: workspaceSession,
                 operationController: operationController,
@@ -284,6 +299,7 @@ struct BloomFileManagerApp: App {
                 selectionFolder: selectionFolder,
                 getInfoInspector: getInfoInspector
             )
+            .modifier(ShelfStartup(controller: shelfController))
             .task {
                 try? await cloudLocations.scanInitially()
             }
@@ -311,6 +327,13 @@ struct BloomFileManagerApp: App {
                 cloudLocations: cloudLocations
             )
             PengridHelpCommands()
+            CommandMenu("Shelf") {
+                Toggle("Enable Top Shelf", isOn: Binding(get: { shelfController.store.isEnabled }, set: { shelfController.setEnabled($0) }))
+                Button("Show Top Shelf") { shelfController.show() }
+                    .disabled(!shelfController.store.isEnabled)
+                Button("Hide Top Shelf") { shelfController.hide() }
+                    .disabled(!shelfController.store.isEnabled)
+            }
         }
 
         Window("Pengrid Help", id: PengridHelpScene.id) { HelpView() }
@@ -333,6 +356,13 @@ struct BloomFileManagerApp: App {
                         Label(
                             PengridSettingsTab.cloudLocations.title,
                             systemImage: PengridSettingsTab.cloudLocations.systemImage
+                        )
+                    }
+                ShelfSettingsView(controller: shelfController)
+                    .tabItem {
+                        Label(
+                            PengridSettingsTab.topShelf.title,
+                            systemImage: PengridSettingsTab.topShelf.systemImage
                         )
                     }
             }

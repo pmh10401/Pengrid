@@ -19,8 +19,20 @@ enum HelpCatalog {
             id: .gettingStarted,
             title: "시작하기",
             summary: "Pengrid를 안전하게 설치하고 듀얼 패널과 미리보기로 첫 작업을 시작합니다.",
-            keywords: ["온보딩", "설치", "미리보기"],
+            keywords: ["온보딩", "설치", "미리보기", "상단 보관함", "클립보드"],
             sections: [
+                HelpSection(
+                    heading: "Top Shelf 상단 보관함",
+                    paragraphs: [
+                        "Settings > Top Shelf에서 Enable Top Shelf를 켜세요. 기본값은 꺼짐입니다. 파일·텍스트·이미지를 드래그하거나 Import Clipboard를 눌러 수동으로 보관하고, 초성 검색과 Copy로 다시 사용할 수 있습니다. 파일은 참조만 보관하며 원본을 이동하지 않습니다.",
+                        "Clear on Quit가 기본 보관 방식입니다. Keep Between Launches를 선택하면 이 Mac의 Application Support/Pengrid/TopShelf에 암호화되지 않은 로컬 저장본을 만듭니다. 비우기로 전환하면 저장본만 지우고 현재 항목은 종료까지 유지합니다. OFF는 보관 항목을 지웁니다. 시스템 클립보드와 원본 파일은 지우지 않습니다."
+                    ],
+                    bulletItems: [
+                        "최대 50개, 텍스트 256KiB, 단일 프레임 PNG/TIFF 이미지 16MiB·40MP, 전체 payload 64MiB입니다.",
+                        "드래그 내보내기는 복사 전용입니다. 텍스트·이미지는 해당 형식을 받는 앱에서만 사용할 수 있으며 Finder용 새 파일을 만들지는 않습니다.",
+                        "작업 진행률은 기존 작업 센터와 같습니다. 암호·충돌·복구 조치는 Open Pengrid로 돌아가 처리하세요. 자동 클립보드 수집과 OCR은 제공하지 않습니다."
+                    ]
+                ),
                 HelpSection(
                     heading: "설치와 첫 실행",
                     paragraphs: [
@@ -369,8 +381,20 @@ enum HelpCatalog {
             id: .gettingStarted,
             title: "Getting Started",
             summary: "Install Pengrid safely, then begin with its dual panes and read-only previews.",
-            keywords: ["onboarding", "installation", "preview"],
+            keywords: ["onboarding", "installation", "preview", "shelf", "clipboard"],
             sections: [
+                HelpSection(
+                    heading: "Top Shelf",
+                    paragraphs: [
+                        "Turn on Enable Top Shelf in Settings > Top Shelf; it is off by default. Drop files, text, or images, or choose Import Clipboard to add them manually. Search, including Korean initials, and Copy reuse stored items. Files are references; originals are not moved.",
+                        "Clear on Quit is the default. Keep Between Launches writes an unencrypted local snapshot in Application Support/Pengrid/TopShelf. Switching back deletes that snapshot but keeps this session's items until quit. Turning the shelf off clears its items. Original files and the system clipboard are not deleted."
+                    ],
+                    bulletItems: [
+                        "Limits: 50 items, 256 KiB per text item, 16 MiB and 40 MP per single-frame PNG/TIFF image, and 64 MiB total payload.",
+                        "Drag-out is copy-only. Text and image destinations must accept their native types; this does not create new files in Finder.",
+                        "Progress comes from the existing operation center. Use Open Pengrid for password, conflict, or recovery actions. No automatic clipboard collection or OCR is included."
+                    ]
+                ),
                 HelpSection(
                     heading: "Install and launch",
                     paragraphs: [

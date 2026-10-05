@@ -105,7 +105,7 @@ import Testing
     @Test func keywordOnlyQueriesFindTheirTopicsAcrossDisplayLanguages() {
         for displayLanguage in HelpLanguage.allCases {
             #expect(HelpCatalog.search("onboarding", displaying: displayLanguage).map(\.id) == [.gettingStarted])
-            #expect(HelpCatalog.search("보관", displaying: displayLanguage).map(\.id) == [.archives])
+            #expect(HelpCatalog.search("보관", displaying: displayLanguage).map(\.id) == [.gettingStarted, .archives])
         }
     }
 

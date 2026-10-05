@@ -103,13 +103,19 @@ import Testing
 
 @MainActor
 @Test func copyAndPasteDispatchToAnActualNSTextResponder() {
+    let pasteboard = NSPasteboard(name: NSPasteboard.Name("BloomTextResponderTests-\(UUID())"))
+    defer { pasteboard.releaseGlobally() }
     let window = NSWindow(
         contentRect: NSRect(x: 0, y: 0, width: 300, height: 100),
         styleMask: [.titled],
         backing: .buffered,
         defer: false
     )
-    let textView = NSTextView(frame: window.contentView?.bounds ?? .zero)
+    defer { window.orderOut(nil) }
+    let textView = NamedPasteboardTextView(
+        frame: window.contentView?.bounds ?? .zero,
+        pasteboard: pasteboard
+    )
     window.contentView = textView
     NSApplication.shared.activate()
     window.makeKeyAndOrderFront(nil)
@@ -119,10 +125,10 @@ import Testing
     textView.setSelectedRange(NSRange(location: 0, length: 4))
 
     #expect(TextResponderCommand.copy(to: textView))
-    #expect(NSPasteboard.general.string(forType: .string) == "Copy")
+    #expect(pasteboard.string(forType: .string) == "Copy")
 
-    NSPasteboard.general.clearContents()
-    NSPasteboard.general.setString("Paste", forType: .string)
+    pasteboard.clearContents()
+    pasteboard.setString("Paste", forType: .string)
     textView.setSelectedRange(NSRange(location: 0, length: textView.string.utf16.count))
     #expect(TextResponderCommand.paste(to: textView))
     #expect(textView.string == "Paste")
@@ -136,6 +142,38 @@ import Testing
     #expect(textView.string.isEmpty)
     textView.insertText(" ", replacementRange: NSRange(location: 0, length: 0))
     #expect(textView.string == " ")
+}
+
+@MainActor
+private final class NamedPasteboardTextView: NSTextView {
+    private let pasteboard: NSPasteboard
+
+    init(frame frameRect: NSRect, pasteboard: NSPasteboard) {
+        self.pasteboard = pasteboard
+        let textStorage = NSTextStorage()
+        let layoutManager = NSLayoutManager()
+        let textContainer = NSTextContainer(
+            size: NSSize(
+                width: max(frameRect.width, 1),
+                height: .greatestFiniteMagnitude
+            )
+        )
+        textStorage.addLayoutManager(layoutManager)
+        layoutManager.addTextContainer(textContainer)
+        super.init(frame: frameRect, textContainer: textContainer)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func copy(_ sender: Any?) {
+        _ = writeSelection(to: pasteboard, types: writablePasteboardTypes)
+    }
+
+    override func paste(_ sender: Any?) {
+        _ = readSelection(from: pasteboard)
+    }
 }
 
 @MainActor
