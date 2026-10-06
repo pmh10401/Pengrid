@@ -55,3 +55,10 @@ integer-conversion warning remain. They did not fail these checks.
 GitHub checks and public download verification happen after publication; their
 status must be read from the corresponding PR/run and release, not inferred
 from this local record. This unsigned mode did not produce a new ZIP asset.
+
+The first [PR CI run](https://github.com/pmh10401/Pengrid/actions/runs/37400824668)
+failed at test compilation: Xcode 26.3 could not infer the compound arithmetic
+inside the four-card width assertion. The independently derived minimum remains
+992 points; a typed local constant now separates arithmetic from `#expect`.
+No assertion was removed and no production app, resource or packaging input
+changed. CI must pass on this test-only correction before merge and release.

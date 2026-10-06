@@ -702,7 +702,8 @@ struct ShelfPanelTests {
         let visible = CGRect(x: 0, y: 25, width: 1440, height: 850)
         let expanded = ShelfPanelPlacement.frame(visibleFrame: visible, screenFrame: screen, safeTop: 25, expanded: true)
         // Four 210-point cards, their spacing, and the notch shoulders must fit.
-        #expect(expanded.width >= 4 * 210 + 3 * 16 + 104)
+        let requiredWidth: CGFloat = 4 * 210 + 3 * 16 + 104
+        #expect(expanded.width >= requiredWidth)
         #expect(expanded.height < expanded.width / 2)
         #expect(expanded.maxY == screen.maxY)
         #expect(expanded.maxY - ShelfPanelPlacement.insets(visibleFrame: visible, screenFrame: screen, edge: .top).top < visible.maxY)
