@@ -230,7 +230,7 @@ func stalePasswordDismissalCannotCancelNewCoordinatorRequest() async throws {
     let workspace = try source(named: "Views/WorkspaceView.swift")
     #expect(workspace.contains("let getInfoInspector: GetInfoInspectorController"))
     let commands = try source(named: "Support/WorkspaceCommands.swift")
-    #expect(commands.contains("Button(\"Get Info\")"))
+    #expect(commands.contains("Button(AppText.text(\"Get Info\"))"))
     #expect(commands.contains(".keyboardShortcut(\"i\", modifiers: .command)"))
 }
 

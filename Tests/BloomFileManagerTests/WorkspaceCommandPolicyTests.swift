@@ -172,16 +172,16 @@ import Testing
 
 @Test func smartSearchShortcutDoesNotReplacePaneFilterShortcut() throws {
     let commands = try commandSource()
-    #expect(commands.contains("Button(\"Filter Files\")"))
+    #expect(commands.contains("Button(AppText.text(\"Filter Files\"))"))
     #expect(commands.contains(".keyboardShortcut(\"f\", modifiers: .command)"))
-    #expect(commands.contains("Button(\"Smart Search…\")"))
+    #expect(commands.contains("Button(AppText.text(\"Smart Search…\"))"))
     #expect(commands.contains(".keyboardShortcut(\"f\", modifiers: [.command, .shift])"))
 }
 
 @Test func protectedCompressionCommandIsImmediatelyAfterOrdinaryZIPAndNeverInTARChoices() throws {
     let commands = try commandSource()
-    let ordinary = try #require(commands.range(of: "Button(\"Compress to ZIP\")"))
-    let protected = try #require(commands.range(of: "Button(\"Compress as Password-Protected ZIP…\")"))
+    let ordinary = try #require(commands.range(of: "Button(AppText.text(\"Compress to ZIP\"))"))
+    let protected = try #require(commands.range(of: "Button(AppText.text(\"Compress as Password-Protected ZIP…\"))"))
     #expect(protected.lowerBound > ordinary.upperBound)
 
     let protectedProjection = String(commands[protected.lowerBound...])
@@ -209,7 +209,7 @@ import Testing
 
 @Test func batchRenameUsesOneMenuAndContextRoute() throws {
     let commands = try commandSource()
-    #expect(commands.contains("Button(\"Batch Rename…\")"))
+    #expect(commands.contains("Button(AppText.text(\"Batch Rename…\"))"))
     #expect(commands.contains("WorkspaceBatchRenameCommandActions.showBatchRename"))
     #expect(commands.contains(".disabled(!policy.canBatchRename)"))
 

@@ -227,8 +227,8 @@ struct ComparisonMoveTests {
         #expect(!workspace.contains("ForEach(confirmation.representativeNames, id: \\.self)"))
 
         let commands = try source(named: "Support/WorkspaceCommands.swift")
-        #expect(commands.contains("Button(\"Move Left to Right…\")"))
-        #expect(commands.contains("Button(\"Move Right to Left…\")"))
+        #expect(commands.contains("Button(AppText.text(\"Move Left to Right…\"))"))
+        #expect(commands.contains("Button(AppText.text(\"Move Right to Left…\"))"))
         #expect(commands.contains("comparison?.requestMove(direction:"))
         #expect(!commands.contains("confirmMove"))
     }

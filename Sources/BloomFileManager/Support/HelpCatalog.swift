@@ -24,7 +24,7 @@ enum HelpCatalog {
                 HelpSection(
                     heading: "Top Shelf 상단 보관함",
                     paragraphs: [
-                        "Settings > Top Shelf에서 Enable Top Shelf를 켜세요. 기본값은 꺼짐입니다. 파일·텍스트·이미지를 드래그하거나 Import Clipboard를 눌러 수동으로 보관하고, 초성 검색과 Copy로 다시 사용할 수 있습니다. 파일은 참조만 보관하며 원본을 이동하지 않습니다.",
+                        "설정 > 노치 보관함에서 ‘노치 보관함 사용’을 켜세요. 기본값은 꺼짐입니다. 파일·텍스트·이미지를 드래그하거나 ‘클립보드 가져오기’를 눌러 수동으로 보관하고, 초성 검색과 ‘복사’로 다시 사용할 수 있습니다. 파일은 참조만 보관하며 원본을 이동하지 않습니다.",
                         "Clear on Quit가 기본 보관 방식입니다. Keep Between Launches를 선택하면 이 Mac의 Application Support/Pengrid/TopShelf에 암호화되지 않은 로컬 저장본을 만듭니다. 비우기로 전환하면 저장본만 지우고 현재 항목은 종료까지 유지합니다. OFF는 보관 항목을 지웁니다. 시스템 클립보드와 원본 파일은 지우지 않습니다."
                     ],
                     bulletItems: [

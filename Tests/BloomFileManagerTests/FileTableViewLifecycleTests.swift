@@ -1529,7 +1529,7 @@ struct FileTableViewLifecycleTests {
         let menu = try #require(tableView.menu)
 
         coordinator.menuNeedsUpdate(menu)
-        let openItem = try #require(menu.items.first { $0.title == "Open" })
+        let openItem = try #require(menu.items.first { $0.title == AppText.text("Open") })
         #expect(openItem.isEnabled)
         #expect(NSApp.sendAction(openItem.action!, to: openItem.target, from: openItem))
 
@@ -1556,7 +1556,7 @@ struct FileTableViewLifecycleTests {
 
         coordinator.menuNeedsUpdate(menu)
 
-        #expect(menu.items.first { $0.title == "Open" }?.isEnabled == false)
+        #expect(menu.items.first { $0.title == AppText.text("Open") }?.isEnabled == false)
     }
 
     @Test func defaultContextMenuPresentationRetainsTheLegacyOrderAndSeparators() throws {
@@ -1582,7 +1582,7 @@ struct FileTableViewLifecycleTests {
             "Open", "", "New Folder", "Add to Favorites", "Rename", "Batch Rename…", "",
             "Copy", "Paste", "", "Compress to ZIP", "Compress as Password-Protected ZIP…",
             "Compress as…", "Extract Archive", "", "Move to Trash…", "Get Info"
-        ])
+        ].map { AppText.text($0) })
     }
 
     @Test func openWithWithoutApplicationsIsDisabledWithAStableReason() throws {
@@ -1607,7 +1607,7 @@ struct FileTableViewLifecycleTests {
 
         coordinator.menuNeedsUpdate(menu)
 
-        let openWith = try #require(menu.items.first { $0.title == "Open With" })
+        let openWith = try #require(menu.items.first { $0.title == AppText.text("Open With") })
         #expect(!openWith.isEnabled)
         #expect(openWith.toolTip == "No compatible applications found.")
     }
@@ -1642,7 +1642,7 @@ struct FileTableViewLifecycleTests {
         directoryCoordinator.apply(items: directoryView.items, selection: directorySelection.value, to: directoryTable)
         let directoryMenu = try #require(directoryTable.menu)
         directoryCoordinator.menuNeedsUpdate(directoryMenu)
-        #expect(directoryMenu.items.contains { $0.title == "Open With" } == false)
+        #expect(directoryMenu.items.contains { $0.title == AppText.text("Open With") } == false)
 
         let selection = SelectionRecorder(value: [first.url])
         let loadingView = FileTableView(
@@ -1664,7 +1664,7 @@ struct FileTableViewLifecycleTests {
         coordinator.apply(items: loadingView.items, selection: selection.value, to: table)
         let menu = try #require(table.menu)
         coordinator.menuNeedsUpdate(menu)
-        let loadingOpenWith = try #require(menu.items.first { $0.title == "Open With" })
+        let loadingOpenWith = try #require(menu.items.first { $0.title == AppText.text("Open With") })
         #expect(!loadingOpenWith.isEnabled)
         #expect(loadingOpenWith.toolTip == "Compatible applications are loading.")
         #expect(selection.value == [first.url])
@@ -1688,7 +1688,7 @@ struct FileTableViewLifecycleTests {
             }
         )
         coordinator.menuNeedsUpdate(menu)
-        let populatedOpenWith = try #require(menu.items.first { $0.title == "Open With" })
+        let populatedOpenWith = try #require(menu.items.first { $0.title == AppText.text("Open With") })
         #expect(populatedOpenWith.isEnabled)
         #expect(populatedOpenWith.submenu?.items.map(\.title) == ["TextEdit"])
         #expect(selection.value == [first.url])
@@ -1710,7 +1710,7 @@ struct FileTableViewLifecycleTests {
         multipleCoordinator.apply(items: multipleView.items, selection: multipleSelection.value, to: multipleTable)
         let multipleMenu = try #require(multipleTable.menu)
         multipleCoordinator.menuNeedsUpdate(multipleMenu)
-        #expect(multipleMenu.items.contains { $0.title == "Open With" } == false)
+        #expect(multipleMenu.items.contains { $0.title == AppText.text("Open With") } == false)
     }
 
     @Test func openWithPresentationRequestsOnlyEligibleUncachedItemsAndUsesStableCachedReasons() {
@@ -1796,16 +1796,16 @@ struct FileTableViewLifecycleTests {
         #expect(menu.items.map(\.title) == [
             "Open", "Quick Look", "",
             "Copy to Other Pane", "Move to Other Pane", "Show in Finder", "Copy Path", "",
-            "New Folder", "New Folder with Selection (2 Items)…", "Add to Favorites", "Duplicate",
+            "New Folder", AppText.format("New Folder with Selection (%ld Items)…", 2), "Add to Favorites", "Duplicate",
             "Rename", "Batch Rename…", "", "Copy", "Paste", "",
             "Compress to ZIP", "Compress as Password-Protected ZIP…", "Compress as…", "Extract Archive", "",
             "Move to Trash…", "Get Info"
-        ])
-        let copyPath = try #require(menu.items.first { $0.title == "Copy Path" })
+        ].map { AppText.text($0) })
+        let copyPath = try #require(menu.items.first { $0.title == AppText.text("Copy Path") })
         #expect(copyPath.identifier == NSUserInterfaceItemIdentifier(AccessibilityIdentifiers.fileTableCopyPath))
         #expect(copyPath.submenu?.items.map(\.title) == [
             "Copy Full Path", "Copy Name", "Copy Parent Path", "Copy File URL"
-        ])
+        ].map { AppText.text($0) })
         #expect(copyPath.submenu?.items.map(\.identifier) == [
             NSUserInterfaceItemIdentifier(AccessibilityIdentifiers.fileTableCopyFullPath),
             NSUserInterfaceItemIdentifier(AccessibilityIdentifiers.fileTableCopyName),
@@ -1849,7 +1849,7 @@ struct FileTableViewLifecycleTests {
 
         coordinator.menuNeedsUpdate(menu)
 
-        let openWith = try #require(menu.items.first { $0.title == "Open With" })
+        let openWith = try #require(menu.items.first { $0.title == AppText.text("Open With") })
         #expect(openWith.identifier == NSUserInterfaceItemIdentifier(AccessibilityIdentifiers.fileTableOpenWith))
         #expect(openWith.isEnabled)
         let applications = try #require(openWith.submenu)
@@ -1898,7 +1898,7 @@ struct FileTableViewLifecycleTests {
         coordinator.menuNeedsUpdate(menu)
 
         for title in ["Quick Look", "Open With", "Open in Other Pane", "Copy to Other Pane", "Move to Other Pane", "Show in Finder", "Copy Path", "Duplicate"] {
-            let menuItem = try #require(menu.items.first { $0.title == title })
+            let menuItem = try #require(menu.items.first { $0.title == AppText.text(title) })
             #expect(!menuItem.isEnabled)
             #expect(menuItem.toolTip == "Finish editing first.")
         }
@@ -1937,13 +1937,13 @@ struct FileTableViewLifecycleTests {
             ("Duplicate", AccessibilityIdentifiers.fileTableDuplicate, .duplicate)
         ]
         for (title, identifier, action) in singleActions {
-            let item = try #require(singleMenu.items.first { $0.title == title })
+            let item = try #require(singleMenu.items.first { $0.title == AppText.text(title) })
             #expect(item.identifier == NSUserInterfaceItemIdentifier(identifier))
             #expect(NSApp.sendAction(item.action!, to: item.target, from: item))
             #expect(actions.last?.0 == action)
             #expect(actions.last?.1 == [first])
         }
-        let copyPath = try #require(singleMenu.items.first { $0.title == "Copy Path" })
+        let copyPath = try #require(singleMenu.items.first { $0.title == AppText.text("Copy Path") })
         #expect(copyPath.identifier == NSUserInterfaceItemIdentifier(AccessibilityIdentifiers.fileTableCopyPath))
         let copyPathActions: [(String, String, ContextActionKind)] = [
             ("Copy Full Path", AccessibilityIdentifiers.fileTableCopyFullPath, .copyPath(.fullPath)),
@@ -1953,7 +1953,7 @@ struct FileTableViewLifecycleTests {
         ]
         let copyPathMenu = try #require(copyPath.submenu)
         for (title, identifier, action) in copyPathActions {
-            let item = try #require(copyPathMenu.items.first { $0.title == title })
+            let item = try #require(copyPathMenu.items.first { $0.title == AppText.text(title) })
             #expect(item.identifier == NSUserInterfaceItemIdentifier(identifier))
             #expect(NSApp.sendAction(item.action!, to: item.target, from: item))
             #expect(actions.last?.0 == action)
@@ -2077,7 +2077,7 @@ struct FileTableViewLifecycleTests {
         let menu = try #require(tableView.menu)
 
         coordinator.menuNeedsUpdate(menu)
-        let item = try #require(menu.items.first { $0.title == "Batch Rename…" })
+        let item = try #require(menu.items.first { $0.title == AppText.text("Batch Rename…") })
 
         #expect(item.isEnabled)
         #expect(item.identifier == NSUserInterfaceItemIdentifier(
@@ -2089,7 +2089,7 @@ struct FileTableViewLifecycleTests {
 
         selection.value = [first.url]
         coordinator.menuNeedsUpdate(menu)
-        #expect(menu.items.first { $0.title == "Batch Rename…" }?.isEnabled == false)
+        #expect(menu.items.first { $0.title == AppText.text("Batch Rename…") }?.isEnabled == false)
     }
 
     @Test func plainSpaceRoutesToTheQuickLookMenuEquivalentBeforeTheTableConsumesIt() throws {

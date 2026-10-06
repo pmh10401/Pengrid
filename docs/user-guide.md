@@ -2,14 +2,14 @@
 
 [한국어](user-guide.ko.md) · **English** · [README](../README.md)
 
-This guide describes Pengrid 1.3.0 Developer Preview 10 and the current source
+This guide describes Pengrid 1.3.0 Developer Preview 11 and the current source
 tree, including safety boundaries and deliberately omitted behavior.
 
 ## Requirements and installation
 
 Pengrid currently supports Apple Silicon Macs running macOS 15 or later.
 Download the DMG from the
-[Developer Preview 10 release](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.10),
+[Developer Preview 11 release](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.11),
 open it, and copy `Pengrid.app` to `Applications`.
 
 The free DMG is ad-hoc signed, not Developer ID signed, and not notarized.
@@ -175,24 +175,64 @@ queries, or actions across a larger result set.
 > Included in Developer Preview 10; unavailable in Preview 9 and earlier DMGs.
 
 Top Shelf is an optional, manual holding area for files, text, and images. In
-Settings, turn on **Enable Top Shelf**. It is off by default. When collapsed,
-only a slim black handle and a short bright line mark the hover target; the
-three large circular icons are not shown. Hover to preview the wide black
-gallery without taking keyboard focus; leaving folds it after 0.45 seconds.
+Settings, turn on **Enable Top Shelf**. It is off by default. Preview 11
+enables **Use Hardware Notch** by default: on a supported MacBook
+display, the collapsed shelf is completely invisible in the camera notch,
+without a handle or shadow. Hover over the notch to open the gallery below it.
+The notch size is read from macOS, including when the menu bar auto-hides.
+On a display without a camera notch, or with this option off, a slim black
+handle and a short bright line mark the hover target. Hover previews the
+gallery without taking keyboard focus; leaving begins a fold after 0.45 seconds.
+Opening and closing use PenguinNotch-style soft springs, with the content
+following the surface. Returning during a fold reopens it smoothly. macOS
+**Reduce motion** disables these animations. Hardware docking, border movement,
+portrait layout and glass styles are included in Preview 11.
 Click or choose **Keep Shelf Open** to keep it open. The panel also provides
 **Open Pengrid**, **Collapse Shelf**, and **Hide Shelf**. Hiding or collapsing
 the panel keeps its entries.
 
+Preview 11 offers **Settings > Top Shelf > Shelf Appearance**:
+**Liquid Glass** follows macOS appearance, **Dark Glass** uses a dark translucent
+surface, and **Solid Black** keeps the original look. Liquid Glass requires
+macOS 26 or later; older macOS versions and **Reduce Transparency** use solid
+black. The collapsed notch always stays black or hidden in the hardware cutout.
+The choice survives relaunch. Menu-bar commands, file context-menu titles, and
+shelf controls support Korean when Korean is the first preferred macOS language;
+other languages use English. Filenames and user-defined profile names are unchanged.
+This is menu/shelf localization, not a translation of every dialog or error message.
+
 The panel contains the following controls:
 
+- **Move Shelf** (Preview 11 and later):
+  drag the six-dot grip in the expanded header along the current display's border.
+  The gallery folds into a compact moving grip: it follows the four edges with a
+  spring, bends around corners, and settles on release before the gallery opens
+  inward. It does not freely float over the desktop. **Escape** cancels without
+  saving the move. Outside search, **⌥ + Arrow** adjusts along the current edge in
+  24-point steps. The screen, edge, and position persist; folding keeps the same
+  anchor. Use **Dock to Screen Edge** in settings or the grip's context menu for
+  keyboard-accessible placement. Controls stay clear of the menu bar and Dock.
+  Top and bottom edges use a wide horizontal gallery; left and right edges use a
+  narrow portrait gallery with upright cards stacked vertically. Search and
+  categories stay above the scrolling cards; clipboard controls and operation
+  progress stay below. Changing edges preserves the query, category, and selection.
+  Choose **Reset Shelf Position**
+  in **Settings > Top Shelf** or the handle's context menu to return to the top center.
+  Moving away switches to edge mode; releasing near the camera notch magnetically
+  docks there again. Enable **Use Hardware Notch** in settings or
+  the move handle's context menu to dock directly; the saved edge position is
+  retained. If the notched display disconnects, the movable handle remains
+  available on another display. **Shelf > Show Top Shelf** also opens it by menu
+  or keyboard, including when the collapsed hardware shelf is invisible.
 - **Import Clipboard** reads the current clipboard only when you explicitly
   press the button. Opening, hovering, searching, and showing progress do not
   read the clipboard.
 - **Search…** searches shelf names and text, including Korean initials.
   The **All**, **Files**, **Text**, and **Images** capsule tabs narrow the results
   and show the total saved count for each category (not just search matches).
-  Cards scroll horizontally. Select a card, or use **← / →** outside the search
-  field; the selected card is outlined. Image cards show a thumbnail, text
+  Cards scroll horizontally on top/bottom edges (**← / →**), or vertically on
+  left/right edges (**↑ / ↓**). These keys select cards outside the search field;
+  the selected card is outlined and scrolled into view. Image cards show a thumbnail, text
   cards show an excerpt, and file cards identify references without opening them.
 - **Copy** writes the selected shelf item to the system clipboard. **Remove
   from Shelf** removes only that shelf entry. **Clear…** opens a confirmation;
@@ -805,7 +845,7 @@ throughout the operation.
 
 ### Password-protected ZIP behavior
 
-Creating a password-protected ZIP is supported for source builds with
+Creating a password-protected ZIP is supported in the current release with
 **AES-256 only**. Reading accepts AES-128, AES-192, AES-256, and ZipCrypto
 entries when their compression method is Store or Deflate and the archive
 passes the current safety policy. ZIP filenames, sizes, timestamps, and other
@@ -936,7 +976,7 @@ documents.
 
 ## Current limitations
 
-Developer Preview 10 and the current source tree deliberately do not provide:
+Developer Preview 11 and the current source tree deliberately do not provide:
 
 - Intel Mac or macOS 14-and-earlier support;
 - Developer ID signing or Apple notarization;

@@ -34,7 +34,7 @@ labels avoid absolute parent paths.
 
 ## Transferred-content verification boundary
 
-Transferred-content verification is an opt-in source feature and defaults off.
+Transferred-content verification is an opt-in feature and defaults off.
 `TransferVerificationPreference` persists user intent, while
 `FileOperationController` captures one immutable `TransferVerificationPolicy`
 at enqueue time. The operation closure, queued snapshot, Retry record, terminal
@@ -156,6 +156,33 @@ AppKit `NSTableView` bridge contributes only the native row context-menu route
 and passes the table's stable ordered selection back to the shared SwiftUI
 action. The menu bar and context menu therefore use the same enablement policy
 and action closure.
+
+## Notch shelf boundary
+
+`ShelfStore` owns the bounded file-reference, text and image collection, its
+Korean-initial search, selection and retention policy. Clipboard import is an
+explicit user action; neither hover nor the operation-progress projection reads
+the clipboard. Removing a reference never removes its original file.
+`ShelfPersistence` stores an unencrypted local snapshot only for the selected
+keep-between-launches policy. Disable, clear and termination keep the existing
+validation and persistence-failure gates.
+
+`ShelfPanelController` owns the native non-main `NSPanel`, hardware-notch
+geometry, hover lifecycle and persisted edge placement. `ShelfBorderTrack`
+uses one clockwise border coordinate; `ShelfCarryMotion` follows it with a
+native SwiftUI spring. A display link runs only while the compact carry surface
+moves and is invalidated on completion or teardown. Workspace shortcuts are
+blocked while the shelf has focus, while search-field editing remains native.
+
+`ShelfView` renders horizontal cards at the top/bottom and upright vertical
+cards at the left/right. The same store survives these layout changes; a native
+scroll position keeps selection visible. Glass is availability-gated to macOS
+26, with solid-black and Reduce Transparency fallbacks. `AppText` shares the
+existing Help language rule for Korean/English menus and shelf copy; it does not
+translate user filenames or claim complete dialog localization.
+
+The shelf observes the existing `FileOperationController` for progress. It does
+not introduce a second file-operation queue or execute filesystem mutations.
 
 ## Performance contract
 

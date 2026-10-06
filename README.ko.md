@@ -1,287 +1,141 @@
 <p align="center">
-  <img src="Assets/Pengrid/AppIcon-1024.png" width="160" alt="Pengrid 앱 아이콘">
+  <img src="Assets/Pengrid/AppIcon-1024.png" width="112" alt="Pengrid 펭귄 앱 아이콘">
 </p>
 
 <h1 align="center">Pengrid</h1>
 
 <p align="center">
-  <strong>빠르고 키보드 친화적인 macOS용 듀얼 패널 파일 관리자입니다.</strong><br>
-  <strong>한국어</strong> · <a href="README.md">English</a>
+  <strong>파일은 나란히. 아이디어는 노치에 가까이.</strong><br>
+  움직이는 노치 보관함을 갖춘 무료 macOS 파일 관리자입니다.<br><br>
+  <a href="https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.11"><strong>Mac용 다운로드</strong></a>
+  · <a href="README.md">English</a>
+  · <a href="docs/user-guide.ko.md">상세 기능 안내</a>
 </p>
 
-Pengrid는 두 패널 탐색, 재귀 검색, 미리보기, 대기열 기반 파일 작업, 압축,
-디렉터리 비교 및 저장 공간 분석을 하나로 묶은 무료 오픈 소스 macOS 앱입니다.
+![예시 프로젝트 파일을 표시한 Pengrid 듀얼 패널 작업공간](docs/images/workspace.png)
+
+*실제 Pengrid 화면 구성 요소를 예시 데이터로 실행해 촬영했습니다. 개인 파일과 클라우드 계정은 포함하지 않았습니다.*
 
 ## 다운로드
 
-현재 릴리스는
-[Pengrid 1.3.0 Developer Preview 10](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.10)입니다.
+[**Pengrid 1.3.0 Developer Preview 11 — DMG 다운로드**](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.11/Pengrid.dmg)
 
-- [Pengrid.dmg 다운로드](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.10/Pengrid.dmg)
-- 버전: **1.3.0 (빌드 12)**
-- 요구 사항: **Apple Silicon Mac, macOS 15 이상**
-- 검증: **131개 스위트의 자동 테스트 2,029개 통과 (환경 의존 검사는 별도)**
-- DMG SHA-256: [SHA256SUMS.txt](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.10/SHA256SUMS.txt)
+**Apple Silicon · macOS 15 이상 · 버전 1.3.0, 빌드 13 · 무료**
 
-DMG를 연 다음 `Pengrid.app`을 `Applications` 폴더로 복사하세요.
+DMG를 열고 `Pengrid.app`을 `Applications` 폴더로 옮기세요.
+같은 릴리즈의 [SHA256SUMS.txt](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.11/SHA256SUMS.txt)를
+받아 다운로드한 파일을 확인할 수 있습니다.
 
-> **Developer Preview 신뢰 안내**
->
-> 이 무료 DMG는 ad-hoc 방식으로 서명되어 있습니다. Developer ID 서명과
-> Apple 공증을 받지 않았으므로 macOS Gatekeeper가 실행을 차단할 수 있습니다.
-> 이 저장소의 GitHub 릴리스 페이지에서만 내려받고, 경고의 의미를 이해하고
-> 동의하는 경우에만 진행하세요. Pengrid는 macOS 보안 기능을 끄도록 요구하지
-> 않습니다.
+```bash
+shasum -a 256 -c SHA256SUMS.txt
+```
 
-파일 검증과 로컬 패키징 방법은 [릴리스 가이드](docs/release.ko.md)를
-참고하세요.
+> 이 Developer Preview는 ad-hoc 서명이며 Developer ID 서명과 Apple 공증을
+> 받지 않았습니다. Gatekeeper가 실행을 차단할 수 있습니다. 이 저장소의
+> 릴리즈 페이지에서 내려받으세요. Pengrid는 macOS 보안 기능을 끄도록 요구하지 않습니다.
 
-## Pengrid를 선택하는 이유
+[릴리즈 노트](docs/release-notes-v1.3.0-developer-preview.11.md) ·
+[패키징·검증 안내](docs/release.ko.md)
 
-- **작업 맥락 유지:** 여러 Finder 창 대신 독립된 두 패널에서 탐색하고,
-  명령을 시작할 때 캡처한 출발지와 목적지 사이에서 파일을 전송합니다.
-- **키보드 중심 작업:** 검색, 필터, 미리보기, 복제, 경로 복사 및 일반적인
-  파일 작업을 macOS 데스크톱 단축키로 빠르게 실행합니다.
-- **복구 가능한 작업 우선:** 대기열의 변경 작업은 파일 식별자를 다시
-  확인하고 진행률과 취소 정리를 제공합니다. Retry와 Undo는 캡처한 상태가
-  여전히 안전할 때만 제시합니다.
-- **도움말을 가까이 두기:** **Help > Pengrid Help**를 선택하거나
-  **Command-?**를 눌러 기본 제공되는 오프라인 8개 항목을 열고 한국어와
-  영어를 전환하세요. 두 언어의 본문을 대상으로 일반 문자열(대소문자·악센트
-  무시), 한글 초성 및 혼합 검색을 지원하며, GitHub 사용자 안내서와 릴리스
-  버튼만 인터넷 연결이 필요합니다.
+## 화면 가장자리에 붙는 나만의 보관함
 
-## 주요 기능
+곧 사용할 파일, 유용한 메모, 이미지를 노치에 잠깐 보관하세요.
+**설정 > 노치 보관함 > 노치 보관함 사용**을 켜고 항목을 끌어 넣거나
+**클립보드 가져오기**를 누르면 됩니다. 클립보드는 직접 가져올 때만 읽습니다.
 
-### 두 패널에서 탐색하고 관리하기
+![이미지·텍스트·파일 카드를 표시한 Pengrid 어두운 글래스 노치 보관함](docs/images/notch-shelf.png)
 
-각 패널은 탐색 기록, 선택, 정렬 및 파일명 필터를 독립적으로 유지합니다.
-복사, 이동, Open in Other Pane 및 검토된 디렉터리 비교 전송은 명령 시작 시
-캡처한 패널과 목적지를 사용합니다.
+카메라 노치가 있는 MacBook에서는 접힌 보관함이 노치 안에 숨겨집니다.
+마우스를 올리면 펼쳐지고, 벗어나면 잠깐 기다린 뒤 접힙니다. 클릭하면
+열린 상태를 유지합니다. 여섯 점 손잡이를 화면 테두리를 따라 옮기면 모서리를
+부드럽게 돌아가고, 놓은 가장자리에 붙어 화면 안쪽으로 펼쳐집니다.
+카메라 노치 근처에 놓으면 다시 붙으며 **Escape**로 이동을 취소할 수 있습니다.
 
-### 집중 명령으로 이동하고 파일을 만들고 선택하기
+<table>
+  <tr>
+    <td align="center" width="46%">
+      <img src="docs/images/side-shelf.png" width="300" alt="화면 오른쪽에 배치한 세로형 보관함">
+    </td>
+    <td align="center" width="54%">
+      <img src="docs/images/shelf-settings.png" width="460" alt="글래스·가장자리·보관 정책을 선택하는 한국어 설정">
+    </td>
+  </tr>
+  <tr>
+    <td>왼쪽·오른쪽에서는 카드를 세로로 배치합니다.</td>
+    <td>리퀴드 글래스·어두운 글래스·검정을 선택하세요.</td>
+  </tr>
+</table>
 
-> **Select by Name…**를 포함한 이 절의 생산성 기능은 Developer Preview 9에
-> 포함되어 있습니다.
+- **한글 초성으로 검색:** 파일 이름, 메모와 이미지 이름을 검색합니다.
+  전체·파일·텍스트·이미지 분류에 실제 항목 개수가 표시됩니다.
+- **위치를 바꿔도 이어서 작업:** 검색어·분류·선택 항목을 유지합니다.
+  카드를 스크롤해도 검색창과 클립보드 버튼은 고정됩니다.
+- **키보드로 선택과 복사:** 가로형은 **← / →**, 세로형은 **↑ / ↓**로
+  선택하고 **⌘C**로 복사합니다. 검색창 안의 방향키는 텍스트를 편집합니다.
+- **파일 작업 진행률 확인:** 실행 중 작업, 대기열과 복구·실패 상태가 있을 때
+  기존 작업 센터의 진행 상황을 보여 줍니다.
+- **보관 정책 선택:** **종료 시 비우기**가 기본입니다.
+  **다음 실행에도 보관**을 선택하면 암호화되지 않은 로컬 스냅샷을 저장합니다.
+  보관함에서 제거해도 원본 파일은 유지됩니다.
 
-**Command-P**를 누르면 현재 scene에만 연결된 열거형 기반의 타입 안전 **Quick Go…** 팔레트가
-열립니다. 후보는 안전한 고정 명령(**Create Folder**, **Create File**, **Show
-Filter**, **Smart Search**), 활성 패널의 현재·뒤로·앞으로 위치, 사용할 수 있는
-즐겨찾기, 작업 공간 프로필 및 저장된 검색입니다. 매칭은 정규화된 텍스트와
-Pengrid의 기존 한글 초성(Hangul-initial) 지원을 함께 사용합니다. 팔레트는
-스크립트를 실행하거나 색인을 크롤링하거나 파일 콘텐츠를 materialize하지 않습니다.
+리퀴드 글래스는 **macOS 26 이상**에서 사용할 수 있습니다. 이전 macOS 또는
+**투명도 줄이기** 사용 시에는 검정으로 표시합니다. **동작 줄이기**는
+애니메이션을 생략합니다. 앱 메뉴, 파일 우클릭 메뉴, 보관함과 보관함 설정은
+한국어·영어를 지원하며 일부 대화상자와 오류 메시지는 영어로 표시됩니다.
 
-**New Empty File**은 **Option-Command-N**을 사용합니다. 캡처한 부모 디렉터리
-동일성에 묶인 일반 파일을 배타적·덮어쓰기 없는 작업으로 만듭니다. 패널을 새로
-고친 뒤 새 행을 선택하고 인라인 이름 변경을 시작합니다. 보수적인 Undo는 새
-파일의 정확한 동일성과 지문이 바뀌지 않은 동안에만 제공합니다.
-이미 불러온 형제 항목과 이름이 겹치면 `New File 2`, `New File 3`처럼 이름을
-정합니다. 배타적 공개 시점에만 발생하는 아직 보지 못한 경쟁 충돌은 덮어쓰지 않고 실패합니다.
+최대 **50개 항목**, 텍스트 항목당 **256 KiB**, 정적 PNG/TIFF 이미지당
+**16 MiB·4천만 픽셀**, 전체 인코딩 데이터 **64 MiB**를 지원합니다.
+파일은 참조로 보관합니다. 자동 클립보드 수집, OCR, 보관함 클라우드 동기화와
+전역 단축키는 제공하지 않습니다. [보관함 상세 동작](docs/user-guide.ko.md#top-shelf-보관함)
 
-활성 패널의 현재 표시 항목, 즉 필터링되지 않은 행만
-**Select All Visible** (**Option-Command-A**), **Invert Selection**
-(**Option-Command-I**), **Select Same Extension** (**Option-Command-E**)의
-대상입니다. 패널 필터나 텍스트 편집이 활성화된 동안에는 이 명령들이
-비활성화됩니다. Select Same Extension은 표시된 일반 파일 하나를 정확히
-선택하고 실제 확장자가 있어야 사용할 수 있습니다.
+## 파일 관리에 필요한 기능을 한곳에
 
-**Select by Name…** (**Edit > Select by Name…**, **Option-Command-S**)은 현재
-Developer Preview 9에 포함된 기능입니다.
-활성 패널의 현재 표시된 필터링되지 않은 행을 폴더·패키지·심볼릭 링크까지
-포함해 화면에 표시된 기본 이름 전체로 매칭합니다. `*`는 0개 이상의 문자,
-`?`는 한 개의 grapheme(한글 음절 등)을 뜻하므로 `*.pdf`와
-`보고서_?.xlsx`처럼 입력할 수 있으며, `*`는 표시된 모든 항목 종류를
-포함합니다. 매칭은 대소문자를 구분하지 않고 한글의 조합/분해 표기 동등성을
-적용하지만 악센트와 공백은 구분합니다. 시트에는 실시간 일치 개수가 표시되고
-**Select**는 선택을 대체하며 일치 항목이 없으면 선택을 비웁니다. 입력이
-비어 있으면 **Select**가 비활성화되고 **Cancel** 또는 **Escape**는 기존
-선택을 유지합니다. 필터링·로딩·텍스트 편집 중이거나 다른 작업 공간 시트가
-열려 있거나 폴더 비교 또는 Storage Inspector 오버레이가 일반 패널을 가리고
-있으면 사용할 수 없습니다. 하나의 와일드카드 패턴만 지원하며 정규식,
-대괄호, 이스케이프, 여러 패턴, 재귀 및 파일 읽기·쓰기는 지원하지 않습니다.
-시트를 연 동안 폴더 목록이 바뀌면 적용이 거부되므로 취소 후 다시 여세요.
-같은 패널과 탭에 남아 있으면 표 포커스를 복원합니다.
+| 작업 | Pengrid가 제공하는 기능 |
+| --- | --- |
+| **두 패널과 여러 작업공간** | 독립된 기록·필터·정렬, 탭, 이름 있는 프로필, 세션 배치 복원과 닫은 탭 다시 열기 |
+| **파일 찾기** | 이름·경로 재귀 검색, 한글 초성, 유형·확장자·크기·수정일 필터, 저장된 검색과 선택적 Spotlight 색인 내용 검색 |
+| **바로 미리보기** | **Space**로 폴더 바로 아래 내용 또는 시스템 Quick Look, **⌘I**로 읽기 전용 정보 창 |
+| **우클릭으로 실행** | 다음으로 열기, 다른 패널에서 열기, 경로 복사, 복제, 선택으로 새 폴더, 이름 변경과 일괄 이름 변경 |
+| **파일 작업 추적** | 복사·이동·휴지통·압축 대기열, 진행률, 안전한 취소와 지원되는 작업의 보수적 Undo·Redo |
+| **압축하고 풀기** | ZIP, TAR, TAR.GZ/TGZ, TAR.BZ2/TBZ/TBZ2, TAR.XZ/TXZ 및 AES-256 ZIP 생성, 지원되는 AES·ZipCrypto ZIP 읽기 |
+| **검토 후 동기화** | 디렉터리 비교, 체크섬 확인과 검토 우선 단방향 폴더 동기화 |
+| **저장 공간 파악** | Storage Inspector의 범위 지정 분석과 검토 후 중복 파일 정리 |
+| **클라우드 폴더 사용** | 설치된 Google Drive·OneDrive의 macOS File Provider 위치 탐색 |
 
-새 파일 및 고급 선택 명령의 상호작용 아이디어는
-[Nimble Commander](https://github.com/mikekazakov/nimble-commander)에서,
-Command-P 실행기의 아이디어는 [Shuffle](https://github.com/WizenPainter/shuffle)와
-[F2 Commander](https://github.com/candidtim/f2-commander)에서 동작을
-연구했습니다. 이는 동작 참고일 뿐이며 Pengrid가 코드를 복사한 것은 아닙니다.
+선택적 전송 내용 검증을 켜면 해당 복사·복제·다른 볼륨 이동·검토된 동기화의
+스테이징 단계에서 일반 파일을 SHA-256으로 비교한 뒤 결과를 게시합니다.
+기본값은 꺼짐입니다. [자세한 동작과 검증 범위](docs/user-guide.ko.md#선택-가능한-전송-내용-검증)
 
-### 여러 작업 공간을 준비해 두기
-
-작업 공간 탭으로 서로 독립된 두 패널 폴더 쌍을 여러 개 열어 둘 수 있습니다.
-**Command-T**는 활성 탭의 저장된 배치를 복사해 새 탭을 열고, **Command-W**는
-실행 중이거나 대기 중인 파일 작업이 없을 때 활성 탭을 닫습니다.
-**Control-Tab** / **Control-Shift-Tab**으로 탭을 이동합니다. 탭 제목에는 전체
-경로가 아닌 두 패널의 현재 폴더 이름만 표시됩니다.
-
-탭 막대에서 이름 있는 작업 공간 프로필을 저장한 뒤 Profiles 메뉴에서 열면
-현재 탭을 바꾸지 않고 새 탭을 만듭니다. 세션은 폴더, 정렬, 분할 위치, 활성
-패널 및 프로필만 복원하며, 선택, 필터, 기록, 미리보기, 검색과 작업 상태는
-의도적으로 복원하지 않습니다.
-
-> **Developer Preview 10에 포함된 기능:** **Window > Reopen Closed Workspace Tab**을
-> 선택하거나 **Command-Shift-T**를 누르면 가장 최근에 닫은 작업 공간 탭을 다시
-> 엽니다. 성공적으로 닫힌 탭에서는 확정된 두 폴더 경로, 정렬, 분할 비율 및
-> 활성 패널만 기록하며 대기 중인 탐색은 복원하지 않습니다. 다시 열 때는 새로운
-> 런타임으로 시작합니다. 따라서 선택, 필터, 기록, 검색, 미리보기, 파일 작업
-> 상태와 Undo 상태는 되살리지 않습니다. 현재 앱 세션에서만 성공적으로 닫힌
-> 항목을 최대 10개 보존합니다. 모달 또는 텍스트
-> 편집 중에는 명령을 사용할 수 없습니다. 기록된 경로에 접근할 수 없으면 일반적인
-> 경로/오류 처리를 적용합니다. 복원 자체가 클라우드 파일을 다운로드하거나 사용자
-> 파일 작업을 재실행하지 않습니다. 동작은 [Nimble Commander 공식 안내서](https://github.com/mikekazakov/nimble-commander/blob/main/Docs/Help.md)에서
-> 영감을 받았으며 코드를 복사하지 않았습니다.
-
-### 파일을 빠르게 찾기
-
-Smart Search는 파일명과 상대 경로를 재귀적으로 검색합니다. 일반 텍스트,
-한글 초성, 혼합 쿼리, 파일 종류, 확장자, 크기 및 수정일 필터를 지원하며,
-검색 조건을 저장해 다시 열 수 있습니다. 기본값이 꺼진 **Search indexed file
-contents** 필터는 Spotlight가 이미 색인한 내용만 사용하며 온라인 전용 파일을
-내려받지 않습니다. 내용 범위를 사용할 수 없거나 초성 검색이라 건너뛴 경우도
-표시합니다.
-
-### 수동 Top Shelf 보관함
-
-> Developer Preview 10에 포함된 기능입니다. Preview 9 및 그 이전 DMG에는 없습니다.
-
-**Top Shelf**는 기본값이 OFF입니다. **Settings > Top Shelf**에서 켜거나 앱의
-Top Shelf 표시/숨기기 명령을 사용하세요. 보관함은 수동으로만 채워집니다.
-열린 보관함에서 **Import Clipboard**를 누르거나 지원되는 항목을 끌어
-놓으세요. 파일은 URL 참조로만 보관하며 원본 파일을 이동·삭제·다운로드·수정하지
-않습니다. 일반 텍스트와 정적 PNG/TIFF 이미지를 지원합니다. 클립보드 자동
-수집(sampling), OCR, 전역 단축키는 제공하지 않습니다.
-
-접힌 보관함은 호버 위치를 알려 주는 얇은 검은 손잡이와 밝은 짧은 선만 남깁니다.
-큰 원 아이콘 3개는 표시하지 않습니다.
-포인터를 올리면 키보드 포커스를 가져오지 않고 가로로 넓은 검은 노치 보관함이 펼쳐집니다.
-포인터를 벗어나면 0.45초 뒤 접히며, 그 전에 다시 진입하면 접힘을 취소합니다.
-클릭하거나 **Show Shelf**로 직접 열면 검색, 클립보드 작업, 파일 작업 진행률을
-확인하는 동안 열린 상태를 유지합니다. **Collapse Shelf**로 다시 접을 수 있습니다.
-항목 개수는 손잡이가 아닌 펼친 보관함의 유형별 탭에서 확인합니다.
-
-펼친 보관함에는 상단 검색창, 실제 개수가 붙은 **All / Files / Text / Images**
-캡슐 탭, 가로로 스크롤하는 미리보기 카드가 있습니다. 이미지는 크기를 제한한
-썸네일, 텍스트는 짧은 내용, 파일은 원본을 열지 않는 참조 카드로 표시합니다.
-카드를 선택하거나 검색창 밖에서 **← / →**로 선택한 뒤 **Copy**(⌘C)로 복사합니다.
-카드의 화살표 손잡이는 복사 전용 드래그, 빼기 버튼은 보관 항목만 제거합니다.
-**Keep Shelf Open**은 호버 미리보기를 열린 상태로 유지합니다. 진행률 영역은
-실행·대기 중 작업이나 복구 필요·최근 실패가 있을 때만 나타납니다.
-
-검색은 파일명, 텍스트, 이미지 표시 이름을 대상으로 하며 Pengrid의 한글 초성
-검색 동작을 재사용합니다. **Copy**는 새 native 값을 시스템 클립보드에 씁니다.
-끌어내기(drag-out)는 copy-only이며 대상이 지원하는 경우 native 파일 URL·문자열·
-이미지 표현을 제공합니다. 지원하지 않는 대상에 파일 export를 제공한다고
-주장하지 않습니다. Clear, 보관함 OFF, 앱 종료는 시스템 클립보드를 지우거나
-원본 파일을 바꾸지 않습니다.
-
-보관함은 최대 50개 항목, 항목당 UTF-8 텍스트 256KiB, 인코딩된 PNG/TIFF 이미지
-16MiB 및 40메가픽셀(단일 프레임), 인코딩 payload 합계 64MiB까지 받습니다.
-기본 보관 방식은 **Clear on Quit**이며 현재 세션의 메모리에만 남습니다.
-**Keep Between Launches**를 명시적으로 선택하면 암호화하지 않은 로컬 snapshot을
-`~/Library/Application Support/Pengrid/TopShelf/snapshot.plist`에 저장합니다.
-클라우드 동기화는 하지 않습니다. **Clear on Quit**으로 바꾸면 디스크 snapshot만
-삭제하고 현재 메모리 세션은 유지합니다. 보관함을 OFF로 바꾸거나 **Clear**를
-사용하면 보관 항목과 snapshot만 지우며 시스템 클립보드와 원본 파일은 건드리지
-않습니다.
-
-### 작업 흐름을 유지하며 미리보고 실행하기
-
-**Space**를 누르면 폴더의 바로 아래 항목을 미리보거나 파일, 패키지,
-심볼릭 링크 및 다중 선택을 시스템 Quick Look으로 엽니다. 컨텍스트 메뉴에는
-Open, Open With, Open in Other Pane, Show in Finder, Copy Path, Duplicate,
-New Folder with Selection, 이름 변경, 압축 및 Trash가 포함됩니다.
-
-Pengrid는 실행 전에 화면에 보이는 선택을 캡처하므로 이후 탐색이나 선택
-변경이 작업 목적지를 몰래 바꾸지 못합니다. 정확한 선택 및 기능 판정 규칙은
-[릴리스 노트](docs/release-notes-v1.3.0-developer-preview.9.md)를 참고하세요.
-
-**Command-I** 또는 행 컨텍스트 메뉴의 **Get Info**는 캡처한 선택 항목의
-읽기 전용 비모달 검사기를 엽니다. 하나의 항목 메타데이터나 여러 항목 요약을
-표시하며, 디렉터리 크기는 재귀 합계가 아닌 항목 자체의 크기입니다. SHA-256은
-적격 일반 파일 하나에서 명시적으로 버튼을 눌렀을 때만 계산하며, 온라인 전용
-파일은 그때 macOS 다운로드가 필요할 수 있습니다.
-
-### 더 안전하게 파일 작업 실행하기
-
-복사, 이동, Trash, 이름 변경, 새 폴더, 압축, Undo 및 검토된 폴더 동기화
-작업은 하나의 순서 있는 작업 센터를 공유합니다. 작업은 진행률과 안전한 취소
-지점을 제공하며, 일괄 이름 변경, New Folder with Selection, 한 방향 폴더
-동기화 같은 독점 트랜잭션은 단계적 게시와 보수적인 롤백 검사를 사용합니다.
-동기화는 다시 시도할 수 없고, 완료 후 Undo로 되돌리지 않습니다.
-
-> 전송 내용 검증은 Developer Preview 9에 포함되어 있습니다. 선택 기능이며
-> 기본값은 꺼짐입니다.
-
-Developer Preview 9와 소스 빌드에는 기본값이 꺼진 **File Operations** 설정
-**Verify transferred file contents before publishing**이 있습니다. 이 설정을
-켜면 복사, Duplicate, 다른
-볼륨으로 이동, 검토된 동기화의 복사·교체 작업에서 비공개 스테이징 결과를 게시하기
-전에 일반 파일 데이터를 SHA-256으로 비교합니다. 링크를 따라가지 않고 재귀 트리
-구조와 심볼릭 링크 payload도 확인합니다. 진행률은 바이트 가중 백분율과 파일
-개수 기준 진행을 함께 표시합니다.
-
-### 압축 파일 만들고 풀기
-
-**ZIP**, **TAR**, **TAR.GZ/TGZ**, **TAR.BZ2/TBZ/TBZ2** 및
-**TAR.XZ/TXZ**를 만들고 풀 수 있습니다. 준비, 인코딩 및 마무리 단계를
-구분해 진행 상황을 표시합니다. 소스 빌드는 AES-256 암호 보호 ZIP을 만들고
-지원되는 AES 및 ZipCrypto 항목도 읽습니다.
-
-### 클라우드 위치와 접근성 도구 사용하기
-
-Google Drive와 OneDrive는 macOS File Provider를 통해 표시됩니다. 메타데이터
-검색과 폴더 미리보기는 의도적인 콘텐츠 다운로드를 피하며, 바이트를 읽는
-작업은 macOS에 온라인 전용 항목 다운로드를 요청할 수 있습니다. 디렉터리
-비교와 검토된 한 방향 폴더 동기화, Storage Inspector, 키보드 탐색,
-VoiceOver 레이블, Reduce Motion 및 개인정보를 노출하지 않는 상태 텍스트도
-제공합니다.
+클라우드 파일 가용성과 쓰기 권한은 macOS와 설치된 제공자가 제어합니다.
+파일 내용을 읽는 작업은 온라인 전용 파일을 다운로드할 수 있습니다.
+메타데이터 검색은 의도적인 다운로드를 피하며 직접 Google·Microsoft OAuth는
+구현하지 않습니다. 7z·RAR·암호 보호 TAR은 지원하지 않습니다.
+[현재 제한 사항](docs/current-limitations.ko.md)
 
 ## 주요 단축키
 
 | 단축키 | 작업 |
 | --- | --- |
-| **Space** | 폴더 미리보기 또는 시스템 Quick Look |
-| **Command-F** | 활성 패널 필터 |
-| **Command-Shift-F** | 활성 패널에서 Smart Search 시작 |
-| **Command-P** | 현재 scene의 Quick Go… 팔레트 열기 |
-| **Command-I** | 캡처한 선택 항목의 Get Info |
-| **Command-T** | 새 작업 공간 탭 |
-| **Command-W** | 안전할 때 활성 작업 공간 탭 닫기 |
-| **Command-Shift-T** | 마지막으로 닫은 작업 공간 탭 다시 열기 *(Developer Preview 10 이상)* |
-| **Control-Tab** | 다음 작업 공간 탭 |
-| **Control-Shift-Tab** | 이전 작업 공간 탭 |
-| **Command-D** | 캡처한 선택 항목 복제 |
-| **Option-Command-N** | 새 빈 파일을 만들고 인라인 이름 변경 시작 |
-| **Option-Command-A** | 활성 패널의 표시 행 모두 선택 |
-| **Option-Command-I** | 활성 패널의 표시 선택 반전 |
-| **Option-Command-E** | 같은 확장자의 표시 행 선택 |
-| **Option-Command-S** | 하나의 파일명 와일드카드 패턴으로 표시 행 선택 |
-| **Option-Command-C** | 화면 순서대로 전체 경로 복사 |
+| **Space** | 폴더 미리보기 / 시스템 Quick Look |
+| **⌘F** / **⇧⌘F** | 패널 필터 / 스마트 검색 |
+| **⌘P** | 빠른 이동 명령·위치 팔레트 |
+| **⌘I** | 정보 가져오기 |
+| **⌘T** / **⌘W** / **⇧⌘T** | 작업공간 탭 만들기 / 닫기 / 다시 열기 |
+| **⌃Tab** / **⌃⇧Tab** | 다음 / 이전 작업공간 탭 |
+| **⌘D** / **⌥⌘C** | 복제 / 전체 경로 복사 |
+| **⌥⌘N** | 빈 파일 생성 후 이름 변경 |
+| **⌥⌘A** / **⌥⌘I** / **⌥⌘E** | 표시 항목 선택 / 선택 반전 / 같은 확장자 |
+| **⌥⌘S** | 하나의 파일명 와일드카드 패턴으로 선택 |
+| **⌘?** | 한글·영문 오프라인 도움말 |
 
-Batch Rename과 나머지 컨텍스트 작업은 File Operations 메뉴 또는 행의
-컨텍스트 메뉴에서 사용할 수 있습니다.
-
-## 클라우드 및 안전 범위
-
-- Pengrid는 macOS File Provider를 통해 클라우드 루트를 검색하며 직접 Google 또는 Microsoft OAuth를 구현하지 않습니다.
-- 파일 가용성, 쓰기 기능 및 다운로드는 설치된 제공자와 macOS가 제어합니다.
-- 암호 보호 ZIP은 파일명이나 중앙 디렉터리 메타데이터를 숨기지 않습니다.
-  암호는 저장하지 않으며 복구할 수 없습니다.
-- 7z, RAR, 암호 보호 TAR, Developer ID 서명 및 공증은 이 Developer
-  Preview에 포함되지 않습니다.
-- Finder 태그 편집은 향후 작업입니다. 선택 가능한 전송 내용 검증은 Developer
-  Preview 9에 포함되어 있습니다. 리소스 포크, 확장 속성, ACL,
-  소유권, 플래그, 생성일, 하드 링크 관계 및 sparse allocation은 검증 범위에서
-  제외합니다.
-- 실행하지 않은 수동 검증은 검증 문서에 `NOT RUN`으로 명시합니다.
-
-자세한 동작, 안전 규칙 및 제한 사항은
-[기능 가이드](docs/user-guide.ko.md)와
-[현재 제한 사항](docs/current-limitations.ko.md)을 참고하세요.
+파일 명령은 활성 패널, 텍스트 편집 포커스와 선택 상태를 확인해 실행합니다.
+[명령 상세 안내](docs/user-guide.ko.md)
 
 ## 소스에서 빌드하기
+
+**Swift 6·SwiftUI·AppKit**으로 개발하며 암호 ZIP은 C 코어를 사용합니다.
+현재 글래스 API를 컴파일하려면 macOS 26 SDK를 포함한 **Xcode 26 이상**이
+필요합니다. 만들어진 앱은 macOS 15부터 실행할 수 있습니다.
 
 ```bash
 git clone https://github.com/pmh10401/Pengrid.git
@@ -294,18 +148,25 @@ env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
 open dist/Pengrid.app
 ```
 
-개발 앱은 `dist/Pengrid.app`에 생성됩니다. 호환성을 위해 Swift 패키지,
-실행 파일, 소스 모듈, 번들 식별자 및 기존 저장 위치의 내부 이름은
+호환성을 위해 패키지·실행 파일·모듈·저장 식별자의 내부 이름은
 `BloomFileManager`로 유지합니다.
 
-## 문서
+## 문서와 참여
 
-- [상세 기능 가이드](docs/user-guide.ko.md)
-- [Developer Preview 10 릴리스 노트](docs/release-notes-v1.3.0-developer-preview.10.md)
-- [릴리스 및 패키징 가이드](docs/release.ko.md)
-- [아키텍처 설명](docs/architecture.md)
-- [현재 제한 사항](docs/current-limitations.ko.md)
-- [전송 내용 검증 기록](docs/verification/transfer-content-verification.ko.md)
-- [검증 기록](docs/verification/)
+- [상세 기능 안내](docs/user-guide.ko.md) · [English guide](docs/user-guide.md)
+- [Preview 11 변경 사항](docs/release-notes-v1.3.0-developer-preview.11.md)
+- [릴리즈 안내](docs/release.ko.md) · [아키텍처](docs/architecture.md)
+- [제한 사항](docs/current-limitations.ko.md) · [Preview 11 검증 기록](docs/verification/preview11-release-check.md)
+- [소개 이미지 출처](docs/images/README.md) · [외부 프로젝트 고지](THIRD_PARTY_NOTICES.md)
 
-Pengrid는 계속 개발 중입니다. 기여와 재현 가능한 문제 보고를 환영합니다.
+기능 후보에서 **131개 스위트·자동 테스트 2,055개**가 통과했습니다.
+자동 검사는 검증 문서에 별도로 기록한 실제 클라우드·접근성·볼륨 검사를
+대신하지 않습니다.
+
+노치 움직임은 [PenguinNotch](https://github.com/pmh10401/PenguinNotch),
+카드형 보관함은 [Supaste](https://www.supaste.com/)를 참고했습니다.
+Pengrid는 독립된 앱이며 외부 프로젝트 고지는
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)에 포함되어 있습니다.
+
+재현 가능한 [문제 보고](https://github.com/pmh10401/Pengrid/issues)와
+범위가 명확한 PR을 환영합니다.

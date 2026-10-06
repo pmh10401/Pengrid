@@ -253,14 +253,14 @@ struct WorkspaceCommandTests {
         let newItemGroup = try #require(commandGroupBody(in: commands, anchoredAt: "CommandGroup(replacing: .newItem)"))
         let editGroup = try #require(commandGroupBody(in: commands, anchoredAt: "CommandGroup(after: .pasteboard)"))
 
-        #expect(newItemGroup.contains("Button(\"New Empty File\")"))
+        #expect(newItemGroup.contains("Button(AppText.text(\"New Empty File\"))"))
         #expect(newItemGroup.contains(".keyboardShortcut(\"n\", modifiers: [.command, .option])"))
         #expect(commands.contains("WorkspaceCommandActions.createFile("))
-        #expect(editGroup.contains("Button(\"Select All Visible\")"))
+        #expect(editGroup.contains("Button(AppText.text(\"Select All Visible\"))"))
         #expect(editGroup.contains(".keyboardShortcut(\"a\", modifiers: [.command, .option])"))
-        #expect(editGroup.contains("Button(\"Invert Selection\")"))
+        #expect(editGroup.contains("Button(AppText.text(\"Invert Selection\"))"))
         #expect(editGroup.contains(".keyboardShortcut(\"i\", modifiers: [.command, .option])"))
-        #expect(editGroup.contains("Button(\"Select Same Extension\")"))
+        #expect(editGroup.contains("Button(AppText.text(\"Select Same Extension\"))"))
         #expect(editGroup.contains(".keyboardShortcut(\"e\", modifiers: [.command, .option])"))
         #expect(editGroup.contains(".disabled(!selectionPolicy.canSelectSameExtension)"))
         for identifier in [
@@ -274,8 +274,8 @@ struct WorkspaceCommandTests {
 
     @Test func workspaceCommandsExposeQuickGoInTheGoMenuAndReplacePrint() throws {
         let commands = try workspaceCommandsSource()
-        #expect(commands.contains("CommandMenu(\"Go\")"))
-        #expect(commands.contains("Button(\"Quick Go…\")"))
+        #expect(commands.contains("CommandMenu(AppText.text(\"Go\"))"))
+        #expect(commands.contains("Button(AppText.text(\"Quick Go…\"))"))
         #expect(commands.contains(".keyboardShortcut(\"p\", modifiers: .command)"))
         #expect(commands.contains("CommandGroup(replacing: .printItem)"))
         #expect(commands.contains("workspaceCommandPalettePresentation?()"))
@@ -431,16 +431,16 @@ struct WorkspaceCommandTests {
         ))
         let profilesMenu = try #require(commandGroupBody(
             in: commands,
-            anchoredAt: "CommandMenu(\"Workspace Profiles\")"
+            anchoredAt: "CommandMenu(AppText.text(\"Workspace Profiles\"))"
         ))
 
         for title in ["New Workspace Tab", "Close Workspace Tab", "Next Workspace Tab", "Previous Workspace Tab"] {
-            #expect(windowGroup.contains("Button(\"\(title)\")"))
-            #expect(!fileGroup.contains("Button(\"\(title)\")"))
+            #expect(windowGroup.contains("Button(AppText.text(\"\(title)\"))"))
+            #expect(!fileGroup.contains("Button(AppText.text(\"\(title)\"))"))
         }
         for title in ["Open", "Quick Look", "Get Info", "Close Preview", "Rename", "Rename with F2"] {
-            #expect(fileGroup.contains("Button(\"\(title)\")"))
-            #expect(!windowGroup.contains("Button(\"\(title)\")"))
+            #expect(fileGroup.contains("Button(AppText.text(\"\(title)\"))"))
+            #expect(!windowGroup.contains("Button(AppText.text(\"\(title)\"))"))
         }
 
         #expect(windowGroup.contains(".keyboardShortcut(\"t\", modifiers: .command)"))
@@ -449,8 +449,8 @@ struct WorkspaceCommandTests {
         #expect(windowGroup.contains(".keyboardShortcut(.tab, modifiers: [.control, .shift])"))
         #expect(windowGroup.contains("!tabCommandFocusPolicy.permitsTabMutation"))
         #expect(windowGroup.contains("beforeClose: operationController.invalidateReversalHistory(for:)"))
-        #expect(profilesMenu.contains("Button(\"Save Workspace as Profile…\")"))
-        #expect(profilesMenu.contains("Button(\"Manage Workspace Profiles…\")"))
+        #expect(profilesMenu.contains("Button(AppText.text(\"Save Workspace as Profile…\"))"))
+        #expect(profilesMenu.contains("Button(AppText.text(\"Manage Workspace Profiles…\"))"))
         #expect(profilesMenu.contains("!tabCommandFocusPolicy.permitsProfilesPresentation"))
         #expect(profilesMenu.contains("!tabCommandFocusPolicy.permitsTabMutation"))
         #expect(profilesMenu.contains("WorkspaceTabCommandActions.openProfile("))
@@ -629,9 +629,9 @@ struct WorkspaceCommandTests {
 
         coordinator.menuNeedsUpdate(menu)
 
-        let ordinaryIndex = try #require(menu.items.firstIndex { $0.title == "Compress to ZIP" })
+        let ordinaryIndex = try #require(menu.items.firstIndex { $0.title == AppText.text("Compress to ZIP") })
         let protectedIndex = try #require(
-            menu.items.firstIndex { $0.title == "Compress as Password-Protected ZIP…" }
+            menu.items.firstIndex { $0.title == AppText.text("Compress as Password-Protected ZIP…") }
         )
         let ordinary = menu.items[ordinaryIndex]
         let protected = menu.items[protectedIndex]
@@ -645,12 +645,12 @@ struct WorkspaceCommandTests {
         #expect(protected.action == #selector(FileTableView.Coordinator.compressProtectedFromMenu))
         #expect(protected.target === coordinator)
         let formatMenuItem = try #require(
-            menu.items.first { $0.title == "Compress as…" && $0.submenu != nil }
+            menu.items.first { $0.title == AppText.text("Compress as…") && $0.submenu != nil }
         )
         let formatMenu = try #require(formatMenuItem.submenu)
         let nestedFormatItems = menuItemsRecursively(in: formatMenu)
         #expect(nestedFormatItems.allSatisfy { item in
-            item.title != "Compress as Password-Protected ZIP…"
+            item.title != AppText.text("Compress as Password-Protected ZIP…")
                 && item.identifier != NSUserInterfaceItemIdentifier(
                     AccessibilityIdentifiers.fileTableCompressProtectedZIP
                 )
@@ -668,10 +668,10 @@ struct WorkspaceCommandTests {
         coordinator.menuNeedsUpdate(menu)
 
         let disabledOrdinary = try #require(
-            menu.items.first { $0.title == "Compress to ZIP" }
+            menu.items.first { $0.title == AppText.text("Compress to ZIP") }
         )
         let disabledProtected = try #require(
-            menu.items.first { $0.title == "Compress as Password-Protected ZIP…" }
+            menu.items.first { $0.title == AppText.text("Compress as Password-Protected ZIP…") }
         )
         #expect(!disabledOrdinary.isEnabled)
         #expect(!disabledProtected.isEnabled)
@@ -953,10 +953,10 @@ struct WorkspaceCommandTests {
 
         #expect(commands.contains(".keyboardShortcut(.space, modifiers: [])"))
         #expect(contextActionSection.contains(
-            "Button(\"Copy Full Path\") { dispatchContextAction(.copyPath(.fullPath)) }\n                    .keyboardShortcut(\"c\", modifiers: [.command, .option])"
+            "Button(AppText.text(\"Copy Full Path\")) { dispatchContextAction(.copyPath(.fullPath)) }\n                    .keyboardShortcut(\"c\", modifiers: [.command, .option])"
         ))
         #expect(contextActionSection.contains(
-            "Button(\"Duplicate\") { dispatchContextAction(.duplicate) }\n                .keyboardShortcut(\"d\", modifiers: .command)"
+            "Button(AppText.text(\"Duplicate\")) { dispatchContextAction(.duplicate) }\n                .keyboardShortcut(\"d\", modifiers: .command)"
         ))
         #expect(contextActionSection.components(separatedBy: ".keyboardShortcut(").count - 1 == 2)
         #expect(commands.contains("WorkspaceContextActionRouting.policy("))

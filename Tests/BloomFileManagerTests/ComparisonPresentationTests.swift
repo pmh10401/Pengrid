@@ -536,7 +536,7 @@ import Testing
         #expect(!workspaceSource.contains("if !comparison.isActive"))
 
         let commandsSource = try bloomSource(named: "Support/WorkspaceCommands.swift")
-        let compareMenu = try #require(commandsSource.range(of: "CommandMenu(\"Compare\")"))
+        let compareMenu = try #require(commandsSource.range(of: "CommandMenu(AppText.text(\"Compare\"))"))
         let menuBlock = try #require(bracedBlock(
             in: commandsSource,
             startingAt: compareMenu.lowerBound

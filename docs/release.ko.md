@@ -8,19 +8,23 @@ App Sandbox entitlement를 사용하지 않습니다. 실행 파일명과 호환
 
 ## 현재 게시된 Developer Preview
 
-[Pengrid 1.3.0 Developer Preview 10](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.10)이
-현재 릴리스입니다. **1.3.0, 빌드 12**, Apple Silicon, macOS 15 이상을
-지원하며 선택적 수동 Top Shelf의 호버 노치 갤러리, 검색, 클립보드 가져오기,
-유형별 개수와 진행률 표시 및 닫은 탭 다시 열기를 포함합니다.
+[Pengrid 1.3.0 Developer Preview 11](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.11)이
+현재 릴리즈입니다. **1.3.0, 빌드 13**, Apple Silicon, macOS 15 이상을
+지원하며 수동 보관함에 하드웨어 노치 숨김, 스프링 기반 테두리 이동,
+가로·세로 배치, 글래스 스타일과 한국어 메뉴를 추가했습니다.
 
-- [Pengrid.dmg 다운로드](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.10/Pengrid.dmg)
-- [SHA256SUMS.txt](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.10/SHA256SUMS.txt)
-- [변경 사항·검증·제한](release-notes-v1.3.0-developer-preview.10.md)
+- [Pengrid.dmg 다운로드](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.11/Pengrid.dmg)
+- [SHA256SUMS.txt](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.11/SHA256SUMS.txt)
+- [변경 사항·검증·제한](release-notes-v1.3.0-developer-preview.11.md)
 
 ad-hoc 서명이며 공증되지 않은 프리릴리스입니다. 이번 후보에서 수행하지 않은
 실제 클라우드 및 접근성 검사는 수동 검증 항목으로 남아 있습니다.
 
 ## 이전 릴리스
+
+[Developer Preview 10](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.10)은
+빌드 12에서 수동 노치 갤러리와 닫은 탭 다시 열기를 도입했습니다.
+[이전 릴리즈 노트](release-notes-v1.3.0-developer-preview.10.md)를 참고하세요.
 
 [Developer Preview 9](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.9)는
 빌드 11에서 한·영 도움말, 이름 패턴 선택 및 텍스트 전체 선택을 제공했습니다.
@@ -74,7 +78,7 @@ Drive, OneDrive 및 실제 VoiceOver 검사는 **MANUAL NOT RUN**입니다.
 적용합니다. 작업자 수는 최대 4개이며 프로세서 수 또는 원본 수를 넘지
 않습니다. 실제 압축과 압축 해제 명령은 하나의 네이티브 작업입니다.
 
-암호로 보호된 ZIP은 아래 소스 기능 경계에 포함되지만 암호로 보호된 TAR, RAR
+암호로 보호된 ZIP은 아래 릴리스 기능 경계에 포함되지만 암호로 보호된 TAR, RAR
 및 7z는 지원하지 않습니다. 필요한 자동·정적 검증과 실제 수동 검증 결과는
 [`docs/verification/version-1.3-archive-checklist.md`](verification/version-1.3-archive-checklist.md)에
 기록합니다.
@@ -116,7 +120,9 @@ Preview임을 명확히 표시한 무료 패키지 배포를 막지 않습니다
 
 ## 로컬 unsigned 패키지와 Developer Preview
 
-릴리스 테스트와 패키징을 실행하기 전에 전체 Xcode를 설치해야 합니다. Command
+릴리즈 테스트와 패키징을 실행하기 전에 macOS 26 SDK를 포함한 Xcode 26
+이상을 설치해야 합니다. 글래스 API는 운영체제 버전에 따라 적용하며 빌드한
+앱은 macOS 15부터 실행할 수 있습니다. Command
 Line Tools만으로는 이 릴리스 게이트가 사용하는 Swift Testing을 제공하지
 않습니다. 전체 Xcode가 설치되어 있고 `DEVELOPER_DIR`가 없으면 스크립트가
 `/Applications/Xcode.app/Contents/Developer`를 사용하며, 사용자가 명시한 값은

@@ -742,7 +742,7 @@ extension FileTableView {
             addMenuItem("New Folder", action: #selector(createFolderFromMenu), enabled: policy.canCreateFolder, to: menu)
             let encloseSelection = capturedContextMenuPresentation.policy.encloseSelection
             addContextMenuItem(
-                "New Folder with Selection (\(contextMenuItems.count) Items)…",
+                AppText.format("New Folder with Selection (%ld Items)…", contextMenuItems.count),
                 action: #selector(encloseSelectionFromMenu),
                 availability: encloseSelection,
                 to: menu,
@@ -1231,7 +1231,7 @@ extension FileTableView {
             identifier: String? = nil,
             toolTip: String? = nil
         ) {
-            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+            let item = NSMenuItem(title: AppText.text(title), action: action, keyEquivalent: "")
             item.target = self
             item.isEnabled = enabled
             item.toolTip = toolTip
@@ -1267,7 +1267,7 @@ extension FileTableView {
             guard availability.isVisible else { return }
 
             let applications = capturedContextMenuPresentation.openWithApplications
-            let submenu = NSMenu(title: "Open With")
+            let submenu = NSMenu(title: AppText.text("Open With"))
             for (index, application) in applications.enumerated() {
                 let item = NSMenuItem(
                     title: application.displayName,
@@ -1285,7 +1285,7 @@ extension FileTableView {
                 submenu.addItem(item)
             }
 
-            let parentItem = NSMenuItem(title: "Open With", action: nil, keyEquivalent: "")
+            let parentItem = NSMenuItem(title: AppText.text("Open With"), action: nil, keyEquivalent: "")
             parentItem.submenu = submenu
             parentItem.identifier = NSUserInterfaceItemIdentifier(AccessibilityIdentifiers.fileTableOpenWith)
             parentItem.isEnabled = availability.isEnabled && !applications.isEmpty
@@ -1299,7 +1299,7 @@ extension FileTableView {
             let availability = capturedContextMenuPresentation.policy.copyPath
             guard availability.isVisible else { return false }
 
-            let submenu = NSMenu(title: "Copy Path")
+            let submenu = NSMenu(title: AppText.text("Copy Path"))
             let entries: [(String, Selector, String)] = [
                 ("Copy Full Path", #selector(copyFullPathFromMenu), AccessibilityIdentifiers.fileTableCopyFullPath),
                 ("Copy Name", #selector(copyNameFromMenu), AccessibilityIdentifiers.fileTableCopyName),
@@ -1307,7 +1307,7 @@ extension FileTableView {
                 ("Copy File URL", #selector(copyFileURLFromMenu), AccessibilityIdentifiers.fileTableCopyFileURL)
             ]
             for (title, action, identifier) in entries {
-                let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+                let item = NSMenuItem(title: AppText.text(title), action: action, keyEquivalent: "")
                 item.target = self
                 item.isEnabled = availability.isEnabled
                 item.toolTip = availability.isEnabled ? nil : availability.disabledReason
@@ -1315,7 +1315,7 @@ extension FileTableView {
                 submenu.addItem(item)
             }
 
-            let parentItem = NSMenuItem(title: "Copy Path", action: nil, keyEquivalent: "")
+            let parentItem = NSMenuItem(title: AppText.text("Copy Path"), action: nil, keyEquivalent: "")
             parentItem.submenu = submenu
             parentItem.identifier = NSUserInterfaceItemIdentifier(AccessibilityIdentifiers.fileTableCopyPath)
             parentItem.isEnabled = availability.isEnabled
@@ -1325,7 +1325,7 @@ extension FileTableView {
         }
 
         private func addCompressSubmenu(enabled: Bool, to menu: NSMenu) {
-            let submenu = NSMenu(title: "Compress as…")
+            let submenu = NSMenu(title: AppText.text("Compress as…"))
             for (index, format) in ArchiveFormat.allCases.enumerated() {
                 let item = NSMenuItem(
                     title: format.displayName,
@@ -1337,7 +1337,7 @@ extension FileTableView {
                 item.isEnabled = enabled
                 submenu.addItem(item)
             }
-            let parentItem = NSMenuItem(title: "Compress as…", action: nil, keyEquivalent: "")
+            let parentItem = NSMenuItem(title: AppText.text("Compress as…"), action: nil, keyEquivalent: "")
             parentItem.submenu = submenu
             parentItem.isEnabled = enabled
             menu.addItem(parentItem)

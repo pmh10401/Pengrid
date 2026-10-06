@@ -56,7 +56,7 @@ import Testing
     @Test func helpCommandUsesStandardMenuShortcutAndSingletonSceneID() throws {
         let commands = try source(named: "Support/PengridHelpCommands.swift")
         #expect(commands.contains("CommandGroup(replacing: .help)"))
-        #expect(commands.contains("Button(\"Pengrid Help\")"))
+        #expect(commands.contains("Button(AppText.text(\"Pengrid Help\"))"))
         #expect(commands.contains(".keyboardShortcut(\"?\", modifiers: .command)"))
         #expect(commands.components(separatedBy: ".keyboardShortcut(\"?\"").count - 1 == 1)
         #expect(commands.contains("openWindow(id: PengridHelpScene.id)"))

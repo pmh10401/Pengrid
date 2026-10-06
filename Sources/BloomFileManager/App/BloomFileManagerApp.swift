@@ -327,11 +327,11 @@ struct BloomFileManagerApp: App {
                 cloudLocations: cloudLocations
             )
             PengridHelpCommands()
-            CommandMenu("Shelf") {
-                Toggle("Enable Top Shelf", isOn: Binding(get: { shelfController.store.isEnabled }, set: { shelfController.setEnabled($0) }))
-                Button("Show Top Shelf") { shelfController.show() }
+            CommandMenu(AppText.text("Shelf")) {
+                Toggle(AppText.text("Enable Top Shelf"), isOn: Binding(get: { shelfController.store.isEnabled }, set: { shelfController.setEnabled($0) }))
+                Button(AppText.text("Show Top Shelf")) { shelfController.show() }
                     .disabled(!shelfController.store.isEnabled)
-                Button("Hide Top Shelf") { shelfController.hide() }
+                Button(AppText.text("Hide Top Shelf")) { shelfController.hide() }
                     .disabled(!shelfController.store.isEnabled)
             }
         }
@@ -347,26 +347,26 @@ struct BloomFileManagerApp: App {
                 FileOperationsSettingsView(preference: transferVerificationPreference)
                     .tabItem {
                         Label(
-                            PengridSettingsTab.fileOperations.title,
+                            AppText.text(PengridSettingsTab.fileOperations.title),
                             systemImage: PengridSettingsTab.fileOperations.systemImage
                         )
                     }
                 CloudLocationsSettingsView(cloudLocations: cloudLocations)
                     .tabItem {
                         Label(
-                            PengridSettingsTab.cloudLocations.title,
+                            AppText.text(PengridSettingsTab.cloudLocations.title),
                             systemImage: PengridSettingsTab.cloudLocations.systemImage
                         )
                     }
                 ShelfSettingsView(controller: shelfController)
                     .tabItem {
                         Label(
-                            PengridSettingsTab.topShelf.title,
+                            AppText.text(PengridSettingsTab.topShelf.title),
                             systemImage: PengridSettingsTab.topShelf.systemImage
                         )
                     }
             }
-            .navigationTitle("\(AppIdentity.displayName) Settings")
+            .navigationTitle(AppText.text("\(AppIdentity.displayName) Settings"))
         }
         .commands {
             PengridHelpCommands()
