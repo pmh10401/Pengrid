@@ -820,13 +820,13 @@ struct WorkspaceCommands: Commands {
 
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
-            Button("New Folder") {
+            Button(AppText.text("New Folder")) {
                 createFolder()
             }
             .keyboardShortcut("n", modifiers: [.command, .shift])
             .disabled(workspace == nil || !policy.canCreateFolder)
 
-            Button("New Empty File") {
+            Button(AppText.text("New Empty File")) {
                 createFile()
             }
             .keyboardShortcut("n", modifiers: [.command, .option])
@@ -837,7 +837,7 @@ struct WorkspaceCommands: Commands {
         CommandGroup(replacing: .printItem) {}
 
         CommandGroup(after: .windowList) {
-            Button("New Workspace Tab") {
+            Button(AppText.text("New Workspace Tab")) {
                 guard tabCommandFocusPolicy.permitsTabMutation,
                       let workspaceSession
                 else { return }
@@ -851,7 +851,7 @@ struct WorkspaceCommands: Commands {
             .keyboardShortcut("t", modifiers: .command)
             .disabled(!tabCommandFocusPolicy.permitsTabMutation)
 
-            Button("Close Workspace Tab") {
+            Button(AppText.text("Close Workspace Tab")) {
                 guard tabCommandFocusPolicy.permitsTabMutation,
                       let workspaceSession
                 else { return }
@@ -876,7 +876,7 @@ struct WorkspaceCommands: Commands {
                     || (workspace.map { operationController.hasActiveOrQueuedWork(boundTo: $0) } ?? true)
             )
 
-            Button("Reopen Closed Workspace Tab") {
+            Button(AppText.text("Reopen Closed Workspace Tab")) {
                 guard tabCommandFocusPolicy.permitsTabMutation,
                       let workspaceSession
                 else { return }
@@ -890,7 +890,7 @@ struct WorkspaceCommands: Commands {
             .keyboardShortcut("t", modifiers: [.command, .shift])
             .disabled(!tabCommandFocusPolicy.permitsTabMutation || workspaceSession?.canReopenClosedTab != true)
 
-            Button("Next Workspace Tab") {
+            Button(AppText.text("Next Workspace Tab")) {
                 guard tabCommandFocusPolicy.permitsTabMutation,
                       let workspaceSession
                 else { return }
@@ -904,7 +904,7 @@ struct WorkspaceCommands: Commands {
             .keyboardShortcut(.tab, modifiers: .control)
             .disabled(workspaceSession?.tabs.count ?? 0 < 2 || !tabCommandFocusPolicy.permitsTabMutation)
 
-            Button("Previous Workspace Tab") {
+            Button(AppText.text("Previous Workspace Tab")) {
                 guard tabCommandFocusPolicy.permitsTabMutation,
                       let workspaceSession
                 else { return }
@@ -921,19 +921,19 @@ struct WorkspaceCommands: Commands {
 
         CommandGroup(after: .newItem) {
 
-            Button("Open") {
+            Button(AppText.text("Open")) {
                 openSelection()
             }
             .keyboardShortcut("o", modifiers: .command)
             .disabled(!policy.canOpen)
 
-            Button("Quick Look") {
+            Button(AppText.text("Quick Look")) {
                 dispatchContextAction(.quickLook)
             }
             .keyboardShortcut(.space, modifiers: [])
             .disabled(!contextPolicy.quickLook.isEnabled || previewCoordinator == nil)
 
-            Button("Get Info") {
+            Button(AppText.text("Get Info")) {
                 guard let workspace, let getInfoInspector else { return }
                 _ = WorkspaceGetInfoCommandActions.present(
                     in: workspace,
@@ -945,7 +945,7 @@ struct WorkspaceCommands: Commands {
             .disabled(!getInfoPolicy.isEnabled)
             .accessibilityIdentifier(GetInfoAccessibilityIdentifiers.command)
 
-            Button("Close Preview") {
+            Button(AppText.text("Close Preview")) {
                 guard let previewCoordinator else { return }
                 WorkspacePreviewCommandActions.closeIfPresented(
                     policy: policy,
@@ -961,13 +961,13 @@ struct WorkspaceCommands: Commands {
 
             Divider()
 
-            Button("Rename") {
+            Button(AppText.text("Rename")) {
                 requestRename()
             }
             .keyboardShortcut(.return, modifiers: [])
             .disabled(!policy.canRename)
 
-            Button("Rename with F2") {
+            Button(AppText.text("Rename with F2")) {
                 requestRename()
             }
             .keyboardShortcut(KeyEquivalent(Character("\u{F705}")), modifiers: [])
@@ -975,19 +975,19 @@ struct WorkspaceCommands: Commands {
         }
 
         CommandGroup(replacing: .pasteboard) {
-            Button("Copy") {
+            Button(AppText.text("Copy")) {
                 copy()
             }
             .keyboardShortcut("c", modifiers: .command)
             .disabled(policy.copyRoute == .unavailable)
 
-            Button("Paste") {
+            Button(AppText.text("Paste")) {
                 paste()
             }
             .keyboardShortcut("v", modifiers: .command)
             .disabled(policy.pasteRoute == .unavailable)
 
-            Button("Select All") {
+            Button(AppText.text("Select All")) {
                 TextResponderCommand.selectAll(isTextEditing: policy.isTextEditing)
             }
             .keyboardShortcut("a", modifiers: .command)
@@ -995,7 +995,7 @@ struct WorkspaceCommands: Commands {
         }
 
         CommandGroup(after: .pasteboard) {
-            Button("Select All Visible") {
+            Button(AppText.text("Select All Visible")) {
                 guard let workspace else { return }
                 WorkspaceSelectionCommandActions.selectAllVisible(
                     in: workspace,
@@ -1006,7 +1006,7 @@ struct WorkspaceCommands: Commands {
             .disabled(!selectionPolicy.canSelectAllVisible)
             .accessibilityIdentifier(AccessibilityIdentifiers.workspaceSelectAllVisible)
 
-            Button("Invert Selection") {
+            Button(AppText.text("Invert Selection")) {
                 guard let workspace else { return }
                 WorkspaceSelectionCommandActions.invertSelection(
                     in: workspace,
@@ -1017,7 +1017,7 @@ struct WorkspaceCommands: Commands {
             .disabled(!selectionPolicy.canInvertSelection)
             .accessibilityIdentifier(AccessibilityIdentifiers.workspaceInvertSelection)
 
-            Button("Select Same Extension") {
+            Button(AppText.text("Select Same Extension")) {
                 guard let workspace else { return }
                 _ = WorkspaceSelectionCommandActions.selectSameExtension(
                     in: workspace,
@@ -1028,7 +1028,7 @@ struct WorkspaceCommands: Commands {
             .disabled(!selectionPolicy.canSelectSameExtension)
             .accessibilityIdentifier(AccessibilityIdentifiers.workspaceSelectSameExtension)
 
-            Button("Select by Name…") {
+            Button(AppText.text("Select by Name…")) {
                 workspaceNamePatternPresentation?()
             }
             .keyboardShortcut("s", modifiers: [.command, .option])
@@ -1044,14 +1044,14 @@ struct WorkspaceCommands: Commands {
 
             Divider()
 
-            Button("Filter Files") {
+            Button(AppText.text("Filter Files")) {
                 guard let workspace, policy.canNavigate else { return }
                 WorkspaceFilterCommandActions.showFilter(in: workspace, canNavigate: policy.canNavigate)
             }
             .keyboardShortcut("f", modifiers: .command)
             .disabled(workspace == nil || !policy.canNavigate)
 
-            Button("Smart Search…") {
+            Button(AppText.text("Smart Search…")) {
                 guard policy.canNavigate, let workspaceSmartSearchPresentation else { return }
                 workspaceSmartSearchPresentation()
             }
@@ -1059,8 +1059,8 @@ struct WorkspaceCommands: Commands {
             .disabled(workspaceSmartSearchPresentation == nil || !policy.canNavigate)
         }
 
-        CommandMenu("Workspace Profiles") {
-            Button("Save Workspace as Profile…") {
+        CommandMenu(AppText.text("Workspace Profiles")) {
+            Button(AppText.text("Save Workspace as Profile…")) {
                 guard tabCommandFocusPolicy.permitsProfilesPresentation,
                       let workspaceProfilesPresentation
                 else { return }
@@ -1089,7 +1089,7 @@ struct WorkspaceCommands: Commands {
 
             Divider()
 
-            Button("Manage Workspace Profiles…") {
+            Button(AppText.text("Manage Workspace Profiles…")) {
                 guard tabCommandFocusPolicy.permitsProfilesPresentation,
                       let workspaceProfilesPresentation
                 else { return }
@@ -1098,12 +1098,12 @@ struct WorkspaceCommands: Commands {
             .disabled(!tabCommandFocusPolicy.permitsProfilesPresentation)
         }
 
-        CommandMenu("File Operations") {
+        CommandMenu(AppText.text("File Operations")) {
             contextActionCommands
 
             Divider()
 
-            Button("Batch Rename…") {
+            Button(AppText.text("Batch Rename…")) {
                 guard let workspace, let batchRename, policy.canBatchRename else { return }
                 let capability = cloudLocations?.batchRenameCapability(
                     for: workspace.activePane.currentDirectory
@@ -1122,7 +1122,7 @@ struct WorkspaceCommands: Commands {
 
             Divider()
 
-            Button("Compress to ZIP") {
+            Button(AppText.text("Compress to ZIP")) {
                 guard let workspace, policy.canCompress else { return }
                 Task {
                     _ = await operationController.compressSelection(workspace)
@@ -1130,7 +1130,7 @@ struct WorkspaceCommands: Commands {
             }
             .disabled(!policy.canCompress)
 
-            Button("Compress as Password-Protected ZIP…") {
+            Button(AppText.text("Compress as Password-Protected ZIP…")) {
                 guard let workspace, policy.canCompressProtectedZIP else { return }
                 Task {
                     _ = await WorkspaceArchiveCommandActions.compressProtectedZIP(
@@ -1142,7 +1142,7 @@ struct WorkspaceCommands: Commands {
             .disabled(!policy.canCompressProtectedZIP)
             .accessibilityIdentifier(AccessibilityIdentifiers.workspaceCompressProtectedZIP)
 
-            Menu("Compress as…") {
+            Menu(AppText.text("Compress as…")) {
                 ForEach(ArchiveFormat.allCases, id: \.self) { format in
                     Button(format.displayName) {
                         guard let workspace, policy.canCompress else { return }
@@ -1154,7 +1154,7 @@ struct WorkspaceCommands: Commands {
             }
             .disabled(!policy.canCompress)
 
-            Button("Extract Archive") {
+            Button(AppText.text("Extract Archive")) {
                 guard let workspace, policy.canExtract else { return }
                 Task {
                     _ = await operationController.extractSelection(workspace)
@@ -1164,7 +1164,7 @@ struct WorkspaceCommands: Commands {
 
             Divider()
 
-            Button("Move to Trash…") {
+            Button(AppText.text("Move to Trash…")) {
                 guard let workspace, policy.canTrash else { return }
                 Task {
                     await operationController.requestTrashConfirmation(
@@ -1176,7 +1176,7 @@ struct WorkspaceCommands: Commands {
             .keyboardShortcut(.delete, modifiers: [])
             .disabled(!policy.canTrash)
 
-            Button("Move to Trash Immediately") {
+            Button(AppText.text("Move to Trash Immediately")) {
                 guard let workspace, policy.canTrash else { return }
                 let selectedURLs = workspace.selectedURLsForCommands
                 Task {
@@ -1190,8 +1190,8 @@ struct WorkspaceCommands: Commands {
             .disabled(!policy.canTrash)
         }
 
-        CommandMenu("Go") {
-            Button("Quick Go…") {
+        CommandMenu(AppText.text("Go")) {
+            Button(AppText.text("Quick Go…")) {
                 workspaceCommandPalettePresentation?()
             }
             .keyboardShortcut("p", modifiers: .command)
@@ -1205,21 +1205,21 @@ struct WorkspaceCommands: Commands {
 
             Divider()
 
-            Button("Back") {
+            Button(AppText.text("Back")) {
                 guard policy.canNavigate, let pane = workspace?.activePane else { return }
                 Task { await pane.goBack() }
             }
             .keyboardShortcut("[", modifiers: .command)
             .disabled(!policy.canNavigate || workspace?.activePane.canGoBack != true)
 
-            Button("Forward") {
+            Button(AppText.text("Forward")) {
                 guard policy.canNavigate, let pane = workspace?.activePane else { return }
                 Task { await pane.goForward() }
             }
             .keyboardShortcut("]", modifiers: .command)
             .disabled(!policy.canNavigate || workspace?.activePane.canGoForward != true)
 
-            Button("Parent Folder") {
+            Button(AppText.text("Parent Folder")) {
                 guard policy.canNavigate, let pane = workspace?.activePane else { return }
                 Task { await pane.goToParent() }
             }
@@ -1231,7 +1231,7 @@ struct WorkspaceCommands: Commands {
 
             Divider()
 
-            Button("Edit Location") {
+            Button(AppText.text("Edit Location")) {
                 guard policy.canNavigate else { return }
                 workspace?.activePane.isEditingPath.toggle()
             }
@@ -1240,8 +1240,8 @@ struct WorkspaceCommands: Commands {
         }
 
         Group {
-        CommandMenu("Compare") {
-            Button(comparisonPolicy.toggleTitle) {
+        CommandMenu(AppText.text("Compare")) {
+            Button(AppText.text(comparisonPolicy.toggleTitle)) {
                 guard let workspace, let comparison else { return }
                 ComparisonCommandActions.toggle(
                     workspace: workspace,
@@ -1253,41 +1253,41 @@ struct WorkspaceCommands: Commands {
 
             Divider()
 
-            Button("Verify Selected Contents") {
+            Button(AppText.text("Verify Selected Contents")) {
                 comparison?.verifySelected()
             }
             .disabled(!comparisonPolicy.canVerifySelectedContents)
 
-            Button("Verify All Contents") {
+            Button(AppText.text("Verify All Contents")) {
                 comparison?.verifyAll()
             }
             .disabled(!comparisonPolicy.canVerifyAllContents)
 
             Divider()
 
-            Button("Copy Left to Right") {
+            Button(AppText.text("Copy Left to Right")) {
                 copyComparedItems(.leftToRight)
             }
             .disabled(!comparisonPolicy.canCopyLeftToRight)
 
-            Button("Move Left to Right…") {
+            Button(AppText.text("Move Left to Right…")) {
                 comparison?.requestMove(direction: .leftToRight)
             }
             .disabled(!comparisonPolicy.canMoveLeftToRight)
 
-            Button("Copy Right to Left") {
+            Button(AppText.text("Copy Right to Left")) {
                 copyComparedItems(.rightToLeft)
             }
             .disabled(!comparisonPolicy.canCopyRightToLeft)
 
-            Button("Move Right to Left…") {
+            Button(AppText.text("Move Right to Left…")) {
                 comparison?.requestMove(direction: .rightToLeft)
             }
             .disabled(!comparisonPolicy.canMoveRightToLeft)
         }
 
-        CommandMenu("Storage") {
-            Button(storagePolicy.toggleTitle) {
+        CommandMenu(AppText.text("Storage")) {
+            Button(AppText.text(storagePolicy.toggleTitle)) {
                 guard let workspace, let comparison, let activeStorage else { return }
                 StorageInspectorCommandActions.toggle(
                     workspace: workspace,
@@ -1299,24 +1299,24 @@ struct WorkspaceCommands: Commands {
 
             Divider()
 
-            Button("Choose Location…") {
+            Button(AppText.text("Choose Location…")) {
                 guard let activeStorage else { return }
                 StorageInspectorCommandActions.chooseLocation(storage: activeStorage)
             }
             .disabled(!storagePolicy.canStart)
 
-            Button("Start Scan") {
+            Button(AppText.text("Start Scan")) {
                 guard let activeStorage else { return }
                 StorageInspectorCommandActions.start(storage: activeStorage)
             }
             .disabled(!storagePolicy.canStart)
 
-            Button("Cancel Scan") {
+            Button(AppText.text("Cancel Scan")) {
                 activeStorage?.cancel()
             }
             .disabled(!storagePolicy.canCancel)
 
-            Button("Scan Again") {
+            Button(AppText.text("Scan Again")) {
                 guard let activeStorage else { return }
                 Task { await activeStorage.scanAgain() }
             }
@@ -1347,7 +1347,7 @@ struct WorkspaceCommands: Commands {
     private var contextActionCommands: some View {
         if contextPresentation.openWithAvailability?.isVisible == true
             || contextPresentation.policy.openWith.isVisible {
-            Menu("Open With") {
+            Menu(AppText.text("Open With")) {
                 ForEach(contextPresentation.openWithApplications) { application in
                     Button(application.displayName) {
                         dispatchContextAction(.openWith(applicationURL: application.applicationURL))
@@ -1362,7 +1362,7 @@ struct WorkspaceCommands: Commands {
         }
 
         if contextPolicy.openInOtherPane.isVisible {
-            Button("Open in Other Pane") {
+            Button(AppText.text("Open in Other Pane")) {
                 dispatchContextAction(.openInOtherPane)
             }
             .disabled(!contextPolicy.openInOtherPane.isEnabled)
@@ -1371,7 +1371,7 @@ struct WorkspaceCommands: Commands {
         }
 
         if contextPolicy.copyToOtherPane.isVisible {
-            Button("Copy to Other Pane") {
+            Button(AppText.text("Copy to Other Pane")) {
                 dispatchContextAction(.transferToOtherPane(.copy))
             }
             .disabled(!contextPolicy.copyToOtherPane.isEnabled)
@@ -1380,7 +1380,7 @@ struct WorkspaceCommands: Commands {
         }
 
         if contextPolicy.moveToOtherPane.isVisible {
-            Button("Move to Other Pane") {
+            Button(AppText.text("Move to Other Pane")) {
                 dispatchContextAction(.transferToOtherPane(.move))
             }
             .disabled(!contextPolicy.moveToOtherPane.isEnabled)
@@ -1389,7 +1389,7 @@ struct WorkspaceCommands: Commands {
         }
 
         if contextPolicy.showInFinder.isVisible {
-            Button("Show in Finder") {
+            Button(AppText.text("Show in Finder")) {
                 dispatchContextAction(.showInFinder)
             }
             .disabled(!contextPolicy.showInFinder.isEnabled)
@@ -1398,15 +1398,15 @@ struct WorkspaceCommands: Commands {
         }
 
         if contextPolicy.copyPath.isVisible {
-            Menu("Copy Path") {
-                Button("Copy Full Path") { dispatchContextAction(.copyPath(.fullPath)) }
+            Menu(AppText.text("Copy Path")) {
+                Button(AppText.text("Copy Full Path")) { dispatchContextAction(.copyPath(.fullPath)) }
                     .keyboardShortcut("c", modifiers: [.command, .option])
                     .accessibilityIdentifier(AccessibilityIdentifiers.workspaceCopyFullPath)
-                Button("Copy Name") { dispatchContextAction(.copyPath(.name)) }
+                Button(AppText.text("Copy Name")) { dispatchContextAction(.copyPath(.name)) }
                     .accessibilityIdentifier(AccessibilityIdentifiers.workspaceCopyName)
-                Button("Copy Parent Path") { dispatchContextAction(.copyPath(.parentPath)) }
+                Button(AppText.text("Copy Parent Path")) { dispatchContextAction(.copyPath(.parentPath)) }
                     .accessibilityIdentifier(AccessibilityIdentifiers.workspaceCopyParentPath)
-                Button("Copy File URL") { dispatchContextAction(.copyPath(.fileURL)) }
+                Button(AppText.text("Copy File URL")) { dispatchContextAction(.copyPath(.fileURL)) }
                     .accessibilityIdentifier(AccessibilityIdentifiers.workspaceCopyFileURL)
             }
             .disabled(!contextPolicy.copyPath.isEnabled)
@@ -1415,7 +1415,7 @@ struct WorkspaceCommands: Commands {
         }
 
         if contextPolicy.encloseSelection.isVisible {
-            Button("New Folder with Selection (\(selectedItemsForCommands.count) Items)…") {
+            Button(AppText.format("New Folder with Selection (%ld Items)…", selectedItemsForCommands.count)) {
                 dispatchContextAction(.encloseSelection)
             }
             .disabled(!contextPolicy.encloseSelection.isEnabled)
@@ -1424,7 +1424,7 @@ struct WorkspaceCommands: Commands {
         }
 
         if contextPolicy.duplicate.isVisible {
-            Button("Duplicate") { dispatchContextAction(.duplicate) }
+            Button(AppText.text("Duplicate")) { dispatchContextAction(.duplicate) }
                 .keyboardShortcut("d", modifiers: .command)
                 .disabled(!contextPolicy.duplicate.isEnabled)
                 .accessibilityIdentifier(AccessibilityIdentifiers.workspaceDuplicate)

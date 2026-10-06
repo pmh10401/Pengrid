@@ -2,15 +2,28 @@
 
 [한국어](current-limitations.ko.md) · **English** · [User guide](user-guide.md)
 
-This list describes the boundaries shared by Developer Preview 8 and the
-current source tree. Transferred-content verification and the productivity
-workflows below are included in Developer Preview 8.
+This list describes Developer Preview 11 and the current source tree.
 
 ## Platform and distribution
 
 - Apple Silicon and macOS 15 or later only.
 - The free public DMG is ad-hoc signed, not Developer ID signed or notarized.
 - No Intel build, Mac App Store distribution, or automatic updater.
+
+## Shelf and language
+
+- The shelf is optional and off by default. Clipboard import is manual; there
+  is no automatic clipboard history, OCR, cloud shelf sync or global shortcut.
+- Hardware-notch hiding requires a display with a macOS-reported camera cutout.
+  Other displays use a small edge handle. Movement is constrained to one
+  display's border rather than a freely floating window.
+- Liquid Glass requires macOS 26+. Older macOS versions and Reduce Transparency
+  use solid black. Reduce Motion disables shelf movement animations.
+- Korean applies to menu-bar commands, file context-menu titles and shelf
+  controls/settings. Some dialogs, errors and workspace labels remain English.
+- Keep Between Launches stores an unencrypted local snapshot. File entries are
+  references and may become unavailable if their originals move or disappear.
+- Item, image and total-payload limits are detailed in the [shelf guide](user-guide.md#top-shelf).
 
 ## Search, preview, and cloud
 

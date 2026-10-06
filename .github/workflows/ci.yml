@@ -20,6 +20,9 @@ jobs:
     name: Swift test and app verification
     runs-on: macos-15
     timeout-minutes: 20
+    env:
+      # Compile the macOS 26 glass APIs while testing the macOS 15 fallback.
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
 
     steps:
       - name: Check out repository

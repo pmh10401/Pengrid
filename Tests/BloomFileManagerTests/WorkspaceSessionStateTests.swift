@@ -169,9 +169,14 @@ struct WorkspaceSessionStateTests {
         let first = try fixture.makeTab(left: "/One/Left", right: "/One/Right")
         let state = fixture.makeState(tabs: [first], active: first.id)
 
+        let earliestSave = ContinuousClock.now.advanced(by: .milliseconds(300))
         state.activeWorkspace.splitRatio = 0.64
-        try await Task.sleep(for: .milliseconds(180))
-        #expect(fixture.persistence.load() == nil)
+        // A loaded runner may resume a 180 ms sleep after the 300 ms debounce.
+        // Check before the real boundary, then wait for the committed state.
+        while ContinuousClock.now < earliestSave {
+            #expect(fixture.persistence.load() == nil)
+            try await Task.sleep(for: .milliseconds(5))
+        }
 
         #expect(await waitForWorkspaceSessionCondition {
             fixture.persistence.load()?.tabs.first?.descriptor.splitRatio == 0.64

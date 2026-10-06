@@ -1,7 +1,7 @@
 import AppKit
 import ImageIO
 
-// Keep row thumbnail decoding serial, independently of SwiftUI's concurrent row tasks.
+// Keep card thumbnail decoding serial, independently of SwiftUI's concurrent card tasks.
 actor ShelfThumbnailRenderer {
     static let shared = ShelfThumbnailRenderer()
     func image(for item: ShelfItem) -> CGImage? {
@@ -122,23 +122,25 @@ enum ShelfClipboard {
             return nil
         }
 
+        let edgeLimit = 512 // Retina card previews without full-size image decoding.
+        let byteLimit = edgeLimit * edgeLimit * 4
         let options: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceThumbnailMaxPixelSize: 256,
+            kCGImageSourceThumbnailMaxPixelSize: edgeLimit,
             kCGImageSourceShouldCache: false,
             kCGImageSourceShouldCacheImmediately: false
         ]
         guard let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary),
               thumbnail.width > 0,
               thumbnail.height > 0,
-              thumbnail.width <= 256,
-              thumbnail.height <= 256 else {
+              thumbnail.width <= edgeLimit,
+              thumbnail.height <= edgeLimit else {
             return nil
         }
 
         let bytesPerRow = thumbnail.width * 4
-        guard bytesPerRow * thumbnail.height <= 256 * 1024,
+        guard bytesPerRow * thumbnail.height <= byteLimit,
               let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
               let context = CGContext(
                   data: nil,
@@ -160,7 +162,7 @@ enum ShelfClipboard {
         guard let image = context.makeImage(),
               image.bitsPerComponent == 8,
               image.bitsPerPixel == 32,
-              image.bytesPerRow * image.height <= 256 * 1024 else {
+              image.bytesPerRow * image.height <= byteLimit else {
             return nil
         }
         return image

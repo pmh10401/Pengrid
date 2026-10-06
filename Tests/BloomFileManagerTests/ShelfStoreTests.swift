@@ -5,6 +5,34 @@ import Testing
 @Suite("Shelf state and retention", .serialized)
 @MainActor
 struct ShelfStoreTests {
+    @Test func filteringClearsHiddenSelectionWithoutRemovingSavedItems() async throws {
+        let fixture = try ShelfStoreFixture()
+        defer { fixture.remove() }
+        let store = fixture.makeStore()
+        await store.start()
+        store.setEnabled(true)
+        let first = ShelfItem(content: .text("한글 초성 검색"))
+        let second = ShelfItem(content: .text("other item"))
+        await store.add([first, second])
+        #expect(store.selectedID == second.id)
+        store.query = "ㅎㄱ"
+        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+        while store.isSearching && ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(store.filteredEntries == [first])
+        #expect(store.selectedID == nil)
+        store.selectedID = first.id
+        store.kind = .image
+        while store.isSearching && ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(store.filteredEntries.isEmpty)
+        #expect(store.selectedID == nil)
+        #expect(store.entries == [first, second])
+        #expect(await store.flushPersistence())
+    }
+
     @Test func failedRestoreRetryPreservesSnapshotUntilAValidRestore() async throws {
         let fixture = try ShelfStoreFixture()
         defer { fixture.remove() }

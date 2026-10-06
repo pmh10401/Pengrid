@@ -9,7 +9,7 @@ NOTICE_NAME="THIRD_PARTY_NOTICES.md"
 BUNDLE_ID="com.minho.BloomFileManager"
 MIN_SYSTEM_VERSION="15.0"
 APP_VERSION="1.3.0"
-BUILD_VERSION="11"
+BUILD_VERSION="13"
 DEFAULT_XCODE_DEVELOPER_DIR="/Applications/Xcode.app/Contents/Developer"
 
 if [[ -z "${DEVELOPER_DIR:-}" && -d "$DEFAULT_XCODE_DEVELOPER_DIR" ]]; then
@@ -345,6 +345,8 @@ cat >"$INFO_PLIST" <<PLIST
 <key>CFBundleDisplayName</key><string>$APP_DISPLAY_NAME</string>
 <key>CFBundleIconFile</key><string>$ICON_NAME</string>
 <key>CFBundlePackageType</key><string>APPL</string>
+<key>CFBundleDevelopmentRegion</key><string>en</string>
+<key>CFBundleLocalizations</key><array><string>en</string><string>ko</string></array>
 <key>CFBundleShortVersionString</key><string>$APP_VERSION</string>
 <key>CFBundleVersion</key><string>$BUILD_VERSION</string>
 <key>LSMinimumSystemVersion</key><string>$MIN_SYSTEM_VERSION</string>

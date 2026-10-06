@@ -66,7 +66,7 @@ struct ShelfClipboardTests {
         let board = NSPasteboard(name: .init("shelf-test-\(UUID())"))
         defer { board.releaseGlobally() }
         let representation = try #require(NSBitmapImageRep(
-            bitmapDataPlanes: nil, pixelsWide: 512, pixelsHigh: 128,
+            bitmapDataPlanes: nil, pixelsWide: 1024, pixelsHigh: 256,
             bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
             isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
         ))
@@ -78,9 +78,9 @@ struct ShelfClipboardTests {
         let item = try #require((await ShelfClipboard.read(from: board, expectedChangeCount: board.changeCount)).first)
         #expect(item.kind == .image)
         let thumbnail = try #require(ShelfClipboard.thumbnail(for: item))
-        #expect(thumbnail.width == 256)
-        #expect(thumbnail.height == 64)
-        #expect(thumbnail.bytesPerRow * thumbnail.height <= 256 * 1024)
+        #expect(thumbnail.width == 512)
+        #expect(thumbnail.height == 128)
+        #expect(thumbnail.bytesPerRow * thumbnail.height <= 1024 * 1024)
         try ShelfClipboard.write(item, to: board)
         #expect(board.data(forType: .png) == data)
     }

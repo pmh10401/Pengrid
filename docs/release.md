@@ -6,19 +6,29 @@ Pengrid is distributed directly for Apple Silicon Macs running macOS 15 or newer
 
 ## Current published Developer Preview
 
-[Pengrid 1.3.0 Developer Preview 9](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.9)
-is the current release: version **1.3.0, build 11**, Apple Silicon, macOS 15+.
-It adds native bilingual Help, filename-pattern selection, text Select All,
-and SwiftPM isolated-test compatibility fixes.
+[Pengrid 1.3.0 Developer Preview 11](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.11)
+is the current release: version **1.3.0, build 13**, Apple Silicon, macOS 15+.
+It adds hardware-notch hiding, spring-based border movement, horizontal/portrait
+shelf layouts, native glass styles and Korean menus to the manual Top Shelf.
 
-- [Download Pengrid.dmg](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.9/Pengrid.dmg)
-- [SHA256SUMS.txt](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.9/SHA256SUMS.txt)
-- [Changes, verification, and limitations](release-notes-v1.3.0-developer-preview.9.md)
+- [Download Pengrid.dmg](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.11/Pengrid.dmg)
+- [SHA256SUMS.txt](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.11/SHA256SUMS.txt)
+- [Changes, verification, and limitations](release-notes-v1.3.0-developer-preview.11.md)
 
 This is an ad-hoc signed, non-notarized prerelease. Physical cloud-provider and
 accessibility checks not run for this candidate remain manual gates.
 
-## Previous release: Developer Preview 8
+## Previous releases
+
+[Developer Preview 10](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.10)
+introduced the manual shelf gallery and reopening closed tabs in build 12.
+See its [release notes](release-notes-v1.3.0-developer-preview.10.md).
+
+[Developer Preview 9](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.9)
+provided native bilingual Help, filename-pattern selection, and text Select All
+in build 11. See its [release notes](release-notes-v1.3.0-developer-preview.9.md).
+
+### Developer Preview 8
 
 [Pengrid 1.3.0 Developer Preview 8](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.8)
 is the previous free binary release:
@@ -68,7 +78,7 @@ cancellation safety, and VoiceOver-aware archive status. During multi-source
 compression, parallelism is limited to staging copies in the private aggregate
 directory, bounded to at most four workers and never beyond available
 processors or sources; archiving and extraction remain single native tool
-operations. Protected ZIP is covered by the source feature boundary below;
+operations. Protected ZIP is covered by the release feature boundary below;
 password-protected TAR, RAR, and 7z archives are excluded.
 The feature gate is not passed until every required automated and static check
 is current and every physical-manual scenario in
@@ -114,7 +124,9 @@ Preview. Such a package must never be described as a signed public release.
 
 ## Local unsigned package and Developer Preview
 
-Install full Xcode before running the release test and packaging workflow.
+Install full Xcode 26 or later with the macOS 26 SDK before running the release
+test and packaging workflow. Glass APIs are availability-gated at runtime, so
+the compiled app still supports macOS 15.
 Command Line Tools alone do not provide the Swift Testing support used by this
 release gate. The scripts use `/Applications/Xcode.app/Contents/Developer` when
 full Xcode is installed and `DEVELOPER_DIR` is unset, or preserve an explicit

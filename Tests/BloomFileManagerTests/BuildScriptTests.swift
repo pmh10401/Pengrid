@@ -281,7 +281,7 @@ import Testing
         encoding: .utf8
     )
 
-    for declaration in ["APP_VERSION=\"1.3.0\"", "BUILD_VERSION=\"11\""] {
+    for declaration in ["APP_VERSION=\"1.3.0\"", "BUILD_VERSION=\"13\""] {
         #expect(development.contains(declaration))
         #expect(release.contains(declaration))
     }

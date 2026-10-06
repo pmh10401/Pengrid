@@ -16,7 +16,7 @@ struct FolderPreviewIntegrationTests {
         let commands = try source(named: "Support/WorkspaceCommands.swift")
         let router = try source(named: "Support/FileContextActionRouter.swift")
 
-        #expect(commands.contains("Button(\"Quick Look\") {\n                dispatchContextAction(.quickLook)\n            }"))
+        #expect(commands.contains("Button(AppText.text(\"Quick Look\")) {\n                dispatchContextAction(.quickLook)\n            }"))
         #expect(commands.contains("let snapshot = await contextActionRouter.capture(draft)"))
         #expect(commands.contains(
             "_ = await contextActionRouter.quickLook(snapshot, previewCoordinator: previewCoordinator)"

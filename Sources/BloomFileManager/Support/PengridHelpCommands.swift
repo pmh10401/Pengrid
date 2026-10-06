@@ -9,7 +9,7 @@ struct PengridHelpCommands: Commands {
 
     var body: some Commands {
         CommandGroup(replacing: .help) {
-            Button("Pengrid Help") {
+            Button(AppText.text("Pengrid Help")) {
                 openWindow(id: PengridHelpScene.id)
             }
             .keyboardShortcut("?", modifiers: .command)

@@ -193,7 +193,7 @@ final class ShelfStore {
         let text = query
         let filter = kind
         if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            filteredEntries = items.filter { filter == nil || $0.kind == filter }
+            setSearchResults(items.filter { filter == nil || $0.kind == filter })
             isSearching = false
             return
         }
@@ -203,8 +203,15 @@ final class ShelfStore {
             let worker = Task.detached(priority: .userInitiated) { ShelfItem.search(items, query: text, kind: filter) }
             let result = await withTaskCancellationHandler { await worker.value } onCancel: { worker.cancel() }
             guard !Task.isCancelled, let self, token == self.searchGeneration else { return }
-            self.filteredEntries = result
+            self.setSearchResults(result)
             self.isSearching = false
+        }
+    }
+
+    private func setSearchResults(_ items: [ShelfItem]) {
+        filteredEntries = items
+        if let selectedID, !items.contains(where: { $0.id == selectedID }) {
+            self.selectedID = nil
         }
     }
 

@@ -1,283 +1,142 @@
 <p align="center">
-  <img src="Assets/Pengrid/AppIcon-1024.png" width="160" alt="Pengrid app icon">
+  <img src="Assets/Pengrid/AppIcon-1024.png" width="112" alt="Pengrid penguin app icon">
 </p>
 
 <h1 align="center">Pengrid</h1>
 
 <p align="center">
-  <strong>A fast, keyboard-friendly dual-pane file manager for macOS.</strong><br>
-  <a href="README.ko.md">한국어</a> · <strong>English</strong>
+  <strong>Your files, side by side. Your ideas, one hover away.</strong><br>
+  A free native macOS file manager with a movable notch shelf.<br><br>
+  <a href="https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.11"><strong>Download for Mac</strong></a>
+  · <a href="README.ko.md">한국어</a>
+  · <a href="docs/user-guide.md">Feature guide</a>
 </p>
 
-Pengrid combines two-pane navigation, recursive search, previews, queued file
-operations, archive tools, directory comparison, and storage inspection in one
-free, open-source macOS app.
+![Pengrid dual-pane workspace with sample project files](docs/images/workspace.png)
+
+*Real Pengrid views with sample data. Screenshots do not contain personal files or cloud accounts.*
 
 ## Download
 
-The current release is
-[Pengrid 1.3.0 Developer Preview 9](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.9).
+[**Pengrid 1.3.0 Developer Preview 11 — download the DMG**](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.11/Pengrid.dmg)
 
-- [Download Pengrid.dmg](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.9/Pengrid.dmg)
-- Version: **1.3.0 (build 11)**
-- Requirements: **Apple Silicon Mac, macOS 15 or later**
-- Verification: **1,971 automated tests in 126 suites (7 environment-dependent tests skipped)**
-- DMG SHA-256: [SHA256SUMS.txt](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.9/SHA256SUMS.txt)
+**Apple Silicon · macOS 15+ · version 1.3.0, build 13 · free**
 
-Open the DMG, then copy `Pengrid.app` to `Applications`.
+Open the DMG and drag `Pengrid.app` to `Applications`. Verify your download with
+[SHA256SUMS.txt](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.11/SHA256SUMS.txt):
 
-> **Developer Preview trust notice**
->
-> This free DMG is ad-hoc signed. It is not Developer ID signed or notarized,
-> so macOS Gatekeeper may block it. Download it only from this repository's
-> GitHub release page and proceed only if you understand and accept the warning.
-> Pengrid does not ask you to disable macOS security controls.
+```bash
+shasum -a 256 -c SHA256SUMS.txt
+```
 
-See the [release guide](docs/release.md) for artifact verification and local
-packaging instructions.
+> This Developer Preview is ad-hoc signed, not Developer ID signed or
+> Apple-notarized. Gatekeeper may block it. Obtain the app from this repository's
+> release page; Pengrid does not ask you to disable macOS security controls.
 
-## Why Pengrid
+[Release notes](docs/release-notes-v1.3.0-developer-preview.11.md) ·
+[Packaging and verification](docs/release.md)
 
-- **Work in context:** browse two independent panes and transfer files between
-  the captured source and destination instead of opening many Finder windows.
-- **Stay on the keyboard:** search, filter, preview, duplicate, copy paths, and
-  manage common file actions with focused desktop shortcuts.
-- **Prefer recoverable operations:** queued mutations revalidate file identity,
-  report progress, clean up cancellation, and offer Retry or Undo only when the
-  captured state still makes them safe.
-- **Keep help close at hand:** choose **Help > Pengrid Help** or press
-  **Command-?** to browse eight bundled offline topics, switch between Korean
-  and English, and search both localized copies with literal, case/diacritic-
-  folded, Korean-initial, and mixed queries. The optional GitHub guide and
-  release buttons are the only Help actions that require internet access.
+## A shelf that belongs at the edge
 
-## What You Can Do
+Keep a file reference, a useful note, or an image close to your next task.
+Enable **Settings > Top Shelf > Enable Top Shelf**, then drag an item in or
+choose **Import Clipboard**. Clipboard import is always manual.
 
-### Navigate and manage two panes
+![Pengrid dark-glass horizontal notch shelf with image, text and file cards](docs/images/notch-shelf.png)
 
-Each pane keeps its own history, selection, sorting, and filename filter. Copy,
-move, Open in Other Pane, and reviewed comparison transfers use the pane and
-destination captured when the command starts.
+The shelf can disappear inside a supported MacBook's camera notch. Hover to
+reveal it; leave to fold it after a short grace period. Click to keep it open.
+Drag the six-dot grip along the display border: it flows around corners,
+settles on the chosen edge, and opens inward. Release near the camera notch
+to dock there again; **Escape** cancels a move.
 
-### Jump, create, and select with focused commands
+<table>
+  <tr>
+    <td align="center" width="46%">
+      <img src="docs/images/side-shelf.png" width="300" alt="Vertical shelf docked to the right screen edge">
+    </td>
+    <td align="center" width="54%">
+      <img src="docs/images/shelf-settings.png" width="460" alt="Korean shelf settings with Liquid Glass, edge and retention options">
+    </td>
+  </tr>
+  <tr>
+    <td>Left and right: upright, vertically scrolling cards.</td>
+    <td>Choose Liquid Glass, Dark Glass, or Solid Black.</td>
+  </tr>
+</table>
 
-> These productivity workflows, including **Select by Name…**, are included
-> in Developer Preview 9.
+- **Search with Korean initials:** filter filenames, notes and image names.
+  Category capsules show the actual counts for All, Files, Text and Images.
+- **Keep your place:** query, category and selection survive edge changes.
+  Search and clipboard controls stay fixed while cards scroll.
+- **Use the keyboard:** select cards with **← / →** horizontally or **↑ / ↓**
+  vertically, then **⌘C** to copy. Arrows in the search field edit text.
+- **See ongoing work:** the shelf shows active file-operation progress, queued
+  jobs and recovery/failure states when attention is needed.
+- **Choose retention:** **Clear on Quit** is the default; **Keep Between
+  Launches** saves an unencrypted local snapshot. Removing a shelf entry
+  preserves the original file.
 
-Press **Command-P** for **Quick Go…**, a scene-local typed palette. Its fixed
-candidate set contains safe commands (**Create Folder**, **Create File**,
-**Show Filter**, and **Smart Search**), the active pane's current, Back, and
-Forward locations, available favorites, workspace profiles, and saved searches.
-Matching uses normalized text and Pengrid's existing Hangul-initial (Korean
-initial-consonant) support. The palette does not run scripts, crawl an index, or
-materialize file contents.
+Liquid Glass requires **macOS 26+**. On older macOS versions or with Reduce
+Transparency enabled, the shelf uses solid black. Reduce Motion disables
+the movement animations. Menu-bar commands, file context menus, shelf controls
+and shelf settings support Korean and English; some dialogs and error messages
+remain English.
 
-**New Empty File** uses **Option-Command-N**. It creates a regular file bound to
-the captured parent-directory identity through an exclusive no-overwrite
-operation; after the pane refreshes, the new row is selected and inline rename
-begins. Conservative Undo is offered only while the created file's exact
-identity and fingerprint remain unchanged.
-Loaded sibling collisions use `New File 2`, `New File 3`, and so on. Only an
-unseen racing collision at exclusive publication fails without overwriting it.
+The shelf accepts up to **50 items**, **256 KiB per text item**, **16 MiB / 40
+megapixels per static PNG/TIFF image**, and **64 MiB total encoded payload**.
+File entries are references. There is no automatic clipboard sampling, OCR,
+cloud shelf sync or global hotkey. [Full shelf behavior](docs/user-guide.md#top-shelf)
 
-The active pane's currently visible, unfiltered rows are the scope for
-**Select All Visible** (**Option-Command-A**), **Invert Selection**
-(**Option-Command-I**), and **Select Same Extension** (**Option-Command-E**).
-These commands are disabled while pane filtering or text editing is active.
-Select Same Extension additionally requires exactly one visible regular file
-with a real extension.
+## A file manager first
 
-**Select by Name…** (**Edit > Select by Name…**, **Option-Command-S**) is
-included in Developer Preview 9.
-It matches the active pane's visible, unfiltered rows—including folders,
-packages, and symbolic links—by their full displayed basenames. `*` matches
-zero or more characters and `?` matches one grapheme, so `*.pdf` and
-`보고서_?.xlsx` are examples; `*` includes every visible item type. Matching is
-case-insensitive with canonical Korean composed/decomposed equivalence, while
-accents and whitespace remain significant. The sheet shows a live match count,
-and **Select** replaces the selection (clearing it when there are no matches).
-Empty input disables **Select**, while **Cancel** or **Escape** preserves the
-selection. Filtering, loading, text editing, another workspace sheet, or a
-folder comparison or Storage Inspector overlay hiding the ordinary pane
-disables the command. Only one wildcard pattern is supported: regexes,
-brackets, escapes, multiple patterns, recursion, and file reads or writes are
-not supported. If the folder listing changes while the sheet is open, applying
-is rejected; cancel and reopen it. Focus returns to the table when the same
-pane and tab remain.
+| Workflow | What Pengrid provides |
+| --- | --- |
+| **Two panes, several workspaces** | Independent history, filters and sorting. Tabs, named profiles, session layouts and reopening closed tabs. |
+| **Find files** | Recursive name/path search, Korean initials, type/extension/size/date filters, saved searches and optional already-indexed Spotlight content search. |
+| **Preview in place** | **Space** opens a folder's immediate contents or system Quick Look. **⌘I** opens read-only Get Info. |
+| **Act from a context menu** | Open With, Open in Other Pane, Copy Path, Duplicate, New Folder with Selection, rename and batch rename. |
+| **Follow file operations** | Ordered copy/move/Trash/archive jobs, progress, safe cancellation, and conservative Undo/Redo where supported. |
+| **Create and extract archives** | ZIP, TAR, TAR.GZ/TGZ, TAR.BZ2/TBZ/TBZ2 and TAR.XZ/TXZ. Create AES-256 ZIP; read supported AES and ZipCrypto ZIP entries. |
+| **Review before synchronizing** | Directory comparison, checksum verification and review-first one-way folder synchronization. |
+| **Understand storage** | Storage Inspector with scoped scans and reviewed duplicate cleanup. |
+| **Use your cloud folders** | Discover the installed Google Drive and OneDrive macOS File Provider roots. |
 
-The interaction ideas for new-file and advanced-selection commands were studied
-from [Nimble Commander](https://github.com/mikekazakov/nimble-commander), and
-the Command-P launcher was studied from [Shuffle](https://github.com/WizenPainter/shuffle)
-and [F2 Commander](https://github.com/candidtim/f2-commander). These are
-behavior references only; Pengrid copied no code from them.
+Optional transferred-content verification compares regular-file data with
+SHA-256 in staging before eligible copies, duplicates, cross-volume moves and
+reviewed synchronization results are published. It is off by default.
+[Details and verification scope](docs/user-guide.md#optional-transferred-content-verification)
 
-### Keep several workspaces ready
+Cloud content and write availability remain controlled by macOS and the
+installed provider. Content-reading actions may download online-only files;
+metadata search avoids intentional downloads. Pengrid does not implement
+direct Google or Microsoft OAuth. 7z, RAR and password-protected TAR are not
+supported. [Current limitations](docs/current-limitations.md)
 
-Use workspace tabs to keep independent dual-pane folder pairs open. **Command-T**
-opens a tab from the active tab's persisted layout, **Command-W** closes the active
-tab when it has no active or queued file work, and **Control-Tab** / **Control-Shift-Tab**
-move between tabs. Tab titles show both pane folder names, never their full paths.
-
-Save a named workspace profile from the tab bar, then open it from the Profiles menu
-to create a new tab without changing the existing one. The session restores tab
-folders, sort orders, split position, active pane, and profiles; selections, filters,
-history, previews, searches, and operation state are intentionally not restored.
-
-> **Upcoming source-only feature on `main` (unreleased; not in the downloadable
-> Developer Preview 9):** Choose **Window > Reopen Closed Workspace Tab** or press
-> **Command-Shift-T** to reopen the most recently closed workspace tab. A successful
-> close records the tab's two committed folder paths, sort orders, split ratio, and
-> active pane; pending navigation is not restored. Reopening creates a fresh runtime,
-> so selections, filters, history, searches, previews, file-operation state, and Undo
-> state are not revived. Up to 10 successful closes are retained for the current app
-> session only. The command is unavailable while a modal or text editor is active. If a
-> recorded path is inaccessible, normal path/error handling applies. The restore does
-> not materialize files or replay user-file operations. Its behavior is inspired by
-> [Nimble Commander's official guide](https://github.com/mikekazakov/nimble-commander/blob/main/Docs/Help.md);
-> no code was copied.
-
-### Find files quickly
-
-Smart Search scans filenames and relative paths recursively. It supports
-ordinary text, Korean initial-consonant matching, mixed queries, type,
-extension, size, and modified-date filters. Searches can be saved and reopened.
-The optional **Search indexed file contents** filter is off by default: it uses
-only already-indexed Spotlight content, never downloads cloud-only files, and
-reports when content coverage is unavailable or skipped for an initial-consonant
-query.
-
-### Keep a manual Top Shelf
-
-> Available in the current source. Previously published DMGs do not include this feature.
-
-**Top Shelf** is off by default. Turn it on in **Settings > Top Shelf**, or use
-the app's Top Shelf show/hide command. The shelf is manual: open it and choose
-**Import Clipboard** or drag a supported item in. It stores file URLs as
-references and never moves, deletes, downloads, or edits the original files.
-Plain text and static PNG/TIFF images are supported. There is no automatic
-clipboard sampling, OCR, or global hotkey.
-
-Shelf search covers filenames, text, and image display names and reuses
-Pengrid's Hangul-initial search behavior. **Copy** writes a fresh native value
-to the system clipboard. Drag-out is copy-only and provides a native file URL,
-string, or image representation when the destination supports that type; it
-does not promise file export for unsupported destinations. Clear, turning the
-shelf off, and quitting do not clear the system clipboard or change original
-files.
-
-The shelf accepts up to 50 items, UTF-8 text up to 256 KiB per item, encoded
-PNG/TIFF images up to 16 MiB and 40 megapixels (single-frame only), and 64 MiB
-of total encoded payload. The default retention choice is **Clear on Quit**:
-items remain in memory for the current session only. **Keep Between Launches**
-is an explicit opt-in that writes an unencrypted local snapshot at
-`~/Library/Application Support/Pengrid/TopShelf/snapshot.plist`; it is not
-cloud-synced. Switching back to **Clear on Quit** removes only that disk
-snapshot and keeps the current in-memory session. Turning the shelf off or
-using **Clear** removes shelf entries and its snapshot, never the system
-clipboard or original files.
-
-### Preview and act without losing context
-
-Press **Space** to preview one folder's immediate contents or open system Quick
-Look for files, packages, symbolic links, and multiple selections. The context
-menu includes Open, Open With, Open in Other Pane, Show in Finder, Copy Path,
-Duplicate, New Folder with Selection, rename, archives, and Trash.
-
-Pengrid captures the visible selection before dispatch, so later navigation
-or selection changes cannot silently redirect an action. Read the
-[release notes](docs/release-notes-v1.3.0-developer-preview.9.md) for the exact
-selection and capability rules.
-
-Press **Command-I**, or choose **Get Info** from a row's context menu, to open a
-nonmodal read-only inspector for the captured selection. It reports metadata for
-one item or a multiple-selection summary; directory sizes are entry sizes, not
-recursive totals. SHA-256 is calculated only after choosing the explicit button
-for one eligible regular file, which may require macOS to download a cloud-only
-file.
-
-### Run safer file operations
-
-Copy, move, Trash, rename, new-folder, archive, Undo, and reviewed folder
-synchronization jobs share an ordered operation center. Jobs expose progress
-and safe cancellation points; exclusive transactions such as batch rename, New
-Folder with Selection, and one-way folder synchronization use staged
-publication and conservative rollback checks. Synchronization is
-non-retryable and is not exposed as Undo after it finishes.
-
-> Transferred-content verification is included in Developer Preview 9. It is
-> optional and remains off by default.
-
-Developer Preview 9 and source builds provide a default-off **File Operations**
-setting named **Verify transferred file contents before publishing**. When
-enabled, copy, Duplicate,
-cross-volume move, and reviewed synchronization copy/replace actions compare
-regular-file data with SHA-256 in private staging before publication. Recursive
-tree structure and symbolic-link payloads are also checked without following
-links. Progress shows a byte-weighted percentage beside a file-weighted count.
-
-### Create and extract archives
-
-Pengrid creates and extracts **ZIP**, **TAR**, **TAR.GZ/TGZ**,
-**TAR.BZ2/TBZ/TBZ2**, and **TAR.XZ/TXZ**. Progress distinguishes preparation,
-encoding, and finishing phases. Source builds also create AES-256
-password-protected ZIP files and read supported AES and ZipCrypto entries.
-
-### Work with cloud locations and accessibility tools
-
-Google Drive and OneDrive appear through macOS File Provider. Metadata-only
-search and folder preview avoid intentional content downloads; byte-reading
-operations may ask macOS to materialize an online-only item. Pengrid also
-includes directory comparison with reviewed one-way folder synchronization,
-Storage Inspector, keyboard navigation, VoiceOver labels, Reduce Motion
-support, and privacy-preserving status text.
-
-## Essential Shortcuts
+## Essential shortcuts
 
 | Shortcut | Action |
 | --- | --- |
-| **Space** | Folder preview or system Quick Look |
-| **Command-F** | Filter the active pane |
-| **Command-Shift-F** | Smart Search from the active pane |
-| **Command-P** | Open the scene-local Quick Go… palette |
-| **Command-I** | Get Info for the captured selection |
-| **Command-T** | New workspace tab |
-| **Command-W** | Close active workspace tab when safe |
-| **Command-Shift-T** | Reopen the last closed workspace tab *(unreleased source-only feature on `main`; not in downloadable Developer Preview 9)* |
-| **Control-Tab** | Next workspace tab |
-| **Control-Shift-Tab** | Previous workspace tab |
-| **Command-D** | Duplicate the captured selection |
-| **Option-Command-N** | Create a new empty file and begin inline rename |
-| **Option-Command-A** | Select all visible rows in the active pane |
-| **Option-Command-I** | Invert the active pane's visible selection |
-| **Option-Command-E** | Select visible rows with the same extension |
-| **Option-Command-S** | Select visible rows by one filename wildcard pattern |
-| **Option-Command-C** | Copy full paths in visible order |
+| **Space** | Folder preview / system Quick Look |
+| **⌘F** / **⇧⌘F** | Pane filter / Smart Search |
+| **⌘P** | Quick Go command and location palette |
+| **⌘I** | Get Info |
+| **⌘T** / **⌘W** / **⇧⌘T** | New / close / reopen workspace tab |
+| **⌃Tab** / **⌃⇧Tab** | Next / previous workspace tab |
+| **⌘D** / **⌥⌘C** | Duplicate / copy full paths |
+| **⌥⌘N** | Create an empty file and start rename |
+| **⌥⌘A** / **⌥⌘I** / **⌥⌘E** | Select visible / invert / same extension |
+| **⌥⌘S** | Select by one filename wildcard pattern |
+| **⌘?** | Bilingual offline Help |
 
-Batch Rename and the remaining context actions are available from the File
-Operations menu or a row's context menu.
+File-action shortcuts respect the active pane, text-editing focus and current
+selection. [Detailed command behavior](docs/user-guide.md)
 
-## Cloud and Safety Boundaries
+## Build from source
 
-- Pengrid discovers cloud roots through macOS File Provider. It does not
-  implement direct Google or Microsoft OAuth.
-- Availability, write capability, and materialization remain controlled by the
-  installed provider and macOS.
-- Password-protected ZIP encryption does not hide filenames or other central
-  directory metadata. Passwords are never saved or recoverable.
-- 7z, RAR, password-protected TAR, Developer ID signing, and notarization are
-  not included in this Developer Preview.
-- Finder tag editing remains future work. Optional transferred-content
-  verification is included in Developer Preview 9. It excludes resource forks,
-  extended attributes, ACLs, ownership, flags,
-  creation dates, hard-link relationships, and sparse allocation.
-- Manual checks that have not been run remain explicitly marked `NOT RUN` in
-  the verification documents.
-
-For detailed behavior, safety rules, and limitations, read the
-[feature guide](docs/user-guide.md) and
-[current limitations](docs/current-limitations.md).
-
-## Build from Source
+The app uses **Swift 6, SwiftUI and AppKit**, with a C core for encrypted ZIP.
+Install full **Xcode 26 or later** with the macOS 26 SDK to compile the current
+glass APIs; the built app still supports macOS 15.
 
 ```bash
 git clone https://github.com/pmh10401/Pengrid.git
@@ -290,19 +149,25 @@ env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
 open dist/Pengrid.app
 ```
 
-The development app is created at `dist/Pengrid.app`. The Swift package,
-executable, source module, bundle identifier, and existing persistence paths
-retain the internal name `BloomFileManager` for compatibility.
+The package, executable, module and compatibility-sensitive persistence identity
+retain the internal name `BloomFileManager`.
 
-## Documentation
+## Documentation and contributions
 
-- [Detailed feature guide](docs/user-guide.md)
-- [Developer Preview 9 release notes](docs/release-notes-v1.3.0-developer-preview.9.md)
-- [Release and packaging guide](docs/release.md)
-- [Architecture notes](docs/architecture.md)
-- [Current limitations](docs/current-limitations.md)
-- [Transferred-content verification record](docs/verification/transfer-content-verification.md)
-- [Verification records](docs/verification/)
+- [Detailed feature guide](docs/user-guide.md) · [한국어 기능 안내](docs/user-guide.ko.md)
+- [Preview 11 changes](docs/release-notes-v1.3.0-developer-preview.11.md)
+- [Release guide](docs/release.md) · [Architecture](docs/architecture.md)
+- [Limitations](docs/current-limitations.md) · [Preview 11 verification](docs/verification/preview11-release-check.md)
+- [Screenshot provenance](docs/images/README.md) · [Third-party notices](THIRD_PARTY_NOTICES.md)
 
-Pengrid is under active development. Contributions and reproducible issue
-reports are welcome.
+The feature candidate passed **2,055 automated tests in 131 suites**.
+Automated coverage does not replace the physical cloud-provider, accessibility
+or volume checks recorded separately in the verification documents.
+
+The shelf interaction references [PenguinNotch](https://github.com/pmh10401/PenguinNotch)
+and the card-gallery layout references [Supaste](https://www.supaste.com/).
+Pengrid is an independent app. Third-party attribution is included in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+Reproducible [issue reports](https://github.com/pmh10401/Pengrid/issues) and
+focused pull requests are welcome.
