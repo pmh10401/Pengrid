@@ -2,14 +2,14 @@
 
 [한국어](user-guide.ko.md) · **English** · [README](../README.md)
 
-This guide describes Pengrid 1.3.0 Developer Preview 11 and the current source
+This guide describes Pengrid 1.3.0 and the current source
 tree, including safety boundaries and deliberately omitted behavior.
 
 ## Requirements and installation
 
 Pengrid currently supports Apple Silicon Macs running macOS 15 or later.
 Download the DMG from the
-[Developer Preview 11 release](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.11),
+[Pengrid 1.3.0 release](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0),
 open it, and copy `Pengrid.app` to `Applications`.
 
 The free DMG is ad-hoc signed, not Developer ID signed, and not notarized.
@@ -175,7 +175,7 @@ queries, or actions across a larger result set.
 > Included in Developer Preview 10; unavailable in Preview 9 and earlier DMGs.
 
 Top Shelf is an optional, manual holding area for files, text, and images. In
-Settings, turn on **Enable Top Shelf**. It is off by default. Preview 11
+Settings, turn on **Enable Top Shelf**. It is off by default. Version 1.3.0
 enables **Use Hardware Notch** by default: on a supported MacBook
 display, the collapsed shelf is completely invisible in the camera notch,
 without a handle or shadow. Hover over the notch to open the gallery below it.
@@ -186,12 +186,12 @@ gallery without taking keyboard focus; leaving begins a fold after 0.45 seconds.
 Opening and closing use PenguinNotch-style soft springs, with the content
 following the surface. Returning during a fold reopens it smoothly. macOS
 **Reduce motion** disables these animations. Hardware docking, border movement,
-portrait layout and glass styles are included in Preview 11.
+portrait layout and glass styles introduced in Preview 11 are included in 1.3.0.
 Click or choose **Keep Shelf Open** to keep it open. The panel also provides
 **Open Pengrid**, **Collapse Shelf**, and **Hide Shelf**. Hiding or collapsing
 the panel keeps its entries.
 
-Preview 11 offers **Settings > Top Shelf > Shelf Appearance**:
+Version 1.3.0 offers **Settings > Top Shelf > Shelf Appearance**:
 **Liquid Glass** follows macOS appearance, **Dark Glass** uses a dark translucent
 surface, and **Solid Black** keeps the original look. Liquid Glass requires
 macOS 26 or later; older macOS versions and **Reduce Transparency** use solid
@@ -976,7 +976,7 @@ documents.
 
 ## Current limitations
 
-Developer Preview 11 and the current source tree deliberately do not provide:
+Pengrid 1.3.0 and the current source tree deliberately do not provide:
 
 - Intel Mac or macOS 14-and-earlier support;
 - Developer ID signing or Apple notarization;

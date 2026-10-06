@@ -6,21 +6,29 @@ Pengrid는 macOS 15 이상을 실행하는 Apple Silicon Mac에 직접 배포합
 App Sandbox entitlement를 사용하지 않습니다. 실행 파일명과 호환성에 영향을
 주는 내부 식별자는 `BloomFileManager`로 유지합니다.
 
-## 현재 게시된 Developer Preview
+## 현재 게시된 GitHub 정식 릴리스
 
-[Pengrid 1.3.0 Developer Preview 11](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.11)이
-현재 릴리즈입니다. **1.3.0, 빌드 13**, Apple Silicon, macOS 15 이상을
-지원하며 수동 보관함에 하드웨어 노치 숨김, 스프링 기반 테두리 이동,
-가로·세로 배치, 글래스 스타일과 한국어 메뉴를 추가했습니다.
+[Pengrid 1.3.0](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0)이
+현재 GitHub 정식 릴리스입니다. **1.3.0, 빌드 14**, Apple Silicon, macOS 15
+이상을 지원합니다. Developer Preview 11에서 검증한 기능 코드를 유지하며
+하드웨어 노치 숨김, 스프링 기반 테두리 이동, 가로·세로 배치, 글래스 스타일과
+한국어 메뉴를 제공합니다. 빌드 번호와 배포 문서만 바뀌며 앱의 동작과 저장
+식별자는 그대로 유지합니다.
 
-- [Pengrid.dmg 다운로드](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.11/Pengrid.dmg)
-- [SHA256SUMS.txt](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.11/SHA256SUMS.txt)
-- [변경 사항·검증·제한](release-notes-v1.3.0-developer-preview.11.md)
+- [Pengrid.dmg 다운로드](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0/Pengrid.dmg)
+- [SHA256SUMS.txt](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0/SHA256SUMS.txt)
+- [릴리스 노트](release-notes-v1.3.0.md) · [검증 기록](verification/v1.3.0-release-check.md)
 
-ad-hoc 서명이며 공증되지 않은 프리릴리스입니다. 이번 후보에서 수행하지 않은
-실제 클라우드 및 접근성 검사는 수동 검증 항목으로 남아 있습니다.
+**ad-hoc 서명이며 Apple 공증을 받지 않은** 릴리스입니다. GitHub 정식 표시는
+배포 채널 구분이며 Developer ID 신뢰나 아래 모든 실제 환경 검사의 통과를
+뜻하지 않습니다. 수행하지 않은 클라우드·접근성·물리 볼륨 검사는 미검증
+항목으로 명확히 남아 있습니다.
 
 ## 이전 릴리스
+
+[Developer Preview 11](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.11)은
+빌드 13에서 같은 앱 기능을 제공했습니다.
+[이전 릴리스 노트](release-notes-v1.3.0-developer-preview.11.md)를 참고하세요.
 
 [Developer Preview 10](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.10)은
 빌드 12에서 수동 노치 갤러리와 닫은 탭 다시 열기를 도입했습니다.
@@ -97,7 +105,7 @@ closed로 거부합니다. 남은 임시 항목의 소유권을 증명할 수 �
 ACL 및 확장 속성은 보장하지 않습니다. Finder와 Archive Utility는 AES ZIP을
 열지 못할 수 있습니다. 타사 호환성은 커밋된 자동 fixture로만 나타내며 실제
 Finder, Archive Utility, Windows 또는 WinZip 검사를 의미하지 않습니다. 7z,
-RAR 및 암호로 보호된 TAR은 지원하지 않습니다. 이 무료 Developer Preview에는
+RAR 및 암호로 보호된 TAR은 지원하지 않습니다. 이 무료 릴리스에는
 Developer ID 서명과 공증을 수행하지 않았습니다.
 
 ## 버전 1.2 릴리스 게이트
@@ -114,11 +122,11 @@ VoiceOver, Full Keyboard Access, 대비 증가, 동작 줄이기, 라이트 모�
 
 선택적 서명 배포 게이트는 정확한 후보를 유효한 Developer ID Application
 인증서로 서명하고 Apple 공증 승인을 받은 뒤 티켓을 staple·검증하고
-Gatekeeper 심사를 통과할 때까지 열려 있습니다. 이는 unsigned Developer
-Preview임을 명확히 표시한 무료 패키지 배포를 막지 않습니다. unsigned 파일을
-서명된 공개 릴리스라고 설명해서는 안 됩니다.
+Gatekeeper 심사를 통과할 때까지 열려 있습니다. 이는 Developer ID 서명과
+공증이 없다는 사실을 명시한 무료 ad-hoc 패키지 배포를 막지 않습니다.
+unsigned 파일을 Developer ID로 서명된 공개 릴리스라고 설명해서는 안 됩니다.
 
-## 로컬 unsigned 패키지와 Developer Preview
+## 로컬 unsigned 패키지와 GitHub 배포
 
 릴리즈 테스트와 패키징을 실행하기 전에 macOS 26 SDK를 포함한 Xcode 26
 이상을 설치해야 합니다. 글래스 API는 운영체제 버전에 따라 적용하며 빌드한
@@ -142,8 +150,9 @@ hdiutil verify dist/release/Pengrid.dmg
 
 앱과 DMG는 로컬 검사를 위해 ad-hoc 방식으로 서명됩니다. Developer ID
 배포 파일이 아니므로 Gatekeeper가 Developer ID 파일로 승인할 것으로 기대하면
-안 됩니다. GitHub의 unsigned **Developer Preview**는 사전 릴리스 제목과
-설명에 이 신뢰 경고를 명확히 표시할 때만 게시합니다.
+안 됩니다. GitHub 정식 릴리스와 Developer Preview 모두 설명에 이 신뢰 경고를
+명확히 표시해야 합니다. 정식 표시는 서명 방식을 바꾸거나 Gatekeeper 승인을
+대신하거나 미실시 수동 검증 항목을 완료로 바꾸지 않습니다.
 
 일반 로컬 작업 공간에서 `dist/release/Pengrid.app`은 실제 앱 디렉터리입니다.
 저장소가 File Provider가 관리하는 Documents 폴더 아래에 있다면 스크립트는

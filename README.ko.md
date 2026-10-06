@@ -7,7 +7,7 @@
 <p align="center">
   <strong>파일은 나란히. 아이디어는 노치에 가까이.</strong><br>
   움직이는 노치 보관함을 갖춘 무료 macOS 파일 관리자입니다.<br><br>
-  <a href="https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.11"><strong>Mac용 다운로드</strong></a>
+  <a href="https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0"><strong>Mac용 다운로드</strong></a>
   · <a href="README.md">English</a>
   · <a href="docs/user-guide.ko.md">상세 기능 안내</a>
 </p>
@@ -18,23 +18,23 @@
 
 ## 다운로드
 
-[**Pengrid 1.3.0 Developer Preview 11 — DMG 다운로드**](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.11/Pengrid.dmg)
+[**Pengrid 1.3.0 — DMG 다운로드**](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0/Pengrid.dmg)
 
-**Apple Silicon · macOS 15 이상 · 버전 1.3.0, 빌드 13 · 무료**
+**Apple Silicon · macOS 15 이상 · 버전 1.3.0, 빌드 14 · 무료 · GitHub 정식 릴리스**
 
 DMG를 열고 `Pengrid.app`을 `Applications` 폴더로 옮기세요.
-같은 릴리즈의 [SHA256SUMS.txt](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.11/SHA256SUMS.txt)를
+같은 릴리즈의 [SHA256SUMS.txt](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0/SHA256SUMS.txt)를
 받아 다운로드한 파일을 확인할 수 있습니다.
 
 ```bash
 shasum -a 256 -c SHA256SUMS.txt
 ```
 
-> 이 Developer Preview는 ad-hoc 서명이며 Developer ID 서명과 Apple 공증을
+> 이 릴리스는 ad-hoc 서명이며 Developer ID 서명과 Apple 공증을
 > 받지 않았습니다. Gatekeeper가 실행을 차단할 수 있습니다. 이 저장소의
 > 릴리즈 페이지에서 내려받으세요. Pengrid는 macOS 보안 기능을 끄도록 요구하지 않습니다.
 
-[릴리즈 노트](docs/release-notes-v1.3.0-developer-preview.11.md) ·
+[릴리즈 노트](docs/release-notes-v1.3.0.md) ·
 [패키징·검증 안내](docs/release.ko.md)
 
 ## 화면 가장자리에 붙는 나만의 보관함
@@ -154,9 +154,9 @@ open dist/Pengrid.app
 ## 문서와 참여
 
 - [상세 기능 안내](docs/user-guide.ko.md) · [English guide](docs/user-guide.md)
-- [Preview 11 변경 사항](docs/release-notes-v1.3.0-developer-preview.11.md)
+- [버전 1.3.0 릴리스 노트](docs/release-notes-v1.3.0.md)
 - [릴리즈 안내](docs/release.ko.md) · [아키텍처](docs/architecture.md)
-- [제한 사항](docs/current-limitations.ko.md) · [Preview 11 검증 기록](docs/verification/preview11-release-check.md)
+- [제한 사항](docs/current-limitations.ko.md) · [버전 1.3.0 검증 기록](docs/verification/v1.3.0-release-check.md)
 - [소개 이미지 출처](docs/images/README.md) · [외부 프로젝트 고지](THIRD_PARTY_NOTICES.md)
 
 기능 후보에서 **131개 스위트·자동 테스트 2,055개**가 통과했습니다.

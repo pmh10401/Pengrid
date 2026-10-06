@@ -2,7 +2,9 @@
 
 [한국어](current-limitations.ko.md) · **English** · [User guide](user-guide.md)
 
-This list describes Developer Preview 11 and the current source tree.
+This list describes Pengrid 1.3.0 and the current source tree. Stable GitHub
+release status does not establish Apple notarization or completion of the
+physical-manual checks recorded in the verification documents.
 
 ## Platform and distribution
 
