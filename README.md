@@ -7,7 +7,7 @@
 <p align="center">
   <strong>Your files, side by side. Your ideas, one hover away.</strong><br>
   A free native macOS file manager with a movable notch shelf.<br><br>
-  <a href="https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.11"><strong>Download for Mac</strong></a>
+  <a href="https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0"><strong>Download for Mac</strong></a>
   · <a href="README.ko.md">한국어</a>
   · <a href="docs/user-guide.md">Feature guide</a>
 </p>
@@ -18,22 +18,22 @@
 
 ## Download
 
-[**Pengrid 1.3.0 Developer Preview 11 — download the DMG**](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.11/Pengrid.dmg)
+[**Pengrid 1.3.0 — download the DMG**](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0/Pengrid.dmg)
 
-**Apple Silicon · macOS 15+ · version 1.3.0, build 13 · free**
+**Apple Silicon · macOS 15+ · version 1.3.0, build 14 · free · stable GitHub release**
 
 Open the DMG and drag `Pengrid.app` to `Applications`. Verify your download with
-[SHA256SUMS.txt](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.11/SHA256SUMS.txt):
+[SHA256SUMS.txt](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0/SHA256SUMS.txt):
 
 ```bash
 shasum -a 256 -c SHA256SUMS.txt
 ```
 
-> This Developer Preview is ad-hoc signed, not Developer ID signed or
+> This release is ad-hoc signed, not Developer ID signed or
 > Apple-notarized. Gatekeeper may block it. Obtain the app from this repository's
 > release page; Pengrid does not ask you to disable macOS security controls.
 
-[Release notes](docs/release-notes-v1.3.0-developer-preview.11.md) ·
+[Release notes](docs/release-notes-v1.3.0.md) ·
 [Packaging and verification](docs/release.md)
 
 ## A shelf that belongs at the edge
@@ -155,9 +155,9 @@ retain the internal name `BloomFileManager`.
 ## Documentation and contributions
 
 - [Detailed feature guide](docs/user-guide.md) · [한국어 기능 안내](docs/user-guide.ko.md)
-- [Preview 11 changes](docs/release-notes-v1.3.0-developer-preview.11.md)
+- [Version 1.3.0 release notes](docs/release-notes-v1.3.0.md)
 - [Release guide](docs/release.md) · [Architecture](docs/architecture.md)
-- [Limitations](docs/current-limitations.md) · [Preview 11 verification](docs/verification/preview11-release-check.md)
+- [Limitations](docs/current-limitations.md) · [Version 1.3.0 verification](docs/verification/v1.3.0-release-check.md)
 - [Screenshot provenance](docs/images/README.md) · [Third-party notices](THIRD_PARTY_NOTICES.md)
 
 The feature candidate passed **2,055 automated tests in 131 suites**.

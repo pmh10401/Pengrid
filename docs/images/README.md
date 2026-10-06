@@ -19,4 +19,5 @@ No user clipboard content or signed-in cloud account was imported or published.
 These are unretouched window captures, not rendered design mockups. Native glass
 appearance varies with macOS, the desktop background and accessibility settings.
 The release build number was subsequently incremented to 13 without changing
-the pictured UI. See [README](../../README.md) and [한국어](../../README.ko.md).
+the pictured UI; the stable 1.3.0 release (build 14) retains the same views.
+See [README](../../README.md) and [한국어](../../README.ko.md).

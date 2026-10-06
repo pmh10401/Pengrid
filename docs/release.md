@@ -4,21 +4,29 @@
 
 Pengrid is distributed directly for Apple Silicon Macs running macOS 15 or newer. The release does not use App Sandbox entitlements. Its executable filename and compatibility-sensitive internal identity remain `BloomFileManager`.
 
-## Current published Developer Preview
+## Current stable GitHub release
 
-[Pengrid 1.3.0 Developer Preview 11](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.11)
-is the current release: version **1.3.0, build 13**, Apple Silicon, macOS 15+.
-It adds hardware-notch hiding, spring-based border movement, horizontal/portrait
-shelf layouts, native glass styles and Korean menus to the manual Top Shelf.
+[Pengrid 1.3.0](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0)
+is the current stable GitHub release: **1.3.0, build 14**, Apple Silicon, macOS 15+.
+It ships the feature code verified in Developer Preview 11, including
+hardware-notch hiding, spring-based border movement, horizontal/portrait
+shelf layouts, native glass styles and Korean menus. The build number and
+distribution documents change; application behavior and stored identities do not.
 
-- [Download Pengrid.dmg](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.11/Pengrid.dmg)
-- [SHA256SUMS.txt](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0-developer-preview.11/SHA256SUMS.txt)
-- [Changes, verification, and limitations](release-notes-v1.3.0-developer-preview.11.md)
+- [Download Pengrid.dmg](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0/Pengrid.dmg)
+- [SHA256SUMS.txt](https://github.com/pmh10401/Pengrid/releases/download/v1.3.0/SHA256SUMS.txt)
+- [Release notes](release-notes-v1.3.0.md) · [Verification record](verification/v1.3.0-release-check.md)
 
-This is an ad-hoc signed, non-notarized prerelease. Physical cloud-provider and
-accessibility checks not run for this candidate remain manual gates.
+This is an **ad-hoc signed, non-notarized** release. Stable GitHub status is a
+distribution-channel label, not Developer ID trust or evidence that every
+physical-manual gate below passed. Unperformed cloud-provider, accessibility
+and physical-volume checks remain explicitly unqualified.
 
 ## Previous releases
+
+[Developer Preview 11](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.11)
+provided the same application features in build 13.
+See its [release notes](release-notes-v1.3.0-developer-preview.11.md).
 
 [Developer Preview 10](https://github.com/pmh10401/Pengrid/releases/tag/v1.3.0-developer-preview.10)
 introduced the manual shelf gallery and reopening closed tabs in build 12.
@@ -102,7 +110,7 @@ Archive Utility may not open AES ZIP files; third-party interoperability is
 represented only by automated committed fixtures, not live Finder, Archive
 Utility, Windows, or WinZip checks. 7z, RAR, and password-protected TAR are
 unsupported. Developer ID signing and notarization were not performed for this
-free Developer Preview.
+free release.
 
 ## Version 1.2 release gates
 
@@ -119,10 +127,11 @@ and Dark Mode. Automated fixtures and source inspection do not replace those che
 The optional signed-distribution gate remains open until an exact candidate has
 been signed with a valid Developer ID Application identity, accepted by Apple
 notarization, stapled and validated, and accepted by Gatekeeper. This does not
-block a free package that is explicitly labelled as an unsigned Developer
-Preview. Such a package must never be described as a signed public release.
+block a free ad-hoc package whose notes explicitly disclose the missing
+Developer ID signature and notarization. Such a package must never be
+described as a Developer ID signed public release.
 
-## Local unsigned package and Developer Preview
+## Local unsigned package and GitHub distribution
 
 Install full Xcode 26 or later with the macOS 26 SDK before running the release
 test and packaging workflow. Glass APIs are availability-gated at runtime, so
@@ -146,9 +155,9 @@ hdiutil verify dist/release/Pengrid.dmg
 
 The app and DMG are ad-hoc signed for local inspection. They are not a
 distributable Developer ID release and Gatekeeper is not expected to accept
-them as one. An unsigned GitHub **Developer Preview** may be published only
-when its prerelease title and notes clearly state this trust warning; it must
-not be presented as a signed public release.
+them as one. Both stable releases and Developer Preview prereleases must
+clearly state this trust warning. A stable GitHub label does not change
+the signature, satisfy Gatekeeper, or close unperformed physical-manual gates.
 
 In an ordinary local workspace, `dist/release/Pengrid.app` is the real app directory. If the repository is under a File Provider-managed Documents folder, the script instead makes that path a symlink to a versioned real bundle in the current user's cache. This prevents repeatedly attached Finder metadata from invalidating the signature. After a successful replacement, the script removes the previous version only when its canonical path and filesystem identity prove that it is a directly owned cache version; external symlink targets are never removed. Deleting the cache can therefore break the local app link; rerunning the package script recreates it. The signed ZIP is always self-contained, contains no cache symlink, and is one of the signed distribution artifacts.
 

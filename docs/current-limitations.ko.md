@@ -3,7 +3,9 @@
 **한국어** · [English](current-limitations.md) ·
 [사용자 안내](user-guide.ko.md)
 
-이 목록은 Developer Preview 11과 현재 소스 트리의 기능 경계를 설명합니다.
+이 목록은 Pengrid 1.3.0과 현재 소스 트리의 기능 경계를 설명합니다.
+GitHub 정식 릴리스 표시는 Apple 공증이나 검증 문서에 남아 있는 실제 환경의
+수동 검사 완료를 의미하지 않습니다.
 
 ## 플랫폼과 배포
 
