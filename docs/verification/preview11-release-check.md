@@ -62,3 +62,12 @@ inside the four-card width assertion. The independently derived minimum remains
 992 points; a typed local constant now separates arithmetic from `#expect`.
 No assertion was removed and no production app, resource or packaging input
 changed. CI must pass on this test-only correction before merge and release.
+
+The next [PR CI run](https://github.com/pmh10401/Pengrid/actions/runs/37401666083)
+compiled but exposed four test assumptions. Its 1024-point display legitimately
+clamps a full-width shelf rather than moving it by 24/32 points. Native reveal
+and move-notification tests now wait for their actual state and check screen
+bounds, rather than assuming a free-floating window or an 80 ms deadline.
+The session debounce test now checks for no save before its real 300 ms boundary;
+its old 180 ms sleep resumed after 324 ms on the loaded runner. No production
+logic or packaging input changed; these are test-only portability corrections.

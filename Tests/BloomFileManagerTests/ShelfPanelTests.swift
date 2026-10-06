@@ -100,9 +100,13 @@ struct ShelfPanelTests {
             let screen = try #require(controller.panel.screen)
             let before = controller.panel.frame
             controller.move(by: CGPoint(x: 24, y: -48))
-            #expect(abs(controller.panel.frame.midX - before.midX - 24) < 1)
+            let expectedX = min(max(before.midX + 24, screen.frame.minX + before.width / 2),
+                                screen.frame.maxX - before.width / 2)
+            #expect(abs(controller.panel.frame.midX - expectedX) < 1)
+            #expect(screen.frame.contains(controller.panel.frame))
             #expect(controller.panel.frame.maxY == screen.frame.maxY)
             controller.show(expanded: false)
+            #expect(abs(controller.panel.frame.midX - expectedX) < 1)
             #expect(controller.panel.frame.maxY == screen.frame.maxY)
         }
     }
@@ -366,20 +370,31 @@ struct ShelfPanelTests {
                 case .leftMouseDown:
                     view.mouseDown(with: event)
                     #expect(controller.carry == nil) // A press alone must not move or change docking.
-                case .leftMouseDragged: view.mouseDragged(with: event)
+                case .leftMouseDragged:
+                    view.mouseDragged(with: event)
+                    let motion = try #require(controller.carry)
+                    #expect(motion.target != motion.position)
                 default: view.mouseUp(with: event)
                 }
             }
             #expect(controller.carry?.isSettling == true)
             #expect(controller.panel.frame == before)
             for _ in 0..<180 { controller.advanceMove(elapsed: 1 / 60) }
-            try await Task.sleep(for: .milliseconds(80))
+            let revealDeadline = ContinuousClock.now.advanced(by: .seconds(2))
+            while (!controller.isExpanded || controller.carry != nil) && ContinuousClock.now < revealDeadline {
+                try await Task.sleep(for: .milliseconds(5))
+            }
             #expect(controller.carry == nil)
+            #expect(controller.isExpanded)
             if let notch = controller.hardwareNotchFrame {
                 #expect(controller.panel.frame.midX == notch.midX)
                 #expect(controller.panel.frame.maxY == notch.minY)
             } else {
-                #expect(abs(controller.panel.frame.minX - before.minX - 32) < 1)
+                let screen = try #require(controller.panel.screen)
+                let expectedX = min(max(before.midX + 32, screen.frame.minX + before.width / 2),
+                                    screen.frame.maxX - before.width / 2)
+                #expect(abs(controller.panel.frame.midX - expectedX) < 1)
+                #expect(screen.frame.contains(controller.panel.frame))
                 #expect(controller.panel.frame.maxY == before.maxY)
             }
             #expect(controller.hasCustomPosition)
@@ -390,14 +405,24 @@ struct ShelfPanelTests {
         try await withHoverShelf { controller in
             controller.show()
             let screen = try #require(controller.panel.screen)
-            let moved = controller.panel.frame.offsetBy(dx: 24, dy: -40)
-            try #require(screen.visibleFrame.contains(moved))
+            let before = controller.panel.frame
+            let moved = before.offsetBy(dx: 24, dy: -40)
+            let expectedX = min(max(moved.midX, screen.frame.minX + before.width / 2),
+                                screen.frame.maxX - before.width / 2)
             controller.panel.setFrameOrigin(moved.origin)
+            let moveDeadline = ContinuousClock.now.advanced(by: .seconds(2))
+            while (!controller.hasCustomPosition || abs(controller.panel.frame.midX - expectedX) >= 1
+                   || controller.panel.frame.maxY != screen.frame.maxY) && ContinuousClock.now < moveDeadline {
+                try await Task.sleep(for: .milliseconds(5))
+            }
+            #expect(controller.hasCustomPosition)
+            #expect(screen.frame.contains(controller.panel.frame))
+            #expect(controller.panel.frame.maxY == screen.frame.maxY)
             controller.show(expanded: false)
-            #expect(abs(controller.panel.frame.midX - moved.midX) < 1)
+            #expect(abs(controller.panel.frame.midX - expectedX) < 1)
             #expect(controller.panel.frame.maxY == screen.frame.maxY)
             controller.show()
-            #expect(abs(controller.panel.frame.midX - moved.midX) < 1)
+            #expect(abs(controller.panel.frame.midX - expectedX) < 1)
             #expect(controller.panel.frame.maxY == screen.frame.maxY)
         }
     }
